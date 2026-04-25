@@ -62,10 +62,14 @@ Sessions are reused until they expire:
   host.
 - **Idle reset** (optional) -- new session after a period of inactivity. Set
   `session.reset.idleMinutes`.
+- **Adaptive reset** (optional) -- new session only after the daily boundary has
+  passed and the session has also been idle for `session.reset.idleMinutes`.
+  Set `session.reset.mode: "adaptive"`.
 - **Manual reset** -- type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
-When both daily and idle resets are configured, whichever expires first wins.
+When `mode: "daily"` and `idleMinutes` are both configured, whichever expires
+first wins. `mode: "adaptive"` uses AND logic instead.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those

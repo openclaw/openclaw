@@ -19450,10 +19450,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "idle",
                   },
+                  {
+                    type: "string",
+                    const: "adaptive",
+                  },
                 ],
                 title: "Session Reset Mode",
                 description:
-                  'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
+                  'Selects reset strategy: "daily" resets at a configured hour, "idle" resets after inactivity windows, and "adaptive" resets only when both the daily boundary has passed and the session is also idle (preventing mid-conversation resets). Keep one clear mode per policy to avoid surprising context turnover patterns.',
               },
               atHour: {
                 type: "integer",
@@ -19469,7 +19473,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Session Reset Idle Minutes",
                 description:
-                  "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+                  "Sets inactivity window before reset for idle mode, can also act as a secondary guard with daily mode, and is required alongside the daily boundary for adaptive mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
               },
             },
             additionalProperties: false,
@@ -19492,6 +19496,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                         const: "idle",
+                      },
+                      {
+                        type: "string",
+                        const: "adaptive",
                       },
                     ],
                   },
@@ -19524,6 +19532,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                         const: "idle",
                       },
+                      {
+                        type: "string",
+                        const: "adaptive",
+                      },
                     ],
                   },
                   atHour: {
@@ -19555,6 +19567,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                         const: "idle",
                       },
+                      {
+                        type: "string",
+                        const: "adaptive",
+                      },
                     ],
                   },
                   atHour: {
@@ -19585,6 +19601,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                         const: "idle",
+                      },
+                      {
+                        type: "string",
+                        const: "adaptive",
                       },
                     ],
                   },
@@ -19627,6 +19647,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     {
                       type: "string",
                       const: "idle",
+                    },
+                    {
+                      type: "string",
+                      const: "adaptive",
                     },
                   ],
                 },
@@ -26575,7 +26599,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "session.reset.mode": {
       label: "Session Reset Mode",
-      help: 'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
+      help: 'Selects reset strategy: "daily" resets at a configured hour, "idle" resets after inactivity windows, and "adaptive" resets only when both the daily boundary has passed and the session is also idle (preventing mid-conversation resets). Keep one clear mode per policy to avoid surprising context turnover patterns.',
       tags: ["storage"],
     },
     "session.reset.atHour": {
@@ -26585,7 +26609,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "session.reset.idleMinutes": {
       label: "Session Reset Idle Minutes",
-      help: "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+      help: "Sets inactivity window before reset for idle mode, can also act as a secondary guard with daily mode, and is required alongside the daily boundary for adaptive mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
       tags: ["storage"],
     },
     "session.resetByType": {

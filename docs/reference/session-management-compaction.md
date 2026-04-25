@@ -135,7 +135,8 @@ Rules of thumb:
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
-- **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When `mode: "daily"` also sets `idleMinutes`, whichever expires first wins.
+- **Adaptive expiry** (`session.reset.mode: "adaptive"`) creates a new `sessionId` only after both the daily boundary and idle window have expired.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.

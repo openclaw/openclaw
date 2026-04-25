@@ -284,4 +284,29 @@ describe("session hook context wiring", () => {
       vi.useRealTimers();
     }
   });
+
+  it("marks adaptive stale rollovers with reason adaptive", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+      const sessionKey = "agent:main:telegram:direct:adaptive";
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-adaptive",
+        sessionKey,
+        sessionId: "adaptive-session",
+        text: "adaptive",
+        updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+        reset: {
+          mode: "adaptive",
+          atHour: 4,
+          idleMinutes: 60,
+        },
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      expect(event).toMatchObject({ reason: "adaptive" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

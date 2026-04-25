@@ -17,7 +17,7 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { DEFAULT_IDLE_MINUTES, mergeSessionEntry, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -125,6 +125,19 @@ describe("resolveSessionResetPolicy", () => {
     });
   });
 
+  it("defaults adaptive resets to the standard idle window", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: { reset: { mode: "adaptive" } } as SessionConfig,
+      resetType: "direct",
+    });
+
+    expect(policy).toMatchObject({
+      mode: "adaptive",
+      atHour: 4,
+      idleMinutes: DEFAULT_IDLE_MINUTES,
+    });
+  });
+
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
     const freshness = evaluateSessionFreshness({
       updatedAt: 1_000,
@@ -140,6 +153,42 @@ describe("resolveSessionResetPolicy", () => {
       fresh: true,
       dailyResetAt: undefined,
       idleExpiresAt: undefined,
+    });
+  });
+
+  it("keeps adaptive sessions fresh until both daily and idle conditions are stale", () => {
+    const freshness = evaluateSessionFreshness({
+      updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+      now: new Date(2026, 0, 18, 4, 15, 0).getTime(),
+      policy: {
+        mode: "adaptive",
+        atHour: 4,
+        idleMinutes: 60,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: true,
+      dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
+    });
+  });
+
+  it("expires adaptive sessions once both daily and idle conditions are stale", () => {
+    const freshness = evaluateSessionFreshness({
+      updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+      now: new Date(2026, 0, 18, 5, 15, 0).getTime(),
+      policy: {
+        mode: "adaptive",
+        atHour: 4,
+        idleMinutes: 60,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: false,
+      dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
     });
   });
 });
