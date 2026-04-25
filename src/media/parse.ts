@@ -80,11 +80,15 @@ function isLikelyLocalPath(candidate: string): boolean {
 }
 
 function normalizeRemoteMediaHostname(value: string): string {
-  return value
+  const normalized = value
     .trim()
     .toLowerCase()
     .replace(/^\[|\]$/g, "")
-    .replace(/\.$/, "");
+    .replace(/\.+$/, "");
+  if (normalized.split(".").some((label) => label.length === 0)) {
+    return "";
+  }
+  return normalized;
 }
 
 function isBlockedRemoteMediaHostname(hostname: string): boolean {

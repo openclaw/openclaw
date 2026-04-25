@@ -70,10 +70,14 @@ describe("splitMediaFromOutput", () => {
   it.each([
     "MEDIA:http://example.com/a.png",
     "MEDIA:https://localhost/a.png",
+    "MEDIA:https://localhost../a.png",
     "MEDIA:https://127.0.0.1/a.png",
+    "MEDIA:https://127.0.0.1../a.png",
     "MEDIA:https://169.254.169.254/latest/meta-data",
     "MEDIA:https://[::1]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
+    "MEDIA:https://metadata.google.internal../a.png",
+    "MEDIA:https://example..com/a.png",
     "MEDIA:https://media.local/a.png",
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
     expectRejectedRemoteMediaUrlCase(input);
