@@ -8,13 +8,29 @@ title: "Plan Mode plugin host hooks"
 sidebarTitle: "Plan Mode Hooks"
 ---
 
-This is an RFC bundle for making Plan Mode a first-class bundled plugin. It is
-based on PR #71676, "Plan Mode rebased onto upstream/main + executing-state
-subsystem".
+This page is the public index for the Plan Mode host-hook RFC work. The full
+maintainer packet lives in
+[Plan Mode Plugin Host Hooks RFC](/plan/plan-mode-plugin-host-hooks-rfc).
+
+The RFC is based on PR #71676, "Plan Mode rebased onto upstream/main +
+executing-state subsystem".
 
 The design goal is to use PR #71676 as the behavior contract and parity oracle,
 not as the merge target. The hook PR should be small, additive,
 backwards-compatible, and covered by fixture-plugin tests.
+
+## Maintainer Packet
+
+Read [the full RFC packet](/plan/plan-mode-plugin-host-hooks-rfc) for:
+
+- current plugin surface gap analysis
+- PR #71676 evidence by host entry point
+- per-hook TypeScript-shaped contract proposals
+- expected host files for each hook family
+- security and trust-tier decisions
+- fixture-plugin acceptance tests
+- migration plan from PR #71676 to a bundled plugin
+- copy-ready GitHub RFC issue bodies
 
 ## Summary
 
