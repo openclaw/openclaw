@@ -422,26 +422,6 @@ function resolveClaudeCliSyntheticAuth() {
       };
 }
 
-function resolveClaudeCliExternalAuthProfiles() {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForRuntime();
-  if (!credential || credential.type !== "oauth") {
-    return [];
-  }
-  return [
-    {
-      profileId: "anthropic:claude-cli",
-      credential: {
-        type: "oauth" as const,
-        provider: CLAUDE_CLI_BACKEND_ID,
-        access: credential.access,
-        refresh: credential.refresh,
-        expires: credential.expires,
-      },
-      persistence: "runtime-only" as const,
-    },
-  ];
-}
-
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
   if (!credential) {
@@ -607,7 +587,6 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
-    resolveExternalAuthProfiles: () => resolveClaudeCliExternalAuthProfiles(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
