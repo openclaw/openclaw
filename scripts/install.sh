@@ -179,11 +179,13 @@ bootstrap_gum_temp() {
     gum_tmpdir="$(mktemp -d)"
     TMPFILES+=("$gum_tmpdir")
 
+    ui_info "Preparing spinner support"
     if ! download_file "${base}/${asset}" "$gum_tmpdir/$asset"; then
         GUM_REASON="download failed"
         return 1
     fi
 
+    ui_info "Verifying spinner support download"
     if ! download_file "${base}/checksums.txt" "$gum_tmpdir/checksums.txt"; then
         GUM_REASON="checksum unavailable or failed"
         return 1
@@ -444,6 +446,7 @@ run_quiet_step() {
 
     local log
     log="$(mktempfile)"
+    local showed_progress=false
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
@@ -453,10 +456,18 @@ run_quiet_step() {
         if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
             return 0
         fi
+        showed_progress=true
     else
+        # Keep users informed even when gum spinner cannot run (for example shell functions).
+        ui_info "${title}"
+        showed_progress=true
         if "$@" >"$log" 2>&1; then
             return 0
         fi
+    fi
+
+    if [[ "$showed_progress" == "false" ]]; then
+        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -1432,7 +1443,7 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
@@ -1443,7 +1454,7 @@ install_node() {
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1454,7 +1465,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
@@ -2265,6 +2276,8 @@ main() {
         return 0
     fi
 
+    # bootstrap_gum_temp may perform network downloads before any spinner is available.
+    echo -e "${INFO}Preparing installer interface...${NC}"
     bootstrap_gum_temp || true
     print_installer_banner
     print_gum_status
