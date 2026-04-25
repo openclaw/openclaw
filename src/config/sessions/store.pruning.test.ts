@@ -142,7 +142,9 @@ describe("rotateSessionFile", () => {
     const rotated = await rotateSessionFile(storePath, 100);
 
     expect(rotated).toBe(true);
-    await expect(fs.stat(storePath)).rejects.toThrow();
+    // sessions.json must still exist (contains {} placeholder after fix).
+    const content = await fs.readFile(storePath, "utf-8");
+    expect(content).toBe("{}");
     const files = await fs.readdir(testDir);
     const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
     expect(bakFiles).toHaveLength(1);

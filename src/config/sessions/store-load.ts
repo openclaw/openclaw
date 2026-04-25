@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
@@ -117,6 +118,34 @@ export function loadSessionStore(
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
+    }
+  }
+
+  // If sessions.json is empty or absent, try to recover from the most recent .bak.* backup.
+  // This closes the crash window: if the gateway crashed after rotateSessionFile wrote
+  // the {} placeholder but before writeSessionStoreAtomic saved the real data, the backup
+  // contains the previous valid session entries.
+  if (serializedFromDisk === undefined) {
+    try {
+      const dir = path.dirname(storePath);
+      const baseName = path.basename(storePath);
+      const files = fs.readdirSync(dir).filter(
+        (f) => f.startsWith(`${baseName}.bak.`),
+      );
+      if (files.length > 0) {
+        // Use the most recent backup (sorted descending, take the first).
+        const latest = files.toSorted().toReversed()[0];
+        const backupPath = path.join(dir, latest);
+        const raw = fs.readFileSync(backupPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (isSessionStoreRecord(parsed)) {
+          store = parsed;
+          serializedFromDisk = raw;
+          log.info("recovered session store from backup", { backupPath: latest });
+        }
+      }
+    } catch {
+      // Best-effort recovery — proceed with empty store if backup also fails.
     }
   }
 
