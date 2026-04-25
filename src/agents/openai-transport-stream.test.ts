@@ -948,6 +948,137 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "medium", summary: "auto" });
   });
 
+  it("uses top-level instructions and strips unsupported fields for Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        serviceTier: "auto",
+        sessionId: "session-123",
+        temperature: 0.2,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown> & {
+      input?: Array<{ role?: string }>;
+      instructions?: string;
+      tools?: unknown[];
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(
+      params.input?.some((item) => item.role === "system" || item.role === "developer"),
+    ).toBe(false);
+    expect(params.tools).toHaveLength(1);
+
+    for (const field of [
+      "metadata",
+      "store",
+      "temperature",
+      "max_output_tokens",
+      "prompt_cache_key",
+      "prompt_cache_retention",
+      "service_tier",
+    ]) {
+      expect(params).not.toHaveProperty(field);
+    }
+  });
+
+  it("allows priority service_tier for Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        serviceTier: "priority",
+      },
+    ) as { service_tier?: unknown };
+
+    expect(params.service_tier).toBe("priority");
+  });
+
+  it("re-strips unsupported Codex responses fields after payload mutation", () => {
+    const params = __testing.finalizeOpenAIResponsesPayload(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        input: [],
+        instructions: "system",
+        max_output_tokens: 1024,
+        metadata: { openclaw_session_id: "session-123" },
+        model: "gpt-5.4",
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+        service_tier: "auto",
+        store: false,
+        stream: true,
+        temperature: 0.2,
+      } as never,
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("system");
+    for (const field of [
+      "metadata",
+      "store",
+      "temperature",
+      "max_output_tokens",
+      "prompt_cache_key",
+      "prompt_cache_retention",
+      "service_tier",
+    ]) {
+      expect(params).not.toHaveProperty(field);
+    }
+  });
+
   it.each([
     {
       label: "openai",

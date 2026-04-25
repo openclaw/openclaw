@@ -728,7 +728,10 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        params = mergeTransportMetadata(params, turnState?.metadata);
+        params = finalizeOpenAIResponsesPayload(
+          model,
+          mergeTransportMetadata(params, turnState?.metadata),
+        ) as typeof params;
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -828,12 +831,80 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
+const CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "You are Codex. Follow the user's instructions.";
+
+const CODEX_RESPONSES_UNSUPPORTED_FIELDS = [
+  "metadata",
+  "store",
+  "temperature",
+  "max_output_tokens",
+  "prompt_cache_key",
+  "prompt_cache_retention",
+] as const satisfies readonly (keyof OpenAIResponsesRequestParams)[];
+
+type CodexResponsesUnsupportedField = (typeof CODEX_RESPONSES_UNSUPPORTED_FIELDS)[number];
+
+type OpenAICodexResponsesRequestParams = Omit<
+  OpenAIResponsesRequestParams,
+  CodexResponsesUnsupportedField
+> & {
+  instructions: string;
+};
+
+const CODEX_RESPONSES_ALLOWED_SERVICE_TIERS = new Set<
+  NonNullable<ResponseCreateParamsStreaming["service_tier"]>
+>(["priority"]);
+
+function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
+  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+}
+
+function buildOpenAICodexResponsesInstructions(context: Context): string {
+  return sanitizeTransportPayloadText(
+    stripSystemPromptCacheBoundary(context.systemPrompt || CODEX_RESPONSES_DEFAULT_INSTRUCTIONS),
+  );
+}
+
+function sanitizeOpenAICodexResponsesPayload<
+  T extends OpenAIResponsesRequestParams | OpenAICodexResponsesRequestParams,
+>(payload: T): T {
+  const sanitized = { ...payload } as T &
+    Partial<Record<CodexResponsesUnsupportedField, unknown>> & {
+      service_tier?: ResponseCreateParamsStreaming["service_tier"];
+    };
+
+  for (const field of CODEX_RESPONSES_UNSUPPORTED_FIELDS) {
+    delete sanitized[field];
+  }
+
+  if (
+    sanitized.service_tier !== undefined &&
+    !CODEX_RESPONSES_ALLOWED_SERVICE_TIERS.has(
+      sanitized.service_tier as NonNullable<ResponseCreateParamsStreaming["service_tier"]>,
+    )
+  ) {
+    delete sanitized.service_tier;
+  }
+
+  return sanitized as T;
+}
+
+function finalizeOpenAIResponsesPayload(
+  model: Model<Api>,
+  payload: OpenAIResponsesRequestParams | OpenAICodexResponsesRequestParams,
+): OpenAIResponsesRequestParams | OpenAICodexResponsesRequestParams {
+  return isOpenAICodexResponsesModel(model)
+    ? sanitizeOpenAICodexResponsesPayload(payload)
+    : payload;
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
 ) {
+  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
@@ -841,27 +912,43 @@ export function buildOpenAIResponsesParams(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole },
+    { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
-  const params: OpenAIResponsesRequestParams = {
+  const baseParams = {
     model: model.id,
     input: messages,
-    stream: true,
-    prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
-    prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(metadata ? { metadata } : {}),
+    stream: true as const,
   };
-  if (options?.maxTokens) {
-    params.max_output_tokens = options.maxTokens;
+  const params: OpenAIResponsesRequestParams | OpenAICodexResponsesRequestParams =
+    isCodexResponses
+      ? {
+          ...baseParams,
+          instructions: buildOpenAICodexResponsesInstructions(context),
+        }
+      : {
+          ...baseParams,
+          prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
+          prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+          ...(metadata ? { metadata } : {}),
+        };
+  if (options?.maxTokens && !isCodexResponses) {
+    (params as OpenAIResponsesRequestParams).max_output_tokens = options.maxTokens;
   }
-  if (options?.temperature !== undefined) {
-    params.temperature = options.temperature;
+  if (options?.temperature !== undefined && !isCodexResponses) {
+    (params as OpenAIResponsesRequestParams).temperature = options.temperature;
   }
-  if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
+  if (
+    options?.serviceTier !== undefined &&
+    payloadPolicy.allowsServiceTier &&
+    (!isCodexResponses ||
+      CODEX_RESPONSES_ALLOWED_SERVICE_TIERS.has(
+        options.serviceTier as NonNullable<ResponseCreateParamsStreaming["service_tier"]>,
+      ))
+  ) {
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
@@ -907,7 +994,7 @@ export function buildOpenAIResponsesParams(
     }
   }
   applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
-  return params;
+  return finalizeOpenAIResponsesPayload(model, params);
 }
 
 export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
@@ -1566,6 +1653,7 @@ type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
+  instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
@@ -1829,5 +1917,6 @@ function mapStopReason(reason: string | null) {
 
 export const __testing = {
   buildOpenAICompletionsClientConfig,
+  finalizeOpenAIResponsesPayload,
   processOpenAICompletionsStream,
 };
