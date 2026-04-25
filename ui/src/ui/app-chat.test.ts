@@ -104,9 +104,30 @@ describe("refreshChatAvatar", () => {
   });
 
   it("uses a route-relative avatar endpoint before basePath bootstrap finishes", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ avatarUrl: "/avatar/main" }),
+    const createObjectURL = vi.fn(() => "blob:local-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/avatar/main?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ avatarUrl: "/avatar/main" }),
+        });
+      }
+      if (url === "/avatar/main") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -117,7 +138,17 @@ describe("refreshChatAvatar", () => {
       "/avatar/main?meta=1",
       expect.objectContaining({ method: "GET" }),
     );
-    expect(host.chatAvatarUrl).toBe("/avatar/main");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/avatar/main",
+      expect.objectContaining({ method: "GET" }),
+    );
+    const avatarFetchInit = (
+      fetchMock.mock.calls as Array<[string | URL | Request, RequestInit?]>
+    )[1]?.[1];
+    expect(avatarFetchInit).not.toHaveProperty("headers");
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBe("blob:local-avatar");
   });
 
   it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
@@ -261,6 +292,15 @@ describe("refreshChatAvatar", () => {
   });
 
   it("ignores stale avatar responses after switching sessions", async () => {
+    const createObjectURL = vi.fn(() => "blob:ops-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -275,6 +315,12 @@ describe("refreshChatAvatar", () => {
         return Promise.resolve({
           ok: true,
           json: async () => opsRequest.promise,
+        });
+      }
+      if (url === "/avatar/ops") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
         });
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
@@ -294,7 +340,8 @@ describe("refreshChatAvatar", () => {
     opsRequest.resolve({ avatarUrl: "/avatar/ops" });
     await secondRefresh;
 
-    expect(host.chatAvatarUrl).toBe("/avatar/ops");
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/avatar/main?meta=1",
@@ -303,6 +350,11 @@ describe("refreshChatAvatar", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/avatar/ops?meta=1",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/avatar/ops",
       expect.objectContaining({ method: "GET" }),
     );
   });

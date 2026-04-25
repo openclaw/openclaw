@@ -492,7 +492,7 @@ image-generation runtime, and the live provider request.
     - `comfy`: separate Comfy live file, not this shared sweep
 - Optional narrowing:
   - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
-  - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.6"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 

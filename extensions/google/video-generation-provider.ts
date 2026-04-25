@@ -13,7 +13,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { normalizeGoogleApiBaseUrl } from "./api.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -29,7 +29,7 @@ const MAX_POLL_ATTEMPTS = 90;
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-  return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
+  return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
