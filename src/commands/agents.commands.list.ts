@@ -99,7 +99,14 @@ export async function agentsListCommand(
     }
   }
 
-  const providerStatus = await buildProviderStatusIndex(cfg);
+  // `buildProviderStatusIndex` triggers on-demand plugin loads and is only
+  // used for human text output (`summary.providers` is rendered in the text
+  // formatter). JSON callers (dashboards, monitors, IDE plugins) poll this
+  // command and don't need provider enrichment, so skip the plugin load when
+  // emitting JSON — combined with `loadPlugins: "text-only"` in the catalog
+  // entry, this drops `agents list --json` cold time from ~9s to sub-second.
+  // (#71739)
+  const providerStatus = opts.json ? null : await buildProviderStatusIndex(cfg);
 
   for (const summary of summaries) {
     const bindings = bindingMap.get(summary.id) ?? [];
@@ -110,14 +117,16 @@ export async function agentsListCommand(
       summary.routes = ["default (no explicit rules)"];
     }
 
-    const providerLines = listProvidersForAgent({
-      summaryIsDefault: summary.isDefault,
-      cfg,
-      bindings,
-      providerStatus,
-    });
-    if (providerLines.length > 0) {
-      summary.providers = providerLines;
+    if (providerStatus) {
+      const providerLines = listProvidersForAgent({
+        summaryIsDefault: summary.isDefault,
+        cfg,
+        bindings,
+        providerStatus,
+      });
+      if (providerLines.length > 0) {
+        summary.providers = providerLines;
+      }
     }
   }
 
