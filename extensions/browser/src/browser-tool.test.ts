@@ -379,7 +379,69 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "profiles" });
 
-    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+  });
+
+  it("uses a longer default timeout for existing-session profile status through node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 50_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/",
+          profile: "user",
+          timeoutMs: 45_000,
+        }),
+      }),
+    );
+  });
+
+  it("passes top-level timeoutMs through to existing-session open", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://example.com",
+      timeoutMs: 60_000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: "user", timeoutMs: 60_000 }),
+    );
+  });
+
+  it("passes top-level timeoutMs through to close without targetId", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "close",
+      profile: "user",
+      timeoutMs: 60_000,
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      { kind: "close" },
+      expect.objectContaining({ profile: "user", timeoutMs: 60_000 }),
+    );
   });
 
   it("passes refs mode through to browser snapshot", async () => {
@@ -750,7 +812,7 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 50_000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
@@ -758,7 +820,7 @@ describe("browser tool snapshot maxChars", () => {
           profile: "user",
           path: "/",
           method: "GET",
-          timeoutMs: 20000,
+          timeoutMs: 45_000,
         }),
       }),
     );
@@ -809,7 +871,7 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 50_000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
@@ -817,6 +879,7 @@ describe("browser tool snapshot maxChars", () => {
           profile: "user",
           path: "/",
           method: "GET",
+          timeoutMs: 45_000,
         }),
       }),
     );
@@ -833,7 +896,7 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 50_000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
@@ -841,6 +904,7 @@ describe("browser tool snapshot maxChars", () => {
           profile: "user",
           path: "/",
           method: "GET",
+          timeoutMs: 45_000,
         }),
       }),
     );
