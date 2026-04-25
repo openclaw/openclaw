@@ -803,7 +803,7 @@ describe("google-meet plugin", () => {
     });
 
     try {
-      await program.parseAsync(["googlemeet", "create"], { from: "user" });
+      await program.parseAsync(["googlemeet", "create", "--no-join"], { from: "user" });
       expect(stdout.output()).toContain("meeting uri: https://meet.google.com/new-abcd-xyz");
       expect(stdout.output()).toContain("space: spaces/new-space");
     } finally {
@@ -811,7 +811,7 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("creates a Meet through browser fallback when OAuth is not configured", async () => {
+  it("can create a Meet through browser fallback without joining when requested", async () => {
     const { methods, nodesInvoke } = setup(
       {
         defaultTransport: "chrome-node",
@@ -861,12 +861,13 @@ describe("google-meet plugin", () => {
       | undefined;
     const respond = vi.fn();
 
-    await handler?.({ params: {}, respond });
+    await handler?.({ params: { join: false }, respond });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       source: "browser",
       meetingUri: "https://meet.google.com/browser-made-url",
+      joined: false,
       browser: { nodeId: "node-1", targetId: "tab-1" },
     });
     expect(nodesInvoke).toHaveBeenCalledWith(
@@ -875,6 +876,101 @@ describe("google-meet plugin", () => {
         params: expect.objectContaining({
           path: "/tabs/open",
           body: { url: "https://meet.google.com/new" },
+        }),
+      }),
+    );
+  });
+
+  it("creates and joins a Meet through the create tool action by default", async () => {
+    const { tools, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          if (params.command === "googlemeet.chrome") {
+            return { payload: { launched: true } };
+          }
+          const proxy = params.params as {
+            path?: string;
+            body?: { url?: string; targetId?: string; fn?: string };
+          };
+          if (proxy.path === "/tabs") {
+            return { payload: { result: { tabs: [] } } };
+          }
+          if (proxy.path === "/tabs/open") {
+            return {
+              payload: {
+                result: {
+                  targetId:
+                    proxy.body?.url === "https://meet.google.com/new" ? "create-tab" : "join-tab",
+                  title: "Meet",
+                  url: proxy.body?.url,
+                },
+              },
+            };
+          }
+          if (proxy.path === "/act" && proxy.body?.fn?.includes("meetUrlPattern")) {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: "create-tab",
+                  result: {
+                    meetingUri: "https://meet.google.com/new-abcd-xyz",
+                    browserUrl: "https://meet.google.com/new-abcd-xyz",
+                    browserTitle: "Meet",
+                  },
+                },
+              },
+            };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: "join-tab",
+                  result: JSON.stringify({
+                    inCall: true,
+                    micMuted: false,
+                    title: "Meet call",
+                    url: "https://meet.google.com/new-abcd-xyz",
+                  }),
+                },
+              },
+            };
+          }
+          return { payload: { result: { ok: true } } };
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{
+        details: { joined?: boolean; meetingUri?: string; join?: { session: { url: string } } };
+      }>;
+    };
+
+    const result = await tool.execute("id", { action: "create" });
+
+    expect(result.details).toMatchObject({
+      source: "browser",
+      joined: true,
+      meetingUri: "https://meet.google.com/new-abcd-xyz",
+      join: { session: { url: "https://meet.google.com/new-abcd-xyz" } },
+    });
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "googlemeet.chrome",
+        params: expect.objectContaining({
+          action: "start",
+          url: "https://meet.google.com/new-abcd-xyz",
+          launch: false,
         }),
       }),
     );
@@ -934,7 +1030,7 @@ describe("google-meet plugin", () => {
       | undefined;
     const respond = vi.fn();
 
-    await handler?.({ params: {}, respond });
+    await handler?.({ params: { join: false }, respond });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({

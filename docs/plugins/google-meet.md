@@ -97,11 +97,16 @@ Or let an agent join through the `google_meet` tool:
 }
 ```
 
-Create a new meeting, then join it:
+Create a new meeting and join it:
 
 ```bash
-openclaw googlemeet create
-openclaw googlemeet join https://meet.google.com/new-abcd-xyz --transport chrome-node
+openclaw googlemeet create --transport chrome-node --mode realtime
+```
+
+Create only the URL without joining:
+
+```bash
+openclaw googlemeet create --no-join
 ```
 
 `googlemeet create` has two paths:
@@ -115,24 +120,18 @@ openclaw googlemeet join https://meet.google.com/new-abcd-xyz --transport chrome
   Browser automation handles Meet's own first-run microphone prompt; that prompt
   is not treated as a Google login failure.
 
-The command output includes a `source` field (`api` or `browser`) so agents can
-explain which path was used.
+The command/tool output includes a `source` field (`api` or `browser`) so agents
+can explain which path was used. `create` joins the new meeting by default and
+returns `joined: true` plus the join session. To only mint the URL, use
+`create --no-join` on the CLI or pass `"join": false` to the tool.
 
 Or tell an agent: "Create a Google Meet, join it with realtime voice, and send
-me the link." The agent should call `google_meet` with `action: "create"`, copy
-the returned `meetingUri`, then call `google_meet` with `action: "join"` and
-that URL.
+me the link." The agent should call `google_meet` with `action: "create"` and
+then share the returned `meetingUri`.
 
 ```json
 {
-  "action": "create"
-}
-```
-
-```json
-{
-  "action": "join",
-  "url": "https://meet.google.com/new-abcd-xyz",
+  "action": "create",
   "transport": "chrome-node",
   "mode": "realtime"
 }
@@ -475,11 +474,11 @@ Create a fresh Meet space:
 openclaw googlemeet create
 ```
 
-The command prints the new `meeting uri` and source. With OAuth credentials it
-uses the official Google Meet API. Without OAuth credentials it uses the pinned
-Chrome node's signed-in browser profile as a fallback. Agents can use the
-`google_meet` tool with `action: "create"` to create a meeting, then call
-`action: "join"` with the returned `meetingUri`.
+The command prints the new `meeting uri`, source, and join session. With OAuth
+credentials it uses the official Google Meet API. Without OAuth credentials it
+uses the pinned Chrome node's signed-in browser profile as a fallback. Agents can
+use the `google_meet` tool with `action: "create"` to create and join in one
+step. For URL-only creation, pass `"join": false`.
 
 Example JSON output from the browser fallback:
 
@@ -487,9 +486,16 @@ Example JSON output from the browser fallback:
 {
   "source": "browser",
   "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "joined": true,
   "browser": {
     "nodeId": "ba0f4e4bc...",
     "targetId": "tab-1"
+  },
+  "join": {
+    "session": {
+      "id": "meet_...",
+      "url": "https://meet.google.com/abc-defg-hij"
+    }
   }
 }
 ```
@@ -500,19 +506,26 @@ Example JSON output from API create:
 {
   "source": "api",
   "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "joined": true,
   "space": {
     "name": "spaces/abc-defg-hij",
     "meetingCode": "abc-defg-hij",
     "meetingUri": "https://meet.google.com/abc-defg-hij"
+  },
+  "join": {
+    "session": {
+      "id": "meet_...",
+      "url": "https://meet.google.com/abc-defg-hij"
+    }
   }
 }
 ```
 
-Creating a Meet only creates or discovers the meeting URL. The Chrome or
-Chrome-node transport still needs a signed-in Google Chrome profile to join
-through the browser. If the profile is signed out, OpenClaw reports
-`manualActionRequired: true` or a browser fallback error and asks the operator
-to finish Google login before retrying.
+Creating a Meet joins by default. The Chrome or Chrome-node transport still
+needs a signed-in Google Chrome profile to join through the browser. If the
+profile is signed out, OpenClaw reports `manualActionRequired: true` or a
+browser fallback error and asks the operator to finish Google login before
+retrying.
 
 Set `preview.enrollmentAcknowledged: true` only after confirming your Cloud
 project, OAuth principal, and meeting participants are enrolled in the Google
