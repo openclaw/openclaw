@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/subagents: preserve thread-bound completion delivery by keeping the requester-agent announce path primary and falling back to direct thread sends only when the announce produces no visible output. (#71064) Thanks @DolencLuka.
 - Gateway/sessions: recover main-agent turns interrupted by a gateway restart from stale transcript-lock evidence, avoiding stuck `status: "running"` sessions without broad post-boot transcript scans. Fixes #70555. Thanks @bitloi.
 - Plugins/Google Meet: include live Chrome-node readiness in `googlemeet setup` and document the Parallels recovery checks, so stale node tokens or disconnected VM browsers are visible before an agent opens a meeting. Thanks @steipete.
 - Codex approvals: compact home-directory permission paths to `~` without repeating them as a separate high-risk warning, while preserving filesystem root and wildcard host warnings. Thanks @steipete.
