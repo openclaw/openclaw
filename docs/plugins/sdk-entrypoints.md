@@ -121,11 +121,12 @@ export default defineChannelPluginEntry({
 - `setRuntime` is called during registration so you can store the runtime reference
   (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
   capture.
-- `registerCliMetadata` runs during both `api.registrationMode === "cli-metadata"`
-  and `api.registrationMode === "full"`.
+- `registerCliMetadata` runs during `api.registrationMode === "cli-metadata"`,
+  `api.registrationMode === "discovery"`, and
+  `api.registrationMode === "full"`.
   Use it as the canonical place for channel-owned CLI descriptors so root help
-  stays non-activating while normal CLI command registration remains compatible
-  with full plugin loads.
+  stays non-activating, discovery snapshots include static command metadata, and
+  normal CLI command registration remains compatible with full plugin loads.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
 - Like `definePluginEntry`, `configSchema` can be a lazy factory and OpenClaw
@@ -197,19 +198,24 @@ setter before the full channel entry loads.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode              | When                              | What to register                                                                          |
-| ----------------- | --------------------------------- | ----------------------------------------------------------------------------------------- |
-| `"full"`          | Normal gateway startup            | Everything                                                                                |
-| `"setup-only"`    | Disabled/unconfigured channel     | Channel registration only                                                                 |
-| `"setup-runtime"` | Setup flow with runtime available | Channel registration plus only the lightweight runtime needed before the full entry loads |
-| `"cli-metadata"`  | Root help / CLI metadata capture  | CLI descriptors only                                                                      |
+| Mode              | When                              | What to register                                                                               |
+| ----------------- | --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `"full"`          | Normal gateway startup            | Everything                                                                                     |
+| `"discovery"`     | Read-only capability discovery    | Channel registration plus static CLI descriptors; skip sockets, workers, clients, and services |
+| `"setup-only"`    | Disabled/unconfigured channel     | Channel registration only                                                                      |
+| `"setup-runtime"` | Setup flow with runtime available | Channel registration plus only the lightweight runtime needed before the full entry loads      |
+| `"cli-metadata"`  | Root help / CLI metadata capture  | CLI descriptors only                                                                           |
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself:
 
 ```typescript
 register(api) {
-  if (api.registrationMode === "cli-metadata" || api.registrationMode === "full") {
+  if (
+    api.registrationMode === "cli-metadata" ||
+    api.registrationMode === "discovery" ||
+    api.registrationMode === "full"
+  ) {
     api.registerCli(/* ... */);
     if (api.registrationMode === "cli-metadata") return;
   }
