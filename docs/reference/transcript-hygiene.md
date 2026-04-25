@@ -114,9 +114,9 @@ external end-user instructions.
 - Image sanitization only.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
 - No tool call id sanitization.
-- No tool result pairing repair.
+- Tool result pairing repair may move real matched outputs and synthesize Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering.
-- No synthetic tool results.
+- Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
