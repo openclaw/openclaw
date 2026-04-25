@@ -42,8 +42,12 @@ const persistentBindingMocks = vi.hoisted(() => ({
   })),
 }));
 const sessionMocks = vi.hoisted(() => ({
+  loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
+}));
+const commandAuthMocks = vi.hoisted(() => ({
+  resolveCommandArgMenu: vi.fn(),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -134,6 +138,26 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
       unbind: vi.fn(),
     }),
+  };
+});
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadSessionStore: sessionMocks.loadSessionStore,
+    resolveStorePath: sessionMocks.resolveStorePath,
+  };
+});
+vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
+    "openclaw/plugin-sdk/command-auth-native",
+  );
+  commandAuthMocks.resolveCommandArgMenu.mockImplementation(actual.resolveCommandArgMenu);
+  return {
+    ...actual,
+    resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
   };
 });
 vi.mock("./bot-native-commands.runtime.js", async () => {
@@ -406,6 +430,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+    commandAuthMocks.resolveCommandArgMenu.mockClear();
+    sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
