@@ -377,6 +377,7 @@ export const ToolCatalogEntrySchema = Type.Object(
     defaultProfiles: Type.Array(
       Type.Union([
         Type.Literal("minimal"),
+        Type.Literal("readonly"),
         Type.Literal("coding"),
         Type.Literal("messaging"),
         Type.Literal("full"),

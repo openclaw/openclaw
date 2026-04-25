@@ -129,6 +129,30 @@ If you want to share creds, copy `auth-profiles.json` into the other agent's `ag
 
 ---
 
+### Example 2c: Read-only observer agent
+
+```json
+{
+  "agents": {
+    "list": [
+      {
+        "id": "observer",
+        "workspace": "/path/to/main-agent/workspace",
+        "tools": { "profile": "readonly" }
+      }
+    ]
+  }
+}
+```
+
+**Result:**
+
+- `observer` can read files, search memory, browse the web, and view session status from the main agent's workspace
+- Cannot write files, run commands, send messages, or modify any state
+- Useful for monitoring dashboards, shared team access, or audit-safe query interfaces
+
+---
+
 ### Example 3: Different Sandbox Modes per Agent
 
 ```json

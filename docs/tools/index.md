@@ -141,6 +141,7 @@ Per-agent override: `agents.list[].tools.profile`.
 | `full`      | No restriction (same as unset)                                                                                                                    |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
+| `readonly`  | Non-mutating tools only: `read`, `group:web`, `group:memory`, `sessions_list`, `sessions_history`, `session_status`, `image`, `agents_list`       |
 | `minimal`   | `session_status` only                                                                                                                             |
 
 `coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
