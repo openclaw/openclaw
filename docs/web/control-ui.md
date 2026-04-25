@@ -65,6 +65,13 @@ Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
 
+If you are connecting a Paperclip agent through the `openclaw_gateway` adapter,
+the same first-run approval may be required. After the initial connection attempt,
+run `openclaw devices approve --latest`, or use explicit `--url` / `--token`
+flags for a remote gateway. To keep approvals stable across restarts, configure a
+persistent `adapterConfig.devicePrivateKeyPem` in Paperclip instead of letting it
+generate a new ephemeral device identity each run.
+
 **Notes:**
 
 - Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
