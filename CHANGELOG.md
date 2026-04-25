@@ -2995,6 +2995,7 @@ Docs: https://docs.openclaw.ai
 - Feishu: back off streaming-card creation after HTTP 400 startup failures, so unsupported card setups fall back without delaying every message. Fixes #56981. Thanks @JinnanDuan.
 - Feishu/topic groups: key native Feishu/Lark topic-group sessions by `thread_id` so starter messages and replies with different `root_id` formats stay in the same `group_topic` conversation. Fixes #71438. Thanks @1335848090.
 - Feishu: suppress duplicate final card delivery when idle closes a streaming card before the final payload arrives. (#68491) Thanks @MoerAI.
+- Feishu: stop carrying inbound mention targets into every outbound reply, so fallback, error, and ack responses no longer cascade @mentions; agent prompts now treat those mentions as context only. Fixes #70065. Thanks @AxelHu.
 - Signal: preserve sender attachment filenames and resolve missing MIME types from those filenames, so Linux `signal-cli` voice notes without `contentType` still enter audio transcription. Fixes #48614. Thanks @mindfury.
 - Telegram/agents: suppress the phantom "Agent couldn't generate a response" fallback after a reply was already committed through the messaging tool. (#70623) Thanks @chinar-amrutkar.
 - Models/CLI: show provider runtime `contextTokens` beside native `contextWindow` in `openclaw models list`, and align `openai-codex/gpt-5.5` with Codex's 272K runtime cap plus 400K native window. Fixes #71403.

@@ -9,7 +9,7 @@ import {
 } from "./bot.js";
 
 describe("buildFeishuAgentBody", () => {
-  it("builds message id, speaker, quoted content, mentions, and permission notice in order", () => {
+  it("builds message id, speaker, quoted content, mention context, and permission notice in order", () => {
     const body = buildFeishuAgentBody({
       ctx: {
         content: "hello world",
@@ -27,7 +27,7 @@ describe("buildFeishuAgentBody", () => {
     });
 
     expect(body).toBe(
-      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: https://open.feishu.cn/app/cli_test]',
+      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: These users were mentioned in the incoming message: Target User. They will only receive your reply if you @mention them.]\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: https://open.feishu.cn/app/cli_test]',
     );
   });
 });
