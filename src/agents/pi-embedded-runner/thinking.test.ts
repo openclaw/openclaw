@@ -58,6 +58,10 @@ describe("dropThinkingBlocks", () => {
     const { assistant } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal-only" },
     ]);
-    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+    // The placeholder must be non-empty so downstream provider converters
+    // (Bedrock convertMessages, Anthropic convertAnthropicMessages) do not
+    // filter it out and leave an empty content array, which would trigger a
+    // Bedrock ValidationException.
+    expect(assistant.content).toEqual([{ type: "text", text: "[thinking]" }]);
   });
 });
