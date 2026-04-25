@@ -1296,6 +1296,8 @@ export async function handleFeishuMessage(params: {
           },
         };
         const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          cfg,
+          agentId,
           storePath: agentStorePath,
           sessionKey: agentSessionKey,
         });
@@ -1471,6 +1473,8 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
       });
       const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+        cfg,
+        agentId: route.agentId,
         storePath,
         sessionKey: route.sessionKey,
       });

@@ -211,8 +211,16 @@ function resolveTelegramReasoningLevel(params: {
   telegramDeps: TelegramBotDeps;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps } = params;
+
+  // Resolve config-driven default: per-agent override > hardcoded "off".
+  const agentDefault = cfg.agents?.list?.find((a) => a.id === agentId)?.reasoningDefault;
+  const configDefault: TelegramReasoningLevel =
+    agentDefault === "on" || agentDefault === "stream" || agentDefault === "off"
+      ? agentDefault
+      : "off";
+
   if (!sessionKey) {
-    return "off";
+    return configDefault;
   }
   try {
     const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
@@ -221,13 +229,13 @@ function resolveTelegramReasoningLevel(params: {
     });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
-    if (level === "on" || level === "stream") {
+    if (level === "on" || level === "stream" || level === "off") {
       return level;
     }
   } catch {
     // Fall through to default.
   }
-  return "off";
+  return configDefault;
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
