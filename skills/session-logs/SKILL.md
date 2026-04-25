@@ -68,15 +68,19 @@ Each `.jsonl` file contains messages with:
 
 ```bash
 # Bash helper that emits every searchable transcript path — active and archived.
+# Saves and restores `nullglob` locally so callers' shell options aren't disturbed.
 AGENT_ID="<agentId>"
 SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
-shopt -s nullglob
 list_session_transcripts() {
+  local _nullglob_state
+  _nullglob_state=$(shopt -p nullglob 2>/dev/null)
+  shopt -s nullglob
   for f in "$SESSION_DIR"/*.jsonl \
            "$SESSION_DIR"/*.jsonl.reset.*Z \
            "$SESSION_DIR"/*.jsonl.deleted.*Z; do
     [ -f "$f" ] && printf '%s\n' "$f"
   done
+  eval "$_nullglob_state"
 }
 ```
 
@@ -100,9 +104,18 @@ for f in "$SESSION_DIR"/*.jsonl; do
 done | sort -r
 ```
 
-_Tip:_ swap the `for f in ...` line for `for f in $(list_session_transcripts); do`
-(see snippet above) when you also want archived `.reset` / `.deleted` files in the
-listing.
+_Tip:_ swap the `for f in ...` line for a `while`-read over
+`list_session_transcripts` (see snippet above) when you also want archived
+`.reset` / `.deleted` files in the listing. The `while`-read pattern is safe
+for paths with spaces or other IFS characters:
+
+```bash
+while IFS= read -r f; do
+  date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
+  size=$(ls -lh "$f" | awk '{print $5}')
+  echo "$date $size $(basename "$f")"
+done < <(list_session_transcripts) | sort -r
+```
 
 ### Find sessions from a specific day
 
