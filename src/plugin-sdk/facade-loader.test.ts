@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withoutProcessVersionsBunForTest } from "../test-utils/process-versions.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -144,6 +145,7 @@ describe("plugin-sdk facade loader", () => {
         marker: "windows-dist-ok",
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
+    const restoreProcessVersions = withoutProcessVersionsBunForTest();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
@@ -164,6 +166,7 @@ describe("plugin-sdk facade loader", () => {
     } finally {
       restoreVersions();
       platformSpy.mockRestore();
+      restoreProcessVersions();
     }
   });
 
