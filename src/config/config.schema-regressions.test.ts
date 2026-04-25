@@ -62,7 +62,7 @@ describe("config schema regressions", () => {
       expect(
         res.issues.some(
           (issue) =>
-            String(issue.path) === "agents.defaults.memorySearch.remote.baseUrl" &&
+            issue.path === "agents.defaults.memorySearch.remote.baseUrl" &&
             issue.message.includes("must not include a query string or fragment"),
         ),
       ).toBe(true);

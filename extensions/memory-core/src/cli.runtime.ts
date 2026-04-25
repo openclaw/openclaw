@@ -346,6 +346,8 @@ function formatBatchDisabledReason(reason: MemoryBatchDisabledReason | undefined
     case undefined:
       return null;
   }
+  const exhaustive: never = reason;
+  return exhaustive;
 }
 
 function formatBatchStatusSuffix(batch: {
