@@ -150,6 +150,7 @@ function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
 export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
+  private startPromise: Promise<string> | null = null;
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
@@ -443,7 +444,11 @@ export class VoiceCallWebhookServer {
       await this.initializeMediaStreaming();
     }
 
-    return new Promise((resolve, reject) => {
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+
+    this.startPromise = new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this.handleRequest(req, res, webhookPath).catch((err) => {
           console.error("[voice-call] Webhook error:", err);
@@ -468,11 +473,17 @@ export class VoiceCallWebhookServer {
         });
       }
 
-      this.server.on("error", reject);
+      this.server.on("error", (err) => {
+        this.server = null;
+        this.listeningUrl = null;
+        this.startPromise = null;
+        reject(err);
+      });
 
       this.server.listen(port, bind, () => {
         const url = this.resolveListeningUrl(bind, webhookPath);
         this.listeningUrl = url;
+        this.startPromise = null;
         console.log(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
           const address = this.server?.address();
@@ -491,6 +502,8 @@ export class VoiceCallWebhookServer {
         });
       });
     });
+
+    return this.startPromise;
   }
 
   /**
@@ -502,6 +515,7 @@ export class VoiceCallWebhookServer {
     }
     this.pendingDisconnectHangups.clear();
     this.webhookInFlightLimiter.clear();
+    this.startPromise = null;
 
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
