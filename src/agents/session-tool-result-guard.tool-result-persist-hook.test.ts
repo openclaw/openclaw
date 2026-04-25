@@ -154,6 +154,51 @@ describe("tool_result_persist hook", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
+  it("falls back to a compact summary when sanitized details still exceed the cap", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "visible output stays small" }],
+      details: {
+        status: "completed".repeat(250),
+        sessionId: "exec-oversized",
+        cwd: "/tmp/very-long-working-directory".repeat(250),
+        name: "noisy process".repeat(250),
+        fullOutputPath: "/tmp/output.log".repeat(250),
+        truncation: "truncated".repeat(250),
+        tail: "t".repeat(20_000),
+        aggregated: "a".repeat(120_000),
+        sessions: Array.from({ length: 10 }, (_, index) => ({
+          sessionId: `proc-${index}`,
+          status: "completed".repeat(100),
+          cwd: "/tmp/session".repeat(100),
+          name: "child process".repeat(100),
+          command: "node noisy-script.js ".repeat(200),
+          aggregated: "x".repeat(50_000),
+          tail: "z".repeat(10_000),
+        })),
+      },
+    } as any);
+
+    const toolResult = getPersistedToolResult(sm);
+    const details = toolResult.details as Record<string, unknown>;
+    expect(details.persistedDetailsTruncated).toBe(true);
+    expect(details.finalDetailsTruncated).toBe(true);
+    expect(details.aggregated).toBeUndefined();
+    expect(details.tail).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(details), "utf-8")).toBeLessThan(8_192);
+  });
+
   it("loads tool_result_persist hooks without breaking persistence", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-"));
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";

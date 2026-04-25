@@ -474,6 +474,54 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("uses a default timeout when active work does not drain before channel reload", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      hoisted.providerManager.stopChannel.mockClear();
+      hoisted.providerManager.startChannel.mockClear();
+      hoisted.activeEmbeddedRunCount.value = 1;
+      embeddedRunMock.activeIds.add("reload-stuck");
+      vi.useFakeTimers();
+      const reloadPromise = onHotReload?.(
+        {
+          changedPaths: ["channels.discord.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.discord.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(["discord"]),
+          noopPaths: [],
+        },
+        {
+          channels: { discord: { token: "token" } },
+        },
+      );
+      try {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(5 * 60_000 - 500);
+        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
+        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(500);
+        await reloadPromise;
+      } finally {
+        hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
+        await vi.advanceTimersByTimeAsync(500).catch(() => {});
+        vi.useRealTimers();
+        await reloadPromise?.catch(() => {});
+      }
+
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+    });
+  });
+
   it("applies hot reload actions and emits restart signal", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();

@@ -41,6 +41,7 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
 const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
 const MAX_PERSISTED_DETAIL_SESSION_COUNT = 10;
+const MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS = 200;
 
 function jsonByteLength(value: unknown): number {
   try {
@@ -92,6 +93,55 @@ function sanitizePersistedSessionDetail(value: unknown): unknown {
   return out;
 }
 
+function buildPersistedDetailsFallback(
+  src: Record<string, unknown> | undefined,
+  originalBytes: number,
+  sanitizedBytes?: number,
+): Record<string, unknown> {
+  const fallback: Record<string, unknown> = {
+    persistedDetailsTruncated: true,
+    finalDetailsTruncated: true,
+    originalDetailsBytes: originalBytes,
+  };
+  if (sanitizedBytes !== undefined) {
+    fallback.sanitizedDetailsBytes = sanitizedBytes;
+  }
+  if (src) {
+    fallback.originalDetailKeys = Object.keys(src).slice(0, 40);
+    for (const key of ["status", "sessionId", "pid", "exitCode", "exitSignal", "truncated"]) {
+      const field = src[key];
+      if (field !== undefined) {
+        fallback[key] =
+          typeof field === "string"
+            ? truncatePersistedDetailString(field, MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS)
+            : field;
+      }
+    }
+  }
+  return fallback;
+}
+
+function enforcePersistedDetailsByteCap(
+  value: Record<string, unknown>,
+  src: Record<string, unknown> | undefined,
+  originalBytes: number,
+): Record<string, unknown> {
+  const sanitizedBytes = jsonByteLength(value);
+  if (sanitizedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
+    return value;
+  }
+  const fallback = buildPersistedDetailsFallback(src, originalBytes, sanitizedBytes);
+  if (jsonByteLength(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
+    return fallback;
+  }
+  return {
+    persistedDetailsTruncated: true,
+    finalDetailsTruncated: true,
+    originalDetailsBytes: originalBytes,
+    sanitizedDetailsBytes: sanitizedBytes,
+  };
+}
+
 function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
   if (details === undefined || details === null) {
     return details;
@@ -101,11 +151,15 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
     return details;
   }
   if (typeof details !== "object") {
-    return {
-      persistedDetailsTruncated: true,
-      originalDetailsBytes: originalBytes,
-      valueType: typeof details,
-    };
+    return enforcePersistedDetailsByteCap(
+      {
+        persistedDetailsTruncated: true,
+        originalDetailsBytes: originalBytes,
+        valueType: typeof details,
+      },
+      undefined,
+      originalBytes,
+    );
   }
   const src = details as Record<string, unknown>;
   const out: Record<string, unknown> = {
@@ -147,7 +201,7 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
       out.sessionsTruncated = src.sessions.length - MAX_PERSISTED_DETAIL_SESSION_COUNT;
     }
   }
-  return out;
+  return enforcePersistedDetailsByteCap(out, src, originalBytes);
 }
 
 function capToolResultDetails(msg: AgentMessage): AgentMessage {

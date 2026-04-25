@@ -61,6 +61,7 @@ type GatewayReloadLog = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+const DEFAULT_CHANNEL_RELOAD_DEFERRAL_TIMEOUT_MS = 5 * 60_000;
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -175,7 +176,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
         ? Math.max(CHANNEL_RELOAD_DEFERRAL_POLL_MS, Math.floor(timeoutMsRaw))
-        : undefined;
+        : DEFAULT_CHANNEL_RELOAD_DEFERRAL_TIMEOUT_MS;
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
