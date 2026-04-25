@@ -15,6 +15,7 @@ import {
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -48,6 +49,7 @@ const browserToolDeps = {
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -72,6 +74,7 @@ export const __testing = {
       browserArmDialog: typeof browserArmDialog;
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
+      browserDoctor: typeof browserDoctor;
       browserFocusTab: typeof browserFocusTab;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
@@ -94,6 +97,7 @@ export const __testing = {
     browserToolDeps.browserArmFileChooser =
       overrides?.browserArmFileChooser ?? browserArmFileChooser;
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
+    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
@@ -466,6 +470,17 @@ export function createBrowserTool(opts?: {
         : null;
 
       switch (action) {
+        case "doctor":
+          if (proxyRequest) {
+            return jsonResult(
+              await proxyRequest({
+                method: "GET",
+                path: "/doctor",
+                profile,
+              }),
+            );
+          }
+          return jsonResult(await browserToolDeps.browserDoctor(baseUrl, { profile }));
         case "status":
           if (proxyRequest) {
             return jsonResult(

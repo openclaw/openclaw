@@ -23,6 +23,7 @@ export {
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserOpenTab,
   browserProfiles,

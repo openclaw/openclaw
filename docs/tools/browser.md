@@ -598,7 +598,7 @@ Security guidance:
 
 The agent gets **one tool** for browser automation:
 
-- `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
+- `browser` — doctor/status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
 
 How it maps:
 
