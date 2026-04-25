@@ -117,6 +117,11 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+        params: {
+          cleanupBundleMcpOnRunEnd: true,
+        },
+      });
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
@@ -198,7 +203,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("does not force bundle MCP cleanup on gateway fallback", async () => {
+  it("forces bundle MCP cleanup on embedded fallback", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
@@ -206,7 +211,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
+      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
     });

@@ -130,6 +130,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
+- `model run` is one-shot. MCP servers opened through the agent runtime for that command are retired after the reply for both local and `--gateway` execution, so repeated scripted invocations do not keep stdio MCP child processes alive.
 
 ## Model
 
@@ -145,6 +146,7 @@ openclaw infer model inspect --name gpt-5.5 --json
 Notes:
 
 - `model run` reuses the agent runtime so provider/model overrides behave like normal agent execution.
+- Because `model run` is intended for headless automation, it does not retain per-session bundled MCP runtimes after the command finishes.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
 
 ## Image
