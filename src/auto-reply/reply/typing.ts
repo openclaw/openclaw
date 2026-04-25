@@ -122,6 +122,7 @@ export function createTypingController(params: {
   const triggerTyping = async () => {
     await startGuard.run(async () => {
       await onReplyStart?.();
+      refreshTypingTtl();
     });
   };
 
