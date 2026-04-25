@@ -72,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - Dashboard/Windows: open Control UI and OAuth URLs through the system URL handler without `cmd.exe` parsing or PATH-based `rundll32` lookup, and reject non-HTTP browser-open inputs. Fixes #71098. Thanks @Sanjays2402.
 - Config/doctor: reject legacy `secretref-env:<ENV_VAR>` marker strings on SecretRef credential paths and migrate valid markers to structured env SecretRefs with `openclaw doctor --fix`. Fixes #51794. Thanks @halointellicore.
 - Providers/OpenAI: separate API-key and Codex sign-in onboarding groups, and avoid replaying stale OpenAI Responses reasoning blocks after a model route switch.
+- Providers/OpenAI-compatible: forward `prompt_cache_key` on Completions requests only for providers that opt in with `compat.supportsPromptCacheKey`, keeping default proxy payloads unchanged. Fixes #69272.
 - Providers/ElevenLabs: omit the MP3-only `Accept` header for PCM telephony synthesis, so Voice Call requests for `pcm_22050` no longer receive MP3 audio. Fixes #67340. Thanks @marcchabot.
 - Plugins/Voice Call: reap stale pre-answer calls by default, honor configured TTS timeouts for Twilio media-stream playback, and fail empty telephony audio instead of completing as silence. Fixes #42071; supersedes #60957. Thanks @Ryce and @sliekens.
 - Skills: honor legacy `metadata.clawdbot` requirements and installer hints when `metadata.openclaw` is absent, so older skills no longer appear ready when required binaries are missing. Fixes #71323. Thanks @chen-zhang-cs-code.
