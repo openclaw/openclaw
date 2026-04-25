@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
+import {
+  cleanupBundleMcpHarness,
+  startStreamableHttpProbeServer,
+} from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
+  createSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
@@ -93,6 +97,137 @@ describe("session MCP runtime", () => {
       errorMessage: undefined,
     });
     expect(validator({ url: 42 }).valid).toBe(false);
+  });
+
+  it("reinitializes lost streamable-http sessions and refreshes SDK tool metadata", async () => {
+    const server = await startStreamableHttpProbeServer();
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-streamable-http-reconnect",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            streamableProbe: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.port}/mcp`,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).resolves.toMatchObject({
+        servers: { streamableProbe: { toolCount: 1 } },
+      });
+      expect(server.getListToolsRequestCount()).toBe(1);
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).resolves.toEqual(
+        expect.objectContaining({
+          structuredContent: { value: "generation:1" },
+        }),
+      );
+
+      await server.resetSession();
+
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).resolves.toEqual(
+        expect.objectContaining({
+          structuredContent: { value: "generation:2" },
+        }),
+      );
+      expect(server.getListToolsRequestCount()).toBe(2);
+    } finally {
+      await runtime.dispose();
+      await server.close();
+    }
+  });
+
+  it("keeps streamable-http sessions recoverable when a reconnect attempt fails", async () => {
+    const server = await startStreamableHttpProbeServer();
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-streamable-http-reconnect-retry",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            streamableProbe: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.port}/mcp`,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).resolves.toEqual(
+        expect.objectContaining({
+          structuredContent: { value: "generation:1" },
+        }),
+      );
+
+      await server.resetSession();
+      server.failNextInitialize();
+
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).rejects.toThrow(
+        /Server not initialized/u,
+      );
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).resolves.toEqual(
+        expect.objectContaining({
+          structuredContent: { value: "generation:2" },
+        }),
+      );
+    } finally {
+      await runtime.dispose();
+      await server.close();
+    }
+  });
+
+  it("shares one streamable-http reconnect across concurrent lost-session calls", async () => {
+    const server = await startStreamableHttpProbeServer();
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-streamable-http-reconnect-concurrent",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            streamableProbe: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.port}/mcp`,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      await expect(runtime.callTool("streamableProbe", "structured_probe", {})).resolves.toEqual(
+        expect.objectContaining({
+          structuredContent: { value: "generation:1" },
+        }),
+      );
+
+      await server.resetSession();
+
+      await expect(
+        Promise.all([
+          runtime.callTool("streamableProbe", "structured_probe", {}),
+          runtime.callTool("streamableProbe", "structured_probe", {}),
+        ]),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          structuredContent: { value: "generation:2" },
+        }),
+        expect.objectContaining({
+          structuredContent: { value: "generation:2" },
+        }),
+      ]);
+      expect(server.getListToolsRequestCount()).toBe(2);
+    } finally {
+      await runtime.dispose();
+      await server.close();
+    }
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
