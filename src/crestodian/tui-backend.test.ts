@@ -23,6 +23,7 @@ vi.mock("./probes.js", () => ({
 
 vi.mock("./overview.js", () => ({
   formatCrestodianOverview: () => "Default model: openai/gpt-5.5",
+  formatCrestodianStartupMessage: () => "Default model: openai/gpt-5.5",
   loadCrestodianOverview: vi.fn(async () => ({
     defaultAgentId: "main",
     defaultModel: "openai/gpt-5.5",
