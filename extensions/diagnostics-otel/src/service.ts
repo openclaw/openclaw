@@ -25,7 +25,6 @@ import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
-  onInternalDiagnosticEvent,
   redactSensitiveText,
 } from "../api.js";
 
@@ -1267,92 +1266,96 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
-      unsubscribe = onInternalDiagnosticEvent(
-        (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
-          try {
-            switch (evt.type) {
-              case "model.usage":
-                recordModelUsage(evt, metadata);
-                return;
-              case "webhook.received":
-                recordWebhookReceived(evt);
-                return;
-              case "webhook.processed":
-                recordWebhookProcessed(evt);
-                return;
-              case "webhook.error":
-                recordWebhookError(evt);
-                return;
-              case "message.queued":
-                recordMessageQueued(evt);
-                return;
-              case "message.processed":
-                recordMessageProcessed(evt);
-                return;
-              case "message.delivery.started":
-                recordMessageDeliveryStarted(evt);
-                return;
-              case "message.delivery.completed":
-                recordMessageDeliveryCompleted(evt);
-                return;
-              case "message.delivery.error":
-                recordMessageDeliveryError(evt);
-                return;
-              case "queue.lane.enqueue":
-                recordLaneEnqueue(evt);
-                return;
-              case "queue.lane.dequeue":
-                recordLaneDequeue(evt);
-                return;
-              case "session.state":
-                recordSessionState(evt);
-                return;
-              case "session.stuck":
-                recordSessionStuck(evt);
-                return;
-              case "run.attempt":
-                recordRunAttempt(evt);
-                return;
-              case "diagnostic.heartbeat":
-                recordHeartbeat(evt);
-                return;
-              case "run.completed":
-                recordRunCompleted(evt, metadata);
-                return;
-              case "model.call.completed":
-                recordModelCallCompleted(evt, metadata);
-                return;
-              case "model.call.error":
-                recordModelCallError(evt, metadata);
-                return;
-              case "tool.execution.completed":
-                recordToolExecutionCompleted(evt, metadata);
-                return;
-              case "tool.execution.error":
-                recordToolExecutionError(evt, metadata);
-                return;
-              case "exec.process.completed":
-                recordExecProcessCompleted(evt);
-                return;
-              case "log.record":
-                recordLogRecord?.(evt, metadata);
-                return;
-              case "tool.loop":
-              case "tool.execution.started":
-              case "run.started":
-              case "model.call.started":
-              case "diagnostic.memory.sample":
-              case "diagnostic.memory.pressure":
-              case "payload.large":
-                return;
-            }
-          } catch (err) {
-            ctx.logger.error(
-              `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
-            );
+      const subscribe = ctx.internalDiagnostics?.onEvent;
+      if (!subscribe) {
+        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
+        return;
+      }
+
+      unsubscribe = subscribe((evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+        try {
+          switch (evt.type) {
+            case "model.usage":
+              recordModelUsage(evt, metadata);
+              return;
+            case "webhook.received":
+              recordWebhookReceived(evt);
+              return;
+            case "webhook.processed":
+              recordWebhookProcessed(evt);
+              return;
+            case "webhook.error":
+              recordWebhookError(evt);
+              return;
+            case "message.queued":
+              recordMessageQueued(evt);
+              return;
+            case "message.processed":
+              recordMessageProcessed(evt);
+              return;
+            case "message.delivery.started":
+              recordMessageDeliveryStarted(evt);
+              return;
+            case "message.delivery.completed":
+              recordMessageDeliveryCompleted(evt);
+              return;
+            case "message.delivery.error":
+              recordMessageDeliveryError(evt);
+              return;
+            case "queue.lane.enqueue":
+              recordLaneEnqueue(evt);
+              return;
+            case "queue.lane.dequeue":
+              recordLaneDequeue(evt);
+              return;
+            case "session.state":
+              recordSessionState(evt);
+              return;
+            case "session.stuck":
+              recordSessionStuck(evt);
+              return;
+            case "run.attempt":
+              recordRunAttempt(evt);
+              return;
+            case "diagnostic.heartbeat":
+              recordHeartbeat(evt);
+              return;
+            case "run.completed":
+              recordRunCompleted(evt, metadata);
+              return;
+            case "model.call.completed":
+              recordModelCallCompleted(evt, metadata);
+              return;
+            case "model.call.error":
+              recordModelCallError(evt, metadata);
+              return;
+            case "tool.execution.completed":
+              recordToolExecutionCompleted(evt, metadata);
+              return;
+            case "tool.execution.error":
+              recordToolExecutionError(evt, metadata);
+              return;
+            case "exec.process.completed":
+              recordExecProcessCompleted(evt);
+              return;
+            case "log.record":
+              recordLogRecord?.(evt, metadata);
+              return;
+            case "tool.loop":
+            case "tool.execution.started":
+            case "run.started":
+            case "model.call.started":
+            case "diagnostic.memory.sample":
+            case "diagnostic.memory.pressure":
+            case "payload.large":
+              return;
           }
-        },
-      );
+        } catch (err) {
+          ctx.logger.error(
+            `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
+          );
+        }
+      });
 
       if (logsEnabled) {
         ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/Protobuf)");

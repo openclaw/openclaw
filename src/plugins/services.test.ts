@@ -17,10 +17,10 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
-function createRegistry(services: OpenClawPluginService[]) {
+function createRegistry(services: OpenClawPluginService[], pluginId = "plugin:test") {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
-    pluginId: "plugin:test",
+    pluginId,
     service,
     source: "test",
     rootDir: "/plugins/test-plugin",
@@ -172,5 +172,27 @@ describe("startPluginServices", () => {
     );
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("grants internal diagnostics only to the bundled diagnostics OTEL service", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
+    await startPluginServices({
+      registry: createRegistry([diagnosticsService], "diagnostics-otel"),
+      config: createServiceConfig(),
+    });
+
+    expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+
+    const untrustedContexts: OpenClawPluginServiceContext[] = [];
+    const untrustedService = createTrackingService("diagnostics-otel", {
+      contexts: untrustedContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([untrustedService], "plugin:test"),
+      config: createServiceConfig(),
+    });
+
+    expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
 });

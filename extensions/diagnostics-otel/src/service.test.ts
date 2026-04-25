@@ -111,7 +111,10 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
-import { emitTrustedDiagnosticEvent } from "../../../src/infra/diagnostic-events.js";
+import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "../../../src/infra/diagnostic-events.js";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -167,6 +170,7 @@ function createOtelContext(
     },
     logger: createLogger(),
     stateDir: OTEL_TEST_STATE_DIR,
+    internalDiagnostics: { onEvent: onInternalDiagnosticEvent },
   };
 }
 

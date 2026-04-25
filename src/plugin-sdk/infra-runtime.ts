@@ -37,9 +37,6 @@ export {
   emitDiagnosticEvent,
   isDiagnosticsEnabled,
   onDiagnosticEvent,
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";

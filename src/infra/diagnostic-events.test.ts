@@ -3,7 +3,6 @@ import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
-  isTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -119,16 +118,12 @@ describe("diagnostic-events", () => {
 
   it("marks only internal trusted diagnostic emissions as trusted", async () => {
     const events: Array<{
-      event: Parameters<typeof isTrustedDiagnosticEvent>[0];
       metadataTrusted: boolean;
-      trusted: boolean;
       type: string;
     }> = [];
     onInternalDiagnosticEvent((event, metadata) => {
       events.push({
-        event,
         metadataTrusted: metadata.trusted,
-        trusted: isTrustedDiagnosticEvent(event),
         type: event.type,
       });
     });
@@ -146,17 +141,37 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(
-      events.map(({ metadataTrusted, trusted, type }) => ({ metadataTrusted, trusted, type })),
-    ).toEqual([
-      { metadataTrusted: false, trusted: false, type: "message.queued" },
-      { metadataTrusted: true, trusted: true, type: "model.call.started" },
+    expect(events).toEqual([
+      { metadataTrusted: false, type: "message.queued" },
+      { metadataTrusted: true, type: "model.call.started" },
     ]);
+  });
 
-    const trustedEvent = events[1]?.event;
-    resetDiagnosticEventsForTest();
-    expect(trustedEvent).toBeDefined();
-    expect(trustedEvent ? isTrustedDiagnosticEvent(trustedEvent) : false).toBe(false);
+  it("does not derive trust from mutable global diagnostic state", async () => {
+    const stateKey = Symbol.for("openclaw.diagnosticEventsState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const state = globalStore[stateKey] as Record<string, unknown>;
+    state.trustedEvents = { has: () => true };
+    const events: boolean[] = [];
+    onInternalDiagnosticEvent((_event, metadata) => {
+      events.push(metadata.trusted);
+    });
+
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(Object.getOwnPropertyDescriptor(globalStore, stateKey)).toMatchObject({
+      configurable: false,
+      writable: false,
+    });
+    expect(events).toEqual([false]);
+    delete state.trustedEvents;
   });
 
   it("drops prototype-pollution keys during event enrichment", () => {
@@ -170,7 +185,7 @@ describe("diagnostic-events", () => {
       enumerable: true,
       value: { polluted: true },
     });
-    const events: Array<Parameters<typeof isTrustedDiagnosticEvent>[0]> = [];
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
     onInternalDiagnosticEvent((event) => {
       events.push(event);
     });
