@@ -10,6 +10,7 @@ export {
 } from "./normalize.js";
 export { planManifestModelCatalogRows } from "./manifest-planner.js";
 export type {
+  ManifestModelCatalogConflict,
   ManifestModelCatalogPlan,
   ManifestModelCatalogPlanEntry,
   ManifestModelCatalogPlugin,

@@ -51,6 +51,7 @@ describe("manifest model catalog planner", () => {
       },
     ]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["moonshot/kimi-k2.6"]);
+    expect(plan.conflicts).toEqual([]);
   });
 
   it("filters providers before row planning", () => {
@@ -84,9 +85,10 @@ describe("manifest model catalog planner", () => {
 
     expect(plan.entries.map((entry) => entry.pluginId)).toEqual(["openrouter"]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["openrouter/anthropic/claude-sonnet-4.6"]);
+    expect(plan.conflicts).toEqual([]);
   });
 
-  it("keeps the first registry row for duplicate provider/model keys", () => {
+  it("reports duplicate provider/model keys and excludes conflicted rows", () => {
     const plan = planManifestModelCatalogRows({
       registry: {
         plugins: [
@@ -95,7 +97,10 @@ describe("manifest model catalog planner", () => {
             modelCatalog: {
               providers: {
                 openai: {
-                  models: [{ id: "gpt-5.4", name: "First GPT-5.4" }],
+                  models: [
+                    { id: "gpt-5.4", name: "First GPT-5.4" },
+                    { id: "gpt-5.5", name: "GPT-5.5" },
+                  ],
                 },
               },
             },
@@ -115,10 +120,20 @@ describe("manifest model catalog planner", () => {
     });
 
     expect(plan.entries).toHaveLength(2);
+    expect(plan.conflicts).toEqual([
+      {
+        mergeKey: "openai::gpt-5.4",
+        ref: "openai/gpt-5.4",
+        provider: "openai",
+        modelId: "gpt-5.4",
+        firstPluginId: "z-first",
+        secondPluginId: "a-second",
+      },
+    ]);
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0]).toMatchObject({
-      mergeKey: "openai::gpt-5.4",
-      name: "First GPT-5.4",
+      mergeKey: "openai::gpt-5.5",
+      name: "GPT-5.5",
     });
   });
 });

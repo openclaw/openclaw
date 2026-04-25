@@ -17,9 +17,19 @@ export type ManifestModelCatalogPlanEntry = {
   rows: readonly NormalizedModelCatalogRow[];
 };
 
+export type ManifestModelCatalogConflict = {
+  mergeKey: string;
+  ref: string;
+  provider: string;
+  modelId: string;
+  firstPluginId: string;
+  secondPluginId: string;
+};
+
 export type ManifestModelCatalogPlan = {
   rows: readonly NormalizedModelCatalogRow[];
   entries: readonly ManifestModelCatalogPlanEntry[];
+  conflicts: readonly ManifestModelCatalogConflict[];
 };
 
 export function planManifestModelCatalogRows(params: {
@@ -37,20 +47,36 @@ export function planManifestModelCatalogRows(params: {
     }
   }
 
-  const rows: NormalizedModelCatalogRow[] = [];
-  const seenMergeKeys = new Set<string>();
+  const rowCandidates: NormalizedModelCatalogRow[] = [];
+  const seenRows = new Map<string, { pluginId: string; row: NormalizedModelCatalogRow }>();
+  const conflicts = new Map<string, ManifestModelCatalogConflict>();
   for (const entry of entries) {
     for (const row of entry.rows) {
-      if (seenMergeKeys.has(row.mergeKey)) {
+      const seen = seenRows.get(row.mergeKey);
+      if (seen) {
+        if (!conflicts.has(row.mergeKey)) {
+          conflicts.set(row.mergeKey, {
+            mergeKey: row.mergeKey,
+            ref: seen.row.ref,
+            provider: seen.row.provider,
+            modelId: seen.row.id,
+            firstPluginId: seen.pluginId,
+            secondPluginId: entry.pluginId,
+          });
+        }
         continue;
       }
-      seenMergeKeys.add(row.mergeKey);
-      rows.push(row);
+      seenRows.set(row.mergeKey, { pluginId: entry.pluginId, row });
+      rowCandidates.push(row);
     }
   }
 
+  const conflictedMergeKeys = new Set(conflicts.keys());
+  const rows = rowCandidates.filter((row) => !conflictedMergeKeys.has(row.mergeKey));
+
   return {
     entries,
+    conflicts: [...conflicts.values()],
     rows: rows.toSorted(
       (left, right) =>
         left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
