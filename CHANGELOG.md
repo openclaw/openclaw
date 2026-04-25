@@ -82,6 +82,9 @@ Docs: https://docs.openclaw.ai
 - CLI/agents: keep `openclaw agents list --json` on the config-only path by
   default, avoiding bundled plugin loading unless callers request
   `--bindings`. Fixes #71739. Thanks @kaloster.
+- Plugins/install: force plugin dependency installs to stay project-local even
+  when inherited npm config requests global installs, so successful installs
+  still materialize the plugin's staged `node_modules`.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
   WhatsApp and other native voice-note replies can play as voice messages.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when

@@ -7,6 +7,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { satisfies, validRange, validSemver } from "./semver.runtime.js";
@@ -745,29 +746,13 @@ function storeSourceCheckoutRuntimeDepsCache(params: {
   }
 }
 
-function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const nextEnv = { ...env };
-  delete nextEnv.NPM_CONFIG_CACHE;
-  delete nextEnv.NPM_CONFIG_GLOBAL;
-  delete nextEnv.NPM_CONFIG_LOCATION;
-  delete nextEnv.NPM_CONFIG_PREFIX;
-  delete nextEnv.npm_config_cache;
-  delete nextEnv.npm_config_global;
-  delete nextEnv.npm_config_location;
-  delete nextEnv.npm_config_prefix;
-  return nextEnv;
-}
-
 export function createBundledRuntimeDepsInstallEnv(
   env: NodeJS.ProcessEnv,
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
   return {
-    ...createNestedNpmInstallEnv(env),
+    ...createNpmProjectInstallEnv(env, options),
     npm_config_legacy_peer_deps: "true",
-    npm_config_package_lock: "false",
-    npm_config_save: "false",
-    ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
 }
 

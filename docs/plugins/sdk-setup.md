@@ -554,8 +554,9 @@ openclaw plugins install <package-name>
 
 <Info>
   For npm-sourced installs, `openclaw plugins install` runs
-  `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
-  trees pure JS/TS and avoid packages that require `postinstall` builds.
+  project-local `npm install --ignore-scripts` (no lifecycle scripts), ignoring
+  inherited global npm install settings. Keep plugin dependency trees pure JS/TS
+  and avoid packages that require `postinstall` builds.
 </Info>
 
 Bundled OpenClaw-owned plugins are the only startup repair exception: when a
