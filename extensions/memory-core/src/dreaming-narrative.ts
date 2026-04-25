@@ -240,6 +240,7 @@ async function startNarrativeRunOrFallback(params: {
       params.logger.warn(
         `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
       );
+      return { runId: null, fallbackUsed: false };
     }
     return { runId: null, fallbackUsed: true };
   }

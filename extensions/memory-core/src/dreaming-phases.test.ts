@@ -2373,7 +2373,15 @@ describe("memory-core dreaming phases", () => {
   it("keeps raw light-sleep candidate dumps out of daily memory when narrative fallback is request-scoped", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("");
-    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    let persistedBeforeNarrative = false;
+    subagent.run.mockImplementation(async () => {
+      const daily = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      persistedBeforeNarrative = daily.includes("Candidate:");
+      throw new RequestScopedSubagentRuntimeError();
+    });
     const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
 
     await withDreamingTestClock(async () => {
@@ -2391,6 +2399,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
       "utf-8",
     );
+    expect(persistedBeforeNarrative).toBe(true);
     expect(daily).toContain("- Move backups to S3 Glacier.");
     expect(daily).not.toContain("## Light Sleep");
     expect(daily).not.toContain("Candidate:");
