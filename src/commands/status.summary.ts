@@ -242,7 +242,8 @@ export async function getStatusSummary(
           flags: buildFlags(entry),
         } satisfies SessionStatus;
       })
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  };
 
   const paths = new Set<string>();
   const byAgent = agentList.agents.map((agent) => {
