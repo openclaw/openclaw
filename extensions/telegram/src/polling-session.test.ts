@@ -308,8 +308,8 @@ describe("TelegramPollingSession", () => {
 
     await session.runUntilAbort();
 
-    // Offset confirmation was removed - it caused 409 self-conflicts on restart
-    // when stale polling state existed. The runner handles duplicates via shouldSkipUpdate.
+    // Offset confirmation was removed because it could self-conflict with the runner.
+    // OpenClaw middleware still skips duplicates using the persisted update offset.
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
   });
 

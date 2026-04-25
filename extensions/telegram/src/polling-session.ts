@@ -220,15 +220,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(_bot: TelegramBot): Promise<void> {
-    // Offset confirmation removed - the runner handles duplicates via shouldSkipUpdate.
-    // The confirmation getUpdates call was causing 409 self-conflicts on restart
-    // when stale polling state existed on Telegram's side.
-  }
-
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
-
     const liveness = new TelegramPollingLivenessTracker({
       onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
     });
