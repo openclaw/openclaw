@@ -48,6 +48,10 @@ type SetupOptions = {
   json?: boolean;
 };
 
+type JsonOptions = {
+  json?: boolean;
+};
+
 type CreateOptions = {
   accessToken?: string;
   refreshToken?: string;
@@ -99,6 +103,101 @@ function writeSetupStatus(status: Awaited<ReturnType<GoogleMeetRuntime["setupSta
   writeStdoutLine("Google Meet setup: %s", status.ok ? "OK" : "needs attention");
   for (const check of status.checks) {
     writeStdoutLine("[%s] %s: %s", check.ok ? "ok" : "fail", check.id, check.message);
+  }
+}
+
+function formatBoolean(value: boolean | undefined): string {
+  return typeof value === "boolean" ? (value ? "yes" : "no") : "unknown";
+}
+
+function formatOptional(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "n/a";
+}
+
+function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): void {
+  if (!status.found) {
+    writeStdoutLine("Google Meet session: not found");
+    return;
+  }
+  const sessions = status.session ? [status.session] : (status.sessions ?? []);
+  if (sessions.length === 0) {
+    writeStdoutLine("Google Meet sessions: none");
+    return;
+  }
+  writeStdoutLine("Google Meet sessions: %d", sessions.length);
+  for (const session of sessions) {
+    const health = session.chrome?.health;
+    writeStdoutLine("");
+    writeStdoutLine("session: %s", session.id);
+    writeStdoutLine("url: %s", session.url);
+    writeStdoutLine("state: %s", session.state);
+    writeStdoutLine("transport: %s", session.transport);
+    writeStdoutLine("mode: %s", session.mode);
+    writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
+    writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
+    writeStdoutLine(
+      "provider: %s",
+      session.chrome?.audioBridge?.provider ?? session.realtime.provider ?? "n/a",
+    );
+    writeStdoutLine("in call: %s", formatBoolean(health?.inCall));
+    writeStdoutLine("manual action: %s", formatBoolean(health?.manualActionRequired));
+    if (health?.manualActionRequired) {
+      writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
+      writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    }
+    writeStdoutLine("provider connected: %s", formatBoolean(health?.providerConnected));
+    writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
+    writeStdoutLine("audio input active: %s", formatBoolean(health?.audioInputActive));
+    writeStdoutLine("audio output active: %s", formatBoolean(health?.audioOutputActive));
+    writeStdoutLine(
+      "last input: %s (%s bytes)",
+      formatOptional(health?.lastInputAt),
+      health?.lastInputBytes ?? 0,
+    );
+    writeStdoutLine(
+      "last output: %s (%s bytes)",
+      formatOptional(health?.lastOutputAt),
+      health?.lastOutputBytes ?? 0,
+    );
+    writeStdoutLine("bridge closed: %s", formatBoolean(health?.bridgeClosed));
+    writeStdoutLine("browser url: %s", formatOptional(health?.browserUrl));
+  }
+}
+
+function writeRecoverCurrentTabResult(
+  result: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>,
+): void {
+  writeStdoutLine("Google Meet current tab: %s", result.found ? "found" : "not found");
+  writeStdoutLine("node: %s", result.nodeId);
+  if (result.targetId) {
+    writeStdoutLine("target: %s", result.targetId);
+  }
+  if (result.tab?.url) {
+    writeStdoutLine("tab url: %s", result.tab.url);
+  }
+  writeStdoutLine("message: %s", result.message);
+  if (result.browser) {
+    writeDoctorStatus({
+      found: true,
+      session: {
+        id: "current-tab",
+        url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
+        transport: "chrome-node",
+        mode: "transcribe",
+        state: "active",
+        createdAt: "",
+        updatedAt: "",
+        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        realtime: { enabled: false, toolPolicy: "safe-read-only" },
+        chrome: {
+          audioBackend: "blackhole-2ch",
+          launched: true,
+          nodeId: result.nodeId,
+          health: result.browser,
+        },
+        notes: [],
+      },
+    });
   }
 }
 
@@ -477,6 +576,36 @@ export function registerGoogleMeetCli(params: {
     .action(async (sessionId?: string) => {
       const rt = await params.ensureRuntime();
       writeStdoutJson(rt.status(sessionId));
+    });
+
+  root
+    .command("doctor")
+    .description("Show human-readable Meet session/browser/realtime health")
+    .argument("[session-id]", "Meet session ID")
+    .option("--json", "Print JSON output", false)
+    .action(async (sessionId: string | undefined, options: JsonOptions) => {
+      const rt = await params.ensureRuntime();
+      const status = rt.status(sessionId);
+      if (options.json) {
+        writeStdoutJson(status);
+        return;
+      }
+      writeDoctorStatus(status);
+    });
+
+  root
+    .command("recover-tab")
+    .description("Focus and inspect an existing Google Meet tab on the Chrome node")
+    .argument("[url]", "Optional Meet URL to match")
+    .option("--json", "Print JSON output", false)
+    .action(async (url: string | undefined, options: JsonOptions) => {
+      const rt = await params.ensureRuntime();
+      const result = await rt.recoverCurrentTab({ url });
+      if (options.json) {
+        writeStdoutJson(result);
+        return;
+      }
+      writeRecoverCurrentTabResult(result);
     });
 
   root

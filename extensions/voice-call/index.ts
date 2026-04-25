@@ -100,6 +100,11 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     store: { label: "Call Log Store Path", advanced: true },
+    agentId: {
+      label: "Response Agent ID",
+      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      advanced: true,
+    },
     responseModel: {
       label: "Response Model",
       help: "Optional override. Falls back to the runtime default model when unset.",
