@@ -99,6 +99,19 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("reenables local-check policy for changed typecheck commands", () => {
+    const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
+    });
+
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
+      OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.test.ts"]);
 

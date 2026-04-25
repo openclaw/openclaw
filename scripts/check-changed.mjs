@@ -7,6 +7,7 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { resolveLocalHeavyCheckEnv } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -17,21 +18,23 @@ const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 
 export function createChangedCheckVitestEnv(baseEnv = process.env) {
+  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
   const env = {
-    ...baseEnv,
+    ...resolvedBaseEnv,
     [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
-      baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
+      resolvedBaseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
       CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
-    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]: baseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
+    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]:
+      resolvedBaseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
   };
 
   const hasWorkerOverride = Boolean(
-    (baseEnv.OPENCLAW_VITEST_MAX_WORKERS ?? baseEnv.OPENCLAW_TEST_WORKERS)?.trim(),
+    (resolvedBaseEnv.OPENCLAW_VITEST_MAX_WORKERS ?? resolvedBaseEnv.OPENCLAW_TEST_WORKERS)?.trim(),
   );
-  const hasParallelOverride = Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL?.trim());
-  const serialOverride = baseEnv.OPENCLAW_TEST_PROJECTS_SERIAL?.trim();
+  const hasParallelOverride = Boolean(resolvedBaseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL?.trim());
+  const serialOverride = resolvedBaseEnv.OPENCLAW_TEST_PROJECTS_SERIAL?.trim();
   if (
-    !isCiLikeEnv(baseEnv) &&
+    !isCiLikeEnv(resolvedBaseEnv) &&
     !hasWorkerOverride &&
     !hasParallelOverride &&
     serialOverride !== "0"
@@ -45,12 +48,13 @@ export function createChangedCheckVitestEnv(baseEnv = process.env) {
 
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
+  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
       commands.push({ name, args, ...(env ? { env } : {}) });
     }
   };
-  const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(options.env));
+  const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
 
   add("conflict markers", ["check:no-conflict-markers"]);
 
@@ -159,7 +163,8 @@ export function createChangedCheckPlan(result, options = {}) {
 }
 
 export async function runChangedCheck(result, options = {}) {
-  const plan = createChangedCheckPlan(result, options);
+  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const plan = createChangedCheckPlan(result, { ...options, env: baseEnv });
   printPlan(result, plan, options);
 
   if (options.dryRun) {
@@ -267,7 +272,7 @@ async function runCommand(command, timings) {
     status = await runManagedCommand({
       bin: command.bin,
       args: command.args,
-      env: command.env,
+      env: command.env ?? resolveLocalHeavyCheckEnv(),
     });
   } catch (error) {
     console.error(error);

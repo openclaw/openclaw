@@ -20,6 +20,21 @@ export function isLocalCheckEnabled(env) {
   return raw !== "0" && raw !== "false";
 }
 
+export function isCiLikeEnv(env = process.env) {
+  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+}
+
+export function resolveLocalHeavyCheckEnv(env = process.env) {
+  if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    OPENCLAW_LOCAL_CHECK: "1",
+  };
+}
+
 export function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
