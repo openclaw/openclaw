@@ -9,7 +9,9 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-const FRESH_CRON_SESSION_PRESERVED_FIELDS = [
+type FreshCronSessionSanitizeMode = "isolated-force-new" | "stale-rollover";
+
+const FRESH_CRON_SAFE_PREFERENCE_FIELDS = [
   "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
@@ -17,9 +19,14 @@ const FRESH_CRON_SESSION_PRESERVED_FIELDS = [
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",
-  "elevatedLevel",
   "ttsAuto",
   "responseUsage",
+  "label",
+  "displayName",
+] as const satisfies readonly (keyof SessionEntry)[];
+
+const STALE_SESSION_CONTEXT_PRESERVED_FIELDS = [
+  "elevatedLevel",
   "groupActivation",
   "groupActivationNeedsSystemIntro",
   "sendPolicy",
@@ -27,8 +34,6 @@ const FRESH_CRON_SESSION_PRESERVED_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "label",
-  "displayName",
   "channel",
   "groupId",
   "subject",
@@ -42,36 +47,56 @@ function cloneSessionField<T>(value: T): T {
   return globalThis.structuredClone(value);
 }
 
-function clearFreshCronSessionState(entry: SessionEntry): SessionEntry {
-  const next = {} as SessionEntry;
-
-  for (const field of FRESH_CRON_SESSION_PRESERVED_FIELDS) {
+function copySessionFields(
+  target: SessionEntry,
+  entry: SessionEntry,
+  fields: readonly (keyof SessionEntry)[],
+): void {
+  for (const field of fields) {
     if (entry[field] !== undefined) {
-      next[field] = cloneSessionField(entry[field]) as never;
+      target[field] = cloneSessionField(entry[field]) as never;
     }
   }
+}
 
+function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
   if (entry.modelOverrideSource !== "auto") {
     if (entry.modelOverride !== undefined) {
-      next.modelOverride = entry.modelOverride;
+      target.modelOverride = entry.modelOverride;
     }
     if (entry.providerOverride !== undefined) {
-      next.providerOverride = entry.providerOverride;
+      target.providerOverride = entry.providerOverride;
     }
     if (entry.modelOverrideSource !== undefined) {
-      next.modelOverrideSource = entry.modelOverrideSource;
+      target.modelOverrideSource = entry.modelOverrideSource;
     }
   }
+}
 
+function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
   if (entry.authProfileOverrideSource === "user") {
     if (entry.authProfileOverride !== undefined) {
-      next.authProfileOverride = entry.authProfileOverride;
+      target.authProfileOverride = entry.authProfileOverride;
     }
-    next.authProfileOverrideSource = entry.authProfileOverrideSource;
+    target.authProfileOverrideSource = entry.authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
-      next.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      target.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }
   }
+}
+
+function sanitizeFreshCronSessionEntry(
+  entry: SessionEntry,
+  mode: FreshCronSessionSanitizeMode,
+): SessionEntry {
+  const next = {} as SessionEntry;
+
+  copySessionFields(next, entry, FRESH_CRON_SAFE_PREFERENCE_FIELDS);
+  if (mode === "stale-rollover") {
+    copySessionFields(next, entry, STALE_SESSION_CONTEXT_PRESERVED_FIELDS);
+  }
+  preserveNonAutoModelOverride(next, entry);
+  preserveUserAuthOverride(next, entry);
 
   return next;
 }
@@ -132,7 +157,14 @@ export function resolveCronSession(params: {
     previousSessionId,
   });
 
-  const baseEntry = entry ? (isNewSession ? clearFreshCronSessionState(entry) : entry) : undefined;
+  const baseEntry = entry
+    ? isNewSession
+      ? sanitizeFreshCronSessionEntry(
+          entry,
+          params.forceNew ? "isolated-force-new" : "stale-rollover",
+        )
+      : entry
+    : undefined;
 
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.

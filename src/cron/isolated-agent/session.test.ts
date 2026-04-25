@@ -278,6 +278,31 @@ describe("resolveCronSession", () => {
             tools: { listChars: 0, schemaChars: 0, entries: [] },
           },
           pluginDebugEntries: [{ pluginId: "test", lines: ["old"] }],
+          elevatedLevel: "full",
+          sendPolicy: "deny",
+          groupActivation: "always",
+          groupActivationNeedsSystemIntro: true,
+          queueMode: "interrupt",
+          queueDebounceMs: 500,
+          queueCap: 25,
+          queueDrop: "old",
+          channel: "telegram" as never,
+          groupId: "group-1",
+          subject: "old subject",
+          groupChannel: "ops",
+          space: "team",
+          origin: {
+            provider: "telegram",
+            to: "old-chat",
+          },
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "old-acp",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: NOW_MS - 1_000,
+          },
           authProfileOverride: "auto-auth",
           authProfileOverrideSource: "auto",
           authProfileOverrideCompactionCount: 2,
@@ -327,6 +352,21 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
       expect(result.sessionEntry.systemPromptReport).toBeUndefined();
       expect(result.sessionEntry.pluginDebugEntries).toBeUndefined();
+      expect(result.sessionEntry.elevatedLevel).toBeUndefined();
+      expect(result.sessionEntry.sendPolicy).toBeUndefined();
+      expect(result.sessionEntry.groupActivation).toBeUndefined();
+      expect(result.sessionEntry.groupActivationNeedsSystemIntro).toBeUndefined();
+      expect(result.sessionEntry.queueMode).toBeUndefined();
+      expect(result.sessionEntry.queueDebounceMs).toBeUndefined();
+      expect(result.sessionEntry.queueCap).toBeUndefined();
+      expect(result.sessionEntry.queueDrop).toBeUndefined();
+      expect(result.sessionEntry.channel).toBeUndefined();
+      expect(result.sessionEntry.groupId).toBeUndefined();
+      expect(result.sessionEntry.subject).toBeUndefined();
+      expect(result.sessionEntry.groupChannel).toBeUndefined();
+      expect(result.sessionEntry.space).toBeUndefined();
+      expect(result.sessionEntry.origin).toBeUndefined();
+      expect(result.sessionEntry.acp).toBeUndefined();
       expect(result.sessionEntry.authProfileOverride).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
@@ -358,6 +398,28 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+    });
+
+    it("preserves session context for stale non-isolated rollovers", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-321",
+          updatedAt: NOW_MS - 1000,
+          elevatedLevel: "full",
+          sendPolicy: "deny",
+          queueMode: "collect",
+          channel: "discord" as never,
+          origin: { provider: "discord", to: "old-channel" },
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.elevatedLevel).toBe("full");
+      expect(result.sessionEntry.sendPolicy).toBe("deny");
+      expect(result.sessionEntry.queueMode).toBe("collect");
+      expect(result.sessionEntry.channel).toBe("discord");
+      expect(result.sessionEntry.origin).toEqual({ provider: "discord", to: "old-channel" });
     });
 
     it("clears delivery routing metadata when session is stale", () => {
