@@ -35,8 +35,8 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
 
   if (platform === "win32") {
     return {
-      argv: ["explorer.exe"],
-      command: "explorer.exe",
+      argv: ["cmd.exe", "/c", "start", ""],
+      command: "cmd.exe",
     };
   }
 
