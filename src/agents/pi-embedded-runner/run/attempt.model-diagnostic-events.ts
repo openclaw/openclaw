@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
   diagnosticProviderRequestIdHash,
@@ -12,6 +13,12 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookModelCallEndedEvent,
+  PluginHookModelCallStartedEvent,
+} from "../../../plugins/hook-types.js";
 
 export { diagnosticErrorCategory };
 
@@ -34,6 +41,10 @@ type ModelCallEventBase = Omit<
 type ModelCallErrorFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.error" }>,
   "errorCategory" | "upstreamRequestIdHash"
+>;
+type ModelCallEndedHookFields = Pick<
+  PluginHookModelCallEndedEvent,
+  "durationMs" | "outcome" | "errorCategory" | "upstreamRequestIdHash"
 >;
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
@@ -90,6 +101,102 @@ function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   };
 }
 
+function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelCallStartedEvent {
+  return {
+    runId: eventBase.runId,
+    callId: eventBase.callId,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    provider: eventBase.provider,
+    model: eventBase.model,
+    ...(eventBase.api ? { api: eventBase.api } : {}),
+    ...(eventBase.transport ? { transport: eventBase.transport } : {}),
+  };
+}
+
+function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentContext {
+  return Object.freeze({
+    runId: eventBase.runId,
+    trace: eventBase.trace,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    modelProviderId: eventBase.provider,
+    modelId: eventBase.model,
+  }) as PluginHookAgentContext;
+}
+
+function dispatchModelCallStartedHook(eventBase: ModelCallEventBase): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("model_call_started")) {
+    return;
+  }
+  const event = Object.freeze(modelCallHookEventBase(eventBase)) as PluginHookModelCallStartedEvent;
+  const hookCtx = modelCallHookContext(eventBase);
+  fireAndForgetBoundedHook(
+    () => hookRunner.runModelCallStarted(event, hookCtx),
+    "model_call_started plugin hook failed",
+  );
+}
+
+function dispatchModelCallEndedHook(
+  eventBase: ModelCallEventBase,
+  fields: ModelCallEndedHookFields,
+): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("model_call_ended")) {
+    return;
+  }
+  const event = Object.freeze({
+    ...modelCallHookEventBase(eventBase),
+    ...fields,
+  }) as PluginHookModelCallEndedEvent;
+  const hookCtx = modelCallHookContext(eventBase);
+  fireAndForgetBoundedHook(
+    () => hookRunner.runModelCallEnded(event, hookCtx),
+    "model_call_ended plugin hook failed",
+  );
+}
+
+function emitModelCallStarted(eventBase: ModelCallEventBase): void {
+  emitTrustedDiagnosticEvent({
+    type: "model.call.started",
+    ...eventBase,
+  });
+  dispatchModelCallStartedHook(eventBase);
+}
+
+function emitModelCallCompleted(eventBase: ModelCallEventBase, startedAt: number): void {
+  const durationMs = Date.now() - startedAt;
+  emitTrustedDiagnosticEvent({
+    type: "model.call.completed",
+    ...eventBase,
+    durationMs,
+  });
+  dispatchModelCallEndedHook(eventBase, {
+    durationMs,
+    outcome: "completed",
+  });
+}
+
+function emitModelCallError(
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  fields: ModelCallErrorFields,
+): void {
+  const durationMs = Date.now() - startedAt;
+  emitTrustedDiagnosticEvent({
+    type: "model.call.error",
+    ...eventBase,
+    durationMs,
+    ...fields,
+  });
+  dispatchModelCallEndedHook(eventBase, {
+    durationMs,
+    outcome: "error",
+    ...fields,
+  });
+}
+
 async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<void> {
   let returnResult: unknown;
   try {
@@ -137,29 +244,15 @@ async function* observeModelCallIterator<T>(
       yield next.value;
     }
     terminalEmitted = true;
-    emitTrustedDiagnosticEvent({
-      type: "model.call.completed",
-      ...eventBase,
-      durationMs: Date.now() - startedAt,
-    });
+    emitModelCallCompleted(eventBase, startedAt);
   } catch (err) {
     terminalEmitted = true;
-    emitTrustedDiagnosticEvent({
-      type: "model.call.error",
-      ...eventBase,
-      durationMs: Date.now() - startedAt,
-      ...modelCallErrorFields(err),
-    });
+    emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
     throw err;
   } finally {
     if (!terminalEmitted) {
       await safeReturnIterator(iterator);
-      emitTrustedDiagnosticEvent({
-        type: "model.call.error",
-        ...eventBase,
-        durationMs: Date.now() - startedAt,
-        errorCategory: "StreamAbandoned",
-      });
+      emitModelCallError(eventBase, startedAt, { errorCategory: "StreamAbandoned" });
     }
   }
 }
@@ -209,11 +302,7 @@ function observeModelCallResult(
       startedAt,
     );
   }
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...eventBase,
-    durationMs: Date.now() - startedAt,
-  });
+  emitModelCallCompleted(eventBase, startedAt);
   return result;
 }
 
@@ -225,10 +314,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
     const eventBase = baseModelCallEvent(ctx, callId, trace);
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      ...eventBase,
-    });
+    emitModelCallStarted(eventBase);
     const startedAt = Date.now();
 
     try {
@@ -237,24 +323,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt),
           (err) => {
-            emitTrustedDiagnosticEvent({
-              type: "model.call.error",
-              ...eventBase,
-              durationMs: Date.now() - startedAt,
-              ...modelCallErrorFields(err),
-            });
+            emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
             throw err;
           },
         );
       }
       return observeModelCallResult(result, eventBase, startedAt);
     } catch (err) {
-      emitTrustedDiagnosticEvent({
-        type: "model.call.error",
-        ...eventBase,
-        durationMs: Date.now() - startedAt,
-        ...modelCallErrorFields(err),
-      });
+      emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
       throw err;
     }
   }) as StreamFn;

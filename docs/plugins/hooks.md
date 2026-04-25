@@ -68,6 +68,7 @@ observation-only.
 
 **Conversation observation**
 
+- `model_call_started` / `model_call_ended` — observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` — observe provider input (system prompt, prompt, history)
 - `llm_output` — observe provider output
 
@@ -161,6 +162,13 @@ so your plugin does not depend on a legacy combined phase.
 
 `before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
 identify the active run. The same value is also available on `ctx.runId`.
+
+Use `model_call_started` and `model_call_ended` for provider-call telemetry
+that should not receive raw prompts, history, responses, headers, request
+bodies, or provider request IDs. These hooks include stable metadata such as
+`runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
+`durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
+bounded provider request-id hash.
 
 Non-bundled plugins that need `llm_input`, `llm_output`, or `agent_end` must set:
 
