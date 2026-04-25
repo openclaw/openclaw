@@ -24,7 +24,7 @@ vi.mock("../../media/store.js", () => ({
 vi.mock("../screenshot.js", () => ({
   normalizeBrowserScreenshot: vi.fn().mockResolvedValue({
     buffer: Buffer.from("normalized"),
-    contentType: "image/png",
+    contentType: "image/jpeg",
   }),
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 10_000_000,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 1920,
@@ -90,6 +90,7 @@ const FAKE_PROFILE = {
 
 const FAKE_TAB = {
   targetId: "target-1",
+  title: "Example",
   url: "http://example.com",
   wsUrl: "ws://127.0.0.1:9222/devtools/page/target-1",
 };
@@ -155,11 +156,11 @@ beforeEach(() => {
   mockCaptureScreenshot.mockResolvedValue(Buffer.from("cdp-png"));
   mockGetBrowserProfileCapabilities.mockReturnValue({ usesChromeMcp: false } as never);
   mockShouldUsePlaywrightForScreenshot.mockReturnValue(false);
-  mockNormalize.mockResolvedValue({ buffer: Buffer.from("normalized"), contentType: "image/png" });
+  mockNormalize.mockResolvedValue({ buffer: Buffer.from("normalized"), contentType: "image/jpeg" });
 });
 
 afterEach(() => {
-  vi.resetAllMocks();
+  vi.clearAllMocks();
 });
 
 describe("screenshot route — hyprlandViewportCapture flag", () => {

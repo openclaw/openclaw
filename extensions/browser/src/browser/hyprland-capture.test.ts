@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    { execFile: vi.fn() },
+  const { mockNodeChildProcessExecFile } =
+    await import("../../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeChildProcessExecFile(
+    vi.fn() as unknown as typeof import("node:child_process").execFile,
   );
 });
 
@@ -62,11 +62,18 @@ const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function makeHappyPathExecFile(): void {
   stubExecFile((_cmd, args, cb) => {
-    if (args.includes("instances")) return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
-    if (args.includes("monitors")) return cb(null, JSON.stringify([FAKE_MONITOR]), "");
-    if (args.includes("clients")) return cb(null, JSON.stringify([FAKE_CLIENT]), "");
-    if (args.includes("movetoworkspacesilent") || args.includes("output"))
+    if (args.includes("instances")) {
+      return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
+    }
+    if (args.includes("monitors")) {
+      return cb(null, JSON.stringify([FAKE_MONITOR]), "");
+    }
+    if (args.includes("clients")) {
+      return cb(null, JSON.stringify([FAKE_CLIENT]), "");
+    }
+    if (args.includes("movetoworkspacesilent") || args.includes("output")) {
       return cb(null, "ok", "");
+    }
     return cb(null, PNG_BYTES, Buffer.alloc(0));
   });
 }
@@ -123,7 +130,9 @@ describe("tryHyprlandViewportCapture — session detection", () => {
 
   it("returns null when no Hyprland instances are running", async () => {
     stubExecFile((_cmd, args, cb) => {
-      if (args.includes("instances")) return cb(null, "[]", "");
+      if (args.includes("instances")) {
+        return cb(null, "[]", "");
+      }
       cb(new Error("unexpected call"), "", "");
     });
     const result = await tryHyprlandViewportCapture({ browserPid: 42 });
@@ -133,7 +142,9 @@ describe("tryHyprlandViewportCapture — session detection", () => {
   it("returns null when socket file does not exist", async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     stubExecFile((_cmd, args, cb) => {
-      if (args.includes("instances")) return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
+      if (args.includes("instances")) {
+        return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
+      }
       cb(new Error("unexpected call"), "", "");
     });
     const result = await tryHyprlandViewportCapture({ browserPid: 42 });
@@ -148,7 +159,9 @@ describe("tryHyprlandViewportCapture — cache and lifecycle", () => {
 
   it("returns null and clears cache when setup throws", async () => {
     stubExecFile((_cmd, args, cb) => {
-      if (args.includes("instances")) return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
+      if (args.includes("instances")) {
+        return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
+      }
       cb(new Error("hyprctl monitors failed"), "", "");
     });
     const result = await tryHyprlandViewportCapture({ browserPid: 42 });
@@ -197,10 +210,15 @@ describe("tryHyprlandViewportCapture — concurrent calls", () => {
         instanceCallCount++;
         return cb(null, JSON.stringify([FAKE_INSTANCE]), "");
       }
-      if (args.includes("monitors")) return cb(null, JSON.stringify([FAKE_MONITOR]), "");
-      if (args.includes("clients")) return cb(null, JSON.stringify([FAKE_CLIENT]), "");
-      if (args.includes("movetoworkspacesilent") || args.includes("output"))
+      if (args.includes("monitors")) {
+        return cb(null, JSON.stringify([FAKE_MONITOR]), "");
+      }
+      if (args.includes("clients")) {
+        return cb(null, JSON.stringify([FAKE_CLIENT]), "");
+      }
+      if (args.includes("movetoworkspacesilent") || args.includes("output")) {
         return cb(null, "ok", "");
+      }
       return cb(null, PNG_BYTES, Buffer.alloc(0));
     });
 

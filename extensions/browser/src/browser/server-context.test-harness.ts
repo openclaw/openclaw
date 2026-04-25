@@ -45,6 +45,7 @@ export function makeBrowserServerState(params?: {
     headless: true,
     noSandbox: false,
     attachOnly: false,
+    hyprlandViewportCapture: false,
     ssrfPolicy: { allowPrivateNetwork: true },
     tabCleanup: {
       enabled: true,

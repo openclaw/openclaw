@@ -170,7 +170,7 @@ Notes:
 
 `Page.captureScreenshot` times out (~10s) on certain pages in headed local-managed mode on Hyprland, even though the page loaded successfully.
 
-### Root Cause
+### Cause
 
 Hyprland does not render windows without an assigned physical output. The CDP raster path never receives a frame, causing the timeout.
 

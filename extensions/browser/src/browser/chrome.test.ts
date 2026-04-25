@@ -838,6 +838,7 @@ describe("browser chrome launch args", () => {
         headless: false,
         noSandbox: false,
         attachOnly: false,
+        hyprlandViewportCapture: false,
         ssrfPolicy: { allowPrivateNetwork: true },
         tabCleanup: {
           enabled: true,

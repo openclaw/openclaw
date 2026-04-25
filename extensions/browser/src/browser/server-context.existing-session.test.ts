@@ -51,6 +51,7 @@ function makeState(): BrowserServerState {
       headless: false,
       noSandbox: false,
       attachOnly: false,
+      hyprlandViewportCapture: false,
       defaultProfile: "chrome-live",
       tabCleanup: {
         enabled: true,

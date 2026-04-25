@@ -16,9 +16,13 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
-vi.mock("node:child_process", () => ({
-  spawnSync: vi.fn(),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    { spawnSync: vi.fn() },
+  );
+});
 
 const spawnSyncMock = vi.mocked(spawnSync);
 const tempDirs: string[] = [];

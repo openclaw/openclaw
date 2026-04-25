@@ -34,6 +34,7 @@ export function makeState(
       headlessSource: "config",
       noSandbox: false,
       attachOnly: false,
+      hyprlandViewportCapture: false,
       ssrfPolicy: { allowPrivateNetwork: true },
       tabCleanup: {
         enabled: true,
