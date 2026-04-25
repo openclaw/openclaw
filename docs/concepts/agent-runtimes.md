@@ -14,7 +14,7 @@ the finished turn to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer         | Examples                              | What It Means                                                       |
+| Layer         | Examples                              | What it means                                                       |
 | ------------- | ------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
 | Model         | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
@@ -97,7 +97,7 @@ routed back to PI just because defaults used `fallback: "pi"`.
 When a runtime is not PI, it should document what OpenClaw surfaces it supports.
 Use this shape for runtime docs:
 
-| Question                               | Why It Matters                                                                                    |
+| Question                               | Why it matters                                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Who owns the model loop?               | Determines where retries, tool continuation, and final answer decisions happen.                   |
 | Who owns canonical thread history?     | Determines whether OpenClaw can edit history or only mirror it.                                   |

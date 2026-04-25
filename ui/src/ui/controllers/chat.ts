@@ -1,3 +1,4 @@
+import { isHeartbeatOkResponse } from "../../../../src/auto-reply/heartbeat-filter.js";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -71,8 +72,141 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+function isTextOnlyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  let sawText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text") {
+      return false;
+    }
+    sawText = true;
+    if (typeof entry.text !== "string") {
+      return false;
+    }
+  }
+  return sawText;
+}
+
+function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
+    return false;
+  }
+  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+    return false;
+  }
+  return (extractText(message)?.trim() ?? "") === "";
+}
+
+function isAssistantHeartbeatAck(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "assistant") {
+    return false;
+  }
+  const content = entry.content ?? entry.text;
+  return isHeartbeatOkResponse({ role, content });
+}
+
 function shouldHideHistoryMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+  return (
+    isAssistantSilentReply(message) ||
+    isAssistantHeartbeatAck(message) ||
+    isSyntheticTranscriptRepairToolResult(message) ||
+    isEmptyUserTextOnlyMessage(message)
+  );
+}
+
+function hasTranscriptMeta(message: unknown): boolean {
+  return Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { __openclaw?: unknown }).__openclaw &&
+    typeof (message as { __openclaw?: unknown }).__openclaw === "object",
+  );
+}
+
+function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  return role === "user" || role === "assistant";
+}
+
+function messageDisplaySignature(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  if (!role) {
+    return null;
+  }
+  const text = extractText(message)?.trim();
+  if (text) {
+    return `${role}:text:${text}`;
+  }
+  try {
+    const content = JSON.stringify((message as { content?: unknown }).content ?? null);
+    return `${role}:content:${content}`;
+  } catch {
+    return null;
+  }
+}
+
+function preserveOptimisticTailMessages(
+  historyMessages: unknown[],
+  previousMessages: unknown[],
+): unknown[] {
+  if (historyMessages.length === 0 || previousMessages.length === 0) {
+    return historyMessages;
+  }
+  const historySignatures = new Set(
+    historyMessages
+      .map((message) => messageDisplaySignature(message))
+      .filter((signature): signature is string => Boolean(signature)),
+  );
+  let sharedPreviousIndex = -1;
+  for (let index = previousMessages.length - 1; index >= 0; index--) {
+    const signature = messageDisplaySignature(previousMessages[index]);
+    if (signature && historySignatures.has(signature)) {
+      sharedPreviousIndex = index;
+      break;
+    }
+  }
+  if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  const optimisticTail: unknown[] = [];
+  for (const message of previousMessages.slice(sharedPreviousIndex + 1)) {
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      return historyMessages;
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature || historySignatures.has(signature)) {
+      return historyMessages;
+    }
+    optimisticTail.push(message);
+  }
+  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
@@ -143,6 +277,7 @@ export async function loadChatHistory(state: ChatState) {
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
+  const previousMessages = state.chatMessages;
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -177,7 +312,8 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.

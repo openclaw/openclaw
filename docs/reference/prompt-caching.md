@@ -16,7 +16,7 @@ cache values still take precedence over transcript fallback values.
 
 Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
 
-This page covers all cache-related knobs that affect prompt reuse and token cost.
+The sections below cover every cache-related knob that affects prompt reuse and token cost.
 
 Provider references:
 
@@ -338,9 +338,9 @@ Defaults:
 Related docs:
 
 - [Anthropic](/providers/anthropic)
-- [Token Use and Costs](/reference/token-use)
-- [Session Pruning](/concepts/session-pruning)
-- [Gateway Configuration Reference](/gateway/configuration-reference)
+- [Token use and costs](/reference/token-use)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)
 
 ## Related
 

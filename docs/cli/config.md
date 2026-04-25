@@ -186,7 +186,7 @@ openclaw config set secrets.providers.vaultfile \
   --strict-json
 ```
 
-## Provider Builder Flags
+## Provider builder flags
 
 Provider builder targets must use `secrets.providers.<alias>` as the path.
 
@@ -279,7 +279,7 @@ Dry-run behavior:
 - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
 - `errors`: structured schema/resolvability failures when `ok=false`
 
-### JSON Output Shape
+### JSON output shape
 
 ```json5
 {

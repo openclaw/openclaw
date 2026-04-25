@@ -423,13 +423,13 @@ observe results through `after_tool_call`, and participate in Codex
 arguments yet. The exact Codex runtime support boundary lives in the
 [Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
 
-For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
-- [Community Plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) — create your own plugin
+- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) — manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) — capability model and load pipeline
+- [Community plugins](/plugins/community) — third-party listings

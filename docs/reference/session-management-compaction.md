@@ -7,9 +7,7 @@ read_when:
 title: "Session management deep dive"
 ---
 
-# Session Management & Compaction (Deep Dive)
-
-This document explains how OpenClaw manages sessions end-to-end:
+This page explains how OpenClaw manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
@@ -21,12 +19,12 @@ This document explains how OpenClaw manages sessions end-to-end:
 
 If you want a higher-level overview first, start with:
 
-- [/concepts/session](/concepts/session)
-- [/concepts/compaction](/concepts/compaction)
-- [/concepts/memory](/concepts/memory)
-- [/concepts/memory-search](/concepts/memory-search)
-- [/concepts/session-pruning](/concepts/session-pruning)
-- [/reference/transcript-hygiene](/reference/transcript-hygiene)
+- [Session management](/concepts/session)
+- [Compaction](/concepts/compaction)
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Session pruning](/concepts/session-pruning)
+- [Transcript hygiene](/reference/transcript-hygiene)
 
 ---
 
