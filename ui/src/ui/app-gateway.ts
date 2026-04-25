@@ -103,6 +103,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  reconcileWebPushState?: () => Promise<void> | void;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -340,7 +341,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
       // Re-run push reconciliation now that the gateway client is available.
-      void (host as unknown as OpenClawApp).reconcileWebPushState();
+      void host.reconcileWebPushState?.();
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {

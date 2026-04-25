@@ -374,6 +374,10 @@ type ConfigTabOverrides = Pick<
       | "includeVirtualSections"
       | "settingsLayout"
       | "onBackToQuick"
+      | "webPush"
+      | "onWebPushSubscribe"
+      | "onWebPushUnsubscribe"
+      | "onWebPushTest"
     >
   >;
 

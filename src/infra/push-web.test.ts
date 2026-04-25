@@ -2,13 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import webPush from "web-push";
 import {
+  broadcastWebPush,
   clearWebPushSubscription,
   clearWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
   loadWebPushSubscription,
   registerWebPushSubscription,
   resolveVapidKeys,
+  sendWebPushNotification,
 } from "./push-web.js";
 
 // Stub resolveStateDir so tests use a temp directory.
@@ -31,6 +34,7 @@ vi.mock("web-push", () => ({
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "push-web-test-"));
+  vi.clearAllMocks();
 });
 
 afterEach(async () => {
@@ -176,5 +180,48 @@ describe("subscription CRUD", () => {
         baseDir: tmpDir,
       }),
     ).rejects.toThrow("invalid push subscription keys");
+  });
+});
+
+describe("sending", () => {
+  const keys = { p256dh: "p256dh-key", auth: "auth-key" };
+
+  it("configures VAPID details for direct sends", async () => {
+    const sub = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/direct",
+      keys,
+      baseDir: tmpDir,
+    });
+
+    const result = await sendWebPushNotification(sub, { title: "Direct" });
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
+      "mailto:openclaw@localhost",
+      "test-public-key-base64url",
+      "test-private-key-base64url",
+    );
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(1);
+  });
+
+  it("configures VAPID details once before broadcasting to subscribers", async () => {
+    await registerWebPushSubscription({
+      endpoint: "https://push.example.com/a",
+      keys,
+      baseDir: tmpDir,
+    });
+    await registerWebPushSubscription({
+      endpoint: "https://push.example.com/b",
+      keys,
+      baseDir: tmpDir,
+    });
+
+    const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
+
+    expect(results).toHaveLength(2);
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
   });
 });

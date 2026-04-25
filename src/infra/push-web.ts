@@ -152,10 +152,10 @@ export async function registerWebPushSubscription(
   const { endpoint, keys, baseDir } = params;
 
   if (!isValidEndpoint(endpoint)) {
-    throw new Error("Invalid push subscription endpoint: must be an HTTPS URL under 2048 chars");
+    throw new Error("invalid push subscription endpoint: must be an HTTPS URL under 2048 chars");
   }
   if (!isValidKey(keys.p256dh) || !isValidKey(keys.auth)) {
-    throw new Error("Invalid push subscription keys: must be non-empty strings under 512 chars");
+    throw new Error("invalid push subscription keys: must be non-empty strings under 512 chars");
   }
 
   return await withLock(async () => {
@@ -238,13 +238,25 @@ export type WebPushPayload = {
   url?: string;
 };
 
+function applyVapidDetails(keys: VapidKeyPair): void {
+  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
+}
+
 export async function sendWebPushNotification(
   subscription: WebPushSubscription,
   payload: WebPushPayload,
   vapidKeys?: VapidKeyPair,
 ): Promise<WebPushSendResult> {
   const keys = vapidKeys ?? (await resolveVapidKeys());
+  applyVapidDetails(keys);
 
+  return sendPreparedWebPushNotification(subscription, payload);
+}
+
+async function sendPreparedWebPushNotification(
+  subscription: WebPushSubscription,
+  payload: WebPushPayload,
+): Promise<WebPushSendResult> {
   const pushSubscription = {
     endpoint: subscription.endpoint,
     keys: {
@@ -267,7 +279,7 @@ export async function sendWebPushNotification(
         : undefined;
     const message =
       typeof err === "object" && err !== null && "message" in err
-        ? String((err as { message: string }).message)
+        ? (err as { message: string }).message
         : "unknown error";
     return {
       ok: false,
@@ -290,10 +302,10 @@ export async function broadcastWebPush(
   const vapidKeys = await resolveVapidKeys(baseDir);
 
   // Set VAPID details once before fanning out concurrent sends.
-  webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
+  applyVapidDetails(vapidKeys);
 
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendWebPushNotification(sub, payload, vapidKeys)),
+    subscriptions.map((sub) => sendPreparedWebPushNotification(sub, payload)),
   );
 
   const mapped = results.map((r, i) =>
