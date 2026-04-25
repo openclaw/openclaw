@@ -474,7 +474,7 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("uses a default timeout when active work does not drain before channel reload", async () => {
+  it("uses the configured timeout when active work does not drain before channel reload", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
@@ -498,12 +498,13 @@ describe("gateway hot reload", () => {
           noopPaths: [],
         },
         {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
           channels: { discord: { token: "token" } },
         },
       );
       try {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(5 * 60_000 - 500);
+        await vi.advanceTimersByTimeAsync(500);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
@@ -519,6 +520,100 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+    });
+  });
+
+  it("waits indefinitely for channel hot reload when deferral timeout is 0 or omitted", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      hoisted.providerManager.stopChannel.mockClear();
+      hoisted.providerManager.startChannel.mockClear();
+      hoisted.activeEmbeddedRunCount.value = 1;
+      embeddedRunMock.activeIds.add("reload-indefinite");
+      vi.useFakeTimers();
+      const reloadPromise = onHotReload?.(
+        {
+          changedPaths: ["channels.discord.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.discord.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(["discord"]),
+          noopPaths: [],
+        },
+        {
+          gateway: { reload: { deferralTimeoutMs: 0 } },
+          channels: { discord: { token: "token" } },
+        },
+      );
+      try {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
+        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
+
+        hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
+        await vi.advanceTimersByTimeAsync(500);
+        await reloadPromise;
+      } finally {
+        hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
+        await vi.advanceTimersByTimeAsync(500).catch(() => {});
+        vi.useRealTimers();
+        await reloadPromise?.catch(() => {});
+      }
+
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+
+      hoisted.providerManager.stopChannel.mockClear();
+      hoisted.providerManager.startChannel.mockClear();
+      hoisted.activeEmbeddedRunCount.value = 1;
+      embeddedRunMock.activeIds.add("reload-indefinite-omitted");
+      vi.useFakeTimers();
+      const omittedPromise = onHotReload?.(
+        {
+          changedPaths: ["channels.telegram.botToken"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.telegram.botToken"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(["telegram"]),
+          noopPaths: [],
+        },
+        {
+          channels: { telegram: { botToken: "token" } },
+        },
+      );
+      try {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
+        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
+
+        hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
+        await vi.advanceTimersByTimeAsync(500);
+        await omittedPromise;
+      } finally {
+        hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
+        await vi.advanceTimersByTimeAsync(500).catch(() => {});
+        vi.useRealTimers();
+        await omittedPromise?.catch(() => {});
+      }
+
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
     });
   });
 
