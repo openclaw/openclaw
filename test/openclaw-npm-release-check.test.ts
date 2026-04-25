@@ -552,4 +552,19 @@ describe("collectReleasePackageMetadataErrors", () => {
       }),
     ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
   });
+
+  it("rejects node-llama-cpp as an optional dependency", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        optionalDependencies: { "node-llama-cpp": "3.18.1" },
+      }),
+    ).toContain(
+      'package.json optionalDependencies["node-llama-cpp"] must be omitted; keep it operator-installed.',
+    );
+  });
 });
