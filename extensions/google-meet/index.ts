@@ -154,6 +154,7 @@ const GoogleMeetToolSchema = Type.Object({
       "calendar_events",
       "artifacts",
       "attendance",
+      "export",
       "recover_current_tab",
       "leave",
       "speak",
@@ -205,13 +206,15 @@ const GoogleMeetToolSchema = Type.Object({
   includeDocumentBodies: Type.Optional(
     Type.Boolean({
       description:
-        "For artifacts, export linked transcript and smart-note Google Docs text through Drive.",
+        "For artifacts/export, export linked transcript and smart-note Google Docs text through Drive.",
     }),
   ),
+  outputDir: Type.Optional(Type.String({ description: "For export, output directory" })),
+  zip: Type.Optional(Type.Boolean({ description: "For export, also write a .zip archive" })),
   includeAllConferenceRecords: Type.Optional(
     Type.Boolean({
       description:
-        "For artifacts or attendance with meeting input, fetch all conference records instead of only the latest.",
+        "For artifacts, attendance, or export with meeting input, fetch all conference records instead of only the latest.",
     }),
   ),
   mergeDuplicateParticipants: Type.Optional(
@@ -371,6 +374,73 @@ async function resolveArtifactQueryFromParams(
     mergeDuplicateParticipants: raw.mergeDuplicateParticipants !== false,
     lateAfterMinutes: resolveOptionalPositiveInteger(raw.lateAfterMinutes),
     earlyBeforeMinutes: resolveOptionalPositiveInteger(raw.earlyBeforeMinutes),
+  };
+}
+
+async function exportGoogleMeetBundleFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+) {
+  const resolved = await resolveArtifactQueryFromParams(config, raw);
+  const [artifacts, attendance] = await Promise.all([
+    fetchGoogleMeetArtifacts({
+      accessToken: resolved.token.accessToken,
+      meeting: resolved.meeting,
+      conferenceRecord: resolved.conferenceRecord,
+      pageSize: resolved.pageSize,
+      includeTranscriptEntries: resolved.includeTranscriptEntries,
+      includeDocumentBodies: resolved.includeDocumentBodies,
+      allConferenceRecords: resolved.allConferenceRecords,
+    }),
+    fetchGoogleMeetAttendance({
+      accessToken: resolved.token.accessToken,
+      meeting: resolved.meeting,
+      conferenceRecord: resolved.conferenceRecord,
+      pageSize: resolved.pageSize,
+      allConferenceRecords: resolved.allConferenceRecords,
+      mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+      lateAfterMinutes: resolved.lateAfterMinutes,
+      earlyBeforeMinutes: resolved.earlyBeforeMinutes,
+    }),
+  ]);
+  const { writeMeetExportBundle } = await import("./src/cli.js");
+  const calendarId = normalizeOptionalString(raw.calendarId);
+  const request = {
+    ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
+    ...(resolved.conferenceRecord ? { conferenceRecord: resolved.conferenceRecord } : {}),
+    ...(resolved.calendarEvent?.event.id
+      ? { calendarEventId: resolved.calendarEvent.event.id }
+      : {}),
+    ...(resolved.calendarEvent?.event.summary
+      ? { calendarEventSummary: resolved.calendarEvent.event.summary }
+      : {}),
+    ...(calendarId ? { calendarId } : {}),
+    ...(resolved.pageSize !== undefined ? { pageSize: resolved.pageSize } : {}),
+    includeTranscriptEntries: resolved.includeTranscriptEntries,
+    includeDocumentBodies: resolved.includeDocumentBodies,
+    allConferenceRecords: resolved.allConferenceRecords,
+    mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+    ...(resolved.lateAfterMinutes !== undefined
+      ? { lateAfterMinutes: resolved.lateAfterMinutes }
+      : {}),
+    ...(resolved.earlyBeforeMinutes !== undefined
+      ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
+      : {}),
+  };
+  const outputDir = normalizeOptionalString(raw.outputDir) ?? normalizeOptionalString(raw.output);
+  const bundle = await writeMeetExportBundle({
+    ...(outputDir ? { outputDir } : {}),
+    artifacts,
+    attendance,
+    zip: raw.zip === true,
+    request,
+    tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+    ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+  });
+  return {
+    ...bundle,
+    ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+    tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
   };
 }
 
@@ -580,6 +650,17 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.export",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          respond(true, await exportGoogleMeetBundleFromParams(config, asParamRecord(params)));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.leave",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -766,6 +847,9 @@ export default definePluginEntry({
                   earlyBeforeMinutes: resolved.earlyBeforeMinutes,
                 }),
               );
+            }
+            case "export": {
+              return json(await exportGoogleMeetBundleFromParams(config, raw));
             }
             case "leave": {
               const rt = await ensureRuntime();
