@@ -1517,7 +1517,7 @@ module.exports = {
     });
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.24", type: "module" }),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25", type: "module" }),
       "utf-8",
     );
     fs.writeFileSync(

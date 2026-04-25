@@ -685,7 +685,7 @@ describe("bundledRuntimeDependencySentinelCandidates", () => {
       mkdirSync(join(packageRoot, "dist", "extensions", "browser"), { recursive: true });
       writeFileSync(
         join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.4.24-beta.1" }, null, 2),
+        JSON.stringify({ name: "openclaw", version: "2026.4.25-beta.1" }, null, 2),
       );
       symlinkSync(packageRoot, aliasRoot, "dir");
 
