@@ -24,3 +24,4 @@
 - GitHub: github.com/openclaw/openclaw (personal fork: Personal-openclaw)
 - Deploy target: GCP VM (136.116.235.101), Docker container
 - Current sprint: Phase 1 — VS Code bridge daemon + routing policy
+- Key files: deploy/openclaw.json, deploy/AGENTS.md, deploy/TOOLS.md
