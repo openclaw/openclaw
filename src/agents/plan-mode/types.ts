@@ -1,3 +1,5 @@
+import { randomUUID as nodeRandomUUID } from "node:crypto";
+
 /**
  * Plan mode types for the GPT 5.4 parity sprint.
  *
@@ -108,19 +110,18 @@ export function newPlanApprovalId(): string {
   if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
     return `plan-${cryptoApi.randomUUID()}`;
   }
-  // Copilot review #68939 (2026-04-19): replaced the Math.random()
-  // fallback with `node:crypto.randomUUID()`. The `approvalId` is
-  // the security boundary token used by the answer-guard / plan-
-  // approval-guard for staleness protection — `Math.random()` is
-  // not cryptographically secure (predictable from a few prior
-  // outputs) and shouldn't be used here even as a "host without
-  // webcrypto" fallback. Modern Node always exposes node:crypto;
-  // the dynamic import keeps this isomorphic-safe (the function
-  // also runs in browser-like contexts via the globalThis.crypto
-  // path above, which we already prefer when available).
+  // Copilot review #68939 (2026-04-19) + #71676: use the
+  // module-scope `randomUUID` import from `node:crypto`. The
+  // approvalId is a security boundary token (answer-guard /
+  // plan-approval staleness protection); a non-secure RNG would
+  // weaken it. The earlier dynamic `require("node:crypto")` was
+  // unsafe in ESM-only runtimes where `require` is not defined
+  // (TS→ESM builds). Modern Node always exposes node:crypto, so a
+  // module-scope import is correct; on browser-like hosts the
+  // globalThis.crypto path above runs first, so this fallback only
+  // executes on Node when globalThis.crypto is unavailable.
   try {
-    const nodeCrypto = require("node:crypto") as { randomUUID: () => string };
-    return `plan-${nodeCrypto.randomUUID()}`;
+    return `plan-${nodeRandomUUID()}`;
   } catch {
     // Last-resort defensive fallback if even node:crypto can't be
     // resolved (extremely unusual — would mean a non-Node host with

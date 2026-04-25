@@ -68,18 +68,22 @@ export function buildPlanAttachmentCaption(
   title: string | undefined,
   summary: string | undefined,
 ): string {
+  // Copilot review #71676: build the caption from logical blocks
+  // joined with double-newline, instead of `.filter(Boolean)` (which
+  // strips the intentional blank-line separator) + leading-newline
+  // hack (which produced double-newlines). Each block is a single
+  // line of text; `join("\n\n")` adds the blank-line separator.
   const safeTitle = (title ?? "").trim() || "Plan";
   const escTitle = escapeHtml(safeTitle);
   const safeSummary = (summary ?? "").trim();
-  const summaryLine = safeSummary ? `\n${escapeHtml(safeSummary)}` : "";
-  return [
-    `<b>${escTitle}</b> — plan submitted for approval. See attached.`,
-    summaryLine,
-    "",
+  const blocks: string[] = [`<b>${escTitle}</b> — plan submitted for approval. See attached.`];
+  if (safeSummary) {
+    blocks.push(escapeHtml(safeSummary));
+  }
+  blocks.push(
     "Resolve with: <code>/plan accept</code> | <code>/plan accept edits</code> | <code>/plan revise &lt;feedback&gt;</code>",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  );
+  return blocks.join("\n\n");
 }
 
 function escapeHtml(text: string): string {
