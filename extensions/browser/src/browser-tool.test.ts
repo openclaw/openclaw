@@ -404,7 +404,8 @@ describe("browser tool snapshot maxChars", () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    await runSnapshotToolCall({ snapshotFormat: "ai" });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "snapshot", target: "host" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -412,6 +413,19 @@ describe("browser tool snapshot maxChars", () => {
         mode: "efficient",
       }),
     );
+  });
+
+  it("does not apply config snapshot defaults to explicit ai snapshots", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { snapshotDefaults: { mode: "efficient" } },
+    });
+    await runSnapshotToolCall({ snapshotFormat: "ai" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
+    const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
+      | { mode?: string }
+      | undefined;
+    expect(opts?.mode).toBeUndefined();
   });
 
   it("does not apply config snapshot defaults to aria snapshots", async () => {

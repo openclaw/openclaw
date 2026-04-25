@@ -75,8 +75,13 @@ export function registerBrowserInspectCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
+      const formatWasExplicit =
+        typeof cmd.getOptionValueSource === "function" &&
+        cmd.getOptionValueSource("format") === "cli";
       const configMode =
-        format === "ai" && loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+        !formatWasExplicit &&
+        format === "ai" &&
+        loadConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
