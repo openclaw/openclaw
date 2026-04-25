@@ -85,6 +85,7 @@ describe("server-runtime-services", () => {
       minimalTestGateway: false,
       cfgAtStart: {} as never,
       deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
       cron,
       logCron: { error: vi.fn() },
       log,
@@ -104,7 +105,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
       expect.objectContaining({
         deps: {},
-        maxEnqueuedAt: expect.any(Number),
+        maxEnqueuedAt: 123,
       }),
     );
   });
@@ -116,6 +117,7 @@ describe("server-runtime-services", () => {
       minimalTestGateway: true,
       cfgAtStart: {} as never,
       deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
       cron,
       logCron: { error: vi.fn() },
       log: createLog(),

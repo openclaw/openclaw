@@ -91,8 +91,6 @@ async function deliverRestartSentinelNotice(params: {
   session: ReturnType<typeof buildOutboundSessionContext>;
 }) {
   const payloads = [{ text: params.message }];
-  // Persist one recoverable notice across the whole retry loop so a transient
-  // failure does not leave behind a stale duplicate queue entry.
   const queueId = await enqueueDelivery({
     channel: params.channel,
     to: params.to,
@@ -136,9 +134,7 @@ async function deliverRestartSentinelNotice(params: {
       });
       if (!retrying) {
         if (queueId) {
-          await failDelivery(queueId, formatErrorMessage(err)).catch(() => {
-            // Best-effort queue bookkeeping.
-          });
+          await failDelivery(queueId, formatErrorMessage(err)).catch(() => undefined);
         }
         return;
       }
@@ -483,7 +479,6 @@ async function loadRestartSentinelStartupTask(params: {
               ? String(replyTransport.threadId)
               : undefined
             : threadId;
-        // Keep the resolved route for the queued continuation and restart notice.
       }
     }
 
