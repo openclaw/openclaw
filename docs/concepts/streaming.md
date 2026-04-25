@@ -176,10 +176,28 @@ Preview streaming can also include **tool-progress** updates — short status li
 
 Supported surfaces:
 
-- **Discord** and **Slack** stream tool-progress into the live preview edit by default.
-- **Telegram** only streams tool-progress into the live preview edit when `streaming.preview.toolProgress` is explicitly enabled.
+- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit by default when preview streaming is active.
+- Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message.
+- To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+
+Example:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": {
+        "mode": "partial",
+        "preview": {
+          "toolProgress": false
+        }
+      }
+    }
+  }
+}
+```
 
 ## Related
 
