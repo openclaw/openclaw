@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   enablePluginInConfig,
   recordPluginInstall,
+  refreshPluginRegistry,
   resetPluginsCliTestState,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
@@ -60,5 +61,9 @@ describe("persistPluginInstall", () => {
 
     expect(next).toBe(persistedConfig);
     expect(writeConfigFile).toHaveBeenCalledWith(persistedConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: persistedConfig,
+      reason: "source-changed",
+    });
   });
 });

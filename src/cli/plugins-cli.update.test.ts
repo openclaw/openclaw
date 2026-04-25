@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
+  refreshPluginRegistry,
   registerPluginsCli,
   resetPluginsCliTestState,
   runPluginsCommand,
@@ -106,6 +107,7 @@ describe("plugins cli update", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(
       runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
     ).toBe(true);
@@ -209,6 +211,10 @@ describe("plugins cli update", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: nextConfig,
+      reason: "source-changed",
+    });
     expect(
       runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
     ).toBe(true);
