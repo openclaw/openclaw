@@ -152,6 +152,11 @@ whether the plugin is enabled, the provider and credentials are present, webhook
 exposure is configured, and only one audio mode is active. Use
 `openclaw voicecall setup --json` for scripts.
 
+For Twilio, Telnyx, and Plivo, setup must resolve to a public webhook URL. If the
+configured `publicUrl`, tunnel URL, Tailscale URL, or serve fallback resolves to
+loopback or private network space, setup fails instead of starting a provider
+that cannot receive real carrier webhooks.
+
 For a no-surprises smoke test, run:
 
 ```bash
@@ -478,6 +483,9 @@ Notes:
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
+- When Twilio barge-in or stream teardown clears the pending TTS queue, queued
+  playback requests settle instead of hanging callers that are awaiting playback
+  completion.
 
 ### More examples
 
@@ -589,6 +597,9 @@ For outbound `conversation` calls, first-message handling is tied to live playba
 - Barge-in queue clear and auto-response are suppressed only while the initial greeting is actively speaking.
 - If initial playback fails, the call returns to `listening` and the initial message remains queued for retry.
 - Initial playback for Twilio streaming starts on stream connect without extra delay.
+- Barge-in aborts active playback and clears queued-but-not-yet-playing Twilio
+  TTS entries. Cleared entries resolve as skipped, so follow-up response logic
+  can continue without waiting on audio that will never play.
 - Realtime voice conversations use the realtime stream's own opening turn. Voice Call does not post a legacy `<Say>` TwiML update for that initial message, so outbound `<Connect><Stream>` sessions stay attached.
 
 ### Twilio stream disconnect grace
