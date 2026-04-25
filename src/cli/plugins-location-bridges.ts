@@ -5,6 +5,9 @@ import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-ind
 function buildBridgeFromPersistedBundledRecord(
   record: InstalledPluginIndexRecord,
 ): ExternalizedBundledPluginBridge | null {
+  // Relocation is derived from the previous persisted registry, not a hardcoded
+  // table. A plugin moving from bundled to npm keeps the same plugin id; the old
+  // registry row is the proof that this user actually had it bundled/enabled.
   if (record.origin !== "bundled" || record.enabled === false) {
     return null;
   }
@@ -24,6 +27,9 @@ export async function listPersistedBundledPluginLocationBridges(options: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<readonly ExternalizedBundledPluginBridge[]> {
+  // This intentionally reads the pre-update registry. The current build may no
+  // longer contain the bundled plugin, so normal discovery cannot recover its
+  // package install hint.
   const index = await readPersistedInstalledPluginIndex(options);
   if (!index) {
     return [];
