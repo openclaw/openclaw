@@ -27,7 +27,11 @@ import {
   OPENAI_CODEX_LOGIN_LABEL,
   OPENAI_CODEX_WIZARD_GROUP,
 } from "./auth-choice-copy.js";
-import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
+import {
+  isOpenAIApiBaseUrl,
+  isOpenAICodexBaseUrl,
+  OPENAI_CODEX_RESPONSES_BASE_URL,
+} from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
@@ -41,7 +45,7 @@ import {
 } from "./shared.js";
 
 const PROVIDER_ID = "openai-codex";
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
+const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
 const OPENAI_CODEX_GPT_55_MODEL_ID = "gpt-5.5";
