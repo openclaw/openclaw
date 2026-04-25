@@ -2,7 +2,7 @@ import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import readline from "node:readline/promises";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import {
-  planCrestodianCommandWithConfiguredModel,
+  planCrestodianCommand,
   type CrestodianAssistantPlan,
   type CrestodianAssistantPlanner,
 } from "./assistant.js";
@@ -76,7 +76,7 @@ async function resolveCrestodianOperation(
     return operation;
   }
   const overview = await loadCrestodianOverview();
-  const planner = opts.planWithAssistant ?? planCrestodianCommandWithConfiguredModel;
+  const planner = opts.planWithAssistant ?? planCrestodianCommand;
   const plan = await planner({ input, overview });
   if (!plan) {
     return operation;

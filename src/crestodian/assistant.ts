@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { extractAssistantText } from "../agents/pi-embedded-utils.js";
 import {
@@ -5,16 +9,20 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CrestodianOverview } from "./overview.js";
 
 const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 10_000;
 const CRESTODIAN_ASSISTANT_MAX_TOKENS = 512;
+const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-7";
+const CRESTODIAN_CODEX_MODEL = "gpt-5.5";
 
 const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "You are Crestodian, OpenClaw's ring-zero setup helper.",
   "Turn the user's request into exactly one safe OpenClaw Crestodian command.",
   "Return only compact JSON with keys reply and command.",
   "Do not invent commands. Do not claim a write was applied.",
+  "Do not use tools, shell commands, file edits, or network lookups; plan only from the supplied overview.",
   "Use the provided OpenClaw docs/source references when the user's request needs behavior, config, or architecture details.",
   "If local source is available, prefer inspecting it. Otherwise point to GitHub and strongly recommend reviewing source when docs are not enough.",
   "Allowed commands:",
@@ -51,6 +59,30 @@ export type CrestodianAssistantPlanner = (params: {
   overview: CrestodianOverview;
 }) => Promise<CrestodianAssistantPlan | null>;
 
+type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
+type RunEmbeddedPiAgentFn = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+
+export type CrestodianLocalRuntimePlannerDeps = {
+  runCliAgent?: RunCliAgentFn;
+  runEmbeddedPiAgent?: RunEmbeddedPiAgentFn;
+  createTempDir?: () => Promise<string>;
+  removeTempDir?: (dir: string) => Promise<void>;
+};
+
+type LocalPlannerCandidate = "claude-cli" | "codex-app-server" | "codex-cli";
+
+export async function planCrestodianCommand(params: {
+  input: string;
+  overview: CrestodianOverview;
+  deps?: CrestodianLocalRuntimePlannerDeps;
+}): Promise<CrestodianAssistantPlan | null> {
+  const configured = await planCrestodianCommandWithConfiguredModel(params);
+  if (configured) {
+    return configured;
+  }
+  return await planCrestodianCommandWithLocalRuntime(params);
+}
+
 export async function planCrestodianCommandWithConfiguredModel(params: {
   input: string;
   overview: CrestodianOverview;
@@ -60,7 +92,7 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
     return null;
   }
   const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
+  if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
@@ -111,6 +143,44 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function planCrestodianCommandWithLocalRuntime(params: {
+  input: string;
+  overview: CrestodianOverview;
+  deps?: CrestodianLocalRuntimePlannerDeps;
+}): Promise<CrestodianAssistantPlan | null> {
+  const input = params.input.trim();
+  if (!input) {
+    return null;
+  }
+  const candidates = listLocalRuntimePlannerCandidates(params.overview);
+  if (candidates.length === 0) {
+    return null;
+  }
+  const prompt = buildCrestodianAssistantUserPrompt({
+    input,
+    overview: params.overview,
+  });
+
+  for (const candidate of candidates) {
+    try {
+      const rawText = await runLocalRuntimePlanner(candidate, {
+        prompt,
+        deps: params.deps,
+      });
+      const parsed = parseCrestodianAssistantPlanText(rawText);
+      if (parsed) {
+        return {
+          ...parsed,
+          modelLabel: localRuntimePlannerLabel(candidate),
+        };
+      }
+    } catch {
+      // Try the next locally available runtime. Crestodian must keep booting.
+    }
+  }
+  return null;
 }
 
 export function buildCrestodianAssistantUserPrompt(params: {
@@ -192,4 +262,180 @@ function extractFirstJsonObject(text: string): string | null {
     return null;
   }
   return text.slice(start, end + 1);
+}
+
+function listLocalRuntimePlannerCandidates(overview: CrestodianOverview): LocalPlannerCandidate[] {
+  const candidates: LocalPlannerCandidate[] = [];
+  if (overview.tools.claude.found) {
+    candidates.push("claude-cli");
+  }
+  if (overview.tools.codex.found) {
+    candidates.push("codex-app-server", "codex-cli");
+  }
+  return candidates;
+}
+
+function localRuntimePlannerLabel(candidate: LocalPlannerCandidate): string {
+  const labels: Record<LocalPlannerCandidate, string> = {
+    "claude-cli": `claude-cli/${CRESTODIAN_CLAUDE_CLI_MODEL}`,
+    "codex-app-server": `openai/${CRESTODIAN_CODEX_MODEL} via codex`,
+    "codex-cli": `codex-cli/${CRESTODIAN_CODEX_MODEL}`,
+  };
+  return labels[candidate];
+}
+
+async function runLocalRuntimePlanner(
+  candidate: LocalPlannerCandidate,
+  params: {
+    prompt: string;
+    deps?: CrestodianLocalRuntimePlannerDeps;
+  },
+): Promise<string | undefined> {
+  const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
+  try {
+    const runId = `crestodian-planner-${randomUUID()}`;
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = `${runId}-session`;
+    const sessionKey = `temp:crestodian-planner:${runId}`;
+    switch (candidate) {
+      case "claude-cli": {
+        const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
+        const result = await runCli({
+          sessionId,
+          sessionKey,
+          agentId: "crestodian",
+          trigger: "manual",
+          sessionFile,
+          workspaceDir: tempDir,
+          config: buildCliPlannerConfig(tempDir, `claude-cli/${CRESTODIAN_CLAUDE_CLI_MODEL}`),
+          prompt: params.prompt,
+          provider: "claude-cli",
+          model: CRESTODIAN_CLAUDE_CLI_MODEL,
+          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
+          runId,
+          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+          extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+          messageChannel: "crestodian",
+          messageProvider: "crestodian",
+          senderIsOwner: true,
+          cleanupCliLiveSessionOnRunEnd: true,
+        });
+        return extractPlannerResultText(result);
+      }
+      case "codex-app-server": {
+        const runEmbedded = params.deps?.runEmbeddedPiAgent ?? (await loadRunEmbeddedPiAgent());
+        const result = await runEmbedded({
+          sessionId,
+          sessionKey,
+          agentId: "crestodian",
+          trigger: "manual",
+          sessionFile,
+          workspaceDir: tempDir,
+          config: buildCodexAppServerPlannerConfig(tempDir),
+          prompt: params.prompt,
+          provider: "openai",
+          model: CRESTODIAN_CODEX_MODEL,
+          agentHarnessId: "codex",
+          disableTools: true,
+          toolsAllow: [],
+          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
+          runId,
+          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+          messageChannel: "crestodian",
+          messageProvider: "crestodian",
+          senderIsOwner: true,
+          cleanupBundleMcpOnRunEnd: true,
+        });
+        return extractPlannerResultText(result);
+      }
+      case "codex-cli": {
+        const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
+        const result = await runCli({
+          sessionId,
+          sessionKey,
+          agentId: "crestodian",
+          trigger: "manual",
+          sessionFile,
+          workspaceDir: tempDir,
+          config: buildCliPlannerConfig(tempDir, `codex-cli/${CRESTODIAN_CODEX_MODEL}`),
+          prompt: params.prompt,
+          provider: "codex-cli",
+          model: CRESTODIAN_CODEX_MODEL,
+          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
+          runId,
+          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+          extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+          messageChannel: "crestodian",
+          messageProvider: "crestodian",
+          senderIsOwner: true,
+          cleanupCliLiveSessionOnRunEnd: true,
+        });
+        return extractPlannerResultText(result);
+      }
+    }
+    return undefined;
+  } finally {
+    await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
+  }
+}
+
+function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        model: { primary: modelRef },
+      },
+    },
+  };
+}
+
+function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        embeddedHarness: { runtime: "codex", fallback: "none" },
+        model: { primary: `openai/${CRESTODIAN_CODEX_MODEL}` },
+      },
+    },
+    plugins: {
+      entries: {
+        codex: { enabled: true },
+      },
+    },
+  };
+}
+
+async function createTempPlannerDir(): Promise<string> {
+  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crestodian-planner-"));
+}
+
+async function removeTempPlannerDir(dir: string): Promise<void> {
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+async function loadRunCliAgent(): Promise<RunCliAgentFn> {
+  return (await import("../agents/cli-runner.js")).runCliAgent;
+}
+
+async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
+  return (await import("../agents/pi-embedded.js")).runEmbeddedPiAgent;
+}
+
+function extractPlannerResultText(result: {
+  payloads?: Array<{ text?: string }>;
+  meta?: {
+    finalAssistantVisibleText?: string;
+    finalAssistantRawText?: string;
+  };
+}): string | undefined {
+  return (
+    result.meta?.finalAssistantVisibleText ??
+    result.meta?.finalAssistantRawText ??
+    result.payloads
+      ?.map((payload) => payload.text?.trim())
+      .filter(Boolean)
+      .join("\n")
+  );
 }

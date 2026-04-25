@@ -72,6 +72,15 @@ export function resetClaudeLiveSessionsForTest(): void {
   liveSessionCreates.clear();
 }
 
+export function closeClaudeLiveSessionForContext(context: PreparedCliRunContext): void {
+  const key = buildClaudeLiveKey(context);
+  const session = liveSessions.get(key);
+  if (session) {
+    closeLiveSession(session, "restart");
+  }
+  liveSessionCreates.delete(key);
+}
+
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
     context.backendResolved.id === "claude-cli" &&

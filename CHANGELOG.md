@@ -52,7 +52,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- CLI/Crestodian: add a configless setup and repair helper for bare `openclaw`, typed config operations, agent handoff, audit logging, docs/source discovery, and guarded message-channel rescue.
+- CLI/Crestodian: add a configless setup and repair helper for bare `openclaw`, typed config operations, local Claude/Codex planner fallback, agent handoff, audit logging, docs/source discovery, and guarded message-channel rescue.
 - Gateway/nodes: add disabled-by-default `gateway.nodes.pairing.autoApproveCidrs` for first-time node pairing from explicit trusted CIDRs, while keeping operator/browser pairing and all upgrade flows manual. Fixes #60800. Thanks @sahilsatralkar.
 - Browser: add viewport coordinate clicks for managed and existing-session automation, plus `openclaw browser click-coords` for CLI use. (#54452) Thanks @dluttz.
 - Browser: add `browser.actionTimeoutMs` and use a 60s default action budget so healthy long browser waits do not fail at the client transport boundary. (#62589) Thanks @andyylin.
