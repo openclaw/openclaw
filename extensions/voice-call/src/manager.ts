@@ -146,19 +146,22 @@ export class CallManager {
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
     const verifyTasks: Array<{ callId: CallId; call: CallRecord; promise: Promise<void> }> = [];
+    let skippedNoProviderCallId = 0;
+    let skippedOlderThanMaxDuration = 0;
+    const skippedProviderStatuses = new Map<string, number>();
+    let keptUnknownProviderStatus = 0;
+    let keptVerificationFailures = 0;
 
     for (const [callId, call] of candidates) {
       // Skip calls without a provider ID — can't verify
       if (!call.providerCallId) {
-        console.log(`[voice-call] Skipping restored call ${callId} (no providerCallId)`);
+        skippedNoProviderCallId += 1;
         continue;
       }
 
       // Skip calls older than maxDurationSeconds (time-based fallback)
       if (now - call.startedAt > maxAgeMs) {
-        console.log(
-          `[voice-call] Skipping restored call ${callId} (older than maxDurationSeconds)`,
-        );
+        skippedOlderThanMaxDuration += 1;
         continue;
       }
 
@@ -169,13 +172,10 @@ export class CallManager {
           .getCallStatus({ providerCallId: call.providerCallId })
           .then((result) => {
             if (result.isTerminal) {
-              console.log(
-                `[voice-call] Skipping restored call ${callId} (provider status: ${result.status})`,
-              );
+              const status = result.status || "terminal";
+              skippedProviderStatuses.set(status, (skippedProviderStatuses.get(status) || 0) + 1);
             } else if (result.isUnknown) {
-              console.log(
-                `[voice-call] Keeping restored call ${callId} (provider status unknown, relying on timer)`,
-              );
+              keptUnknownProviderStatus += 1;
               verified.set(callId, call);
             } else {
               verified.set(callId, call);
@@ -183,9 +183,7 @@ export class CallManager {
           })
           .catch(() => {
             // Verification failed entirely — keep the call, rely on timer
-            console.log(
-              `[voice-call] Keeping restored call ${callId} (verification failed, relying on timer)`,
-            );
+            keptVerificationFailures += 1;
             verified.set(callId, call);
           }),
       };
@@ -193,6 +191,33 @@ export class CallManager {
     }
 
     await Promise.allSettled(verifyTasks.map((t) => t.promise));
+
+    if (skippedNoProviderCallId > 0) {
+      console.log(
+        `[voice-call] Skipped ${skippedNoProviderCallId} restored call(s) with no providerCallId`,
+      );
+    }
+    if (skippedOlderThanMaxDuration > 0) {
+      console.log(
+        `[voice-call] Skipped ${skippedOlderThanMaxDuration} restored call(s) older than maxDurationSeconds`,
+      );
+    }
+    for (const [status, count] of skippedProviderStatuses) {
+      console.log(
+        `[voice-call] Skipped ${count} restored call(s) with provider status: ${status}`,
+      );
+    }
+    if (keptUnknownProviderStatus > 0) {
+      console.log(
+        `[voice-call] Kept ${keptUnknownProviderStatus} restored call(s) with unknown provider status (relying on timer)`,
+      );
+    }
+    if (keptVerificationFailures > 0) {
+      console.log(
+        `[voice-call] Kept ${keptVerificationFailures} restored call(s) after verification failure (relying on timer)`,
+      );
+    }
+
     return verified;
   }
 
