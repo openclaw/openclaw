@@ -116,18 +116,99 @@ export async function start(state: CronServiceState) {
     }
   });
 
-  await runMissedJobs(state, {
-    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
-  });
+  // Run missed jobs from before the restart.  If this throws (e.g. an
+  // isolated agent turn fails catastrophically), we must STILL arm the timer
+  // so the scheduler does not silently die until the next gateway restart.
+  // See: https://github.com/openclaw/openclaw/issues/67854
+  try {
+    await runMissedJobs(state, {
+      skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+    });
+  } catch (err) {
+    state.deps.log.error(
+      { err: String(err) },
+      "cron: startup catch-up failed; arming timer anyway to keep scheduler alive",
+    );
+    // Repair partial state left by the failed catch-up.
+    //
+    // planStartupCatchup() persists runningAtMs markers before execution.
+    // If a later step (execution or applyStartupCatchupOutcomes) throws,
+    // those markers remain on disk and subsequent ticks will skip those jobs
+    // until the runtime zombie detector clears them.  Clear them now so
+    // jobs can run on the very next tick.
+    //
+    // Similarly, interruptedOneShotIds was computed above but never
+    // persisted.  One-shot jobs with past-due nextRunAtMs and no runningAtMs
+    // would be re-executed on the first tick.  Clear their nextRunAtMs to
+    // prevent double-execution.
+    //
+    // This repair is best-effort: if it also fails (e.g. transient I/O),
+    // we still arm the timer below so the scheduler survives.  The runtime
+    // zombie detector in onTimer() will eventually clean up stale markers.
+    try {
+      await locked(state, async () => {
+        // Do NOT force-reload: if applyStartupCatchupOutcomes() already
+        // updated in-memory state (cleared runningAtMs for completed jobs,
+        // advanced nextRunAtMs) before its persist threw, reloading would
+        // discard those outcomes and revert to the pre-outcome disk state,
+        // potentially making completed jobs runnable again.
+        await ensureLoaded(state, { skipRecompute: true });
+        let dirty = false;
+        for (const job of state.store?.jobs ?? []) {
+          if (typeof job.state.runningAtMs === "number") {
+            job.state.runningAtMs = undefined;
+            dirty = true;
+            // For one-shot jobs, also clear nextRunAtMs to prevent
+            // re-execution if the outcome was applied but not persisted.
+            if (job.schedule.kind === "at" && typeof job.state.nextRunAtMs === "number") {
+              job.state.nextRunAtMs = undefined;
+            }
+          }
+          if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
+            job.state.nextRunAtMs = undefined;
+            dirty = true;
+          }
+        }
+        if (dirty) {
+          await persist(state);
+        }
+      });
+    } catch (repairErr) {
+      state.deps.log.error(
+        { err: String(repairErr) },
+        "cron: failed to repair catch-up state; runtime zombie detector will clean up",
+      );
+    }
+  }
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
     // this path runs before the scheduler begins servicing regular timer ticks.
     // Avoid an extra reload/write cycle on startup.
     await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
+    let changed = recomputeNextRuns(state);
+    // recomputeNextRuns may repopulate nextRunAtMs for interrupted one-shot
+    // jobs (kind="at" jobs where lastStatus !== "ok" always return atMs).
+    // Clear them again so they aren't re-executed on the first tick after a
+    // failed catch-up.  Without this, the repair in the catch block above is
+    // silently undone by recompute.
+    if (interruptedOneShotIds.size > 0) {
+      for (const job of state.store?.jobs ?? []) {
+        if (interruptedOneShotIds.has(job.id) && typeof job.state.nextRunAtMs === "number") {
+          job.state.nextRunAtMs = undefined;
+          changed = true;
+        }
+      }
+    }
     if (changed) {
-      await persist(state);
+      try {
+        await persist(state);
+      } catch (persistErr) {
+        state.deps.log.error(
+          { err: String(persistErr) },
+          "cron: failed to persist final startup state; arming timer anyway",
+        );
+      }
     }
     armTimer(state);
     state.deps.log.info(

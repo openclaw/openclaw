@@ -684,6 +684,50 @@ function armRunningRecheckTimer(state: CronServiceState) {
   }, MAX_TIMER_DELAY_MS);
 }
 
+/**
+ * Detect and clear zombie running markers.  If a job has been in
+ * "running" state for longer than twice its resolved timeout, the
+ * previous execution is presumed dead and the marker is cleared so
+ * the job can run again on the next tick.
+ *
+ * Jobs with no configured timeout (timeoutSeconds <= 0) are exempt —
+ * they are intentionally unbounded and should never be treated as
+ * zombies.
+ *
+ * Returns true if any markers were cleared.
+ */
+export function clearZombieRunningMarkers(state: CronServiceState): Set<string> {
+  const now = state.deps.nowMs();
+  const clearedIds = new Set<string>();
+  for (const job of state.store?.jobs ?? []) {
+    if (typeof job.state.runningAtMs !== "number") {
+      continue;
+    }
+    const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+    if (typeof jobTimeoutMs !== "number" || jobTimeoutMs <= 0) {
+      continue; // no timeout configured → never treat as zombie
+    }
+    const elapsed = now - job.state.runningAtMs;
+    const threshold = jobTimeoutMs * 2;
+    if (elapsed > threshold) {
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name, elapsed, threshold },
+        "cron: clearing zombie running marker",
+      );
+      job.state.runningAtMs = undefined;
+      clearedIds.add(job.id);
+      // For one-shot jobs, also clear nextRunAtMs to prevent
+      // re-execution. A one-shot with a past-due nextRunAtMs and no
+      // runningAtMs will be selected for execution again, duplicating
+      // side effects from the interrupted run.
+      if (job.schedule.kind === "at" && typeof job.state.nextRunAtMs === "number") {
+        job.state.nextRunAtMs = undefined;
+      }
+    }
+  }
+  return clearedIds;
+}
+
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
@@ -707,16 +751,49 @@ export async function onTimer(state: CronServiceState) {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const dueCheckNow = state.deps.nowMs();
+
+      // Detect and clear zombie running markers.  If a job has been in
+      // "running" state for longer than twice its resolved timeout, the
+      // previous execution is presumed dead and the marker is cleared so
+      // the job can run again.
+      // Jobs with no configured timeout (timeoutSeconds <= 0) are exempt —
+      // they are intentionally unbounded and should never be treated as
+      // zombies.  See: https://github.com/openclaw/openclaw/issues/59056
+      const clearedZombieIds = clearZombieRunningMarkers(state);
+      if (clearedZombieIds.size > 0) {
+        await persist(state);
+      }
+
       const due = collectRunnableJobs(state, dueCheckNow);
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const changed = recomputeNextRunsForMaintenance(state, {
+        let changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
         });
+        // recomputeNextRunsForMaintenance may repopulate nextRunAtMs for
+        // one-shot jobs whose zombie markers were just cleared (kind=at
+        // jobs where lastStatus !== "ok" always return atMs). Re-clear
+        // them so interrupted one-shots aren't re-executed.
+        // Scoped to only the jobs whose zombie markers were actually
+        // cleared to avoid wiping scheduled retry backoff for unrelated jobs.
+        if (clearedZombieIds.size > 0) {
+          for (const job of state.store?.jobs ?? []) {
+            if (
+              clearedZombieIds.has(job.id) &&
+              job.schedule.kind === "at" &&
+              typeof job.state.runningAtMs !== "number" &&
+              typeof job.state.nextRunAtMs === "number" &&
+              job.state.lastStatus !== "ok"
+            ) {
+              job.state.nextRunAtMs = undefined;
+              changed = true;
+            }
+          }
+        }
         if (changed) {
           await persist(state);
         }
