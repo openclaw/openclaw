@@ -463,8 +463,8 @@ describe("registerPreActionHooks", () => {
     });
 
     await runPreAction({
-      parseArgv: ["agents", "list"],
-      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+      parseArgv: ["message", "send"],
+      processArgv: ["node", "openclaw", "message", "send", "--json"],
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();

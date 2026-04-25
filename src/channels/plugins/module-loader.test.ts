@@ -93,7 +93,7 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("uses native Jiti import for Windows dist loads", async () => {
+  it("uses the runtime-supported Jiti boundary for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
     vi.doMock("jiti", () => ({
       createJiti,
