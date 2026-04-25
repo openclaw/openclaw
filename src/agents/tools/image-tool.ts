@@ -31,6 +31,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
 import {
@@ -307,7 +308,7 @@ export function createImageTool(options?: {
   if (!imageModelConfig) {
     return null;
   }
-  const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
