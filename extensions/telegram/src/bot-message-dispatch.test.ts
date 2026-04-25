@@ -7,6 +7,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
+import { renderTelegramHtmlText } from "./format.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -524,6 +525,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "read [label](tg://user?id=123)" });
       return { queuedFinal: false };
     });
 
@@ -533,7 +535,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { preview: { toolProgress: true } } },
     });
 
-    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• tool: exec");
+    const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0];
+    expect(lastPreviewText).toBe("Working…\n• `tool: exec`\n• `read [label](tg://user?id=123)`");
+    expect(renderTelegramHtmlText(lastPreviewText ?? "")).not.toContain("<a ");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
