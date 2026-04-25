@@ -349,6 +349,33 @@ describe("bundled plugin postinstall", () => {
     expect(importModule).not.toHaveBeenCalled();
   });
 
+  it("does not disable plugin registry migration for falsey env flag strings", async () => {
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {},
+    }));
+    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+        existsSync: vi.fn(() => true),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toMatchObject({
+      status: "skip-existing",
+      migrated: false,
+    });
+    expect(importModule).toHaveBeenCalledOnce();
+    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
+      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+      packageRoot: "/pkg",
+    });
+  });
+
   it("prunes stale dist files from packaged installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
     const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");

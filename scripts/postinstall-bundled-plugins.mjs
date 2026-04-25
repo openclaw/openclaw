@@ -117,6 +117,11 @@ const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]event
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
+function hasEnvFlag(env, key) {
+  const value = env?.[key]?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
@@ -666,7 +671,7 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
 
-  if (env[DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]?.trim()) {
+  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
     return { status: "disabled", migrated: false, reason: "disabled-env" };
   }
 

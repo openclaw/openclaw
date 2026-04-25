@@ -12,6 +12,7 @@ import {
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import {
+  DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
   FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
@@ -266,6 +267,25 @@ describe("plugin registry install migration", () => {
       deprecationWarnings: [
         expect.stringContaining(`${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated`),
       ],
+    });
+  });
+
+  it("treats falsey env flag strings as unset", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    expect(
+      preflightPluginRegistryInstallMigration({
+        stateDir,
+        env: hermeticEnv({
+          [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "0",
+          [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "false",
+        }),
+      }),
+    ).toMatchObject({
+      action: "skip-existing",
+      force: false,
+      deprecationWarnings: [],
     });
   });
 });

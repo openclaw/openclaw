@@ -57,7 +57,8 @@ export type PluginRegistryInstallMigrationParams = LoadInstalledPluginIndexParam
   };
 
 function hasEnvFlag(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
-  return Boolean(env?.[key]?.trim());
+  const value = env?.[key]?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
 }
 
 function forceDeprecationWarning(): string {
