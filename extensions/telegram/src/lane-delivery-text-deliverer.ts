@@ -38,6 +38,12 @@ function isMissingPreviewMessageError(err: unknown): boolean {
   return MESSAGE_NOT_FOUND_RE.test(extractErrorText(err));
 }
 
+function isIncompleteFinalPreviewPrefix(previewText: string, finalText: string): boolean {
+  const preview = previewText.trimEnd();
+  const final = finalText.trimEnd();
+  return preview.length > 0 && preview.length < final.length && final.startsWith(preview);
+}
+
 export type LaneName = "answer" | "reasoning";
 
 export type DraftLaneState = {
@@ -294,7 +300,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           );
           return "fallback";
         }
-        // Default: ambiguous error — prefer incomplete over duplicate
+        if (isIncompleteFinalPreviewPrefix(args.lane.lastPartialText, args.text)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit failed and existing preview is an incomplete prefix; falling back to standard send (${String(err)})`,
+          );
+          return "fallback";
+        }
+        // Default: ambiguous error — retain when fallback may duplicate a final
+        // edit that already landed or when the preview is not known-incomplete.
         params.log(
           `telegram: ${args.laneName} preview final edit failed with ambiguous error; keeping existing preview to avoid duplicate (${String(err)})`,
         );
