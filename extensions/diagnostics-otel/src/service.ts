@@ -134,7 +134,7 @@ function clampOtelLogText(value: string, maxChars: number): string {
 }
 
 function normalizeOtelLogString(value: string, maxChars: number): string {
-  return redactSensitiveText(clampOtelLogText(value, maxChars));
+  return clampOtelLogText(redactSensitiveText(value), maxChars);
 }
 
 function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {

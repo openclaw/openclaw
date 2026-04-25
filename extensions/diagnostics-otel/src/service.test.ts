@@ -814,7 +814,7 @@ describe("diagnostics-otel service", () => {
       toolCallId: "tool-1",
       durationMs: 20,
       toolInput: "tool input",
-      toolOutput: "x".repeat(6000),
+      toolOutput: `${"x".repeat(4077)} Bearer ${"a".repeat(80)}`, // pragma: allowlist secret
     } as Parameters<typeof emitDiagnosticEvent>[0]);
     await flushDiagnosticEvents();
 
@@ -842,6 +842,7 @@ describe("diagnostics-otel service", () => {
     expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(
       MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
     );
+    expect(String(toolAttrs?.["openclaw.content.tool_output"])).not.toContain("a".repeat(11));
     await service.stop?.(ctx);
   });
 
