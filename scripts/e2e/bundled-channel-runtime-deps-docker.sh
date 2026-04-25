@@ -127,6 +127,29 @@ test -d "$package_root/dist/extensions/slack"
 test -d "$package_root/dist/extensions/feishu"
 test -d "$package_root/dist/extensions/memory-lancedb"
 
+stage_root() {
+  printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
+}
+
+find_external_dep_package() {
+  local dep_path="$1"
+  find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+assert_package_dep_absent() {
+  local channel="$1"
+  local dep_path="$2"
+  for candidate in \
+    "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$package_root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$package_root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "packaged install should not mutate package tree for $channel: $candidate" >&2
+      exit 1
+    fi
+  done
+}
+
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
   find "$package_root/dist/extensions/$CHANNEL/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
@@ -357,12 +380,10 @@ assert_installed_once() {
   if [ "$count" -eq 1 ]; then
     return 0
   fi
-  if [ "$count" -eq 0 ] && [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    return 0
-  fi
   if [ "$count" -ne 1 ]; then
-    echo "expected exactly one runtime deps install log or installed sentinel for $channel, got $count log lines" >&2
+    echo "expected exactly one runtime deps install log for $channel, got $count log lines" >&2
     cat "$log_file" >&2
+    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
     exit 1
   fi
 }
@@ -380,18 +401,22 @@ assert_not_installed() {
 assert_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  if [ ! -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "missing dependency sentinel for $channel: $dep_path" >&2
-    find "$package_root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
+  local sentinel
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -z "$sentinel" ]; then
+    echo "missing external dependency sentinel for $channel: $dep_path" >&2
+    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
     exit 1
   fi
+  assert_package_dep_absent "$channel" "$dep_path"
 }
 
 assert_no_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  if [ -f "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "dependency sentinel should be absent before activation for $channel: $dep_path" >&2
+  assert_package_dep_absent "$channel" "$dep_path"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "external dependency sentinel should be absent before activation for $channel: $dep_path" >&2
     exit 1
   fi
 }
@@ -1063,6 +1088,15 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
+stage_root() {
+  printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
+}
+
+find_external_dep_package() {
+  local dep_path="$1"
+  find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 update_target="file:$package_tgz"
 candidate_version="$(node - <<'NODE' "$package_tgz"
@@ -1182,12 +1216,15 @@ assert_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
   local root
+  local sentinel
   root="$(package_root)"
-  if [ ! -f "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "missing dependency sentinel for $channel: $dep_path" >&2
-    find "$root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -z "$sentinel" ]; then
+    echo "missing external dependency sentinel for $channel: $dep_path" >&2
+    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
     exit 1
   fi
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
 }
 
 assert_no_dep_sentinel() {
@@ -1195,28 +1232,43 @@ assert_no_dep_sentinel() {
   local dep_path="$2"
   local root
   root="$(package_root)"
-  if [ -f "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" ]; then
-    echo "dependency sentinel should be absent before repair for $channel: $dep_path" >&2
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "external dependency sentinel should be absent before repair for $channel: $dep_path" >&2
     exit 1
   fi
+}
+
+assert_no_package_dep_available() {
+  local channel="$1"
+  local dep_path="$2"
+  local root="$3"
+  for candidate in \
+    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "packaged install should not mutate package tree for $channel: $candidate" >&2
+      exit 1
+    fi
+  done
 }
 
 assert_dep_available() {
   local channel="$1"
   local dep_path="$2"
   local root
+  local sentinel
   root="$(package_root)"
-  for candidate in \
-    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      return 0
-    fi
-  done
+  sentinel="$(find_external_dep_package "$dep_path")"
+  if [ -n "$sentinel" ]; then
+    assert_no_package_dep_available "$channel" "$dep_path" "$root"
+    return 0
+  fi
   echo "missing dependency sentinel for $channel: $dep_path" >&2
   find "$root/dist/extensions/$channel" -maxdepth 3 -type f | sort | head -80 >&2 || true
   find "$root/node_modules" -maxdepth 3 -path "*/$dep_path/package.json" -type f -print >&2 || true
+  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
   exit 1
 }
 
@@ -1225,15 +1277,11 @@ assert_no_dep_available() {
   local dep_path="$2"
   local root
   root="$(package_root)"
-  for candidate in \
-    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      echo "dependency sentinel should be absent before repair for $channel: $dep_path ($candidate)" >&2
-      exit 1
-    fi
-  done
+  assert_no_package_dep_available "$channel" "$dep_path" "$root"
+  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    echo "dependency sentinel should be absent before repair for $channel: $dep_path" >&2
+    exit 1
+  fi
 }
 
 remove_runtime_dep() {
@@ -1244,6 +1292,7 @@ remove_runtime_dep() {
   rm -rf "$root/dist/extensions/$channel/node_modules"
   rm -rf "$root/dist/extensions/node_modules/$dep_path"
   rm -rf "$root/node_modules/$dep_path"
+  rm -rf "$(stage_root)"
 }
 
 assert_update_ok() {
