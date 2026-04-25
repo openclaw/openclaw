@@ -57,6 +57,10 @@ export function inlineChannelPluginEntryFactorySource(): string {
       }
       options.setRuntime?.(api.runtime);
       api.registerChannel({ plugin: options.plugin });
+      if (api.registrationMode === "discovery") {
+        options.registerCliMetadata?.(api);
+        return;
+      }
       if (api.registrationMode !== "full") {
         return;
       }

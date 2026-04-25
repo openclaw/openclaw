@@ -549,6 +549,108 @@ module.exports = {
     );
   });
 
+  it("collects channel CLI metadata during discovery plugin loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discovery-cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discovery-cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["discovery-cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `${inlineChannelPluginEntryFactorySource()}
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "discovery-cli-metadata-channel",
+    name: "Discovery CLI Metadata Channel",
+    description: "discovery cli metadata channel",
+    plugin: {
+      id: "discovery-cli-metadata-channel",
+      meta: {
+        id: "discovery-cli-metadata-channel",
+        label: "Discovery CLI Metadata Channel",
+        selectionLabel: "Discovery CLI Metadata Channel",
+        docsPath: "/channels/discovery-cli-metadata-channel",
+        blurb: "discovery cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "discovery-cli-metadata-channel",
+            description: "Discovery-load channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["discovery-cli-metadata-channel"],
+          entries: {
+            "discovery-cli-metadata-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "discovery-cli-metadata-channel",
+    );
+  });
+
   it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
