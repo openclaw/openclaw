@@ -2,7 +2,7 @@
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "daily" | "idle" | "adaptive";
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
@@ -17,6 +17,8 @@ export type SessionFreshness = {
   dailyResetAt?: number;
   idleExpiresAt?: number;
   staleReason?: SessionResetMode;
+  staleDaily?: boolean;
+  staleIdle?: boolean;
 };
 
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
@@ -68,7 +70,7 @@ export function resolveSessionResetPolicy(params: {
     if (Number.isFinite(normalized)) {
       idleMinutes = Math.max(normalized, 0);
     }
-  } else if (mode === "idle") {
+  } else if (mode === "idle" || mode === "adaptive") {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
@@ -90,7 +92,7 @@ export function evaluateSessionFreshness(params: {
   // Daily reset uses session start, while idle reset uses last interaction; a continued session can
   // stay idle-fresh even when its original transcript is old.
   const dailyResetAt =
-    params.policy.mode === "daily"
+    params.policy.mode === "daily" || params.policy.mode === "adaptive"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
@@ -99,22 +101,29 @@ export function evaluateSessionFreshness(params: {
       : undefined;
   const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
-  const staleReason =
-    staleDaily && staleIdle
-      ? // When both policies mark the session stale, report the boundary that went stale first.
-        (dailyResetAt ?? Number.POSITIVE_INFINITY) <= (idleExpiresAt ?? Number.POSITIVE_INFINITY)
+  let staleReason: SessionResetMode | undefined;
+  if (params.policy.mode === "adaptive") {
+    staleReason = staleDaily && staleIdle ? "adaptive" : undefined;
+  } else if (staleDaily && staleIdle) {
+    // When both policies mark the session stale, report the boundary that went stale first.
+    staleReason =
+      (dailyResetAt ?? Number.POSITIVE_INFINITY) <= (idleExpiresAt ?? Number.POSITIVE_INFINITY)
         ? "daily"
-        : "idle"
-      : staleIdle
-        ? "idle"
-        : staleDaily
-          ? "daily"
-          : undefined;
+        : "idle";
+  } else if (staleIdle) {
+    staleReason = "idle";
+  } else if (staleDaily) {
+    staleReason = "daily";
+  }
+  // adaptive: only stale when BOTH daily boundary has passed AND the session is idle
+  const stale = params.policy.mode === "adaptive" ? staleDaily && staleIdle : staleDaily || staleIdle;
   return {
-    fresh: !(staleDaily || staleIdle),
+    fresh: !stale,
     dailyResetAt,
     idleExpiresAt,
     ...(staleReason ? { staleReason } : {}),
+    staleDaily,
+    staleIdle,
   };
 }
 

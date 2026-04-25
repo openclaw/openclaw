@@ -51,6 +51,18 @@ describe("SessionSchema maintenance extensions", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts adaptive session reset mode", () => {
+    expect(() =>
+      SessionSchema.parse({
+        reset: {
+          mode: "adaptive",
+          atHour: 4,
+          idleMinutes: 60,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts disabling reset archive cleanup", () => {
     const result = SessionSchema.safeParse({
       maintenance: {
