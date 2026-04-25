@@ -159,12 +159,12 @@ hooks; restart the Gateway process that is serving the live channel before
 expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
 provider/runtime hooks to run.
 
-`openclaw plugins list` is a local CLI/config snapshot. A `loaded` plugin there
-means the plugin is discoverable and loadable from the config/files seen by that
-CLI invocation. It does not prove that an already-running remote Gateway child
-has restarted into the same plugin code. On VPS/container setups with wrapper
-processes, send restarts to the actual `openclaw gateway run` process, or use
-`openclaw gateway restart` against the running Gateway.
+`openclaw plugins list` is a local plugin registry/config snapshot. An
+`enabled` plugin there means the persisted registry and current config allow the
+plugin to participate. It does not prove that an already-running remote Gateway
+child has restarted into the same plugin code. On VPS/container setups with
+wrapper processes, send restarts to the actual `openclaw gateway run` process,
+or use `openclaw gateway restart` against the running Gateway.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -256,7 +256,7 @@ Some categories are exclusive (only one active at a time):
 
 ```bash
 openclaw plugins list                       # compact inventory
-openclaw plugins list --enabled            # only loaded plugins
+openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
 openclaw plugins inspect <id>              # deep detail
@@ -264,6 +264,8 @@ openclaw plugins inspect <id> --json       # machine-readable
 openclaw plugins inspect --all             # fleet-wide table
 openclaw plugins info <id>                 # inspect alias
 openclaw plugins doctor                    # diagnostics
+openclaw plugins registry                  # inspect persisted registry state
+openclaw plugins registry --refresh        # rebuild persisted registry
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
@@ -298,6 +300,13 @@ of copying over a managed install target.
 When `plugins.allow` is already set, `openclaw plugins install` adds the
 installed plugin id to that allowlist before enabling it, so installs are
 immediately loadable after restart.
+
+OpenClaw keeps a persisted local plugin registry as the cold read model for
+plugin inventory, contribution ownership, and startup planning. Install, update,
+uninstall, enable, and disable flows refresh that registry after changing plugin
+state. If the registry is missing, stale, or invalid, `openclaw plugins registry
+--refresh` rebuilds it from the durable install ledger, config policy, and
+manifest/package metadata without loading plugin runtime modules.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name

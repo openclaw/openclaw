@@ -457,7 +457,7 @@ Doctor prints a summary of the workspace state for the default agent:
 - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
 - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories
   exist alongside the current workspace.
-- **Plugin status**: counts loaded/disabled/errored plugins; lists plugin IDs for any
+- **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any
   errors; reports bundle plugin capabilities.
 - **Plugin compatibility warnings**: flags plugins that have compatibility issues with
   the current runtime.
