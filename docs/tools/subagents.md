@@ -383,6 +383,14 @@ child session is marked `abortedLastRun: true`. Those restart-aborted child
 sessions remain recoverable through the sub-agent orphan recovery flow, which
 sends a synthetic resume message before clearing the aborted marker.
 
+If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` / `scope-upgrade`,
+check the RPC caller before editing pairing state. Internal `sessions_spawn`
+coordination should connect as `client.id: "gateway-client"` with
+`client.mode: "backend"` over direct loopback shared-token/password auth; that
+path does not depend on the CLI's paired-device scope baseline. Remote callers,
+explicit `deviceIdentity`, explicit device-token paths, and browser/node clients
+still need normal device approval for scope upgrades.
+
 ## Stopping
 
 - Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it, cascading to nested children.
