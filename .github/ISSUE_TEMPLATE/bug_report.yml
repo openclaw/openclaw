@@ -9,6 +9,7 @@ body:
       value: |
         Thanks for filing this report. Keep every answer concise, reproducible, and grounded in observed evidence.
         Do not speculate or infer beyond the evidence. If a narrative section cannot be answered from the available evidence, respond with exactly `NOT_ENOUGH_INFO`.
+        Do not include passwords, tokens, API keys, session cookies, or other secrets anywhere in this report or in follow-up comments.
 
         If this is a plugin beta-release blocker, rename the issue title to `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label after filing.
   - type: dropdown

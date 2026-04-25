@@ -8,6 +8,7 @@ body:
     attributes:
       value: |
         Help us evaluate this request with concrete use cases and tradeoffs.
+        Do not include passwords, tokens, API keys, session cookies, or other secrets in the request body or comments.
   - type: textarea
     id: summary
     attributes:
