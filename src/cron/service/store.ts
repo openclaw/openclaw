@@ -7,11 +7,32 @@ import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
-function didSchedulingInputsChange(previous: CronJob, next: CronJob): boolean {
-  if (previous.enabled !== next.enabled) {
-    return true;
+function schedulesEqual(previous: CronJob["schedule"], next: CronJob["schedule"]): boolean {
+  if (previous.kind !== next.kind) {
+    return false;
   }
-  return JSON.stringify(previous.schedule) !== JSON.stringify(next.schedule);
+  switch (previous.kind) {
+    case "at":
+      return next.kind === "at" && previous.at === next.at;
+    case "every":
+      return (
+        next.kind === "every" &&
+        previous.everyMs === next.everyMs &&
+        previous.anchorMs === next.anchorMs
+      );
+    case "cron":
+      return (
+        next.kind === "cron" &&
+        previous.expr === next.expr &&
+        previous.tz === next.tz &&
+        previous.staggerMs === next.staggerMs
+      );
+  }
+  return false;
+}
+
+function didSchedulingInputsChange(previous: CronJob, next: CronJob): boolean {
+  return previous.enabled !== next.enabled || !schedulesEqual(previous.schedule, next.schedule);
 }
 
 function invalidateStaleNextRunOnScheduleChange(params: {
