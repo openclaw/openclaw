@@ -98,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics: emit structured tool execution diagnostic events with trace context, timing, and redacted error metadata. Thanks @vincentkoc.
 - Diagnostics: emit structured run and model-call diagnostic events with trace context, duration, and non-message error metadata. Thanks @vincentkoc.
 - Control UI/chat: add a Steer action on queued messages so a browser follow-up can be injected into the active run without retyping it. Thanks @steipete.
+- Control UI/avatars: render authenticated assistant avatar routes through local blob URLs and allow those managed blobs in the dashboard CSP, restoring configured chat avatars. Fixes #71422. Thanks @blaspat.
 - Control UI/Talk: add browser WebRTC realtime voice sessions backed by OpenAI Realtime, with Gateway-minted ephemeral client secrets and `openclaw_agent_consult` handoff to the full OpenClaw agent. Thanks @steipete.
 - Plugin SDK/Codex harness: add provider-owned transport/auth/follow-up seams and harness result classification so Codex-style runtimes can participate in fallback policy without core special-casing. (#70772) Thanks @100yenadmin.
 - Codex harness: bridge Codex-native tool hooks into OpenClaw plugin hooks and approvals, with bounded relay payloads and approval spam protection. (#71008) Thanks @pashpashpash.
