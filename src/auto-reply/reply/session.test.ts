@@ -1574,6 +1574,7 @@ describe("initSessionState reset policy", () => {
     });
 
     const cfg = { session: { store: storePath } } as OpenClawConfig;
+
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
@@ -1592,6 +1593,38 @@ describe("initSessionState reset policy", () => {
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
     expect(persisted[sessionKey]?.endedAt).toBe(Date.now() - 1_000);
     expect(persisted[sessionKey]?.runtimeMs).toBe(9_000);
+  });
+
+  it("keeps sessions in adaptive mode until both rollover conditions are true", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 4, 15, 0));
+    const root = await makeCaseDir("openclaw-reset-adaptive-fresh-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:adaptive-fresh";
+    const existingSessionId = "adaptive-fresh-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionStartedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+        lastInteractionAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+        updatedAt: new Date(2026, 0, 18, 4, 10, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "adaptive", atHour: 4, idleMinutes: 60 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

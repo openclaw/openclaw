@@ -25,7 +25,12 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import {
+  DEFAULT_IDLE_MINUTES,
+  mergeSessionEntry,
+  mergeSessionEntryWithPolicy,
+  type SessionEntry,
+} from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
 
@@ -150,6 +155,19 @@ describe("resolveSessionResetPolicy", () => {
     expect(policy.atHour).toBe(4);
   });
 
+  it("defaults adaptive resets to the standard idle window", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: { reset: { mode: "adaptive" } } as SessionConfig,
+      resetType: "direct",
+    });
+
+    expect(policy).toMatchObject({
+      mode: "adaptive",
+      atHour: 4,
+      idleMinutes: DEFAULT_IDLE_MINUTES,
+    });
+  });
+
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
     const freshness = evaluateSessionFreshness({
       updatedAt: 1_000,
@@ -165,6 +183,8 @@ describe("resolveSessionResetPolicy", () => {
       fresh: true,
       dailyResetAt: undefined,
       idleExpiresAt: undefined,
+      staleDaily: false,
+      staleIdle: false,
     });
   });
 
@@ -180,8 +200,12 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness.fresh).toBe(false);
-    expect(freshness.staleReason).toBe("daily");
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: true,
+      staleIdle: false,
+      staleReason: "daily",
+    });
   });
 
   it("uses lastInteractionAt, not updatedAt, for idle reset freshness", () => {
@@ -197,9 +221,13 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness.fresh).toBe(false);
-    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
-    expect(freshness.staleReason).toBe("idle");
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: false,
+      staleIdle: true,
+      idleExpiresAt: 5 * 60_000,
+      staleReason: "idle",
+    });
   });
 
   it("falls back to sessionStartedAt, not updatedAt, for legacy idle freshness", () => {
@@ -215,9 +243,13 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness.fresh).toBe(false);
-    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
-    expect(freshness.staleReason).toBe("idle");
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: false,
+      staleIdle: true,
+      idleExpiresAt: 5 * 60_000,
+      staleReason: "idle",
+    });
   });
 
   it("reports the first expired reset deadline when daily and idle are both stale", () => {
@@ -249,7 +281,11 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness.fresh).toBe(false);
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: true,
+      staleIdle: false,
+    });
   });
 
   it("does not let future legacy updatedAt values keep idle sessions fresh", () => {
@@ -264,8 +300,84 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness.fresh).toBe(false);
-    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: false,
+      staleIdle: true,
+      idleExpiresAt: 5 * 60_000,
+    });
+  });
+
+  it("keeps adaptive sessions fresh when only the daily boundary is stale", () => {
+    const sessionStartedAt = new Date(2026, 0, 18, 3, 30, 0).getTime();
+    const lastInteractionAt = sessionStartedAt;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: new Date(2026, 0, 18, 4, 10, 0).getTime(),
+      sessionStartedAt,
+      lastInteractionAt,
+      now: new Date(2026, 0, 18, 4, 15, 0).getTime(),
+      policy: {
+        mode: "adaptive",
+        atHour: 4,
+        idleMinutes: 60,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: true,
+      staleDaily: true,
+      staleIdle: false,
+      dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
+    });
+  });
+
+  it("keeps adaptive sessions fresh when only idle is stale", () => {
+    const sessionStartedAt = new Date(2026, 0, 18, 0, 0, 0).getTime();
+    const lastInteractionAt = sessionStartedAt;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: new Date(2026, 0, 18, 1, 30, 0).getTime(),
+      sessionStartedAt,
+      lastInteractionAt,
+      now: new Date(2026, 0, 18, 2, 0, 0).getTime(),
+      policy: {
+        mode: "adaptive",
+        atHour: 4,
+        idleMinutes: 60,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: true,
+      staleDaily: false,
+      staleIdle: true,
+      dailyResetAt: new Date(2026, 0, 17, 4, 0, 0).getTime(),
+      idleExpiresAt: new Date(2026, 0, 18, 1, 0, 0).getTime(),
+    });
+  });
+
+  it("expires adaptive sessions once both daily and idle conditions are stale", () => {
+    const sessionStartedAt = new Date(2026, 0, 18, 3, 30, 0).getTime();
+    const lastInteractionAt = sessionStartedAt;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: new Date(2026, 0, 18, 5, 10, 0).getTime(),
+      sessionStartedAt,
+      lastInteractionAt,
+      now: new Date(2026, 0, 18, 5, 15, 0).getTime(),
+      policy: {
+        mode: "adaptive",
+        atHour: 4,
+        idleMinutes: 60,
+      },
+    });
+
+    expect(freshness).toMatchObject({
+      fresh: false,
+      staleDaily: true,
+      staleIdle: true,
+      dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
+    });
   });
 });
 
