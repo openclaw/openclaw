@@ -349,7 +349,7 @@ agent.
 
 If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `exec` tool with `host=node`.
 
-This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
+This relies on the node reporting its command support and on a bin probe via `system.which` or `system.run`. Offline nodes do not make remote-only skills visible. If a connected node stops answering bin probes, OpenClaw clears its cached bin matches so agents no longer see skills that cannot currently run there.
 
 ## Skills watcher (auto-refresh)
 

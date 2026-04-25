@@ -817,6 +817,60 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
+  it("links source-checkout runtime deps from the cache instead of copying them", () => {
+    const packageRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "voice-call");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { "voice-runtime": "1.0.0" } }),
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd);
+      expect(cwd).toContain(path.join(".local", "bundled-plugin-runtime-deps"));
+      const depRoot = path.join(cwd, "node_modules", "voice-runtime");
+      fs.mkdirSync(depRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(depRoot, "package.json"),
+        JSON.stringify({ name: "voice-runtime", version: "1.0.0" }),
+      );
+      return { status: 0, stdout: "", stderr: "" } as ReturnType<typeof spawnSync>;
+    });
+
+    expect(
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        pluginId: "voice-call",
+        pluginRoot,
+      }),
+    ).toEqual({
+      installedSpecs: ["voice-runtime@1.0.0"],
+      retainSpecs: ["voice-runtime@1.0.0"],
+    });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(fs.lstatSync(path.join(pluginRoot, "node_modules")).isSymbolicLink()).toBe(true);
+
+    fs.rmSync(path.join(pluginRoot, "node_modules"), { recursive: true, force: true });
+    expect(
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        installDeps: () => {
+          throw new Error("cache restore should not reinstall");
+        },
+        pluginId: "voice-call",
+        pluginRoot,
+      }),
+    ).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(fs.lstatSync(path.join(pluginRoot, "node_modules")).isSymbolicLink()).toBe(true);
+  });
+
   it("retains existing staged deps without a retained manifest before shared installs", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
@@ -1194,6 +1248,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installExecutionRoot: expect.stringContaining(
           path.join(".local", "bundled-plugin-runtime-deps"),
         ),
+        linkNodeModulesFromExecutionRoot: true,
         missingSpecs: ["tokenjuice@0.6.1"],
         installSpecs: ["tokenjuice@0.6.1"],
       },
@@ -1276,6 +1331,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installExecutionRoot: expect.stringContaining(
           path.join(".local", "bundled-plugin-runtime-deps"),
         ),
+        linkNodeModulesFromExecutionRoot: true,
         missingSpecs: ["acpx@0.5.3"],
         installSpecs: ["acpx@0.5.3"],
       },

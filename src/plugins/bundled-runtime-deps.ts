@@ -27,6 +27,7 @@ export type RuntimeDepConflict = {
 export type BundledRuntimeDepsInstallParams = {
   installRoot: string;
   installExecutionRoot?: string;
+  linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   installSpecs?: string[];
 };
@@ -701,6 +702,31 @@ function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
   }
 }
 
+function linkNodeModulesDir(targetDir: string, sourceDir: string): boolean {
+  const parentDir = path.dirname(targetDir);
+  const tempLink = path.join(parentDir, `.openclaw-runtime-deps-link-${process.pid}-${Date.now()}`);
+  try {
+    fs.symlinkSync(sourceDir, tempLink, process.platform === "win32" ? "junction" : "dir");
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.renameSync(tempLink, targetDir);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(tempLink, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; caller falls back to copying.
+    }
+    return false;
+  }
+}
+
+function replaceNodeModulesDirFromCache(targetDir: string, sourceDir: string): void {
+  if (linkNodeModulesDir(targetDir, sourceDir)) {
+    return;
+  }
+  replaceNodeModulesDir(targetDir, sourceDir);
+}
+
 function restoreSourceCheckoutRuntimeDepsFromCache(params: {
   cacheDir: string | null;
   deps: readonly { name: string }[];
@@ -714,7 +740,10 @@ function restoreSourceCheckoutRuntimeDepsFromCache(params: {
     return false;
   }
   try {
-    replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), cachedNodeModulesDir);
+    replaceNodeModulesDirFromCache(
+      path.join(params.installRoot, "node_modules"),
+      cachedNodeModulesDir,
+    );
     return true;
   } catch {
     return false;
@@ -1153,6 +1182,7 @@ function ensureNpmInstallExecutionManifest(installExecutionRoot: string): void {
 export function installBundledRuntimeDeps(params: {
   installRoot: string;
   installExecutionRoot?: string;
+  linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
 }): void {
@@ -1198,7 +1228,12 @@ export function installBundledRuntimeDeps(params: {
       if (!fs.existsSync(stagedNodeModulesDir)) {
         throw new Error("npm install did not produce node_modules");
       }
-      replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+      const targetNodeModulesDir = path.join(params.installRoot, "node_modules");
+      if (params.linkNodeModulesFromExecutionRoot) {
+        replaceNodeModulesDirFromCache(targetNodeModulesDir, stagedNodeModulesDir);
+      } else {
+        replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
+      }
     }
   } finally {
     if (cleanInstallExecutionRoot) {
@@ -1314,9 +1349,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
     });
     const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
     const sourceCheckoutCacheStage =
-      cacheDir &&
-      isPluginRootInstall &&
-      resolveSourceCheckoutBundledPluginPackageRoot(params.pluginRoot)
+      cacheDir && isPluginRootInstall && resolveSourceCheckoutPackageRoot(params.pluginRoot)
         ? cacheDir
         : undefined;
     const installExecutionRoot =
@@ -1338,14 +1371,26 @@ export function ensureBundledPluginRuntimeDeps(params: {
         installBundledRuntimeDeps({
           installRoot: installParams.installRoot,
           installExecutionRoot: installParams.installExecutionRoot,
+          linkNodeModulesFromExecutionRoot: installParams.linkNodeModulesFromExecutionRoot,
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           env: params.env,
         }));
-    install({ installRoot, installExecutionRoot, missingSpecs, installSpecs });
+    install({
+      installRoot,
+      installExecutionRoot,
+      ...(sourceCheckoutCacheStage ? { linkNodeModulesFromExecutionRoot: true } : {}),
+      missingSpecs,
+      installSpecs,
+    });
+    const cacheAlreadyPopulated = Boolean(
+      sourceCheckoutCacheStage && hasAllDependencySentinels(sourceCheckoutCacheStage, deps),
+    );
     if (persistRetainedManifest) {
       writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
     }
-    storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
+    if (!cacheAlreadyPopulated) {
+      storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
+    }
     return { installedSpecs: missingSpecs, retainSpecs: installSpecs };
   });
 }

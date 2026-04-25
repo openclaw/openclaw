@@ -69,6 +69,13 @@ Docs: https://docs.openclaw.ai
 - Providers/Azure OpenAI: give deployment-scoped image generation requests a
   longer 600s default timeout so slow `gpt-image-2` generations can complete
   without a per-call `timeoutMs`. Fixes #71705. Thanks @voytas75.
+- Gateway/plugins: link source-checkout bundled runtime dependency caches instead
+  of recursively copying `node_modules` on the gateway main thread, preventing
+  local status, node, and skill probes from timing out during startup cache
+  restores. Thanks @steipete.
+- Skills/remote nodes: only expose remote macOS skill bins for connected nodes,
+  clear stale bin matches when node probes fail, and include probe command,
+  timeout, bin count, and connection state in timeout logs. Thanks @steipete.
 - CLI/gateway: keep diagnostic probes from creating first-time read-only device
   pairings, while still reusing cached device tokens for detailed read probes.
   Fixes #71766. Thanks @SunboZ.
