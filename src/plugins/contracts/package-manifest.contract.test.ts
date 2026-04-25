@@ -70,10 +70,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   {
-    pluginId: "media-attachments",
-    pluginLocalRuntimeDeps: ["sharp"],
-  },
-  {
     pluginId: "msteams",
     pluginLocalRuntimeDeps: [
       "@azure/identity",

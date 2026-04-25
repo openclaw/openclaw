@@ -33,8 +33,8 @@ type MediaAttachmentImageOpsModule = {
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
-const MEDIA_ATTACHMENTS_PLUGIN_ID = "media-attachments";
-const MEDIA_ATTACHMENTS_IMAGE_OPS_ARTIFACT = "image-ops.js";
+const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
+const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -78,14 +78,14 @@ async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
         const { loadBundledPluginPublicArtifactModuleSync } =
           await import("../plugins/public-surface-loader.js");
         const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
-          dirName: MEDIA_ATTACHMENTS_PLUGIN_ID,
-          artifactBasename: MEDIA_ATTACHMENTS_IMAGE_OPS_ARTIFACT,
+          dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
+          artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
         });
         const ops = mod.createMediaAttachmentImageOps?.({
           maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
         });
         if (!isMediaAttachmentImageOps(ops)) {
-          throw new Error("Media attachments image operations plugin did not expose image ops");
+          throw new Error("Media understanding core did not expose image ops");
         }
         return ops;
       })

@@ -796,12 +796,6 @@ importers:
         version: link:../..
 
   extensions/media-understanding-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
-  extensions/media-attachments:
     dependencies:
       sharp:
         specifier: ^0.34.5

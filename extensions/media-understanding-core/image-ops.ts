@@ -17,7 +17,7 @@ type ResizeToPngParams = {
   withoutEnlargement?: boolean;
 };
 
-type MediaAttachmentImageOpsOptions = {
+type MediaUnderstandingImageOpsOptions = {
   maxInputPixels: number;
 };
 
@@ -81,7 +81,7 @@ function normalizeMetadata(meta: { width?: number; height?: number }): ImageMeta
   return { width, height };
 }
 
-export function createMediaAttachmentImageOps(options: MediaAttachmentImageOpsOptions) {
+export function createMediaAttachmentImageOps(options: MediaUnderstandingImageOpsOptions) {
   const maxInputPixels = normalizeMaxInputPixels(options.maxInputPixels);
   return {
     async getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
