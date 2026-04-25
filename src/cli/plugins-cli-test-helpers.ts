@@ -38,6 +38,8 @@ export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginInspectReport: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
+export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
+export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
@@ -198,6 +200,29 @@ vi.mock("../plugins/status.js", () => ({
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  inspectPluginRegistry: ((
+    ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>,
+      ReturnType<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
+    >(
+      inspectPluginRegistry,
+      ...args,
+    )) as (typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"],
+  refreshPluginRegistry: ((
+    ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>,
+      ReturnType<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>
+    >(
+      refreshPluginRegistry,
+      ...args,
+    )) as (typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"],
 }));
 
 vi.mock("../plugins/slots.js", async (importOriginal) => {
@@ -392,6 +417,8 @@ export function resetPluginsCliTestState() {
   buildPluginInspectReport.mockReset();
   buildPluginDiagnosticsReport.mockReset();
   buildPluginCompatibilityNotices.mockReset();
+  inspectPluginRegistry.mockReset();
+  refreshPluginRegistry.mockReset();
   applyExclusiveSlotSelection.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
@@ -452,6 +479,23 @@ export function resetPluginsCliTestState() {
   buildPluginSnapshotReport.mockReturnValue(defaultPluginReport);
   buildPluginDiagnosticsReport.mockReturnValue(defaultPluginReport);
   buildPluginCompatibilityNotices.mockReturnValue([]);
+  const defaultRegistryIndex = {
+    version: 1,
+    hostContractVersion: "2026.4.25",
+    compatRegistryVersion: "compat-v1",
+    migrationVersion: 1,
+    policyHash: "policy-v1",
+    generatedAtMs: 1777118400000,
+    plugins: [],
+    diagnostics: [],
+  };
+  inspectPluginRegistry.mockResolvedValue({
+    state: "fresh",
+    refreshReasons: [],
+    persisted: defaultRegistryIndex,
+    current: defaultRegistryIndex,
+  });
+  refreshPluginRegistry.mockResolvedValue(defaultRegistryIndex);
   applyExclusiveSlotSelection.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],
