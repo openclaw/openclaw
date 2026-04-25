@@ -1,0 +1,15 @@
+{
+  "id": "assemblyai",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "assemblyai": ["ASSEMBLYAI_API_KEY"]
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["assemblyai"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
