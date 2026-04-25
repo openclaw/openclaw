@@ -5,6 +5,7 @@ export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {
   emitDiagnosticEvent,
+  isTrustedDiagnosticEvent,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";

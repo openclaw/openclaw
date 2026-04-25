@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
+  isTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -113,6 +115,40 @@ describe("diagnostic-events", () => {
     });
 
     expect(events).toEqual([{ trace, type: "message.queued" }]);
+  });
+
+  it("marks only internal trusted diagnostic emissions as trusted", async () => {
+    const events: Array<{
+      event: Parameters<typeof isTrustedDiagnosticEvent>[0];
+      trusted: boolean;
+      type: string;
+    }> = [];
+    onInternalDiagnosticEvent((event) => {
+      events.push({ event, trusted: isTrustedDiagnosticEvent(event), type: event.type });
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events.map(({ trusted, type }) => ({ trusted, type }))).toEqual([
+      { trusted: false, type: "message.queued" },
+      { trusted: true, type: "model.call.started" },
+    ]);
+
+    const trustedEvent = events[1]?.event;
+    resetDiagnosticEventsForTest();
+    expect(trustedEvent).toBeDefined();
+    expect(trustedEvent ? isTrustedDiagnosticEvent(trustedEvent) : false).toBe(false);
   });
 
   it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {

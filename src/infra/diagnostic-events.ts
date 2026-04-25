@@ -388,6 +388,8 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 
+let trustedDiagnosticEvents = new WeakSet<DiagnosticEventPayload>();
+
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticEventsState?: DiagnosticEventsGlobalState;
@@ -468,7 +470,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   });
 }
 
-export function emitDiagnosticEvent(event: DiagnosticEventInput) {
+function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: boolean) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
     return;
@@ -480,6 +482,10 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
 
+  if (trusted) {
+    trustedDiagnosticEvents.add(enriched);
+  }
+
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
       return;
@@ -490,6 +496,18 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   }
 
   dispatchDiagnosticEvent(state, enriched);
+}
+
+export function emitDiagnosticEvent(event: DiagnosticEventInput) {
+  emitDiagnosticEventWithTrust(event, false);
+}
+
+export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
+  emitDiagnosticEventWithTrust(event, true);
+}
+
+export function isTrustedDiagnosticEvent(event: DiagnosticEventPayload): boolean {
+  return trustedDiagnosticEvents.has(event);
 }
 
 export function onInternalDiagnosticEvent(
@@ -519,4 +537,5 @@ export function resetDiagnosticEventsForTest(): void {
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;
+  trustedDiagnosticEvents = new WeakSet<DiagnosticEventPayload>();
 }

@@ -24,6 +24,7 @@ import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
+  isTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   redactSensitiveText,
 } from "../api.js";
@@ -339,6 +340,37 @@ function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined
   });
 }
 
+function contextForDiagnosticSpanParent(
+  traceContext: DiagnosticTraceContext | undefined,
+  options: { fallbackToSpanId?: boolean } = {},
+) {
+  const normalized = normalizeTraceContext(traceContext);
+  const parentSpanId =
+    normalized?.parentSpanId ?? (options.fallbackToSpanId ? normalized?.spanId : undefined);
+  if (!normalized || !parentSpanId) {
+    return undefined;
+  }
+  return trace.setSpanContext(otelContextApi.active(), {
+    traceId: normalized.traceId,
+    spanId: parentSpanId,
+    traceFlags: traceFlagsToOtel(normalized.traceFlags),
+    isRemote: true,
+  });
+}
+
+function contextForTrustedTraceContext(evt: DiagnosticEventPayload) {
+  return isTrustedDiagnosticEvent(evt) ? contextForTraceContext(evt.trace) : undefined;
+}
+
+function contextForTrustedDiagnosticSpanParent(
+  evt: DiagnosticEventPayload,
+  options: { fallbackToSpanId?: boolean } = {},
+) {
+  return isTrustedDiagnosticEvent(evt)
+    ? contextForDiagnosticSpanParent(evt.trace, options)
+    : undefined;
+}
+
 function addTraceAttributes(
   attributes: Record<string, string | number | boolean>,
   traceContext: DiagnosticTraceContext | undefined,
@@ -635,7 +667,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               attributes: redactOtelAttributes(attributes),
               timestamp: evt.ts,
             };
-            const logContext = contextForTraceContext(evt.trace);
+            const logContext = contextForTrustedTraceContext(evt);
             if (logContext) {
               logRecord.context = logContext;
             }
@@ -777,8 +809,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.total": usage.total ?? 0,
         };
 
-        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
-        span.end();
+        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
       };
 
       const recordWebhookReceived = (
@@ -1015,6 +1050,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
         const span = spanWithDuration("openclaw.run", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
           endTimeMs: evt.ts,
         });
         if (evt.outcome === "error") {
@@ -1061,6 +1097,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
           endTimeMs: evt.ts,
         });
         span.end(evt.ts);
@@ -1096,6 +1133,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
           endTimeMs: evt.ts,
         });
         span.setStatus({
@@ -1128,6 +1166,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
           endTimeMs: evt.ts,
         });
         span.end(evt.ts);
@@ -1161,6 +1200,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt),
           endTimeMs: evt.ts,
         });
         span.setStatus({
