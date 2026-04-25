@@ -953,6 +953,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
+          ...genAiAttrs,
           "openclaw.tokens.input": usage.input ?? 0,
           "openclaw.tokens.output": usage.output ?? 0,
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,

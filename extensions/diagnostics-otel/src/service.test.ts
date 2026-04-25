@@ -768,6 +768,9 @@ describe("diagnostics-otel service", () => {
     );
     expect(modelUsageCall?.[1]).toMatchObject({
       attributes: {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.request.model": "claude-sonnet-4.6",
         "gen_ai.usage.input_tokens": 150,
         "gen_ai.usage.output_tokens": 40,
         "gen_ai.usage.cache_read.input_tokens": 30,
