@@ -6,6 +6,7 @@ import {
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
+import { loadLocalAssistantIdentity } from "../storage.ts";
 
 export type ControlUiBootstrapState = {
   basePath: string;
@@ -79,6 +80,14 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     state.assistantAvatarStatus = normalized.avatarStatus ?? null;
     state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
+    // Local override always wins — same pattern as the user avatar.
+    const localAvatar = loadLocalAssistantIdentity().avatar;
+    if (localAvatar) {
+      state.assistantAvatar = localAvatar;
+      state.assistantAvatarSource = localAvatar;
+      state.assistantAvatarStatus = "data";
+      state.assistantAvatarReason = null;
+    }
     state.serverVersion = parsed.serverVersion ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
