@@ -23,6 +23,19 @@ OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
+### Abliteration
+
+Abliteration.ai model provider plugin for OpenClaw. Adds the `abliteration`
+provider, API-key onboarding, and the `abliteration/abliterated-model` default
+model over the OpenAI Responses API.
+
+- **npm:** `@abliterationai/openclaw-abliteration-provider`
+- **repo:** [github.com/abliterationai/openclaw-abliteration-provider](https://github.com/abliterationai/openclaw-abliteration-provider)
+
+```bash
+openclaw plugins install @abliterationai/openclaw-abliteration-provider
+```
+
 ### Apify
 
 Scrape data from any website with 20,000+ ready-made scrapers. Let your agent
