@@ -54,15 +54,34 @@ Docs: https://docs.openclaw.ai
 - Providers/Xiaomi: add MiMo TTS as a bundled speech provider with MP3/WAV output and voice-note Opus transcoding. Fixes #52376. (#55614) Thanks @zoujiejun.
 - Providers/ElevenLabs: include `eleven_v3` in the bundled TTS model catalog so model selection surfaces can offer ElevenLabs v3. (#68321) Thanks @itsuzef.
 - Providers/Local CLI TTS: add a bundled local command speech provider with file/stdout input, voice-note Opus conversion, and telephony PCM output. (#56239) Thanks @solar2ain.
+- Providers/Inworld: add Inworld as a bundled speech provider with streaming TTS synthesis, voice listing, voice-note output, and PCM telephony output. (#55972) Thanks @cshape.
 - Android/Talk Mode: expose Talk Mode in the Voice tab with runtime-owned voice capture modes and microphone foreground-service escalation. Thanks @alex-latitude.
 - Providers/LiteLLM: register `litellm` as an image-generation provider so `image_generate model=litellm/...` calls and `agents.defaults.imageGenerationModel.fallbacks` entries resolve through the LiteLLM proxy. Thanks @zqchris.
 - Codex harness: require Codex app-server `0.125.0` or newer and cover native MCP `PreToolUse`, `PostToolUse`, and `PermissionRequest` payloads through the OpenClaw hook relay.
 
 ### Fixes
 
+- CLI/agents: keep `agents bind`, `agents unbind`, and `agents bindings` on
+  setup-safe channel metadata paths so they do not preload bundled plugin
+  runtimes or stage runtime dependencies. Fixes #71743.
+- Plugins/registry: preserve explicit disabled plugin records during registry migration without persisting every unused bundled plugin discovered on disk. Thanks @shakkernerd.
 - Windows/native: keep CLI startup and bundled provider plugin loading off
   Windows ESM raw-path failure paths, fixing native onboarding/install smoke on
   Node 24. Thanks @steipete.
+- Plugins/doctor: read bundled channel doctor capabilities through the same
+  packaged plugin directory resolver used by plugin loading, so published
+  installs keep Matrix DM allowlist repairs on `channels.matrix.dm.*` instead
+  of writing invalid top-level `dmPolicy` keys. Fixes #71757.
+- Plugins/Windows: keep bundled plugin Jiti loaders off the native import path
+  on Windows so channel plugins such as Telegram no longer crash with
+  `ERR_UNSUPPORTED_ESM_URL_SCHEME` on `C:\...` paths. Fixes #71749. Thanks
+  @smeyer9.
+- Providers/Ollama: use Ollama's current `/api/web_search` endpoint and honor
+  `https://ollama.com` model-provider base URLs for Ollama Web Search. Fixes
+  #71741. Thanks @madhvidua.
+- CLI/agents: keep `openclaw agents list --json` on the config-only path by
+  default, avoiding bundled plugin loading unless callers request
+  `--bindings`. Fixes #71739. Thanks @kaloster.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
   WhatsApp and other native voice-note replies can play as voice messages.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when
@@ -79,6 +98,15 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions_spawn: reject normal OpenClaw config agent ids when callers
   explicitly request `runtime="acp"`, while allowing agents configured with
   `runtime.type="acp"` to resolve to their ACP harness id. Fixes #63914.
+- ACP/sessions_spawn: apply `runTimeoutSeconds` to ACP child turns and dispatch
+  those turns on the background subagent lane, so quota-stalled ACP harnesses do
+  not occupy the main agent lane indefinitely. Fixes #68823.
+- ACP/oneshot: reconcile runtime session identity before closing completed
+  oneshot ACP runs, so finished `sessions.json` entries do not stay stuck with
+  `acp.identity.state="pending"`.
+- ACP/models: document that non-Codex ACP model overrides require adapter
+  support for ACP `models` plus `session/set_model`, so unsupported harnesses
+  fail clearly instead of silently falling back to their defaults.
 - Plugins/Voice Call: treat missing provider credentials as setup-incomplete
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks
@@ -111,6 +139,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/startup: remove ownerless bundled runtime-dependency install locks
   after a short grace window and include lock owner details when startup times
   out waiting for a plugin runtime-deps lock.
+- Plugins/install: anchor bundled runtime-dependency npm installs with an
+  OpenClaw-owned package manifest so Linux updates cannot accidentally write to
+  a parent `$HOME/node_modules` tree. Fixes #71730.
 - Live tests/voice: accept common STT variants for OpenClaw and ElevenLabs
   brand names so provider smoke tests fail on real regressions rather than
   equivalent transcripts.

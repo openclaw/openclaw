@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginInstallRecords,
@@ -13,9 +14,9 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
 import {
-  listEnabledInstalledPluginRecords,
   loadInstalledPluginIndex,
   type InstalledPluginIndex,
+  type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
 } from "../../../plugins/installed-plugin-index.js";
 
@@ -111,6 +112,134 @@ async function readMigrationConfig(
   return await configModule.readBestEffortConfig();
 }
 
+function normalizeRegistryReference(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function createMigrationPluginIdNormalizer(
+  index: InstalledPluginIndex,
+): (pluginId: string) => string {
+  const aliases = new Map<string, string>();
+  for (const plugin of index.plugins) {
+    const pluginId = normalizeRegistryReference(plugin.pluginId);
+    if (!pluginId) {
+      continue;
+    }
+    aliases.set(pluginId, plugin.pluginId);
+    for (const alias of [
+      ...plugin.contributions.providers,
+      ...plugin.contributions.channels,
+      ...plugin.contributions.setupProviders,
+      ...plugin.contributions.cliBackends,
+      ...plugin.contributions.modelCatalogProviders,
+    ]) {
+      const normalizedAlias = normalizeRegistryReference(alias);
+      if (normalizedAlias && !aliases.has(normalizedAlias)) {
+        aliases.set(normalizedAlias, plugin.pluginId);
+      }
+    }
+  }
+  return (pluginId: string) => {
+    const normalized = normalizeRegistryReference(pluginId);
+    return normalized ? (aliases.get(normalized) ?? pluginId.trim()) : pluginId.trim();
+  };
+}
+
+function addPluginReference(
+  references: Set<string>,
+  normalizePluginId: (pluginId: string) => string,
+  value: unknown,
+): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = normalizePluginId(value);
+  if (normalized) {
+    references.add(normalized);
+  }
+}
+
+function listConfiguredChannelIds(config: OpenClawConfig): Set<string> {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return new Set();
+  }
+  return new Set(
+    Object.keys(channels)
+      .map((channelId) => normalizeRegistryReference(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId)),
+  );
+}
+
+function listConfiguredModelProviderIds(config: OpenClawConfig): Set<string> {
+  const providers = config.models?.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+    return new Set();
+  }
+  return new Set(
+    Object.keys(providers)
+      .map((providerId) => normalizeProviderId(providerId))
+      .filter(Boolean),
+  );
+}
+
+export function listMigrationRelevantPluginRecords(params: {
+  index: InstalledPluginIndex;
+  config: OpenClawConfig;
+  installRecords: Record<string, unknown>;
+}): readonly InstalledPluginIndexRecord[] {
+  const normalizePluginId = createMigrationPluginIdNormalizer(params.index);
+  const referencedPluginIds = new Set<string>();
+  const installedPluginIds = new Set<string>();
+
+  for (const pluginId of Object.keys(params.installRecords)) {
+    addPluginReference(installedPluginIds, normalizePluginId, pluginId);
+  }
+
+  const plugins = params.config.plugins;
+  for (const pluginId of plugins?.allow ?? []) {
+    addPluginReference(referencedPluginIds, normalizePluginId, pluginId);
+  }
+  for (const pluginId of plugins?.deny ?? []) {
+    addPluginReference(referencedPluginIds, normalizePluginId, pluginId);
+  }
+  for (const pluginId of Object.keys(plugins?.entries ?? {})) {
+    addPluginReference(referencedPluginIds, normalizePluginId, pluginId);
+  }
+  for (const pluginId of Object.values(plugins?.slots ?? {})) {
+    if (normalizeRegistryReference(pluginId) === "none") {
+      continue;
+    }
+    addPluginReference(referencedPluginIds, normalizePluginId, pluginId);
+  }
+
+  const configuredChannelIds = listConfiguredChannelIds(params.config);
+  const configuredModelProviderIds = listConfiguredModelProviderIds(params.config);
+
+  return params.index.plugins.filter((plugin) => {
+    if (plugin.origin !== "bundled") {
+      return true;
+    }
+    if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
+      return true;
+    }
+    if (
+      plugin.contributions.channels.some((channelId) =>
+        configuredChannelIds.has(normalizeRegistryReference(channelId) ?? ""),
+      )
+    ) {
+      return true;
+    }
+    return plugin.contributions.providers.some((providerId) =>
+      configuredModelProviderIds.has(normalizeProviderId(providerId)),
+    );
+  });
+}
+
 export async function migratePluginRegistryForInstall(
   params: PluginRegistryInstallMigrationParams = {},
 ): Promise<PluginRegistryInstallMigrationResult> {
@@ -139,7 +268,11 @@ export async function migratePluginRegistryForInstall(
   const current: InstalledPluginIndex = {
     ...candidateIndex,
     refreshReason: "migration",
-    plugins: listEnabledInstalledPluginRecords(candidateIndex, config),
+    plugins: listMigrationRelevantPluginRecords({
+      index: candidateIndex,
+      config,
+      installRecords,
+    }),
   };
   if (Object.keys(installRecords).length > 0) {
     await writePersistedPluginInstallLedger(installRecords, params);

@@ -35,6 +35,11 @@ If your local Cursor install still exposes ACP as `agent acp`, override the `cur
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
 
+Model control is adapter-capability dependent. Codex ACP model refs are
+normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
+`session/set_model` support; if a harness exposes neither that ACP capability
+nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
+
 ## Required config
 
 Core ACP baseline:

@@ -238,6 +238,10 @@
       "types": "./dist/plugin-sdk/outbound-media.d.ts",
       "default": "./dist/plugin-sdk/outbound-media.js"
     },
+    "./plugin-sdk/outbound-send-deps": {
+      "types": "./dist/plugin-sdk/outbound-send-deps.d.ts",
+      "default": "./dist/plugin-sdk/outbound-send-deps.js"
+    },
     "./plugin-sdk/outbound-runtime": {
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"

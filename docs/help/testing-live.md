@@ -174,7 +174,7 @@ OPENCLAW_LIVE_TEST=1 \
 This does not ask Gemini to generate a response. It writes the same system
 settings OpenClaw gives Gemini, then runs `gemini --debug mcp list` to prove a
 saved `transport: "streamable-http"` server is normalized to Gemini's HTTP MCP
-shape and can connect.
+shape and can connect to a local streamable-HTTP MCP server.
 
 Docker recipe:
 

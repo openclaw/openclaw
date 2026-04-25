@@ -43,6 +43,22 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("keeps agent binding commands on config-only startup", () => {
+    for (const commandPath of [
+      ["agents", "bind"],
+      ["agents", "bindings"],
+      ["agents", "unbind"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
+        bypassConfigGuard: false,
+        routeConfigGuard: "never",
+        loadPlugins: "never",
+        hideBanner: false,
+        ensureCliPath: true,
+      });
+    }
+  });
+
   it("resolves mixed startup-only rules", () => {
     expect(resolveCliCommandPathPolicy(["configure"])).toEqual({
       bypassConfigGuard: true,

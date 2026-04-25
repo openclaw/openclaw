@@ -26,6 +26,7 @@ import {
 } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
+  filterLiveShortTermRecallEntries,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
@@ -1520,9 +1521,14 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
+  const recentEntries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: (
+      await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
+    ).filter((entry) => entryWithinLookback(entry, cutoffMs)),
+  });
   const entries = dedupeEntries(
-    (await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }))
-      .filter((entry) => entryWithinLookback(entry, cutoffMs))
+    recentEntries
       .toSorted((a, b) => {
         const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
         if (byTime !== 0) {
@@ -1611,9 +1617,12 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const entries = (
-    await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
-  ).filter((entry) => entryWithinLookback(entry, cutoffMs));
+  const entries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: (
+      await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
+    ).filter((entry) => entryWithinLookback(entry, cutoffMs)),
+  });
   const preview = previewRemDreaming({
     entries,
     limit: params.config.limit,

@@ -122,6 +122,7 @@ const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
 const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
 const MAX_PERMISSION_FALLBACK_KEYS = 200;
 const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
+const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
@@ -442,7 +443,7 @@ async function runNativeHookRelayPermissionRequest(params: {
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
-      requestNativeHookRelayPermissionApprovalWithBudget({
+      startNativeHookRelayPermissionApprovalWithBudget({
         registration: params.registration,
         approvalKey,
         request,
@@ -463,7 +464,7 @@ async function runNativeHookRelayPermissionRequest(params: {
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function requestNativeHookRelayPermissionApprovalWithBudget(params: {
+async function startNativeHookRelayPermissionApprovalWithBudget(params: {
   registration: NativeHookRelayRegistration;
   approvalKey: string;
   request: NativeHookRelayPermissionApprovalRequest;
@@ -505,18 +506,18 @@ function permissionRequestFallbackKey(request: NativeHookRelayPermissionApproval
 
 function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
   let fingerprint = "";
-  let processed = 0;
-  for (const key of Object.keys(toolInput).toSorted()) {
-    if (processed >= MAX_PERMISSION_FALLBACK_KEYS) {
-      break;
-    }
+  const { keys, truncated } = readBoundedOwnKeys(toolInput, MAX_PERMISSION_FALLBACK_KEYS);
+  for (const key of keys) {
     const separator = fingerprint ? "," : "";
     const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
     if (remaining <= 0) {
       break;
     }
     fingerprint += `${separator}${key.slice(0, remaining)}`;
-    processed += 1;
+  }
+  if (truncated && fingerprint.length < MAX_PERMISSION_FALLBACK_KEY_CHARS) {
+    const marker = `${fingerprint ? "," : ""}...`;
+    fingerprint += marker.slice(0, MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length);
   }
   return fingerprint || "none";
 }
@@ -559,13 +560,49 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     return;
   }
   hash.update("{");
-  for (const key of Object.keys(value).toSorted()) {
+  const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
+  for (const key of keys) {
     hash.update(JSON.stringify(key));
     hash.update(":");
     updateJsonHash(hash, value[key]);
     hash.update(",");
   }
+  if (truncated) {
+    // Keep ordinary objects order-independent without sorting a broad native
+    // hook payload. The tail remains content-sensitive in traversal order.
+    const sortedKeySet = new Set(keys);
+    hash.update("#object-tail:");
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key) || sortedKeySet.has(key)) {
+        continue;
+      }
+      hash.update(JSON.stringify(key));
+      hash.update(":");
+      updateJsonHash(hash, value[key]);
+      hash.update(",");
+    }
+  }
   hash.update("}");
+}
+
+function readBoundedOwnKeys(
+  value: Record<string, unknown>,
+  maxKeys: number,
+): { keys: string[]; truncated: boolean } {
+  const keys: string[] = [];
+  let truncated = false;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    if (keys.length >= maxKeys) {
+      truncated = true;
+      break;
+    }
+    keys.push(key);
+  }
+  keys.sort();
+  return { keys, truncated };
 }
 
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
@@ -1031,6 +1068,14 @@ export const __testing = {
     request: NativeHookRelayPermissionApprovalRequest,
   ): string {
     return formatPermissionApprovalDescription(request);
+  },
+  permissionRequestContentFingerprintForTests(
+    request: NativeHookRelayPermissionApprovalRequest,
+  ): string {
+    return permissionRequestContentFingerprint(request);
+  },
+  permissionRequestToolInputKeyFingerprintForTests(toolInput: Record<string, unknown>): string {
+    return permissionRequestToolInputKeyFingerprint(toolInput);
   },
   setNativeHookRelayPermissionApprovalRequesterForTests(
     requester: NativeHookRelayPermissionApprovalRequester,

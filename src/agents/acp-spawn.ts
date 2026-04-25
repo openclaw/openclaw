@@ -70,6 +70,7 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
@@ -99,6 +100,7 @@ export type SpawnAcpParams = {
   resumeSessionId?: string;
   model?: string;
   thinking?: string;
+  runTimeoutSeconds?: number;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -854,6 +856,7 @@ async function initializeAcpSpawnRuntime(params: {
   resumeSessionId?: string;
   model?: string;
   thinking?: string;
+  runTimeoutSeconds?: number;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -879,10 +882,11 @@ async function initializeAcpSpawnRuntime(params: {
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions:
-      params.model || params.thinking
+      params.model || params.thinking || params.runTimeoutSeconds
         ? {
             ...(params.model ? { model: params.model } : {}),
             ...(params.thinking ? { thinking: params.thinking } : {}),
+            ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
           }
         : undefined,
     cwd: params.cwd,
@@ -1229,6 +1233,7 @@ export async function spawnAcpDirect(
       resumeSessionId: params.resumeSessionId,
       model: params.model,
       thinking: params.thinking,
+      runTimeoutSeconds: params.runTimeoutSeconds,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
@@ -1312,6 +1317,8 @@ export async function spawnAcpDirect(
         threadId: deliveryPlan.threadId,
         idempotencyKey: childIdem,
         deliver: deliveryPlan.useInlineDelivery,
+        lane: AGENT_LANE_SUBAGENT,
+        ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
         label: params.label || undefined,
       },
       timeoutMs: 10_000,

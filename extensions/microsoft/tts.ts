@@ -1,16 +1,28 @@
 import { statSync } from "node:fs";
-import { EdgeTTS } from "node-edge-tts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
+type EdgeTTSRuntimeConfig = {
+  voice?: string;
+  lang?: string;
+  outputFormat?: string;
+  saveSubtitles?: boolean;
+  proxy?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
+  timeout?: number;
+};
+
 type EdgeTTSDeps = {
-  EdgeTTS: new (config: ConstructorParameters<typeof EdgeTTS>[0]) => {
+  EdgeTTS: new (config: EdgeTTSRuntimeConfig) => {
     ttsPromise: (text: string, outputPath: string) => Promise<unknown>;
   };
 };
 
-const defaultEdgeTTSDeps: EdgeTTSDeps = {
-  EdgeTTS,
-};
+async function loadDefaultEdgeTTSDeps(): Promise<EdgeTTSDeps> {
+  const { EdgeTTS } = await import("node-edge-tts");
+  return { EdgeTTS };
+}
 
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
@@ -46,10 +58,11 @@ export async function edgeTTS(
     };
     timeoutMs: number;
   },
-  deps: EdgeTTSDeps = defaultEdgeTTSDeps,
+  deps?: EdgeTTSDeps,
 ): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
-  const tts = new deps.EdgeTTS({
+  const resolvedDeps = deps ?? (await loadDefaultEdgeTTSDeps());
+  const tts = new resolvedDeps.EdgeTTS({
     voice: config.voice,
     lang: config.lang,
     outputFormat: config.outputFormat,

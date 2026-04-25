@@ -7,7 +7,7 @@ read_when:
 title: "Text-to-speech"
 ---
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Local CLI, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Inworld, Local CLI, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -15,6 +15,7 @@ It works anywhere OpenClaw can send audio.
 - **ElevenLabs** (primary or fallback provider)
 - **Google Gemini** (primary or fallback provider; uses Gemini API TTS)
 - **Gradium** (primary or fallback provider; supports voice-note and telephony output)
+- **Inworld** (primary or fallback provider; uses the Inworld streaming TTS API)
 - **Local CLI** (primary or fallback provider; runs a configured local TTS command)
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
@@ -38,11 +39,12 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, xAI, or Xiaomi MiMo:
+If you want ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
 - `GRADIUM_API_KEY`
+- `INWORLD_API_KEY`
 - `MINIMAX_API_KEY`; MiniMax TTS also accepts Token Plan auth via
   `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, or
   `MINIMAX_CODING_API_KEY`
@@ -64,6 +66,7 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [Gradium](/providers/gradium)
+- [Inworld TTS API](https://docs.inworld.ai/tts/tts)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
 - [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
@@ -216,6 +219,35 @@ restricted to the Gemini API is valid here, and it is the same style of key used
 by the bundled Google image-generation provider. Resolution order is
 `messages.tts.providers.google.apiKey` -> `models.providers.google.apiKey` ->
 `GEMINI_API_KEY` -> `GOOGLE_API_KEY`.
+
+### Inworld primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "inworld",
+      providers: {
+        inworld: {
+          apiKey: "inworld_api_key",
+          baseUrl: "https://api.inworld.ai",
+          voiceId: "Sarah",
+          modelId: "inworld-tts-1.5-max",
+          temperature: 0.8,
+        },
+      },
+    },
+  },
+}
+```
+
+The `apiKey` value must be the Base64-encoded credential string copied
+verbatim from the Inworld dashboard (Workspace > API Keys). The provider
+sends it as `Authorization: Basic <apiKey>` without any additional
+encoding, so do not pass a raw bearer token and do not Base64-encode it
+yourself. The key falls back to the `INWORLD_API_KEY` env var. See
+[Inworld provider](/providers/inworld) for full setup.
 
 ### xAI primary
 
@@ -415,7 +447,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts:key=value]]` directives or a `[[tts:text]]...[[/tts:text]]` block.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, `"xai"`, or `"xiaomi"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"inworld"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, `"xai"`, or `"xiaomi"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
 - Legacy `provider: "edge"` config is repaired by `openclaw doctor --fix` and
   rewritten to `provider: "microsoft"`.
@@ -429,7 +461,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `INWORLD_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`).
 - `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -453,6 +485,10 @@ Then run:
 - `providers.tts-local-cli.timeoutMs`: command timeout in milliseconds (default `120000`).
 - `providers.tts-local-cli.cwd`: optional command working directory.
 - `providers.tts-local-cli.env`: optional string environment overrides for the command.
+- `providers.inworld.baseUrl`: override Inworld API base URL (default `https://api.inworld.ai`).
+- `providers.inworld.voiceId`: Inworld voice identifier (default `Sarah`).
+- `providers.inworld.modelId`: Inworld TTS model (default `inworld-tts-1.5-max`; also supports `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`).
+- `providers.inworld.temperature`: sampling temperature `0..2` (optional).
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
 - `providers.google.audioProfile`: natural-language style prompt prepended before the spoken text.
@@ -586,6 +622,7 @@ These override `messages.tts.*` for that host.
   with `ffmpeg`.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
 - **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
+- **Inworld**: MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
 - **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.
 - **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
