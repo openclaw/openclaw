@@ -68,6 +68,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.
 - Use `.github/pull_request_template.md` for PR submissions and `.github/ISSUE_TEMPLATE/` for issues.
+- Do not commit PR-only artifacts such as screenshots under `.github/pr-assets`; attach them to the PR/comment or use an external artifact store instead.
 
 ## Extra safety
 
