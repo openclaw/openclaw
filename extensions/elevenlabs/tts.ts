@@ -24,6 +24,14 @@ function assertElevenLabsVoiceSettings(settings: {
   requireInRange(settings.speed, 0.5, 2, "speed");
 }
 
+function resolveElevenLabsAcceptHeader(outputFormat: string): string | undefined {
+  const normalized = outputFormat.trim().toLowerCase();
+  if (!normalized || normalized.startsWith("mp3_")) {
+    return "audio/mpeg";
+  }
+  return undefined;
+}
+
 export async function elevenLabsTTS(params: {
   text: string;
   apiKey: string;
@@ -70,6 +78,7 @@ export async function elevenLabsTTS(params: {
   if (outputFormat) {
     url.searchParams.set("output_format", outputFormat);
   }
+  const acceptHeader = resolveElevenLabsAcceptHeader(outputFormat);
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -78,7 +87,7 @@ export async function elevenLabsTTS(params: {
       headers: {
         "xi-api-key": apiKey,
         "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+        ...(acceptHeader ? { Accept: acceptHeader } : {}),
       },
       body: JSON.stringify({
         text,
