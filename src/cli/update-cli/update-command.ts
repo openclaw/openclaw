@@ -52,6 +52,7 @@ import {
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
@@ -1082,6 +1083,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let packageAlreadyCurrent = false;
 
   if (updateInstallKind !== "git") {
+    const normalizedTag = normalizeLowercaseStringOrEmpty(tag);
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
     if (explicitTag) {
       targetVersion = await resolveTargetVersion(tag, timeoutMs);
@@ -1105,7 +1107,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
       currentVersion != null &&
-      (targetVersion == null || (cmp != null && cmp > 0));
+      ((targetVersion == null && normalizedTag !== "latest") || (cmp != null && cmp > 0));
     packageInstallSpec = resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
