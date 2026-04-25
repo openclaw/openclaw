@@ -293,6 +293,28 @@ discord_smoke_enabled() {
   [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
 }
 
+successful_discord_smoke() {
+  discord_smoke_enabled || return 1
+  [[ "$FRESH_DISCORD_STATUS" == "pass" || "$UPGRADE_DISCORD_STATUS" == "pass" ]]
+}
+
+stop_vm_after_successful_discord_smoke() {
+  successful_discord_smoke || return 0
+
+  say "Stop $VM_NAME after successful Discord smoke"
+  set +e
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout --foreground 120s prlctl stop "$VM_NAME"
+  else
+    prlctl stop "$VM_NAME"
+  fi
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    warn "failed to stop $VM_NAME after successful Discord smoke (rc=$rc)"
+  fi
+}
+
 fresh_uses_host_tgz() {
   if [[ -z "$TARGET_PACKAGE_SPEC" ]]; then
     return 0
@@ -1617,14 +1639,23 @@ PY
 
 wait_for_discord_host_visibility() {
   local nonce="$1"
+  local message_id="${2:-}"
   local response
   local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
   while (( SECONDS < deadline )); do
     set +e
+    if [[ -n "$message_id" ]]; then
+      response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages/$message_id")"
+      local direct_rc=$?
+      if [[ $direct_rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
+        set -e
+        return 0
+      fi
+    fi
     response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages?limit=20")"
     local rc=$?
     set -e
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 2
@@ -1687,7 +1718,7 @@ wait_for_guest_discord_readback() {
     if [[ -n "$response" ]]; then
       printf '%s' "$response" >"$last_response_path"
     fi
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 3
@@ -1697,7 +1728,7 @@ wait_for_guest_discord_readback() {
 
 run_discord_roundtrip_smoke() {
   local phase="$1"
-  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file
+  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file sent_message_id
   nonce="$(date +%s)-$RANDOM"
   outbound_nonce="$phase-out-$nonce"
   inbound_nonce="$phase-in-$nonce"
@@ -1706,6 +1737,7 @@ run_discord_roundtrip_smoke() {
   sent_id_file="$RUN_DIR/$phase.discord-sent-message-id"
   host_id_file="$RUN_DIR/$phase.discord-host-message-id"
 
+  printf 'discord: guest-send\n'
   guest_current_user_exec \
     "$GUEST_OPENCLAW_BIN" \
     message send \
@@ -1715,9 +1747,13 @@ run_discord_roundtrip_smoke() {
     --silent \
     --json >"$outbound_log"
 
-  discord_message_id_from_send_log "$outbound_log" >"$sent_id_file"
-  wait_for_discord_host_visibility "$outbound_nonce"
+  sent_message_id="$(discord_message_id_from_send_log "$outbound_log")"
+  printf '%s\n' "$sent_message_id" >"$sent_id_file"
+  printf 'discord: host-visibility %s\n' "$sent_message_id"
+  wait_for_discord_host_visibility "$outbound_nonce" "$sent_message_id"
+  printf 'discord: host-reply\n'
   post_host_discord_message "$inbound_nonce" "$host_id_file"
+  printf 'discord: guest-readback\n'
   wait_for_guest_discord_readback "$inbound_nonce"
 }
 
@@ -1885,6 +1921,9 @@ run_fresh_main_lane() {
   phase_run "fresh.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+  if [[ -z "$FRESH_MAIN_VERSION" ]]; then
+    FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.verify-main-version)")"
+  fi
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
@@ -1908,7 +1947,7 @@ run_upgrade_lane() {
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_SITE_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
-  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
+  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$INSTALL_VERSION"
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
     if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_S" capture_latest_ref_failure; then
       UPGRADE_PRECHECK_STATUS="latest-ref-pass"
@@ -1922,6 +1961,9 @@ run_upgrade_lane() {
     phase_run "upgrade.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
     phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+    if [[ -z "$UPGRADE_MAIN_VERSION" ]]; then
+      UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.verify-main-version)")"
+    fi
     phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   else
     phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_DEV_S" run_dev_channel_update
@@ -2003,6 +2045,8 @@ if [[ "$KEEP_SERVER" -eq 0 && -n "${SERVER_PID:-}" ]]; then
   kill "$SERVER_PID" >/dev/null 2>&1 || true
   SERVER_PID=""
 fi
+
+stop_vm_after_successful_discord_smoke
 
 SUMMARY_JSON_PATH="$(
   SUMMARY_VM="$VM_NAME" \

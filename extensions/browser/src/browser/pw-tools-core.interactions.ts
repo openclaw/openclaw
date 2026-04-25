@@ -1005,6 +1005,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1015,7 +1016,7 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   if (opts.element) {
@@ -1023,12 +1024,13 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   const buffer = await page.screenshot({
     type,
     fullPage: Boolean(opts.fullPage),
+    timeout: opts.timeoutMs,
   });
   return { buffer };
 }
@@ -1039,6 +1041,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1148,7 +1151,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
       }, boxes);
     }
 
-    const buffer = await page.screenshot({ type });
+    const buffer = await page.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer, labels: boxes.length, skipped };
   } finally {
     await page

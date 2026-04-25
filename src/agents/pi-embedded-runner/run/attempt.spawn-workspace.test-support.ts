@@ -9,6 +9,7 @@ import type {
   BootstrapResult,
   CompactResult,
   ContextEngineInfo,
+  ContextEngineMaintenanceResult,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
@@ -29,6 +30,9 @@ type AcquireSessionWriteLockFn =
 type SubscriptionMock = ReturnType<SubscribeEmbeddedPiSessionFn>;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AsyncContextEngineMaintenanceMock = Mock<
+  (...args: unknown[]) => Promise<ContextEngineMaintenanceResult | undefined>
+>;
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
@@ -68,7 +72,7 @@ type AttemptSpawnWorkspaceHoisted = {
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
-  runContextEngineMaintenanceMock: AsyncUnknownMock;
+  runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   getDmHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
@@ -189,13 +193,15 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     async reload() {}
   }
   function ModelRegistry() {}
+  const estimateTokens = (value: unknown) =>
+    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
   return {
     ...actual,
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
-    estimateTokens: () => 0,
+    estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
     SessionManager: {
@@ -232,6 +238,7 @@ vi.mock("../../../infra/machine-name.js", () => ({
 }));
 
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
+  DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 120_000,
   ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
@@ -277,6 +284,8 @@ vi.mock("../../pi-project-settings.js", () => ({
   createPreparedEmbeddedPiSettingsManager: () => ({
     getCompactionReserveTokens: () => 0,
     getCompactionKeepRecentTokens: () => 40_000,
+    getGlobalSettings: () => ({}),
+    getProjectSettings: () => ({}),
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),
@@ -298,6 +307,7 @@ vi.mock("../extensions.js", () => ({
 }));
 
 vi.mock("../replay-history.js", () => ({
+  normalizeAssistantReplayContent: <T>(messages: T) => messages,
   sanitizeSessionHistory: async ({ messages }: { messages: unknown[] }) => messages,
   validateReplayTurns: async ({ messages }: { messages: unknown[] }) => messages,
 }));
@@ -967,6 +977,7 @@ export async function createContextEngineAttemptRunner(params: {
         })),
       ...(maintain ? { maintain } : {}),
       info: {
+        ...params.contextEngine.info,
         id: infoId,
         name: infoName,
         version: infoVersion,

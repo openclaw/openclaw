@@ -35,6 +35,7 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
   allowFailures?: boolean;
   cliAuthMode?: string;
   parityPack?: string;
@@ -137,6 +138,16 @@ async function runQaCredentialsList(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCredentialsListCommand(opts);
+}
+
+async function runQaCredentialsDoctor(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsDoctorCommand(opts);
 }
 
 async function runQaUi(opts: {
@@ -247,6 +258,10 @@ export function registerQaLabCli(program: Command) {
       false,
     )
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--thinking <level>",
+      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
+    )
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
@@ -266,6 +281,7 @@ export function registerQaLabCli(program: Command) {
         concurrency?: number;
         allowFailures?: boolean;
         fast?: boolean;
+        thinking?: string;
         image?: string;
         cpus?: number;
         memory?: string;
@@ -281,6 +297,7 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
@@ -426,6 +443,24 @@ export function registerQaLabCli(program: Command) {
   const credentials = qa
     .command("credentials")
     .description("Manage pooled Convex live credentials used by QA lanes");
+
+  credentials
+    .command("doctor")
+    .description("Check Convex credential broker env and admin reachability")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsDoctor(opts);
+      },
+    );
 
   credentials
     .command("add")

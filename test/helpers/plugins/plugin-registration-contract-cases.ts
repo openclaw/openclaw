@@ -55,6 +55,7 @@ export const pluginRegistrationContractCases = {
     pluginId: "google",
     providerIds: ["google", "google-gemini-cli"],
     webSearchProviderIds: ["gemini"],
+    realtimeVoiceProviderIds: ["google"],
     speechProviderIds: ["google"],
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
@@ -113,7 +114,9 @@ export const pluginRegistrationContractCases = {
     pluginId: "openrouter",
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
+    imageGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
+    requireGenerateImage: true,
   },
   perplexity: {
     pluginId: "perplexity",

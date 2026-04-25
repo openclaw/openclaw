@@ -58,6 +58,8 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
+  | "matrix-e2ee-recovery-owner-verification-required"
+  | "matrix-e2ee-cli-self-verification"
   | "matrix-e2ee-device-sas-verification"
   | "matrix-e2ee-qr-verification"
   | "matrix-e2ee-stale-device-hygiene"
@@ -85,8 +87,10 @@ export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
+export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
 
 const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
+const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
 const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
 
@@ -190,6 +194,12 @@ const MATRIX_QA_MEDIA_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
 const MATRIX_QA_RESTART_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   key: MATRIX_QA_RESTART_ROOM_KEY,
   name: "Matrix QA Restart Room",
+  requireMention: true,
+});
+
+const MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_STALE_SYNC_ROOM_KEY,
+  name: "Matrix QA Stale Sync Room",
   requireMention: true,
 });
 
@@ -311,7 +321,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-room-generated-image-delivery",
-    timeoutMs: 60_000,
+    timeoutMs: MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS,
     title: "Matrix generated images deliver as real image attachments while streaming",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
     configOverrides: {
@@ -449,7 +459,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-stale-sync-replay-dedupe",
     timeoutMs: 90_000,
     title: "Matrix stale sync replay is absorbed by inbound dedupe",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+    topology: MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-room-membership-loss",
@@ -556,6 +566,26 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-recovery-key-lifecycle",
       name: "Matrix QA E2EE Recovery Key Lifecycle Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-recovery-owner-verification-required",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE recovery key backup access still requires Matrix identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+      name: "Matrix QA E2EE Recovery Owner Verification Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-self-verification",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE CLI interactive self-verification establishes identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-self-verification",
+      name: "Matrix QA E2EE CLI Self Verification Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

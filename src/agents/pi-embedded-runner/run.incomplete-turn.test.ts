@@ -11,6 +11,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  ACK_EXECUTION_FAST_PATH_INSTRUCTION,
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
@@ -62,9 +63,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-4.1",
       runId: "run-incomplete-turn-messaging-warning",
     });
 
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
@@ -670,6 +674,16 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("applies the ack-turn fast path to Gemini action turns", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "google",
+      modelId: "gemini-3.1-pro",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toBe(ACK_EXECUTION_FAST_PATH_INSTRUCTION);
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(
@@ -732,6 +746,33 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "google",
+      modelId: "gemini-2.5-pro",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google",
+          model: "gemini-2.5-pro",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,
@@ -774,6 +815,33 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
           provider: "ollama",
           model: "kimi-k2.6:cloud",
           content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning when a messaging tool delivered before end_turn", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google",
+          model: "gemini-2.5-pro",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_messaging_end_turn", type: "reasoning" }),
+            },
+          ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     });
@@ -913,6 +981,28 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
   });
 
+  it("detects generic empty Gemini turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "google-vertex",
+      modelId: "google/gemini-3.1-flash",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google-vertex",
+          model: "gemini-3.1-flash",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("does not retry generic empty GPT turns after side effects", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "openai",
@@ -980,6 +1070,36 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toBeUndefined();
     expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("detects replay-safe planning-only Gemini turns", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "google-gemini-cli",
+      modelId: "gemini-3.1-pro",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("does not enable incomplete-turn recovery for non-Gemini Google models", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "google",
+      modelId: "gemma-4-26b-a4b-it",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 
   it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
