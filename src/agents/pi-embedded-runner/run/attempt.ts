@@ -252,6 +252,7 @@ import {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  hasPromptSubmissionContent,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -451,14 +452,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalImageBlocks,
     maxMessageTextChars,
   };
-}
-
-function hasPromptSubmissionContent(params: {
-  prompt: string;
-  messages: readonly AgentMessage[];
-  imageCount: number;
-}): boolean {
-  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
 }
 
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
