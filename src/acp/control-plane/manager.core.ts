@@ -929,15 +929,8 @@ export class AcpSessionManager {
             if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
               this.activeTurnBySession.delete(actorKey);
             }
-            if (
-              !retryFreshHandle &&
-              !skipPostTurnCleanup &&
-              runtime &&
-              handle &&
-              meta &&
-              meta.mode !== "oneshot"
-            ) {
-              ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
+            if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+              ({ handle, meta } = await this.reconcileRuntimeSessionIdentifiers({
                 cfg: input.cfg,
                 sessionKey,
                 runtime,

@@ -87,6 +87,9 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions_spawn: apply `runTimeoutSeconds` to ACP child turns and dispatch
   those turns on the background subagent lane, so quota-stalled ACP harnesses do
   not occupy the main agent lane indefinitely. Fixes #68823.
+- ACP/oneshot: reconcile runtime session identity before closing completed
+  oneshot ACP runs, so finished `sessions.json` entries do not stay stuck with
+  `acp.identity.state="pending"`.
 - ACP/models: document that non-Codex ACP model overrides require adapter
   support for ACP `models` plus `session/set_model`, so unsupported harnesses
   fail clearly instead of silently falling back to their defaults.
