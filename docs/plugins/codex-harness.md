@@ -612,7 +612,7 @@ Supported in Codex runtime v1:
 
 Not supported in Codex runtime v1:
 
-| Surface                                             | V1 Boundary                                                                                                                                     | Future Path                                                                                               |
+| Surface                                             | V1 boundary                                                                                                                                     | Future path                                                                                               |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Native tool argument mutation                       | Codex native pre-tool hooks can block, but OpenClaw does not rewrite Codex-native tool arguments.                                               | Requires Codex hook/schema support for replacement tool input.                                            |
 | Editable Codex-native transcript history            | Codex owns canonical native thread history. OpenClaw owns a mirror and can project future context, but should not mutate unsupported internals. | Add explicit Codex app-server APIs if native thread surgery is needed.                                    |
