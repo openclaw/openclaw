@@ -455,7 +455,10 @@ export async function runPreparedReply(
         .filter(Boolean)
         .join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const hasUserBody = baseBodyFinal.trim().length > 0 || softResetTail.length > 0;
+  const hasUserBody =
+    baseBodyFinal.trim().length > 0 ||
+    softResetTail.length > 0 ||
+    (inboundUserContext != null && inboundUserContext.trim().length > 0);
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
