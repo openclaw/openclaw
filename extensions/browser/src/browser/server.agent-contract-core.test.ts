@@ -219,6 +219,11 @@ describe("browser control server", () => {
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 1,
     });
+    expect(pwMocks.storeAriaSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+    });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok: boolean;

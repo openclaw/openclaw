@@ -505,7 +505,8 @@ export function registerBrowserAgentSnapshotRoutes(
         return;
       }
       const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-      const hasPlaywright = Boolean(await getPwAiModule());
+      const pwModule = await getPwAiModule();
+      const hasPlaywright = Boolean(pwModule);
       const plan = resolveSnapshotPlan({
         profile: profileCtx.profile,
         query: req.query,
@@ -691,10 +692,11 @@ export function registerBrowserAgentSnapshotRoutes(
           });
         }
 
-        const snap = shouldUsePlaywrightForAriaSnapshot({
+        const usePlaywrightAriaSnapshot = shouldUsePlaywrightForAriaSnapshot({
           profile: profileCtx.profile,
           wsUrl: tab.wsUrl,
-        })
+        });
+        const snap = usePlaywrightAriaSnapshot
           ? (() => {
               // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
               // Also covers cases where wsUrl is missing/unusable.
@@ -715,6 +717,13 @@ export function registerBrowserAgentSnapshotRoutes(
         const resolved = await Promise.resolve(snap);
         if (!resolved) {
           return;
+        }
+        if (!usePlaywrightAriaSnapshot) {
+          await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+            nodes: resolved.nodes,
+          });
         }
         return res.json({
           ok: true,
