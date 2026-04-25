@@ -9,6 +9,7 @@ import {
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   updateNpmInstalledHookPacks,
   updateNpmInstalledPlugins,
   writeConfigFile,
@@ -147,6 +148,7 @@ describe("plugins cli update", () => {
       spec: "openclaw-codex-app-server@beta",
     });
     loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
     updateNpmInstalledPlugins.mockResolvedValue({
       config,
       changed: false,
@@ -191,6 +193,7 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     loadConfig.mockReturnValue(cfg);
+    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
     updateNpmInstalledPlugins.mockResolvedValue({
       outcomes: [{ status: "ok", message: "Updated alpha -> 1.1.0" }],
       changed: true,
@@ -217,6 +220,7 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).toHaveBeenCalledWith({});
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: {},
+      installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
     expect(

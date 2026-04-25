@@ -2,6 +2,7 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -14,7 +15,13 @@ type ListMarketplacePluginsFn =
   (typeof import("../plugins/marketplace.js"))["listMarketplacePlugins"];
 type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
-type LoadPluginInstallRecordsParams = { config?: OpenClawConfig };
+type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
+
+let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
+
+function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
+  return structuredClone(records);
+}
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
@@ -33,14 +40,15 @@ export const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
 export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
-export const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(
-  async (...args: unknown[]) => {
-    const params = args[0] as LoadPluginInstallRecordsParams | undefined;
-    return structuredClone(params?.config?.plugins?.installs ?? {});
-  },
+export const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
+  clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
 );
 export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(
-  async () => undefined,
+  async (records: unknown) => {
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+      (records ?? {}) as PluginInstallRecordMap,
+    );
+  },
 );
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
@@ -68,6 +76,10 @@ const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
 export { runtimeErrors, runtimeLogs };
+
+export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
+  mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+}
 
 function restoreRuntimeCaptureMocks() {
   defaultRuntime.log.mockReset();
@@ -465,6 +477,7 @@ export function resetPluginsCliTestState() {
   resolveMarketplaceInstallShortcut.mockReset();
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
+  mockInstalledPluginIndexInstallRecords = {};
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
   clearPluginManifestRegistryCache.mockReset();
@@ -525,11 +538,14 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
-  loadInstalledPluginIndexInstallRecords.mockImplementation(async (...args: unknown[]) => {
-    const params = args[0] as LoadPluginInstallRecordsParams | undefined;
-    return structuredClone(params?.config?.plugins?.installs ?? {});
+  loadInstalledPluginIndexInstallRecords.mockImplementation(async () =>
+    clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
+  );
+  writePersistedInstalledPluginIndexInstallRecords.mockImplementation(async (records: unknown) => {
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+      (records ?? {}) as PluginInstallRecordMap,
+    );
   });
-  writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [],
     diagnostics: [],
