@@ -125,7 +125,7 @@ const runtimeMocks = vi.hoisted(() => ({
   ),
   sanitizeInboundSystemTags: sanitizeInboundSystemTagsMock,
   scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: Record<string, unknown>) => {
-    const wakeOptions = { ...(opts ?? {}) };
+    const wakeOptions = { ...opts };
     return /^agent:[^:]+:.+$/i.test(sessionKey ?? "")
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
@@ -306,6 +306,31 @@ describe("node exec events", () => {
       reason: "exec-event",
       coalesceMs: 0,
       sessionKey: "agent:main:node-node-2",
+      heartbeat: EXEC_EVENT_HEARTBEAT,
+    });
+  });
+
+  it("scopes exec heartbeat wake to global and clears delivery overrides", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "global",
+        runId: "run-global",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-global, code 0)\ndone",
+      { sessionKey: "global", contextKey: "exec:run-global", trusted: false },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      coalesceMs: 0,
+      sessionKey: "global",
       heartbeat: EXEC_EVENT_HEARTBEAT,
     });
   });
