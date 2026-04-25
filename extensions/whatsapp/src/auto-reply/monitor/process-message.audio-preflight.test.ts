@@ -10,6 +10,7 @@ vi.mock("./audio-preflight.runtime.js", () => ({
 
 // Controllable shouldComputeCommandAuthorized for command-sync tests
 let shouldComputeCommandResult = false;
+let shouldComputeCommandBodies: string[] = [];
 
 // Minimal mocks for process-message dependencies
 vi.mock("../../accounts.js", () => ({
@@ -77,20 +78,32 @@ vi.mock("./runtime-api.js", () => ({
   }),
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
   resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: true }),
-  shouldComputeCommandAuthorized: (body: string) =>
-    shouldComputeCommandResult || body.startsWith("/"),
+  shouldComputeCommandAuthorized: (body: string) => {
+    shouldComputeCommandBodies.push(body);
+    return shouldComputeCommandResult || body.startsWith("/");
+  },
   shouldLogVerbose: () => false,
   type: undefined,
 }));
 
 vi.mock("./inbound-dispatch.js", () => ({
   buildWhatsAppInboundContext: (params: {
+    bodyForAgent?: string;
+    combinedBody: string;
+    commandAuthorized?: boolean;
+    commandBody?: string;
     msg: { body: string; mediaPath?: string; mediaType?: string };
+    rawBody?: string;
+    transcript?: string;
   }) => ({
-    Body: params.msg.body,
-    BodyForAgent: params.msg.body,
+    Body: params.combinedBody,
+    BodyForAgent: params.bodyForAgent ?? params.msg.body,
+    CommandAuthorized: params.commandAuthorized,
+    CommandBody: params.commandBody ?? params.msg.body,
     MediaPath: params.msg.mediaPath,
     MediaType: params.msg.mediaType,
+    RawBody: params.rawBody ?? params.msg.body,
+    Transcript: params.transcript,
   }),
   dispatchWhatsAppBufferedReply: vi.fn(async () => true),
   resolveWhatsAppDmRouteTarget: () => "+15550000002",
@@ -165,6 +178,7 @@ describe("processMessage audio preflight transcription", () => {
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockResolvedValue(undefined);
     shouldComputeCommandResult = false;
+    shouldComputeCommandBodies = [];
     vi.mocked(dispatchWhatsAppBufferedReply).mockClear();
   });
 
@@ -187,6 +201,9 @@ describe("processMessage audio preflight transcription", () => {
     expect(dispatchCall?.context).toMatchObject({
       Body: "okay let's test this voice message",
       BodyForAgent: "okay let's test this voice message",
+      CommandBody: "<media:audio>",
+      RawBody: "<media:audio>",
+      Transcript: "okay let's test this voice message",
     });
     // mediaPath and mediaType must be preserved so inboundAudio detection (used by
     // features like messages.tts.auto: "inbound") still recognises this as audio.
@@ -258,18 +275,20 @@ describe("processMessage audio preflight transcription", () => {
     });
   });
 
-  it("uses transcript body for command detection so voice commands are not missed", async () => {
-    // Transcript starts with a slash command — shouldComputeCommandAuthorized must
-    // see the transcript, not the original <media:audio> placeholder.
+  it("does not use transcript body for command detection", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("/new start a new session");
 
     await processMessage(makeParams());
 
-    // Command detection ran against the transcript, so CommandBody is the transcript.
+    expect(shouldComputeCommandBodies).toEqual(["<media:audio>"]);
+
     const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
     expect(dispatchCall?.context).toMatchObject({
       Body: "/new start a new session",
       BodyForAgent: "/new start a new session",
+      CommandBody: "<media:audio>",
+      RawBody: "<media:audio>",
+      Transcript: "/new start a new session",
     });
   });
 
@@ -287,6 +306,9 @@ describe("processMessage audio preflight transcription", () => {
     expect(dispatchCall?.context).toMatchObject({
       Body: "pre-computed transcript from fan-out caller",
       BodyForAgent: "pre-computed transcript from fan-out caller",
+      CommandBody: "<media:audio>",
+      RawBody: "<media:audio>",
+      Transcript: "pre-computed transcript from fan-out caller",
     });
   });
 

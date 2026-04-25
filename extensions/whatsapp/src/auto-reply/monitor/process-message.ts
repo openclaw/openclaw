@@ -248,19 +248,19 @@ export async function processMessage(params: {
     }
   }
 
-  // If we have a transcript, replace the body so the agent sees the spoken text.
+  // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as messages.tts.auto: "inbound") still sees this as an
   // audio message. The transcript is also stored in Transcript so downstream pipelines
   // can detect it. Preventing a second STT pass in the media-understanding pipeline
   // requires SDK-level support (alreadyTranscribed on a shared attachment instance);
   // that is a shared concern across all channels and is tracked separately.
-  const msgForInbound =
+  const msgForAgent =
     audioTranscript !== undefined ? { ...params.msg, body: audioTranscript } : params.msg;
 
   let combinedBody = buildInboundLine({
     cfg: params.cfg,
-    msg: msgForInbound,
+    msg: msgForAgent,
     agentId: params.route.agentId,
     previousTimestamp,
     envelope: envelopeOptions,
@@ -368,12 +368,10 @@ export async function processMessage(params: {
     senderE164: sender.e164 ?? undefined,
     normalizeE164,
   });
-  // Use msgForInbound so that if a voice note transcribes to a command (e.g. /new),
-  // command detection and auth are evaluated against the transcript, not <media:audio>.
-  const commandAuthorized = shouldComputeCommandAuthorized(msgForInbound.body, params.cfg)
+  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
     ? await resolveWhatsAppCommandAuthorized({
         cfg: params.cfg,
-        msg: msgForInbound,
+        msg: params.msg,
         policy: inboundPolicy,
       })
     : undefined;
@@ -407,19 +405,23 @@ export async function processMessage(params: {
         });
 
   const ctxPayload = buildWhatsAppInboundContext({
+    bodyForAgent: msgForAgent.body,
     combinedBody,
+    commandBody: params.msg.body,
     commandAuthorized,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
-    msg: msgForInbound,
+    msg: params.msg,
+    rawBody: params.msg.body,
     route: params.route,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,
       e164: sender.e164 ?? undefined,
     },
+    ...(audioTranscript !== undefined ? { transcript: audioTranscript } : {}),
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
   });
