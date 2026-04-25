@@ -83,6 +83,7 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
+import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -465,6 +466,20 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => allowSet.has(tool.name));
 }
 
+function shouldCreateBundleMcpRuntimeForAttempt(params: {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+}): boolean {
+  if (!params.toolsEnabled || params.disableTools === true) {
+    return false;
+  }
+  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+    return true;
+  }
+  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
+}
+
 function collectAttemptExplicitToolAllowlistSources(params: {
   config?: EmbeddedRunAttemptParams["config"];
   sessionKey?: string;
@@ -835,7 +850,12 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const bundleMcpSessionRuntime = toolsEnabled
+    const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
+    });
+    const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -3099,6 +3119,7 @@ export async function runEmbeddedAttempt(
           allowWsSessionPool:
             !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
           sessionId: params.sessionId,
+          bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
         });
