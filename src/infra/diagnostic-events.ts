@@ -402,6 +402,7 @@ type QueuedDiagnosticEvent = {
 };
 
 type DiagnosticEventsGlobalState = {
+  marker: symbol;
   enabled: boolean;
   seq: number;
   listeners: Set<DiagnosticEventListener>;
@@ -411,6 +412,7 @@ type DiagnosticEventsGlobalState = {
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
@@ -426,10 +428,9 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 
-const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
-
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
   return {
+    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
     enabled: true,
     seq: 0,
     listeners: new Set<DiagnosticEventListener>(),
@@ -445,6 +446,7 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
   }
   const candidate = value as Partial<DiagnosticEventsGlobalState>;
   return (
+    candidate.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
     typeof candidate.enabled === "boolean" &&
     typeof candidate.seq === "number" &&
     candidate.listeners instanceof Set &&
@@ -454,24 +456,20 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
   );
 }
 
-const diagnosticEventsState: DiagnosticEventsGlobalState = (() => {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[DIAGNOSTIC_EVENTS_STATE_KEY];
+function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
   if (isDiagnosticEventsState(existing)) {
     return existing;
   }
-  const created = createDiagnosticEventsState();
-  Object.defineProperty(globalStore, DIAGNOSTIC_EVENTS_STATE_KEY, {
+  const state = createDiagnosticEventsState();
+  Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
     configurable: true,
     enumerable: false,
-    value: created,
+    value: state,
     writable: false,
   });
-  return created;
-})();
-
-function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  return diagnosticEventsState;
+  return state;
 }
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
