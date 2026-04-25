@@ -233,8 +233,9 @@ export async function startGatewayBonjourAdvertiser(
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }
 
+    const responder = getResponder();
+
     function createCycle(): BonjourCycle {
-      const responder = getResponder();
       const services: Array<{ label: string; svc: BonjourService }> = [];
 
       const gateway = responder.createService({
@@ -259,7 +260,7 @@ export async function startGatewayBonjourAdvertiser(
       return { responder, services, cleanupUnhandledRejection };
     }
 
-    async function stopCycle(cycle: BonjourCycle | null) {
+    async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
       if (!cycle) {
         return;
       }
@@ -271,7 +272,9 @@ export async function startGatewayBonjourAdvertiser(
         }
       }
       try {
-        await cycle.responder.shutdown();
+        if (opts?.shutdownResponder) {
+          await cycle.responder.shutdown();
+        }
       } catch {
         /* ignore */
       } finally {
@@ -442,7 +445,7 @@ export async function startGatewayBonjourAdvertiser(
         } catch {
           // ignore
         }
-        await stopCycle(cycle);
+        await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
       },
     };

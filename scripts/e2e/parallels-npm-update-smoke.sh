@@ -1659,6 +1659,10 @@ stop_openclaw_gateway_processes() {
 # host can observe new plugin metadata mid-update and abort config validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
+# The baseline updater process may run its post-install doctor through the old
+# host while new bundled plugin metadata is already on disk. Keep this
+# same-guest update hop focused on core/package migration; post-update smoke
+# below starts the fresh gateway with bundled plugins enabled.
 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.

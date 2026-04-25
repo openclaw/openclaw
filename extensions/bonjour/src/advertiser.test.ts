@@ -484,12 +484,12 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(shutdown).not.toHaveBeenCalled();
     expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
 
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(2);
-    expect(shutdown).toHaveBeenCalledTimes(2);
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("treats probing-to-announcing churn as one unhealthy window", async () => {
@@ -527,9 +527,10 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(shutdown).not.toHaveBeenCalled();
 
     await started.stop();
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes hostnames with domains for service names", async () => {
