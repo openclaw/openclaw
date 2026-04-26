@@ -221,6 +221,11 @@ Notes:
 - Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
+Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
+can prove the replacement tab, such as same URL or a single old tab becoming a
+single new tab after form submission. Raw target ids are still volatile; prefer
+`suggestedTargetId` from `tabs` in scripts.
+
 Snapshot flags at a glance:
 
 - `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
@@ -258,6 +263,9 @@ OpenClaw supports two “snapshot” styles:
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- `/act` returns the current raw `targetId` after action-triggered replacement
+  when it can prove the replacement tab. Keep using stable tab ids/labels for
+  follow-up commands.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 - Unknown or stale `axN` refs fail fast instead of falling through to
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
