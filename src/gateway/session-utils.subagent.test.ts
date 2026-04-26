@@ -84,6 +84,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       requesterDisplayKey: "main",
       task: "child task",
       cleanup: "keep",
+      spawnMode: "session",
       createdAt: now - 8_000,
       startedAt: now - 7_500,
       endedAt: now - 2_500,
@@ -98,6 +99,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       requesterDisplayKey: "main",
       task: "failed task",
       cleanup: "keep",
+      spawnMode: "session",
       createdAt: now - 6_000,
       startedAt: now - 5_500,
       endedAt: now - 500,
@@ -141,6 +143,64 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("hides completed run-mode subagent sessions from the default web registry", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:completed-run";
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      [childSessionKey]: {
+        sessionId: "sess-completed-run",
+        updatedAt: now - 250,
+        spawnedBy: "agent:main:main",
+        status: "done",
+        startedAt: now - 4_000,
+        endedAt: now - 500,
+        runtimeMs: 3_500,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-completed-run",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "completed run task",
+      cleanup: "keep",
+      spawnMode: "run",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      endedAt: now - 500,
+      outcome: { status: "ok" },
+      model: "openai/gpt-5.4",
+    });
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    expect(all.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+    expect(all.sessions[0]?.childSessions).toBeUndefined();
+
+    const searched = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "completed-run" },
+    });
+    expect(searched.sessions.map((session) => session.key)).toEqual([childSessionKey]);
+    expect(searched.sessions[0]).toMatchObject({
+      status: "done",
+      subagentRunState: "historical",
+      hasActiveSubagentRun: false,
+    });
   });
 
   test("does not show stale registry-only subagent runs as actively running", () => {
@@ -621,6 +681,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       requesterDisplayKey: "main",
       task: "current ended row",
       cleanup: "keep",
+      spawnMode: "session",
       createdAt: now - 1_000,
       startedAt: now - 900,
       endedAt: now - 200,
@@ -678,6 +739,7 @@ describe("listSessionsFromStore subagent metadata", () => {
                 requesterDisplayKey: "main",
                 task: "still running",
                 cleanup: "keep",
+                spawnMode: "session",
                 createdAt: now - 10_000,
                 startedAt: now - 9_000,
               },
@@ -964,6 +1026,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       "agent:main:subagent:archived": {
         sessionId: "sess-archived",
         updatedAt: now,
+        label: "archived",
         spawnedBy: "agent:main:main",
         startedAt: now - 20_000,
         endedAt: now - 5_000,
@@ -976,7 +1039,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       cfg,
       storePath: "/tmp/sessions.json",
       store,
-      opts: {},
+      opts: { search: "archived" },
     });
 
     const archived = result.sessions.find(
@@ -1006,6 +1069,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       requesterDisplayKey: "main",
       task: "timeout task",
       cleanup: "keep",
+      spawnMode: "session",
       createdAt: now - 10_000,
       startedAt: now - 1_000,
       endedAt: now - 2_000,

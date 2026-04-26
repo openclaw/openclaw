@@ -27,10 +27,7 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import {
-  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-  shouldKeepSubagentRunChildLink,
-} from "../agents/subagent-run-liveness.js";
+import { shouldKeepSubagentRunChildLink } from "../agents/subagent-run-liveness.js";
 import {
   listThinkingLevelOptions,
   resolveThinkingDefaultForModel,
@@ -53,6 +50,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   DEFAULT_AGENT_ID,
+  isSubagentSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -310,10 +308,7 @@ function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunS
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
   if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
-    const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
-    return (
-      isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
-    );
+    return false;
   }
   if (entry.status === "running" || isFinitePositiveTimestamp(entry.startedAt)) {
     return true;
@@ -387,6 +382,24 @@ function resolveChildSessionKeys(
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
+}
+
+function shouldHideInactiveSubagentRegistryRow(params: {
+  key: string;
+  entry: SessionEntry;
+  now: number;
+}): boolean {
+  if (!isSubagentSessionKey(params.key)) {
+    return false;
+  }
+  const latest = getSessionDisplaySubagentRunByChildSessionKey(params.key);
+  if (latest) {
+    return !shouldKeepSubagentRunChildLink(latest, {
+      activeDescendants: countActiveDescendantRuns(params.key),
+      now: params.now,
+    });
+  }
+  return !shouldKeepStoreOnlyChildLink(params.entry, params.now);
 }
 
 function resolveTranscriptUsageFallback(params: {
@@ -1503,6 +1516,7 @@ export function listSessionsFromStore(params: {
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const hideInactiveSubagentRows = !spawnedBy && !label && !search;
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -1530,6 +1544,12 @@ export function listSessionsFromStore(params: {
         return normalizeAgentId(parsed.agentId) === agentId;
       }
       return true;
+    })
+    .filter(([key, entry]) => {
+      if (!hideInactiveSubagentRows) {
+        return true;
+      }
+      return !shouldHideInactiveSubagentRegistryRow({ key, entry, now });
     })
     .filter(([key, entry]) => {
       if (!spawnedBy) {

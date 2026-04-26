@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Subagents/Control UI: reconcile completed run-mode subagent session rows so stale finished tasks no longer remain in the default web session registry, while explicit session searches can still find their history. Fixes #47975 and #56516; overlaps #67902 without changing crash-orphan recovery or the #58534 large-list performance path. Thanks @magnusbonnevier, @arbaleast, and @slideshow-dingo.
 - Exec approvals: accept a symlinked `OPENCLAW_HOME` as the trusted approvals root while still rejecting symlinked `.openclaw` path components below it. (#64663) Thanks @FunJim.
 - Logging: add top-level `hostname`, flattened `message`, and available `agent_id`, `session_id`, and `channel` fields to file-log JSONL records for multi-agent filtering without removing existing structured log arguments. Fixes #51075. Thanks @stevengonsalvez.
 - ACP: route server logs to stderr before Gateway config/bootstrap work so ACP stdout remains JSON-RPC only for IDE integrations. Fixes #49060. Thanks @Hollychou924.

@@ -68,7 +68,7 @@ export function isRecentlyEndedSubagentRun(
 export function shouldKeepSubagentRunChildLink(
   entry: Pick<
     SubagentRunRecord,
-    "createdAt" | "startedAt" | "sessionStartedAt" | "endedAt" | "runTimeoutSeconds"
+    "createdAt" | "startedAt" | "sessionStartedAt" | "endedAt" | "runTimeoutSeconds" | "spawnMode"
   >,
   options?: {
     activeDescendants?: number;
@@ -79,6 +79,6 @@ export function shouldKeepSubagentRunChildLink(
   return (
     isLiveUnendedSubagentRun(entry, now) ||
     (options?.activeDescendants ?? 0) > 0 ||
-    isRecentlyEndedSubagentRun(entry, now)
+    (entry.spawnMode === "session" && isRecentlyEndedSubagentRun(entry, now))
   );
 }
