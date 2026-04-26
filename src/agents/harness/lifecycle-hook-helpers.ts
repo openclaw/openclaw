@@ -7,9 +7,11 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
+const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget");
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 
@@ -75,6 +77,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
   try {
     return normalizeBeforeAgentFinalizeResult(
       await hookRunner.runBeforeAgentFinalize(params.event, buildAgentHookContext(params.ctx)),
+      params.event,
     );
   } catch (error) {
     log.warn(`before_agent_finalize hook failed: ${String(error)}`);
@@ -84,6 +87,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
 
 function normalizeBeforeAgentFinalizeResult(
   result: PluginHookBeforeAgentFinalizeResult | undefined,
+  event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
   if (result?.action === "finalize") {
     return result.reason?.trim()
@@ -91,6 +95,27 @@ function normalizeBeforeAgentFinalizeResult(
       : { action: "finalize" };
   }
   if (result?.action === "revise") {
+    const retryInstruction = result.retry?.instruction?.trim();
+    if (retryInstruction) {
+      const maxAttempts =
+        typeof result.retry?.maxAttempts === "number" && Number.isFinite(result.retry.maxAttempts)
+          ? Math.max(1, Math.floor(result.retry.maxAttempts))
+          : 1;
+      const retryKey = [
+        event?.runId ?? event?.sessionId ?? "unknown-run",
+        result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160),
+      ].join(":");
+      const budget = resolveGlobalSingleton<Map<string, number>>(
+        FINALIZE_RETRY_BUDGET_KEY,
+        () => new Map(),
+      );
+      const nextCount = (budget.get(retryKey) ?? 0) + 1;
+      budget.set(retryKey, nextCount);
+      if (nextCount > maxAttempts) {
+        return { action: "continue" };
+      }
+      return { action: "revise", reason: retryInstruction };
+    }
     const reason = result.reason?.trim();
     return reason ? { action: "revise", reason } : { action: "continue" };
   }

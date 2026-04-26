@@ -8,6 +8,7 @@ export type PluginNextTurnInjection = {
   text: string;
   idempotencyKey?: string;
   placement?: PluginNextTurnInjectionPlacement;
+  priority?: number;
   ttlMs?: number;
   metadata?: PluginJsonValue;
 };

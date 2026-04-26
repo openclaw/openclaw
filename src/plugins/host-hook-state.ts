@@ -221,6 +221,10 @@ function toPluginNextTurnInjectionRecord(params: {
     text: params.injection.text,
     idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
     placement: params.injection.placement ?? "prepend_context",
+    priority:
+      typeof params.injection.priority === "number" && Number.isFinite(params.injection.priority)
+        ? params.injection.priority
+        : undefined,
     ttlMs: params.injection.ttlMs,
     createdAt: params.now,
     metadata: params.injection.metadata,
@@ -372,7 +376,10 @@ export async function drainPluginNextTurnInjections(params: {
       );
       drained.push(...liveEntries);
     }
-    drained.sort((left, right) => left.createdAt - right.createdAt);
+    drained.sort((left, right) => {
+      const byPriority = (right.priority ?? 0) - (left.priority ?? 0);
+      return byPriority !== 0 ? byPriority : left.createdAt - right.createdAt;
+    });
     // A drain is the consume boundary for this session queue. Inactive plugin
     // records are stale owner state and are discarded with expired records.
     delete entry.pluginNextTurnInjections;
@@ -381,6 +388,25 @@ export async function drainPluginNextTurnInjections(params: {
     }
     return drained;
   });
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Session-extension JSON reads are caller-typed by namespace.
+export function getPluginSessionExtensionSync<T extends PluginJsonValue = PluginJsonValue>(params: {
+  pluginId: string;
+  sessionKey?: string;
+  namespace: string;
+}): T | undefined {
+  const pluginId = params.pluginId.trim();
+  const sessionKey = params.sessionKey?.trim();
+  const namespace = normalizeNamespace(params.namespace);
+  if (!pluginId || !sessionKey || !namespace) {
+    return undefined;
+  }
+  const loaded = loadPluginHostHookSessionEntry(sessionKey);
+  const value = loaded.entry?.pluginExtensions?.[pluginId]?.[namespace] as
+    | PluginJsonValue
+    | undefined;
+  return value === undefined ? undefined : (copyJsonValue(value) as T);
 }
 
 export async function drainPluginNextTurnInjectionContext(params: {

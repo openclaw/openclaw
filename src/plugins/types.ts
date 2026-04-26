@@ -100,6 +100,8 @@ import type {
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginControlUiDescriptor,
   PluginJsonValue,
   PluginNextTurnInjection,
@@ -111,6 +113,10 @@ import type {
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
+  PluginSessionActionRegistration,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionTurnScheduleParams,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -201,6 +207,8 @@ export type {
 export * from "./hook-types.js";
 export type {
   PluginAgentEventSubscriptionRegistration,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
   PluginControlUiDescriptor,
@@ -217,6 +225,12 @@ export type {
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionTurnScheduleParams,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -2357,6 +2371,8 @@ export type OpenClawPluginApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
+  /** Emit a host-routed, plugin-attributed agent event for workflow/UI subscribers. */
+  emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
@@ -2370,6 +2386,16 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
+  /** Schedule a plugin-owned session wake-up turn with deterministic host cleanup. */
+  scheduleSessionTurn: (
+    params: PluginSessionTurnScheduleParams,
+  ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /** Send one or more host-validated files to the active channel for a session. */
+  sendSessionAttachment: (
+    params: PluginSessionAttachmentParams,
+  ) => Promise<PluginSessionAttachmentResult>;
+  /** Register a typed session action that clients can dispatch through the Gateway. */
+  registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

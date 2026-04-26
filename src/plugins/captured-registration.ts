@@ -10,6 +10,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -72,6 +73,7 @@ export type CapturedPluginRegistration = {
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
+  sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
 };
 
@@ -107,6 +109,7 @@ export function createCapturedPluginRegistration(params?: {
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
+  const sessionActions: PluginSessionActionRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
@@ -144,6 +147,7 @@ export function createCapturedPluginRegistration(params?: {
     runtimeLifecycles,
     agentEventSubscriptions,
     sessionSchedulerJobs,
+    sessionActions,
     tools,
     api: buildPluginApi({
       id: pluginId,
@@ -267,6 +271,24 @@ export function createCapturedPluginRegistration(params?: {
             kind: job.kind,
           };
         },
+        scheduleSessionTurn: async (schedule) => {
+          sessionSchedulerJobs.push({
+            id: schedule.name ?? `captured:${schedule.sessionKey}`,
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          });
+          return {
+            id: schedule.name ?? `captured:${schedule.sessionKey}`,
+            pluginId: "captured-plugin-registration",
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        registerSessionAction(action: PluginSessionActionRegistration) {
+          sessionActions.push(action);
+        },
+        emitAgentEvent: () => ({ emitted: false, reason: "captured registration" }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);

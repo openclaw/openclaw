@@ -59,10 +59,14 @@ export type BuildPluginApiParams = {
       | "registerControlUiDescriptor"
       | "registerRuntimeLifecycle"
       | "registerAgentEventSubscription"
+      | "emitAgentEvent"
       | "setRunContext"
       | "getRunContext"
       | "clearRunContext"
       | "registerSessionSchedulerJob"
+      | "scheduleSessionTurn"
+      | "sendSessionAttachment"
+      | "registerSessionAction"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -131,11 +135,21 @@ const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescr
 const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
 const noopRegisterAgentEventSubscription: OpenClawPluginApi["registerAgentEventSubscription"] =
   () => {};
+const noopEmitAgentEvent: OpenClawPluginApi["emitAgentEvent"] = () => ({
+  emitted: false,
+  reason: "not wired",
+});
 const noopSetRunContext: OpenClawPluginApi["setRunContext"] = () => false;
 const noopGetRunContext: OpenClawPluginApi["getRunContext"] = () => undefined;
 const noopClearRunContext: OpenClawPluginApi["clearRunContext"] = () => {};
 const noopRegisterSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] = () =>
   undefined;
+const noopScheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] = async () => undefined;
+const noopSendSessionAttachment: OpenClawPluginApi["sendSessionAttachment"] = async () => ({
+  ok: false,
+  error: "not wired",
+});
+const noopRegisterSessionAction: OpenClawPluginApi["registerSessionAction"] = () => {};
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
@@ -219,11 +233,15 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerRuntimeLifecycle: handlers.registerRuntimeLifecycle ?? noopRegisterRuntimeLifecycle,
     registerAgentEventSubscription:
       handlers.registerAgentEventSubscription ?? noopRegisterAgentEventSubscription,
+    emitAgentEvent: handlers.emitAgentEvent ?? noopEmitAgentEvent,
     setRunContext: handlers.setRunContext ?? noopSetRunContext,
     getRunContext: handlers.getRunContext ?? noopGetRunContext,
     clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
     registerSessionSchedulerJob:
       handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
+    scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
+    sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
+    registerSessionAction: handlers.registerSessionAction ?? noopRegisterSessionAction,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
