@@ -238,7 +238,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     loadGatewayRuntimeConfigSchema();
     loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(6);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
       expect(call[0]).toMatchObject({ cache: false });
     }
