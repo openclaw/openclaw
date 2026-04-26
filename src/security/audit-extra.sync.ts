@@ -1121,17 +1121,25 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       ? `Potential high-impact tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}`
       : "No unguarded runtime/filesystem contexts detected.";
 
+  const personalAssistant = cfg.security?.trustModel === "personal-assistant";
   findings.push({
     checkId: "security.trust_model.multi_user_heuristic",
-    severity: "warn",
-    title: "Potential multi-user setup detected (personal-assistant model warning)",
+    severity: personalAssistant ? "info" : "warn",
+    title: personalAssistant
+      ? "Personal-assistant trust model acknowledged (multi-user heuristic suppressed)"
+      : "Potential multi-user setup detected (personal-assistant model warning)",
     detail:
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
       signals.map((signal) => `- ${signal}`).join("\n") +
       `\n${impactLine}\n${riskyContextsDetail}\n` +
-      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway.",
-    remediation:
-      'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
+      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway." +
+      (personalAssistant
+        ? "\nThis setup has been acknowledged via security.trustModel=\"personal-assistant\"; finding reported as info."
+        : ""),
+    remediation: personalAssistant
+      ? "No action required while the operator boundary stays with a single trusted user. If that changes, remove security.trustModel or set it to \"multi-tenant\" and apply the full mitigation (below).\n" +
+        'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.'
+      : 'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
 
   return findings;
