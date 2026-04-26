@@ -994,7 +994,7 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
-  it("tracks async gateway agent runs in the shared task registry", async () => {
+  it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -1009,10 +1009,40 @@ describe("gateway agent handler", () => {
         { reqId: "task-registry-agent-run" },
       );
 
-      expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
-        runtime: "cli",
-        childSessionKey: "agent:main:main",
-        status: "running",
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "succeeded",
+          terminalSummary: "completed",
+        });
+      });
+    });
+  });
+
+  it("terminalizes failed async gateway agent runs in the shared task registry", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-error",
+        },
+        { reqId: "task-registry-agent-run-error" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-error")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "failed",
+          error: "Error: agent unavailable",
+        });
       });
     });
   });
@@ -1250,10 +1280,15 @@ describe("gateway agent handler", () => {
         (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
           defaultRuntime.createRunningTaskRun(...args),
       );
+      const completeTaskRunByRunIdSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.completeTaskRunByRunId>) =>
+          defaultRuntime.completeTaskRunByRunId(...args),
+      );
 
       setDetachedTaskLifecycleRuntime({
         ...defaultRuntime,
         createRunningTaskRun: createRunningTaskRunSpy,
+        completeTaskRunByRunId: completeTaskRunByRunIdSpy,
       });
 
       await invokeAgent(
@@ -1274,10 +1309,18 @@ describe("gateway agent handler", () => {
           task: expect.stringContaining("background cli seam task"),
         }),
       );
+      expect(completeTaskRunByRunIdSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          terminalSummary: "completed",
+        }),
+      );
       expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
         runtime: "cli",
         childSessionKey: "agent:main:main",
-        status: "running",
+        status: "succeeded",
+        terminalSummary: "completed",
       });
     });
   });

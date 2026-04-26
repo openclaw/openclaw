@@ -55,7 +55,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
+import {
+  completeTaskRunByRunId,
+  createRunningTaskRun,
+  failTaskRunByRunId,
+} from "../../tasks/detached-task-runtime.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -237,6 +241,33 @@ function emitSessionsChanged(
   );
 }
 
+function tryCompleteTrackedAgentTask(params: { runId: string; terminalSummary: string }): void {
+  try {
+    completeTaskRunByRunId({
+      runId: params.runId,
+      runtime: "cli",
+      endedAt: Date.now(),
+      terminalSummary: params.terminalSummary,
+    });
+  } catch {
+    // Best-effort only: background task tracking must not block agent runs.
+  }
+}
+
+function tryFailTrackedAgentTask(params: { runId: string; error: string }): void {
+  try {
+    failTaskRunByRunId({
+      runId: params.runId,
+      runtime: "cli",
+      endedAt: Date.now(),
+      error: params.error,
+      terminalSummary: params.error,
+    });
+  } catch {
+    // Best-effort only: background task tracking must not block agent runs.
+  }
+}
+
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
@@ -278,6 +309,9 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      if (shouldTrackTask) {
+        tryCompleteTrackedAgentTask({ runId: params.runId, terminalSummary: "completed" });
+      }
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -298,6 +332,9 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      if (shouldTrackTask) {
+        tryFailTrackedAgentTask({ runId: params.runId, error: String(err) });
+      }
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
