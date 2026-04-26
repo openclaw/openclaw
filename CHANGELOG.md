@@ -85,21 +85,59 @@ Docs: https://docs.openclaw.ai
   and show daemon state separately when available, so `gateway.tailscale.mode:
 "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
   Thanks @pesvobodak.
-- Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables itself for the current Gateway process after repeated failed restarts while the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux, @FiredMosquito831, and @spikefcz.
-- Gateway/Fly.io: seed Control UI allowed origins from the actual runtime bind and port so CLI-driven non-loopback starts do not crash before config exists. Fixes #71823.
-- Gateway/proxy: bootstrap env proxy dispatching from direct Gateway startup so provider and plugin network requests honor `HTTPS_PROXY`/`HTTP_PROXY` before the first embedded agent attempt runs. (#71833) Thanks @mjamiv.
-- Models/LM Studio: preserve `@iq*` quant suffixes in model refs and provider matching so `/model lmstudio/...@iq3_xxs` keeps the exact LM Studio variant. Fixes #71474. (#71486) Thanks @Bartok9, @XinwuC, and @Sanjays2402.
-- Matrix/cron: preserve the live Matrix delivery target when creating implicit announce reminder jobs so mixed-case room IDs are not reconstructed from lowercased session keys. Fixes #71798.
-- Feishu: accept Schema 2.0 card action callbacks that report `context.open_chat_id` instead of legacy `context.chat_id`, so button callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
-- Feishu: keep synthetic card-action and bot-menu ids out of platform reply targets, using the real card callback message id when Feishu provides one and plain-sending otherwise. Fixes #71673. Thanks @eddy1068.
-- Plugins/QQ Bot: prefer an installed QQ Bot plugin that declares it replaces the bundled `qqbot` channel, preventing duplicate `qqbot_channel_api` and `qqbot_remind` tool registration noise. Fixes #63102.
-- Browser automation: keep stable tab ids and labels attached when Chromium replaces the raw target after form submissions or other action-triggered navigations, and return the replacement `targetId` from `/act` when the match is provable. Fixes #46137.
-- QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs directly for owner-authorized senders instead of returning `cronParams` and relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937) Thanks @GaosCode.
-- Agents/ACP: hide `sessions_spawn` ACP runtime options unless an ACP backend is loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled `acpx`. Thanks @vincentkoc.
-- Media delivery: avoid sending generated image attachments twice when the assistant reply already includes explicit `MEDIA:` lines for the same turn, and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
-- Codex harness: ignore retryable app-server error notifications after Codex recovers, and preserve the real nested error message for terminal app-server failures instead of replacing it with a generic failure. Thanks @pashpashpash.
-- Agents/subagents: keep queued subagent announces session-only when the requester has no external channel target, avoiding ambiguous multi-channel delivery failures. Fixes #59201. Thanks @larrylhollan.
-- Image understanding: preserve configured provider-prefixed vision model metadata when callers request the model without the provider prefix, so custom image models keep their `input: ["text", "image"]` capability. Fixes #33185. Thanks @Kobe9312 and @vincentkoc.
+- Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when
+  the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables
+  itself for the current Gateway process after repeated failed restarts while
+  the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux,
+  @FiredMosquito831, and @spikefcz.
+- Gateway/Fly.io: seed Control UI allowed origins from the actual runtime
+  bind and port so CLI-driven non-loopback starts do not crash before config
+  exists. Fixes #71823.
+- Gateway/proxy: bootstrap env proxy dispatching from direct Gateway startup
+  so provider and plugin network requests honor `HTTPS_PROXY`/`HTTP_PROXY`
+  before the first embedded agent attempt runs. (#71833) Thanks @mjamiv.
+- Models/LM Studio: preserve `@iq*` quant suffixes in model refs and provider
+  matching so `/model lmstudio/...@iq3_xxs` keeps the exact LM Studio variant.
+  Fixes #71474. (#71486) Thanks @Bartok9, @XinwuC, and @Sanjays2402.
+- Matrix/cron: preserve the live Matrix delivery target when creating implicit
+  announce reminder jobs so mixed-case room IDs are not reconstructed from
+  lowercased session keys. Fixes #71798.
+- Feishu: accept Schema 2.0 card action callbacks that report
+  `context.open_chat_id` instead of legacy `context.chat_id`, so button
+  callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
+- Feishu: keep synthetic card-action and bot-menu ids out of platform reply
+  targets, using the real card callback message id when Feishu provides one and
+  plain-sending otherwise. Fixes #71673. Thanks @eddy1068.
+- Plugins/QQ Bot: prefer an installed QQ Bot plugin that declares it replaces
+  the bundled `qqbot` channel, preventing duplicate `qqbot_channel_api` and
+  `qqbot_remind` tool registration noise. Fixes #63102.
+- Browser automation: keep stable tab ids and labels attached when Chromium
+  replaces the raw target after form submissions or other action-triggered
+  navigations, and return the replacement `targetId` from `/act` when the match
+  is provable. Fixes #46137.
+- QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
+  directly for owner-authorized senders instead of returning `cronParams` and
+  relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)
+  Thanks @GaosCode.
+- Agents/ACP: hide `sessions_spawn` ACP runtime options unless an ACP backend is
+  loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled
+  `acpx`. Thanks @vincentkoc.
+- Media delivery: avoid sending generated image attachments twice when the
+  assistant reply already includes explicit `MEDIA:` lines for the same turn,
+  and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
+- Codex harness: ignore retryable app-server error notifications after Codex
+  recovers, and preserve the real nested error message for terminal app-server
+  failures instead of replacing it with a generic failure. Thanks @pashpashpash.
+- Agents/Codex: prepare native Codex sub-agent session metadata without a
+  nested Gateway session patch and add a focused Docker smoke for the app-server
+  sub-agent path. Thanks @vincentkoc.
+- Agents/subagents: keep queued subagent announces session-only when the
+  requester has no external channel target, avoiding ambiguous multi-channel
+  delivery failures. Fixes #59201. Thanks @larrylhollan.
+- Image understanding: preserve configured provider-prefixed vision model
+  metadata when callers request the model without the provider prefix, so custom
+  image models keep their `input: ["text", "image"]` capability. Fixes #33185.
+  Thanks @Kobe9312 and @vincentkoc.
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
 - Plugins/update: restore previous plugin index records if core update or channel setup hits a concurrent config write conflict after plugin metadata changes. Thanks @shakkernerd.
 - Plugins/onboarding: defer channel/provider plugin install records until the owning config write commits, keeping setup failures from advancing the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
