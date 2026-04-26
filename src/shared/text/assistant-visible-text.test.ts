@@ -170,6 +170,34 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("prefix\n<tool_call><function=read><parameter=path>/home", "prefix\n");
     });
 
+    it("strips Gemini-style <tool_code> blocks", () => {
+      expectVisibleText(
+        "prefix\n<tool_code>read(path='/app/skills/weather/SKILL.md')</tool_code>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Gemini-style <tool_code> + <result> blocks leaving only final answer", () => {
+      expectVisibleText(
+        "<tool_code>read(path='/app/skills/weather/SKILL.md')</tool_code>\n<result>\n# Weather Skill\nsome content\n</result>\nCertainly, which location?",
+        "Certainly, which location?",
+      );
+    });
+
+    it("strips dangling <tool_code> to end-of-string", () => {
+      expectVisibleText(
+        'Let me check.\n<tool_code>exec(command="curl wttr.in")',
+        "Let me check.\n",
+      );
+    });
+
+    it("strips <result> blocks that appear after tool_code output", () => {
+      expectVisibleText(
+        'prefix\n<result>\n{"weather": "sunny"}\n</result>\nsuffix',
+        "prefix\n\nsuffix",
+      );
+    });
+
     it("does not close early on </tool_call> text inside JSON strings", () => {
       expectVisibleText(
         [

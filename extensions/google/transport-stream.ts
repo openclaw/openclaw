@@ -61,10 +61,18 @@ type GoogleGenerateContentRequest = {
   cachedContent?: string;
   contents: Array<Record<string, unknown>>;
   generationConfig?: Record<string, unknown>;
+  safetySettings?: Array<{ category: string; threshold: string }>;
   systemInstruction?: Record<string, unknown>;
   tools?: Array<Record<string, unknown>>;
   toolConfig?: Record<string, unknown>;
 };
+
+const GOOGLE_SAFETY_SETTINGS: Array<{ category: string; threshold: string }> = [
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+];
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -457,6 +465,7 @@ export function buildGoogleGenerativeAiParams(
 
   const params: GoogleGenerateContentRequest = {
     contents: convertGoogleMessages(model, context),
+    safetySettings: GOOGLE_SAFETY_SETTINGS,
   };
   if (typeof options?.cachedContent === "string" && options.cachedContent.trim()) {
     params.cachedContent = options.cachedContent.trim();
@@ -473,14 +482,17 @@ export function buildGoogleGenerativeAiParams(
       ],
     };
   }
+  const GOOGLE_SEARCH_TOOL = { google_search: {} };
   if (context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
+    params.tools = [...(convertGoogleTools(context.tools) ?? []), GOOGLE_SEARCH_TOOL];
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
       params.toolConfig = {
         functionCallingConfig: toolChoice,
       };
     }
+  } else {
+    params.tools = [GOOGLE_SEARCH_TOOL];
   }
   return params;
 }

@@ -16,7 +16,7 @@ const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function|tool_calls)\b/i;
+  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function|tool_calls|tool_code|result)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
@@ -24,6 +24,8 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "function_calls",
   "function",
   "tool_calls",
+  "tool_code",
+  "result",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
@@ -252,9 +254,11 @@ export function stripToolCallXmlTags(text: string): string {
       const payloadKind =
         tag.tagName === "tool_call" || tag.tagName === "function"
           ? detectToolCallPayloadKind(text, payloadStart)
-          : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
-            ? "json"
-            : null;
+          : tag.tagName === "tool_code" || tag.tagName === "result"
+            ? "xml"
+            : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
+              ? "json"
+              : null;
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
       if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
