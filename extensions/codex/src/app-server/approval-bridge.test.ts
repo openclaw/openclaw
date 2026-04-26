@@ -52,7 +52,6 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
       "plugin.approval.waitDecision",
-      "plugin.approval.list",
     ]);
     expect(mockCallGatewayTool).toHaveBeenCalledWith(
       "plugin.approval.request",
@@ -447,8 +446,6 @@ describe("Codex app-server approval bridge", () => {
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
-      "plugin.approval.list",
-      "plugin.approval.list",
     ]);
     expect(params.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({

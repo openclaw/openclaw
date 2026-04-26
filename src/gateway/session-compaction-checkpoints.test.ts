@@ -162,8 +162,9 @@ describe("session-compaction-checkpoints", () => {
     expect(
       Object.values(nextStore).find((entry) => entry.compactionCheckpoints)?.compactionCheckpoints,
     ).toHaveLength(25);
+  });
 
-test("persist stores boundary id and metadata with the checkpoint", async () => {
+  test("persist stores boundary id and metadata with the checkpoint", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
     tempDirs.push(dir);
     const storePath = path.join(dir, "sessions.json");

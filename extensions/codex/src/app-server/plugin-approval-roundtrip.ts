@@ -209,57 +209,23 @@ export async function resolveCodexPluginApprovalDecision(params: {
   toolCallId?: string;
   signal?: AbortSignal;
 }): Promise<ExecApprovalDecision | null | undefined> {
-  const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
-    params.requestResult ?? {},
-    "decision",
-  );
-  const preResolvedDecision = hasImmediateDecision ? params.requestResult?.decision : undefined;
-  const carriedState = describeCodexPluginCarriedApprovalState(preResolvedDecision);
-  if (hasImmediateDecision) {
-    const liveBefore = await resolveLiveCodexPluginApprovalState(params.approvalId);
-    if (liveBefore.ok && liveBefore.pending) {
-      emitCodexPluginApprovalCarryMismatch({
-        approvalId: params.approvalId,
-        paramsForRun: params.paramsForRun,
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        phase: "before_plugin_decision_use",
-        carriedState,
-        liveState: describeCodexPluginLiveApprovalState(liveBefore),
-      });
-    } else if (!liveBefore.ok) {
-      emitCodexPluginApprovalCarryMismatch({
-        approvalId: params.approvalId,
-        paramsForRun: params.paramsForRun,
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        phase: "before_plugin_decision_use",
-        severity: "info",
-        carriedState,
-        liveState: "unknown",
-        error: liveBefore.error,
-      });
-    }
-  }
-  const decision = hasImmediateDecision
-    ? preResolvedDecision
-    : await waitForPluginApprovalDecision({
-        approvalId: params.approvalId,
-        signal: params.signal,
-      });
-  const liveAfter = await resolveLiveCodexPluginApprovalState(params.approvalId);
-  if (liveAfter.ok && liveAfter.pending && decision !== undefined) {
+  if (approvalRequestExplicitlyUnavailable(params.requestResult)) {
     emitCodexPluginApprovalCarryMismatch({
       approvalId: params.approvalId,
       paramsForRun: params.paramsForRun,
       toolName: params.toolName,
       toolCallId: params.toolCallId,
-      phase: "after_plugin_decision_resolve",
-      carriedState: `decision:${decision ?? "null"}`,
-      liveState: describeCodexPluginLiveApprovalState(liveAfter),
+      phase: "plugin_approval_route_unavailable",
+      severity: "info",
+      carriedState: "resolved:null",
+      liveState: "not-queried",
     });
+    return null;
   }
-  return decision;
+  return await waitForPluginApprovalDecision({
+    approvalId: params.approvalId,
+    signal: params.signal,
+  });
 }
 
 export function mapExecDecisionToOutcome(
