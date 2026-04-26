@@ -24,6 +24,8 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
+	<key>OpenClawCanonicalVersion</key>
+	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

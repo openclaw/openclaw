@@ -1,14 +1,22 @@
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, URL } from "node:url";
+import { URL } from "node:url";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
+import {
+  assertNoWindowsNetworkPath,
+  hasEncodedFileUrlSeparator,
+  safeFileURLToPath,
+} from "../infra/local-file-access.js";
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
+import { resolveConfigDir } from "../utils.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
-const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
+const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -29,8 +37,17 @@ function expandPath(filePath: string): string {
   return normalized;
 }
 
+/** True when the path is absolute for the current platform or a Windows drive path (e.g. C:\\...), even if path.isAbsolute is false under POSIX rules. */
+function hostPathLooksAbsolute(expanded: string): boolean {
+  return path.isAbsolute(expanded) || isWindowsDrivePath(expanded);
+}
+
 function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
+  // Drive-letter paths first: on Unix path.isAbsolute is false for C:/...; on Windows we still normalize.
+  if (isWindowsDrivePath(expanded)) {
+    return path.win32.normalize(expanded);
+  }
   if (path.isAbsolute(expanded)) {
     return expanded;
   }
@@ -51,7 +68,7 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   if (!relative || relative === "") {
     return { resolved, relative: "" };
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relative.startsWith("..") || path.isAbsolute(relative) || isWindowsDrivePath(relative)) {
     throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
   }
   return { resolved, relative };
@@ -85,6 +102,36 @@ export function assertMediaNotDataUrl(media: string): void {
   }
 }
 
+function isManagedMediaPathUnderRoot(candidate: string): boolean {
+  const expanded = expandPath(candidate);
+  if (!hostPathLooksAbsolute(expanded)) {
+    return false;
+  }
+  const mediaRoot = path.join(resolveConfigDir(), "media");
+  const relative = path.relative(path.resolve(mediaRoot), path.resolve(expanded));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const firstSegment = relative.split(path.sep)[0] ?? "";
+  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
+}
+
+export async function resolveAllowedManagedMediaPath(
+  candidate: string,
+): Promise<string | undefined> {
+  const expanded = expandPath(candidate);
+  if (!isManagedMediaPathUnderRoot(expanded)) {
+    return undefined;
+  }
+  const resolved = path.resolve(expanded);
+  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
+  await assertNoManagedMediaAliasEscape({
+    filePath: resolved,
+    managedMediaRoot,
+  });
+  return resolved;
+}
+
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
@@ -93,7 +140,7 @@ export async function resolveSandboxedMediaSource(params: {
   if (!raw) {
     return raw;
   }
-  if (HTTP_URL_RE.test(raw)) {
+  if (isPassThroughRemoteMediaSource(raw)) {
     return raw;
   }
   let candidate = raw;
@@ -106,9 +153,11 @@ export async function resolveSandboxedMediaSource(params: {
       candidate = workspaceMappedFromUrl;
     } else {
       try {
-        candidate = fileURLToPath(candidate);
-      } catch {
-        throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
+        candidate = safeFileURLToPath(candidate);
+      } catch (err) {
+        throw new Error(`Invalid file:// URL for sandboxed media: ${(err as Error).message}`, {
+          cause: err,
+        });
       }
     }
   }
@@ -119,6 +168,7 @@ export async function resolveSandboxedMediaSource(params: {
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
   }
+  assertNoWindowsNetworkPath(candidate, "Sandbox media path");
   const tmpMediaPath = await resolveAllowedTmpMediaPath({
     candidate,
     sandboxRoot: params.sandboxRoot,
@@ -126,12 +176,27 @@ export async function resolveSandboxedMediaSource(params: {
   if (tmpMediaPath) {
     return tmpMediaPath;
   }
+  const managedMediaPath = await resolveAllowedManagedMediaPath(candidate);
+  if (managedMediaPath) {
+    return managedMediaPath;
+  }
   const sandboxResult = await assertSandboxPath({
     filePath: candidate,
     cwd: params.sandboxRoot,
     root: params.sandboxRoot,
   });
   return sandboxResult.resolved;
+}
+
+async function assertNoManagedMediaAliasEscape(params: {
+  filePath: string;
+  managedMediaRoot: string;
+}): Promise<void> {
+  await assertNoPathAliasEscape({
+    absolutePath: params.filePath,
+    rootPath: params.managedMediaRoot,
+    boundaryLabel: "managed media root",
+  });
 }
 
 function mapContainerWorkspaceFileUrl(params: {
@@ -147,9 +212,21 @@ function mapContainerWorkspaceFileUrl(params: {
   if (parsed.protocol !== "file:") {
     return undefined;
   }
+  const host = parsed.hostname.trim().toLowerCase();
+  if (host && host !== "localhost") {
+    return undefined;
+  }
+  if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+    return undefined;
+  }
   // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
   // Windows hosts can still accept file:///workspace/... media references.
-  const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+  let normalizedPathname: string;
+  try {
+    normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+  } catch {
+    return undefined;
+  }
   if (
     normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
     !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
@@ -185,7 +262,7 @@ async function resolveAllowedTmpMediaPath(params: {
   candidate: string;
   sandboxRoot: string;
 }): Promise<string | undefined> {
-  const candidateIsAbsolute = path.isAbsolute(expandPath(params.candidate));
+  const candidateIsAbsolute = hostPathLooksAbsolute(expandPath(params.candidate));
   if (!candidateIsAbsolute) {
     return undefined;
   }

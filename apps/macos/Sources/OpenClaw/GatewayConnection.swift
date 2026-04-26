@@ -42,6 +42,7 @@ struct GatewayAgentInvocation {
     var channel: GatewayAgentChannel = .last
     var timeoutSeconds: Int?
     var idempotencyKey: String = UUID().uuidString
+    var voiceWakeTrigger: String?
 }
 
 /// Single, shared Gateway websocket connection for the whole app.
@@ -70,6 +71,7 @@ actor GatewayConnection {
         case wizardStatus = "wizard.status"
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
+        case talkSpeak = "talk.speak"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"
         case channelsLogout = "channels.logout"
@@ -498,6 +500,10 @@ extension GatewayConnection {
         if let timeout = invocation.timeoutSeconds {
             params["timeout"] = AnyCodable(timeout)
         }
+        if let trigger = invocation.voiceWakeTrigger {
+            params["voiceWakeTrigger"] = AnyCodable(
+                trigger.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
 
         do {
             try await self.requestVoid(method: .agent, params: params)
@@ -558,12 +564,16 @@ extension GatewayConnection {
     func skillsInstall(
         name: String,
         installId: String,
+        dangerouslyForceUnsafeInstall: Bool? = nil,
         timeoutMs: Int? = nil) async throws -> SkillInstallResult
     {
         var params: [String: AnyCodable] = [
             "name": AnyCodable(name),
             "installId": AnyCodable(installId),
         ]
+        if let dangerouslyForceUnsafeInstall {
+            params["dangerouslyForceUnsafeInstall"] = AnyCodable(dangerouslyForceUnsafeInstall)
+        }
         if let timeoutMs {
             params["timeoutMs"] = AnyCodable(timeoutMs)
         }
@@ -614,11 +624,13 @@ extension GatewayConnection {
     func chatHistory(
         sessionKey: String,
         limit: Int? = nil,
+        maxChars: Int? = nil,
         timeoutMs: Int? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
         if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .chatHistory,

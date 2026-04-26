@@ -7,8 +7,8 @@ export {
   getFollowupQueueDepth,
   resetRecentQueuedMessageIdDedupe,
 } from "./queue/enqueue.js";
-export { resolveQueueSettings } from "./queue/settings.js";
-export { clearFollowupQueue } from "./queue/state.js";
+export { resolveQueueSettings } from "./queue/settings-runtime.js";
+export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
 export type {
   FollowupRun,
   QueueDedupeMode,

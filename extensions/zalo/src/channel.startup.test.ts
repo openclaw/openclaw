@@ -1,6 +1,10 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import {
+  expectLifecyclePatch,
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -12,21 +16,35 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+vi.mock("./monitor.js", () => {
   return {
-    ...actual,
     monitorZaloProvider: hoisted.monitorZaloProvider,
   };
 });
 
-vi.mock("./probe.js", async () => {
-  const actual = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+vi.mock("./probe.js", () => {
   return {
-    ...actual,
     probeZalo: hoisted.probeZalo,
   };
 });
+
+vi.mock("./channel.runtime.js", () => ({
+  probeZaloAccount: hoisted.probeZalo,
+  startZaloGatewayAccount: async (ctx: {
+    account: ResolvedZaloAccount;
+    abortSignal: AbortSignal;
+    setStatus: (patch: Partial<ResolvedZaloAccount>) => void;
+  }) => {
+    await hoisted.probeZalo();
+    ctx.setStatus({ accountId: ctx.account.accountId });
+    return await hoisted.monitorZaloProvider({
+      token: ctx.account.token,
+      account: ctx.account,
+      abortSignal: ctx.abortSignal,
+      useWebhook: false,
+    });
+  },
+}));
 
 import { zaloPlugin } from "./channel.js";
 
@@ -57,37 +75,20 @@ describe("zaloPlugin gateway.startAccount", () => {
         }),
     );
 
-    const patches: ChannelAccountSnapshot[] = [];
-    const abort = new AbortController();
-    const task = zaloPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: buildAccount(),
-        abortSignal: abort.signal,
-        statusPatchSink: (next) => patches.push({ ...next }),
-      }),
-    );
-
-    let settled = false;
-    void task.then(() => {
-      settled = true;
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: zaloPlugin.gateway!.startAccount!,
+      account: buildAccount(),
     });
 
-    await vi.waitFor(() => {
-      expect(hoisted.probeZalo).toHaveBeenCalledOnce();
-      expect(hoisted.monitorZaloProvider).toHaveBeenCalledOnce();
+    await expectPendingUntilAbort({
+      waitForStarted: waitForStartedMocks(hoisted.probeZalo, hoisted.monitorZaloProvider),
+      isSettled,
+      abort,
+      task,
     });
 
-    expect(settled).toBe(false);
-    expect(patches).toContainEqual(
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
-
-    abort.abort();
-    await task;
-
-    expect(settled).toBe(true);
+    expectLifecyclePatch(patches, { accountId: "default" });
+    expect(isSettled()).toBe(true);
     expect(hoisted.monitorZaloProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "test-token",

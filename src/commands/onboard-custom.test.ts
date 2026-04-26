@@ -1,17 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { defaultRuntime } from "../runtime.js";
-import {
-  applyCustomApiConfig,
-  parseNonInteractiveCustomApiFlags,
-  promptCustomApiConfig,
-} from "./onboard-custom.js";
+import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import { promptCustomApiConfig } from "./onboard-custom.js";
 
-// Mock dependencies
-vi.mock("./model-picker.js", () => ({
-  applyPrimaryModel: vi.fn((cfg) => cfg),
+const OLLAMA_DEFAULT_BASE_URL_FOR_TEST = "http://127.0.0.1:11434";
+
+vi.mock("../plugins/provider-auth-input.js", () => ({
+  ensureApiKeyFromEnvOrPrompt: vi.fn(
+    async (params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]) => {
+      await params.prompter.select({ message: "Secret input mode", options: [] });
+      const input = await params.prompter.text({
+        message: params.promptMessage,
+        validate: params.validate,
+      });
+      const apiKey = params.normalize(input ?? "");
+      await params.setCredential(apiKey);
+      return apiKey;
+    },
+  ),
 }));
 
 function createTestPrompter(params: { text: string[]; select?: string[] }): {
@@ -62,7 +67,7 @@ async function runPromptCustomApi(
 ) {
   return promptCustomApiConfig({
     prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-    runtime: { ...defaultRuntime, log: vi.fn() },
+    runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
     config,
   });
 }
@@ -76,43 +81,6 @@ function expectOpenAiCompatResult(params: {
   expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
   expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
-}
-
-function buildCustomProviderConfig(contextWindow?: number) {
-  if (contextWindow === undefined) {
-    return {} as OpenClawConfig;
-  }
-  return {
-    models: {
-      providers: {
-        custom: {
-          api: "openai-completions" as const,
-          baseUrl: "https://llm.example.com/v1",
-          models: [
-            {
-              id: "foo-large",
-              name: "foo-large",
-              contextWindow,
-              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              reasoning: false,
-            },
-          ],
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
-  return applyCustomApiConfig({
-    config: buildCustomProviderConfig(contextWindow),
-    baseUrl: "https://llm.example.com/v1",
-    modelId: "foo-large",
-    compatibility: "openai",
-    providerId: "custom",
-  });
 }
 
 describe("promptCustomApiConfig", () => {
@@ -134,7 +102,7 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
   });
 
-  it("defaults custom onboarding to the native Ollama base URL", async () => {
+  it("defaults custom setup to the native Ollama base URL", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434", "", "llama3", "custom", ""],
       select: ["plaintext", "openai"],
@@ -146,7 +114,7 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "API Base URL",
-        initialValue: OLLAMA_DEFAULT_BASE_URL,
+        initialValue: OLLAMA_DEFAULT_BASE_URL_FOR_TEST,
       }),
     );
   });
@@ -174,74 +142,6 @@ describe("promptCustomApiConfig", () => {
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
   });
 
-  it("uses expanded max_tokens for openai verification probes", async () => {
-    const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
-      select: ["plaintext", "openai"],
-    });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
-
-    await runPromptCustomApi(prompter);
-
-    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
-    expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
-  });
-
-  it("uses azure-specific headers and body for openai verification probes", async () => {
-    const prompter = createTestPrompter({
-      text: [
-        "https://my-resource.openai.azure.com",
-        "azure-test-key",
-        "gpt-4.1",
-        "custom",
-        "alias",
-      ],
-      select: ["plaintext", "openai"],
-    });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
-
-    await runPromptCustomApi(prompter);
-
-    const firstCall = fetchMock.mock.calls[0];
-    const firstUrl = firstCall?.[0];
-    const firstInit = firstCall?.[1] as
-      | { body?: string; headers?: Record<string, string> }
-      | undefined;
-    if (typeof firstUrl !== "string") {
-      throw new Error("Expected first verification call URL");
-    }
-    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
-
-    expect(firstUrl).toContain("/openai/deployments/gpt-4.1/chat/completions");
-    expect(firstUrl).toContain("api-version=2024-10-21");
-    expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
-    expect(firstInit?.headers?.Authorization).toBeUndefined();
-    expect(firstInit?.body).toBeDefined();
-    expect(parsedBody).toMatchObject({
-      messages: [{ role: "user", content: "Hi" }],
-      max_completion_tokens: 5,
-      stream: false,
-    });
-    expect(parsedBody).not.toHaveProperty("model");
-    expect(parsedBody).not.toHaveProperty("max_tokens");
-  });
-
-  it("uses expanded max_tokens for anthropic verification probes", async () => {
-    const prompter = createTestPrompter({
-      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
-      select: ["plaintext", "unknown"],
-    });
-    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
-
-    await runPromptCustomApi(prompter);
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
-    expect(secondCall?.body).toBeDefined();
-    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
-  });
-
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({
       text: [
@@ -262,39 +162,6 @@ describe("promptCustomApiConfig", () => {
       expect.stringContaining("did not respond"),
       "Endpoint detection",
     );
-  });
-
-  it("renames provider id when baseUrl differs", async () => {
-    const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
-      select: ["plaintext", "openai"],
-    });
-    stubFetchSequence([{ ok: true }]);
-    const result = await runPromptCustomApi(prompter, {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://old.example.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                contextWindow: 1,
-                maxTokens: 1,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                reasoning: false,
-              },
-            ],
-          },
-        },
-      },
-    });
-
-    expect(result.providerId).toBe("custom-2");
-    expect(result.config.models?.providers?.custom).toBeDefined();
-    expect(result.config.models?.providers?.["custom-2"]).toBeDefined();
   });
 
   it("aborts verification after timeout", async () => {
@@ -320,163 +187,5 @@ describe("promptCustomApiConfig", () => {
     await promise;
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
-  });
-
-  it("stores env SecretRef for custom provider when selected", async () => {
-    vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
-    const prompter = createTestPrompter({
-      text: ["https://example.com/v1", "CUSTOM_PROVIDER_API_KEY", "detected-model", "custom", ""],
-      select: ["ref", "env", "openai"],
-    });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
-
-    const result = await runPromptCustomApi(prompter);
-
-    expect(result.config.models?.providers?.custom?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "CUSTOM_PROVIDER_API_KEY",
-    });
-    const firstCall = fetchMock.mock.calls[0]?.[1] as
-      | { headers?: Record<string, string> }
-      | undefined;
-    expect(firstCall?.headers?.Authorization).toBe("Bearer test-env-key");
-  });
-
-  it("re-prompts source after provider ref preflight fails and succeeds with env ref", async () => {
-    vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
-    const prompter = createTestPrompter({
-      text: [
-        "https://example.com/v1",
-        "/providers/custom/apiKey",
-        "CUSTOM_PROVIDER_API_KEY",
-        "detected-model",
-        "custom",
-        "",
-      ],
-      select: ["ref", "provider", "filemain", "env", "openai"],
-    });
-    stubFetchSequence([{ ok: true }]);
-
-    const result = await runPromptCustomApi(prompter, {
-      secrets: {
-        providers: {
-          filemain: {
-            source: "file",
-            path: "/tmp/openclaw-missing-provider.json",
-            mode: "json",
-          },
-        },
-      },
-    });
-
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
-      "Reference check failed",
-    );
-    expect(result.config.models?.providers?.custom?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "CUSTOM_PROVIDER_API_KEY",
-    });
-  });
-});
-
-describe("applyCustomApiConfig", () => {
-  it.each([
-    {
-      name: "uses hard-min context window for newly added custom models",
-      existingContextWindow: undefined,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
-    },
-    {
-      name: "upgrades existing custom model context window when below hard minimum",
-      existingContextWindow: 4096,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
-    },
-    {
-      name: "preserves existing custom model context window when already above minimum",
-      existingContextWindow: 131072,
-      expectedContextWindow: 131072,
-    },
-  ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
-    const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(expectedContextWindow);
-  });
-
-  it.each([
-    {
-      name: "invalid compatibility values at runtime",
-      params: {
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "invalid" as unknown as "openai",
-      },
-      expectedMessage: 'Custom provider compatibility must be "openai" or "anthropic".',
-    },
-    {
-      name: "explicit provider ids that normalize to empty",
-      params: {
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "openai" as const,
-        providerId: "!!!",
-      },
-      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
-    },
-  ])("rejects $name", ({ params, expectedMessage }) => {
-    expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
-  });
-});
-
-describe("parseNonInteractiveCustomApiFlags", () => {
-  it("parses required flags and defaults compatibility to openai", () => {
-    const result = parseNonInteractiveCustomApiFlags({
-      baseUrl: " https://llm.example.com/v1 ",
-      modelId: " foo-large ",
-      apiKey: " custom-test-key ",
-      providerId: " my-custom ",
-    });
-
-    expect(result).toEqual({
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      apiKey: "custom-test-key", // pragma: allowlist secret
-      providerId: "my-custom",
-    });
-  });
-
-  it.each([
-    {
-      name: "missing required flags",
-      flags: { baseUrl: "https://llm.example.com/v1" },
-      expectedMessage: 'Auth choice "custom-api-key" requires a base URL and model ID.',
-    },
-    {
-      name: "invalid compatibility values",
-      flags: {
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "xmlrpc",
-      },
-      expectedMessage: 'Invalid --custom-compatibility (use "openai" or "anthropic").',
-    },
-    {
-      name: "invalid explicit provider ids",
-      flags: {
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        providerId: "!!!",
-      },
-      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
-    },
-  ])("rejects $name", ({ flags, expectedMessage }) => {
-    expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
   });
 });

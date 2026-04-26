@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -220,7 +224,7 @@ function auditGatewayToken(
     detail: "Run `openclaw gateway install --force` to remove embedded service token.",
     level: "recommended",
   });
-  const expectedToken = expectedGatewayToken?.trim();
+  const expectedToken = normalizeOptionalString(expectedGatewayToken);
   if (!expectedToken || serviceToken === expectedToken) {
     return;
   }
@@ -240,7 +244,7 @@ export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string
   if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
     return undefined;
   }
-  return command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
 function getPathModule(platform: NodeJS.Platform) {
@@ -251,9 +255,29 @@ function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(normalized);
   }
   return normalized;
+}
+
+function getEquivalentMinimalPathEntries(
+  entry: string,
+  platform: NodeJS.Platform,
+  normalizedExpected: Set<string>,
+): string[] {
+  if (platform !== "linux") {
+    return [];
+  }
+  const equivalent = entry.endsWith("/aliases/default/bin")
+    ? `${entry.slice(0, -"/aliases/default/bin".length)}/current/bin`
+    : entry.endsWith("/current/bin")
+      ? `${entry.slice(0, -"/current/bin".length)}/aliases/default/bin`
+      : undefined;
+  if (!equivalent) {
+    return [];
+  }
+  const normalizedEquivalent = normalizePathEntry(equivalent, platform);
+  return normalizedExpected.has(normalizedEquivalent) ? [equivalent] : [];
 }
 
 function auditGatewayServicePath(
@@ -284,7 +308,12 @@ function auditGatewayServicePath(
   const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
   const missing = expected.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
-    return !normalizedParts.has(normalized);
+    if (normalizedParts.has(normalized)) {
+      return false;
+    }
+    return !getEquivalentMinimalPathEntries(entry, platform, normalizedExpected).some(
+      (equivalent) => normalizedParts.has(normalizePathEntry(equivalent, platform)),
+    );
   });
   if (missing.length > 0) {
     issues.push({
@@ -362,7 +391,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22 LTS (22.16+) or Node 24 not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.14+) or Node 24 not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -378,8 +407,8 @@ export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
 }): ServiceConfigIssue | null {
-  const serviceToken = params.serviceToken?.trim() || undefined;
-  const configToken = params.configToken?.trim() || undefined;
+  const serviceToken = normalizeOptionalString(params.serviceToken);
+  const configToken = normalizeOptionalString(params.configToken);
 
   // Tokenless service units are canonical; no drift to report.
   if (!serviceToken) {

@@ -21,6 +21,15 @@ import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { buildExcludeFilter, resolveExcludePatterns, type ExcludeSpec } from "./backup-exclude.js";
 
+type TarRuntime = typeof import("tar");
+
+let tarRuntimePromise: Promise<TarRuntime> | undefined;
+
+function loadTarRuntime(): Promise<TarRuntime> {
+  tarRuntimePromise ??= import("tar");
+  return tarRuntimePromise;
+}
+
 export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;

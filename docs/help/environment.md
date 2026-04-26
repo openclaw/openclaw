@@ -4,10 +4,8 @@ read_when:
   - You need to know which env vars are loaded, and in what order
   - You are debugging missing API keys in the Gateway
   - You are documenting provider auth or deployment environments
-title: "Environment Variables"
+title: "Environment variables"
 ---
-
-# Environment variables
 
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
@@ -18,6 +16,8 @@ OpenClaw pulls environment variables from multiple sources. The rule is **never 
 3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; does not override).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
+
+On Ubuntu fresh installs that use the default state dir, OpenClaw also treats `~/.config/openclaw/gateway.env` as a compatibility fallback after the global `.env`. If both files exist and disagree, OpenClaw keeps `~/.openclaw/.env` and prints a warning.
 
 If the config file is missing entirely, step 4 is skipped; shell import still runs if enabled.
 
@@ -90,7 +90,7 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 }
 ```
 
-See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
+See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
 ## Secret refs vs `${ENV}` strings
 
@@ -127,11 +127,34 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 <key>EnvironmentVariables</key>
 <dict>
   <key>OPENCLAW_HOME</key>
-  <string>/Users/kira</string>
+  <string>/Users/user</string>
 </dict>
 ```
 
 `OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
+
+## nvm users: web_fetch TLS failures
+
+If Node.js was installed via **nvm** (not the system package manager), the built-in `fetch()` uses
+nvm's bundled CA store, which may be missing modern root CAs (ISRG Root X1/X2 for Let's Encrypt,
+DigiCert Global Root G2, etc.). This causes `web_fetch` to fail with `"fetch failed"` on most HTTPS sites.
+
+On Linux, OpenClaw automatically detects nvm and applies the fix in the actual startup environment:
+
+- `openclaw gateway install` writes `NODE_EXTRA_CA_CERTS` into the systemd service environment
+- the `openclaw` CLI entrypoint re-execs itself with `NODE_EXTRA_CA_CERTS` set before Node startup
+
+**Manual fix (for older versions or direct `node ...` launches):**
+
+Export the variable before starting OpenClaw:
+
+```bash
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+openclaw gateway run
+```
+
+Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads
+`NODE_EXTRA_CA_CERTS` at process startup.
 
 ## Related
 

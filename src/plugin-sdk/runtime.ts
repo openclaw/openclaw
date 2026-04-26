@@ -1,44 +1,33 @@
-import { format } from "node:util";
-import type { RuntimeEnv } from "../runtime.js";
-
-type LoggerLike = {
-  info: (message: string) => void;
-  error: (message: string) => void;
-};
-
-export function createLoggerBackedRuntime(params: {
-  logger: LoggerLike;
-  exitError?: (code: number) => Error;
-}): RuntimeEnv {
-  return {
-    log: (...args) => {
-      params.logger.info(format(...args));
-    },
-    error: (...args) => {
-      params.logger.error(format(...args));
-    },
-    exit: (code: number): never => {
-      throw params.exitError?.(code) ?? new Error(`exit ${code}`);
-    },
-  };
-}
-
-export function resolveRuntimeEnv(params: {
-  runtime?: RuntimeEnv;
-  logger: LoggerLike;
-  exitError?: (code: number) => Error;
-}): RuntimeEnv {
-  return params.runtime ?? createLoggerBackedRuntime(params);
-}
-
-export function resolveRuntimeEnvWithUnavailableExit(params: {
-  runtime?: RuntimeEnv;
-  logger: LoggerLike;
-  unavailableMessage?: string;
-}): RuntimeEnv {
-  return resolveRuntimeEnv({
-    runtime: params.runtime,
-    logger: params.logger,
-    exitError: () => new Error(params.unavailableMessage ?? "Runtime exit not available"),
-  });
-}
+import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
+export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
+export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+export { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+export {
+  createLoggerBackedRuntime,
+  resolveRuntimeEnv,
+  resolveRuntimeEnvWithUnavailableExit,
+} from "./runtime-logger.js";
+export {
+  danger,
+  info,
+  isVerbose,
+  isYes,
+  logVerbose,
+  logVerboseConsole,
+  setVerbose,
+  setYes,
+  shouldLogVerbose,
+  success,
+  warn,
+} from "../globals.js";
+export * from "../logging.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { createBackupArchive } from "../infra/backup-create.js";
+export {
+  detectPluginInstallPathIssue,
+  formatPluginInstallPathIssue,
+} from "../infra/plugin-install-path-warnings.js";
+export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
+export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+export { removePluginFromConfig } from "../plugins/uninstall.js";

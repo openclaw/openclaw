@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import {
   emitNodeRuntimeWarning,
@@ -8,7 +9,7 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
-  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
+  return normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts");
 }
 
 export async function resolveDaemonInstallRuntimeInputs(params: {
@@ -41,4 +42,12 @@ export async function emitDaemonInstallRuntimeWarning(params: {
     warn: params.warn,
     title: params.title,
   });
+}
+
+export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined {
+  const trimmed = nodePath?.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return undefined;
+  }
+  return [path.dirname(trimmed)];
 }

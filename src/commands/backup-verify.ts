@@ -1,6 +1,7 @@
 import path from "node:path";
 import * as tar from "tar";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { listArchiveEntries, type BackupManifestBase } from "./backup-shared.js";
 
@@ -169,10 +170,9 @@ function parseManifest(raw: string): BackupManifest {
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
-          stateDir: typeof parsed.paths.stateDir === "string" ? parsed.paths.stateDir : undefined,
-          configPath:
-            typeof parsed.paths.configPath === "string" ? parsed.paths.configPath : undefined,
-          oauthDir: typeof parsed.paths.oauthDir === "string" ? parsed.paths.oauthDir : undefined,
+          stateDir: readStringValue(parsed.paths.stateDir),
+          configPath: readStringValue(parsed.paths.configPath),
+          oauthDir: readStringValue(parsed.paths.oauthDir),
           workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
             ? parsed.paths.workspaceDirs.filter(
                 (entry): entry is string => typeof entry === "string",
@@ -324,6 +324,10 @@ export async function backupVerifyCommand(
     entryCount: rawEntries.length,
   };
 
-  runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));
+  if (opts.json) {
+    writeRuntimeJson(runtime, result);
+  } else {
+    runtime.log(formatResult(result));
+  }
   return result;
 }

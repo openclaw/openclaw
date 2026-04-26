@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
@@ -56,6 +56,7 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           token: Type.Optional(Type.String()),
+          bootstrapToken: Type.Optional(Type.String()),
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
         },
@@ -91,10 +92,23 @@ export const HelloOkSchema = Type.Object(
     auth: Type.Optional(
       Type.Object(
         {
-          deviceToken: NonEmptyString,
+          deviceToken: Type.Optional(NonEmptyString),
           role: NonEmptyString,
           scopes: Type.Array(NonEmptyString),
           issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+          deviceTokens: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  deviceToken: NonEmptyString,
+                  role: NonEmptyString,
+                  scopes: Type.Array(NonEmptyString),
+                  issuedAtMs: Type.Integer({ minimum: 0 }),
+                },
+                { additionalProperties: false },
+              ),
+            ),
+          ),
         },
         { additionalProperties: false },
       ),
