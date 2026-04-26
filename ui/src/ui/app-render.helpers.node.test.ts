@@ -15,6 +15,7 @@ const {
 }));
 
 vi.mock("./app-chat.ts", () => ({
+  CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -548,7 +549,7 @@ describe("switchChatSession", () => {
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
-      activeMinutes: 0,
+      activeMinutes: 10,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,

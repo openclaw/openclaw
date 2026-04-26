@@ -15,6 +15,7 @@ vi.mock("./app-last-active-session.ts", () => ({
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
@@ -23,6 +24,7 @@ async function loadChatHelpers(): Promise<void> {
     handleSendChat,
     steerQueuedChatMessage,
     handleAbortChat,
+    refreshChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
   } = await import("./app-chat.ts"));
@@ -388,6 +390,59 @@ describe("refreshChatAvatar", () => {
       "/avatar/ops",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+});
+
+describe("refreshChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("loads the session list through the shared active-session window", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [],
+          params,
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "commands.list") {
+        return { commands: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    await refreshChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      activeMinutes: 120,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
   });
 });
 

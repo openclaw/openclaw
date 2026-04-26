@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { CHAT_SESSIONS_ACTIVE_MINUTES } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -73,7 +74,7 @@ export function renderChatSessionSelect(
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,

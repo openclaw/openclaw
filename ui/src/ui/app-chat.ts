@@ -514,7 +514,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
   await Promise.all([
     loadChatHistory(host as unknown as ChatState),
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
