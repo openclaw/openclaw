@@ -229,11 +229,10 @@ OpenClaw routes text-to-image requests through the Hugging Face Inference Provid
 
 ```bash
 openclaw infer image generate \
-  --provider huggingface \
-  --model black-forest-labs/FLUX.1-Krea-dev \
+  --model huggingface/black-forest-labs/FLUX.1-Krea-dev \
   --prompt "a serene lake surrounded by mountains at sunset, photorealistic" \
   --size 1024x1024 \
-  --out lake.png
+  --output lake.png
 ```
 
 Image-to-image edits, multi-image batches, and provider routes other than `hf-inference` (Fal AI, Replicate, Together, Nscale, WaveSpeedAI) are not yet wired through this plugin; use the official HF clients for those flows.
