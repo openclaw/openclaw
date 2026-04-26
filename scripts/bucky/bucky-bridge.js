@@ -33,13 +33,15 @@ const WHATSAPP_TO = "+918200557253";
 // Path to the deploy/ directory in the OpenClaw repo on your Mac
 const DEPLOY_DIR = path.join(os.homedir(), "Documents", "Personal-openclaw", "deploy");
 const CURRENT_WORK_FILE = path.join(DEPLOY_DIR, "CURRENT_WORK.md");
+const PROJECTS_FILE = path.join(DEPLOY_DIR, "PROJECTS.md");
 const SKILLS_DIR = path.join(DEPLOY_DIR, "skills");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const POLL_MS = 60_000;
 
-// GCP sync — CURRENT_WORK.md and skills/ are written locally, then synced to the VM so Bucky can read them
+// GCP sync — CURRENT_WORK.md, PROJECTS.md, and skills/ are written locally then synced to the VM
 const GCP_HOST = "dirghpatel@136.116.235.101";
 const GCP_REMOTE = "/home/dirghpatel/.openclaw/CURRENT_WORK.md";
+const GCP_PROJECTS_REMOTE = "/home/dirghpatel/.openclaw/PROJECTS.md";
 const GCP_SKILLS_REMOTE = "/home/dirghpatel/.openclaw/skills/";
 const SSH_KEY = path.join(os.homedir(), ".ssh", "google_compute_engine");
 
@@ -252,6 +254,28 @@ function syncToGCP(content) {
     `scp -o StrictHostKeyChecking=no -i ${SSH_KEY} ${CURRENT_WORK_FILE} ${GCP_HOST}:${GCP_REMOTE}`,
     null,
   );
+}
+
+/**
+ * Sync PROJECTS.md to GCP once on startup and whenever the file changes.
+ * Uses mtime as fingerprint so it only fires on actual edits.
+ */
+let prevProjectsMtime = 0;
+function syncProjectsToGCP() {
+  try {
+    const { mtimeMs } = fs.statSync(PROJECTS_FILE);
+    if (mtimeMs === prevProjectsMtime) {
+      return;
+    }
+    prevProjectsMtime = mtimeMs;
+    run(
+      `scp -o StrictHostKeyChecking=no -i ${SSH_KEY} ${PROJECTS_FILE} ${GCP_HOST}:${GCP_PROJECTS_REMOTE}`,
+      null,
+    );
+    console.log("[bridge] synced PROJECTS.md to GCP");
+  } catch {
+    /* ignore if file missing */
+  }
 }
 
 /**
@@ -484,8 +508,9 @@ async function tick() {
   // Always update CURRENT_WORK.md silently
   updateCurrentWork(claudeCtx, gitCtx, vsCodeProj, sessionState);
 
-  // Sync skills/ to GCP so WhatsApp self-upgrades take effect without manual deploy
+  // Sync skills/ and PROJECTS.md to GCP so edits take effect without manual deploy
   syncSkillsToGCP();
+  syncProjectsToGCP();
 
   // Notify on new commits (skip the very first poll — we don't know prevCommitHash yet)
   if (gitCtx?.commitHash && prevCommitHash !== null && gitCtx.commitHash !== prevCommitHash) {
