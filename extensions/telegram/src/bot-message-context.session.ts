@@ -313,11 +313,26 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => {
+          const mapped: {
+            sender: string;
+            body: string;
+            timestamp?: number;
+            mentionedBot?: string | null;
+            repliedToBot?: string | null;
+          } = {
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+          };
+          if (entry.mentionedBot !== undefined) {
+            mapped.mentionedBot = entry.mentionedBot;
+          }
+          if (entry.repliedToBot !== undefined) {
+            mapped.repliedToBot = entry.repliedToBot;
+          }
+          return mapped;
+        })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
@@ -341,10 +356,19 @@ export async function buildTelegramInboundContextPayload(params: {
     Provider: "telegram",
     Surface: "telegram",
     BotUsername: primaryCtx.me?.username ?? undefined,
+    // Multi-agent (#56692): OtherBotUsernames stays unset until telegram
+    // config exposes a list of sibling bots in the same group. Downstream
+    // prompts gracefully omit the multi-agent context when this is empty;
+    // the per-history-entry mentionedBot / repliedToBot fields and the
+    // ReplyToBotUsername below are still populated and useful on their own.
     MessageSid: options?.messageIdOverride ?? String(msg.message_id),
     ReplyToId: visibleReplyTarget?.id,
     ReplyToBody: visibleReplyTarget?.body,
     ReplyToSender: visibleReplyTarget?.sender,
+    ReplyToBotUsername:
+      visibleReplyTarget?.senderIsBot === true && visibleReplyTarget.senderUsername
+        ? visibleReplyTarget.senderUsername.toLowerCase()
+        : undefined,
     ReplyToIsQuote: visibleReplyTarget?.kind === "quote" ? true : undefined,
     ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
     ReplyToQuoteText: visibleReplyTarget?.quoteText,

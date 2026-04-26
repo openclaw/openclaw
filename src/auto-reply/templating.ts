@@ -43,6 +43,17 @@ export type MsgContext = {
     sender: string;
     body: string;
     timestamp?: number;
+    /**
+     * Bot username mentioned in this history entry.
+     * `undefined` = unknown/not populated; `null` = explicitly no bot mentioned;
+     * `string` = lowercased bot username (no leading `@`).
+     */
+    mentionedBot?: string | null;
+    /**
+     * Bot username this history entry is a reply to.
+     * Same `undefined` / `null` / `string` semantics as `mentionedBot`.
+     */
+    repliedToBot?: string | null;
   }>;
   /**
    * Raw message body without structural context (history, sender labels).
@@ -95,6 +106,12 @@ export type MsgContext = {
   ReplyToBody?: string;
   ReplyToSender?: string;
   ReplyToIsQuote?: boolean;
+  /**
+   * When the replied-to message was authored by a known bot, the bot's username
+   * (no leading `@`). Used so the current agent can recognise reply-chains
+   * directed at sibling bots in multi-agent groups.
+   */
+  ReplyToBotUsername?: string;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
   ReplyToForwardedFromType?: string;
@@ -185,6 +202,12 @@ export type MsgContext = {
   Surface?: string;
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
+  /**
+   * Other bot usernames present in the same group chat (without leading `@`).
+   * Used for multi-agent context: the current agent can distinguish messages
+   * addressed to itself vs. other agents in the same group.
+   */
+  OtherBotUsernames?: string[];
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";

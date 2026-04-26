@@ -279,3 +279,111 @@ describe("group runtime loading", () => {
     vi.doUnmock("./groups.runtime.js");
   });
 });
+
+describe("buildGroupChatContext multi-agent awareness (#56692)", () => {
+  it("includes other bots in group context when OtherBotUsernames is set", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: ["otherbot1", "otherbot2"],
+      },
+    });
+    expect(result).toContain("@mybot");
+    expect(result).toContain("@otherbot1");
+    expect(result).toContain("@otherbot2");
+    expect(result).toContain("Do not act on messages clearly addressed to other bots");
+  });
+
+  it("emits only the bot-username line when no OtherBotUsernames are present", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+      },
+    });
+    expect(result).toContain("Your bot username is @mybot.");
+    expect(result).not.toContain("Other bots");
+    expect(result).not.toContain("Do not act on messages");
+  });
+
+  it("trims whitespace from individual OtherBotUsernames entries (Greptile fix)", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: [" helperbot ", "  ", "otherbot\t", ""],
+      },
+    });
+    expect(result).toContain("@helperbot");
+    expect(result).toContain("@otherbot");
+    // No empty / whitespace-only handles should leak into the rendered prompt.
+    expect(result).not.toContain("@ helperbot");
+    expect(result).not.toContain("@  ");
+    expect(result).not.toContain("@otherbot\t");
+    expect(result).not.toMatch(/@\s/);
+  });
+
+  it("stays byte-for-byte stable when neither BotUsername nor OtherBotUsernames are set", async () => {
+    const groups = await import("./groups.js");
+    expect(
+      groups.buildGroupChatContext({
+        sessionCtx: { Provider: "telegram" },
+      }),
+    ).toBe(
+      "You are in a Telegram group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+    );
+  });
+});
+
+describe("buildGroupIntro multi-agent awareness (#56692)", () => {
+  it("appends multi-agent guidance when OtherBotUsernames is set", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: ["helperbot"],
+      },
+      defaultActivation: "mention",
+      silentToken: "NO_REPLY",
+    });
+    expect(result).toContain("multiple bots");
+    expect(result).toContain("@helperbot");
+    expect(result).toContain("which bot each message mentioned or replied to");
+  });
+
+  it("omits multi-agent guidance when OtherBotUsernames is empty", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: [],
+      },
+      defaultActivation: "mention",
+      silentToken: "NO_REPLY",
+    });
+    expect(result).not.toContain("multiple bots");
+  });
+
+  it("omits multi-agent guidance when OtherBotUsernames contains only whitespace entries", async () => {
+    const groups = await import("./groups.js");
+    const result = groups.buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: ["   ", "\t", ""],
+      },
+      defaultActivation: "mention",
+      silentToken: "NO_REPLY",
+    });
+    expect(result).not.toContain("multiple bots");
+  });
+});

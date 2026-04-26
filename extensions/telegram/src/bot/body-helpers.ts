@@ -355,3 +355,81 @@ export function extractTelegramLocation(msg: Message): NormalizedLocation | null
 
   return null;
 }
+
+/**
+ * Detect bot-targeting metadata for a Telegram inbound message.
+ *
+ * - `mentionedBot`: lowercased username (no `@`) of a bot mentioned in this
+ *   message; `null` if we can definitively say no bot was mentioned;
+ *   `undefined` if we can't tell (no current-bot username configured and
+ *   no other-bot list to check against).
+ * - `repliedToBot`: lowercased username of the bot whose message this is a
+ *   reply to (via `reply_to_message.from`), `null` if the reply target was
+ *   explicitly a non-bot, `undefined` if there's no reply target at all.
+ *
+ * `currentBotUsername` is the running bot's `@me` username (lowercased,
+ * already trimmed of `@`). `otherBotUsernames` are other known bots in the
+ * group (same format) — when supplied we also detect mentions of them in
+ * the message text/entities.
+ */
+export function detectTelegramBotTargeting(
+  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities" | "reply_to_message">,
+  params: {
+    currentBotUsername?: string;
+    otherBotUsernames?: readonly string[];
+  },
+): { mentionedBot?: string | null; repliedToBot?: string | null } {
+  const { currentBotUsername, otherBotUsernames } = params;
+  const knownBots = new Set<string>();
+  if (currentBotUsername) {
+    knownBots.add(currentBotUsername.toLowerCase());
+  }
+  for (const other of otherBotUsernames ?? []) {
+    const normalized = other.trim().toLowerCase();
+    if (normalized) {
+      knownBots.add(normalized);
+    }
+  }
+
+  const result: { mentionedBot?: string | null; repliedToBot?: string | null } = {};
+
+  if (knownBots.size > 0) {
+    const { text, entities } = getTelegramTextParts(msg);
+    let found: string | null = null;
+    if (text) {
+      for (const ent of entities) {
+        if (ent.type !== "mention") {
+          continue;
+        }
+        const slice = text.slice(ent.offset, ent.offset + ent.length);
+        const candidate = normalizeLowercaseStringOrEmpty(slice).replace(/^@/, "");
+        if (candidate && knownBots.has(candidate)) {
+          found = candidate;
+          break;
+        }
+      }
+      if (!found) {
+        const lowered = normalizeLowercaseStringOrEmpty(text);
+        for (const bot of knownBots) {
+          if (hasStandaloneTelegramMention(lowered, `@${bot}`)) {
+            found = bot;
+            break;
+          }
+        }
+      }
+    }
+    result.mentionedBot = found;
+  }
+
+  const reply = msg.reply_to_message;
+  if (reply !== undefined) {
+    const replyFrom = reply.from;
+    if (replyFrom?.is_bot && replyFrom.username) {
+      result.repliedToBot = replyFrom.username.toLowerCase();
+    } else if (replyFrom != null) {
+      result.repliedToBot = null;
+    }
+  }
+
+  return result;
+}

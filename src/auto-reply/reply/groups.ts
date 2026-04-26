@@ -227,6 +227,8 @@ export function buildGroupChatContext(params: {
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const botUsername = params.sessionCtx.BotUsername?.trim();
+  const otherBots = params.sessionCtx.OtherBotUsernames?.map((b) => b.trim()).filter(Boolean) ?? [];
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
@@ -238,6 +240,15 @@ export function buildGroupChatContext(params: {
     lines.push(
       "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
     );
+  }
+  if (botUsername) {
+    if (otherBots.length > 0) {
+      lines.push(
+        `Your bot username is @${botUsername}. Other bots in this group: ${otherBots.map((b) => `@${b}`).join(", ")}. Only respond to messages addressed to you (via @${botUsername} mention or reply to your messages). Do not act on messages clearly addressed to other bots.`,
+      );
+    } else {
+      lines.push(`Your bot username is @${botUsername}.`);
+    }
   }
   lines.push(
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
@@ -337,5 +348,10 @@ export function buildGroupIntro(params: {
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  return `${activationLine} Address the specific sender noted in the message context.`;
+  const otherBots = params.sessionCtx.OtherBotUsernames?.map((b) => b.trim()).filter(Boolean) ?? [];
+  const multiAgentLine =
+    otherBots.length > 0
+      ? ` This group contains multiple bots (${otherBots.map((b) => `@${b}`).join(", ")}). The chat history includes which bot each message mentioned or replied to — use that to ignore messages not addressed to you.`
+      : "";
+  return `${activationLine}${multiAgentLine} Address the specific sender noted in the message context.`;
 }

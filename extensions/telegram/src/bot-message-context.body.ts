@@ -39,6 +39,7 @@ import type {
 import {
   buildSenderLabel,
   buildSenderName,
+  detectTelegramBotTargeting,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -302,18 +303,32 @@ export async function resolveTelegramInboundBody(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+    // Multi-agent (#56692): when an "other bots in this group" config surface
+    // lands, pass those usernames here so we can also detect mentions of
+    // sibling bots in messages we skipped (right now we only detect mentions
+    // of ourselves).
+    const botTargeting = detectTelegramBotTargeting(msg, {
+      currentBotUsername: botUsername,
+    });
+    const skippedHistoryEntry: HistoryEntry | null = historyKey
+      ? {
+          sender: buildSenderLabel(msg, senderId || chatId),
+          body: rawBody,
+          timestamp: msg.date ? msg.date * 1000 : undefined,
+          messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+        }
+      : null;
+    if (skippedHistoryEntry && botTargeting.mentionedBot !== undefined) {
+      skippedHistoryEntry.mentionedBot = botTargeting.mentionedBot;
+    }
+    if (skippedHistoryEntry && botTargeting.repliedToBot !== undefined) {
+      skippedHistoryEntry.repliedToBot = botTargeting.repliedToBot;
+    }
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,
       historyKey: historyKey ?? "",
       limit: historyLimit,
-      entry: historyKey
-        ? {
-            sender: buildSenderLabel(msg, senderId || chatId),
-            body: rawBody,
-            timestamp: msg.date ? msg.date * 1000 : undefined,
-            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-          }
-        : null,
+      entry: skippedHistoryEntry,
     });
     const telegramGroupPolicy = resolveChannelGroupPolicy({
       cfg,

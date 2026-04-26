@@ -374,6 +374,8 @@ export type TelegramReplyTarget = {
   sender: string;
   senderId?: string;
   senderUsername?: string;
+  /** True when the reply target was authored by a bot (per `from.is_bot`). */
+  senderIsBot?: boolean;
   body?: string;
   kind: "reply" | "quote";
   source: "reply_to_message" | "external_reply";
@@ -450,6 +452,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     sender: senderLabel,
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
+    senderIsBot: replyLike?.from?.is_bot === true ? true : undefined,
     body: body || undefined,
     kind,
     source,
