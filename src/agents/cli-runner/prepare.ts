@@ -42,7 +42,11 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
-import { buildCliSessionHistoryPrompt, loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  buildCliSessionHistoryPrompt,
+  loadCliSessionHistoryMessages,
+  loadCliSessionReseedMessages,
+} from "./session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
@@ -363,7 +367,13 @@ export async function prepareCliRunContext(
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({
-        messages: loadOpenClawHistoryMessages(),
+        messages: loadCliSessionReseedMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        }),
         prompt: preparedPrompt,
       });
   systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);

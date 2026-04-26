@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
   loadCliSessionHistoryMessages,
+  loadCliSessionReseedMessages,
   MAX_CLI_SESSION_HISTORY_FILE_BYTES,
   MAX_CLI_SESSION_HISTORY_MESSAGES,
 } from "./session-history.js";
@@ -216,6 +217,91 @@ describe("loadCliSessionHistoryMessages", () => {
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(customStoreDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("loadCliSessionReseedMessages", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("does not reseed fresh CLI sessions from raw transcript history before compaction", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-no-compaction",
+      messages: ["raw secret", "large context"],
+    });
+
+    try {
+      expect(
+        loadCliSessionReseedMessages({
+          sessionId: "session-no-compaction",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-compacted",
+      messages: ["pre-compaction raw history"],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "msg-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "safe compacted summary",
+        firstKeptEntryId: "msg-0",
+        tokensBefore: 10_000,
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "msg-1",
+        parentId: "compaction-1",
+        timestamp: new Date(3).toISOString(),
+        message: {
+          role: "user",
+          content: "post-compaction ask",
+          timestamp: 3,
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    try {
+      const reseed = loadCliSessionReseedMessages({
+        sessionId: "session-compacted",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(reseed).toMatchObject([
+        { role: "compactionSummary", summary: "safe compacted summary" },
+        { role: "user", content: "post-compaction ask" },
+      ]);
+      expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
+        "Compaction summary: safe compacted summary",
+      );
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 });

@@ -759,6 +759,19 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier ask" }],
     });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "msg-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "compacted earlier ask",
+        firstKeptEntryId: "msg-0",
+        tokensBefore: 10_000,
+      })}\n`,
+      "utf-8",
+    );
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -796,7 +809,7 @@ describe("runCliAgent reliability", () => {
       });
 
       expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
-      expect(context.openClawHistoryPrompt).toContain("User: earlier ask");
+      expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
       expect(context.openClawHistoryPrompt).toContain("hook context");
       expect(context.openClawHistoryPrompt).toContain("current ask");
     } finally {
