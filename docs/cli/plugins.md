@@ -247,6 +247,9 @@ metadata, including records for broken or missing plugin manifests. The
 `plugins` array is the manifest-derived cold registry cache. The file includes a
 do-not-edit warning and is used by `openclaw plugins update`, uninstall,
 diagnostics, and the cold plugin registry.
+When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves
+them into the plugin index and removes the config key; if either write fails,
+the config records are kept so the install metadata is not lost.
 
 ### Uninstall
 

@@ -173,6 +173,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/install: anchor bundled runtime-dependency npm installs with an OpenClaw-owned package manifest so Linux updates cannot accidentally write to a parent `$HOME/node_modules` tree. Fixes #71730.
 - Plugins/install: pass onboarding plugin config into plugin index writes so local plugin installs outside default discovery roots keep their install records. Thanks @shakkernerd.
 - Plugins/install: migrate shipped `plugins.installs` config records into the plugin index while stripping them from runtime config and future writes. Thanks @shakkernerd.
+- Plugins/install: durably remove shipped `plugins.installs` from `openclaw.json` after its records are copied into the plugin index, while rolling back the index write if config cleanup fails. Thanks @shakkernerd.
 - Plugins/install: keep migrated plugin install records in the plugin index even when the plugin manifest is missing or invalid, so update, uninstall, inspect, and audit can still recover broken installs. Thanks @shakkernerd.
 - Plugins/security: keep plugin audit JSON check ids stable while reporting plugin index install-record findings with updated wording. Thanks @shakkernerd.
 - CLI/config: reject direct `plugins.installs` edits with guidance to use `openclaw plugins install`, `openclaw plugins update`, or `openclaw plugins uninstall` instead. Thanks @shakkernerd.

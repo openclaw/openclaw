@@ -136,6 +136,12 @@ type ShippedPluginInstallConfigWriteMigration =
           };
     };
 
+type ShippedPluginInstallConfigReadMigration = {
+  config: unknown;
+  persistedRootParsed?: unknown;
+  persistedRootRaw?: string;
+};
+
 const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
 
@@ -1228,21 +1234,104 @@ export function createConfigIO(
     return applyConfigOverrides(cfgWithOwnerDisplaySecret);
   }
 
+  function captureFileSnapshotSync(filePath: string):
+    | {
+        existed: false;
+      }
+    | {
+        existed: true;
+        raw: string;
+      } {
+    return deps.fs.existsSync(filePath)
+      ? ({
+          existed: true,
+          raw: deps.fs.readFileSync(filePath, "utf-8"),
+        } as const)
+      : ({ existed: false } as const);
+  }
+
+  function restoreFileSnapshotSync(
+    filePath: string,
+    previousFile:
+      | {
+          existed: false;
+        }
+      | {
+          existed: true;
+          raw: string;
+        },
+  ): void {
+    if (previousFile.existed) {
+      deps.fs.writeFileSync(filePath, previousFile.raw, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      return;
+    }
+    try {
+      deps.fs.unlinkSync(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+
+  function replaceConfigFileSync(raw: string): void {
+    const dir = path.dirname(configPath);
+    deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const tmp = path.join(
+      dir,
+      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    try {
+      deps.fs.writeFileSync(tmp, raw, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      try {
+        deps.fs.renameSync(tmp, configPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "EPERM" && code !== "EEXIST") {
+          throw err;
+        }
+        deps.fs.copyFileSync(tmp, configPath);
+        deps.fs.chmodSync(configPath, 0o600);
+        deps.fs.unlinkSync(tmp);
+      }
+    } catch (err) {
+      try {
+        deps.fs.unlinkSync(tmp);
+      } catch (cleanupErr) {
+        if ((cleanupErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          deps.logger.warn(`Failed to clean temporary config file ${tmp}: ${String(cleanupErr)}`);
+        }
+      }
+      throw err;
+    }
+  }
+
   function migrateAndStripShippedPluginInstallConfigRecords(
     configRaw: unknown,
-    options: { persist?: boolean } = {},
-  ): unknown {
+    options: { persist?: boolean; rootConfigRaw?: unknown } = {},
+  ): ShippedPluginInstallConfigReadMigration {
     const installRecords = extractShippedPluginInstallConfigRecords(configRaw);
     const stripped = stripShippedPluginInstallConfigRecords(configRaw);
     if (Object.keys(installRecords).length === 0) {
-      return stripped;
+      return { config: stripped };
     }
     if (options.persist === false) {
-      return stripped;
+      return { config: stripped };
     }
 
     try {
       const stateDir = resolveStateDir(deps.env, deps.homedir);
+      const filePath = resolveInstalledPluginIndexRecordsStorePath({
+        env: deps.env,
+        stateDir,
+      });
+      const previousFile = captureFileSnapshotSync(filePath);
       const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
         env: deps.env,
         stateDir,
@@ -1258,16 +1347,33 @@ export function createConfigIO(
           stateDir,
         });
       }
+      const rootConfigRaw = options.rootConfigRaw;
+      if (
+        rootConfigRaw !== undefined &&
+        Object.keys(extractShippedPluginInstallConfigRecords(rootConfigRaw)).length > 0
+      ) {
+        const persistedRootParsed = stripShippedPluginInstallConfigRecords(rootConfigRaw);
+        const persistedRootRaw = JSON.stringify(persistedRootParsed, null, 2)
+          .trimEnd()
+          .concat("\n");
+        try {
+          replaceConfigFileSync(persistedRootRaw);
+        } catch (err) {
+          restoreFileSnapshotSync(filePath, previousFile);
+          throw err;
+        }
+        return { config: stripped, persistedRootParsed, persistedRootRaw };
+      }
     } catch (err) {
       deps.logger.warn(
         `Config (${configPath}): could not migrate shipped plugins.installs records into the plugin index: ${formatErrorMessage(
           err,
         )}`,
       );
-      return configRaw;
+      return { config: configRaw };
     }
 
-    return stripped;
+    return { config: stripped };
   }
 
   function ensureShippedPluginInstallConfigRecordsMigratedForWrite(
@@ -1374,16 +1480,20 @@ export function createConfigIO(
       });
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
-      const hash = hashConfigRaw(effectiveRaw);
       const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(effectiveParsed, configPath, deps),
         deps.env,
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, effectiveParsed);
-      const effectiveConfigRaw = migrateAndStripShippedPluginInstallConfigRecords(
+      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
         legacyResolution.effectiveConfigRaw,
+        { rootConfigRaw: effectiveParsed },
       );
+      const effectiveConfigRaw = installMigration.config;
+      const snapshotRaw = installMigration.persistedRootRaw ?? effectiveRaw;
+      const snapshotParsed = installMigration.persistedRootParsed ?? effectiveParsed;
+      const hash = hashConfigRaw(snapshotRaw);
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
           `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} - feature using this value will be unavailable`,
@@ -1395,8 +1505,8 @@ export function createConfigIO(
           ...createConfigFileSnapshot({
             path: configPath,
             exists: true,
-            raw: effectiveRaw,
-            parsed: effectiveParsed,
+            raw: snapshotRaw,
+            parsed: snapshotParsed,
             sourceConfig: {},
             valid: true,
             runtimeConfig: {},
@@ -1424,8 +1534,8 @@ export function createConfigIO(
           ...createConfigFileSnapshot({
             path: configPath,
             exists: true,
-            raw: effectiveRaw,
-            parsed: effectiveParsed,
+            raw: snapshotRaw,
+            parsed: snapshotParsed,
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: false,
             runtimeConfig: coerceConfig(effectiveConfigRaw),
@@ -1457,8 +1567,8 @@ export function createConfigIO(
         ...createConfigFileSnapshot({
           path: configPath,
           exists: true,
-          raw: effectiveRaw,
-          parsed: effectiveParsed,
+          raw: snapshotRaw,
+          parsed: snapshotParsed,
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: true,
           runtimeConfig: cfg,
@@ -1594,10 +1704,19 @@ export function createConfigIO(
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
-      const effectiveConfigRaw = migrateAndStripShippedPluginInstallConfigRecords(
+      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
         legacyResolution.effectiveConfigRaw,
-        { persist: options.persistShippedPluginInstallMigration !== false },
+        {
+          persist: options.persistShippedPluginInstallMigration !== false,
+          rootConfigRaw: effectiveParsed,
+        },
       );
+      const effectiveConfigRaw = installMigration.config;
+      const snapshotRaw = installMigration.persistedRootRaw ?? effectiveRaw;
+      const snapshotParsed = installMigration.persistedRootParsed ?? effectiveParsed;
+      const snapshotHash = installMigration.persistedRootRaw
+        ? hashConfigRaw(installMigration.persistedRootRaw)
+        : hash;
       fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
         env: deps.env,
@@ -1608,12 +1727,12 @@ export function createConfigIO(
           snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
-            raw: effectiveRaw,
-            parsed: effectiveParsed,
+            raw: snapshotRaw,
+            parsed: snapshotParsed,
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: false,
             runtimeConfig: coerceConfig(effectiveConfigRaw),
-            hash,
+            hash: snapshotHash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
             legacyIssues: legacyResolution.sourceLegacyIssues,
@@ -1627,14 +1746,14 @@ export function createConfigIO(
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
-          raw: effectiveRaw,
-          parsed: effectiveParsed,
+          raw: snapshotRaw,
+          parsed: snapshotParsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: true,
           runtimeConfig: snapshotConfig,
-          hash,
+          hash: snapshotHash,
           issues: [],
           warnings: [...validated.warnings, ...envVarWarnings],
           legacyIssues: legacyResolution.sourceLegacyIssues,
