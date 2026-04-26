@@ -79,6 +79,8 @@ import type {
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
 } from "./hook-types.js";
+import { getPluginSessionExtensionSync } from "./host-hook-state.js";
+import type { PluginJsonValue } from "./host-hooks.js";
 
 // Re-export types for consumers
 export type {
@@ -191,6 +193,10 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  mapContext?: (
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    registration: PluginHookRegistration<K>,
+  ) => Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1];
 };
 
 export type PluginTargetedInboundClaimOutcome =
@@ -514,8 +520,9 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
+        const hookContext = policy.mapContext ? policy.mapContext(ctx, hook) : ctx;
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
-        const promise = Promise.resolve(handler(event, ctx));
+        const promise = Promise.resolve(handler(event, hookContext));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -1032,6 +1039,15 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
+        mapContext: (baseCtx, reg) => ({
+          ...baseCtx,
+          getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
+            getPluginSessionExtensionSync<T>({
+              pluginId: reg.pluginId,
+              sessionKey: baseCtx.sessionKey,
+              namespace,
+            }),
+        }),
       },
     );
   }

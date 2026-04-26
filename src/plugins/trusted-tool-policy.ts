@@ -3,6 +3,8 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
+import { getPluginSessionExtensionSync } from "./host-hook-state.js";
+import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
 export async function runTrustedToolPolicies(
@@ -14,7 +16,19 @@ export async function runTrustedToolPolicies(
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
   for (const registration of policies) {
-    const decision = await registration.policy.evaluate({ ...event, params: adjustedParams }, ctx);
+    const policyCtx: PluginHookToolContext = {
+      ...ctx,
+      getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
+        getPluginSessionExtensionSync<T>({
+          pluginId: registration.pluginId,
+          sessionKey: ctx.sessionKey,
+          namespace,
+        }),
+    };
+    const decision = await registration.policy.evaluate(
+      { ...event, params: adjustedParams },
+      policyCtx,
+    );
     if (!decision) {
       continue;
     }
