@@ -368,5 +368,19 @@ describe("ws connect policy", () => {
         authMethod: undefined,
       }),
     ).toBe(true);
+
+    const controlUiAllowBypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: controlUiAllowBypass,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "token",
+      }),
+    ).toBe(false);
   });
 });
