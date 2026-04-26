@@ -387,16 +387,53 @@ function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
   return normalized;
 }
 
-function totalSignalCountForEntry(entry: {
-  recallCount?: number;
-  dailyCount?: number;
-  groundedCount?: number;
-}): number {
-  return (
+function totalSignalCountForEntry(
+  entry: {
+    recallCount?: number;
+    dailyCount?: number;
+    groundedCount?: number;
+  },
+  phaseSignals?: { lightHits?: number; remHits?: number },
+): number {
+  const baseSignals =
     Math.max(0, Math.floor(entry.recallCount ?? 0)) +
     Math.max(0, Math.floor(entry.dailyCount ?? 0)) +
-    Math.max(0, Math.floor(entry.groundedCount ?? 0))
+    Math.max(0, Math.floor(entry.groundedCount ?? 0));
+  const phaseKinds =
+    (Math.max(0, Math.floor(phaseSignals?.lightHits ?? 0)) > 0 ? 1 : 0) +
+    (Math.max(0, Math.floor(phaseSignals?.remHits ?? 0)) > 0 ? 1 : 0);
+  return baseSignals + phaseKinds;
+}
+
+function calculateContextDiversity(
+  entry: {
+    queryHashes?: string[];
+    recallDays?: string[];
+    groundedCount?: number;
+  },
+  phaseSignals?: { lightHits?: number; remHits?: number },
+): number {
+  const uniqueQueries = entry.queryHashes?.length ?? 0;
+  const recallDays = entry.recallDays?.length ?? 0;
+  const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
+  const phaseKinds =
+    (Math.max(0, Math.floor(phaseSignals?.lightHits ?? 0)) > 0 ? 1 : 0) +
+    (Math.max(0, Math.floor(phaseSignals?.remHits ?? 0)) > 0 ? 1 : 0);
+  return Math.max(
+    uniqueQueries,
+    recallDays,
+    groundedCount,
+    uniqueQueries + phaseKinds,
+    recallDays + phaseKinds,
+    recallDays + Math.min(groundedCount, 2),
   );
+}
+
+function calculateGroundedSignalBoost(groundedCount: number): number {
+  if (!Number.isFinite(groundedCount) || groundedCount <= 0) {
+    return 0;
+  }
+  return 0.24 * clampScore(groundedCount / 3);
 }
 
 function calculateConsolidationComponent(recallDays: string[]): number {
@@ -1211,7 +1248,8 @@ export async function rankShortTermPromotionCandidates(
     const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
     const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
     const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
-    const signalCount = totalSignalCountForEntry(entry);
+    const phaseSignalEntry = phaseSignals.entries[entry.key];
+    const signalCount = totalSignalCountForEntry(entry, phaseSignalEntry);
     if (signalCount <= 0) {
       continue;
     }
@@ -1222,7 +1260,7 @@ export async function rankShortTermPromotionCandidates(
     const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     const uniqueQueries = entry.queryHashes?.length ?? 0;
-    const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
+    const contextDiversity = calculateContextDiversity(entry, phaseSignalEntry);
     if (contextDiversity < minUniqueQueries) {
       continue;
     }
@@ -1243,7 +1281,8 @@ export async function rankShortTermPromotionCandidates(
     );
     const conceptual = calculateConceptualComponent(conceptTags);
 
-    const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
+    const phaseBoost = calculatePhaseSignalBoost(phaseSignalEntry, nowMs);
+    const groundedBoost = calculateGroundedSignalBoost(groundedCount);
     const score =
       weights.frequency * frequency +
       weights.relevance * avgScore +
@@ -1251,7 +1290,8 @@ export async function rankShortTermPromotionCandidates(
       weights.recency * recency +
       weights.consolidation * consolidation +
       weights.conceptual * conceptual +
-      phaseBoost;
+      phaseBoost +
+      groundedBoost;
 
     if (score < minScore) {
       continue;
@@ -1270,7 +1310,7 @@ export async function rankShortTermPromotionCandidates(
       signalCount,
       avgScore,
       maxScore: clampScore(entry.maxScore),
-      uniqueQueries,
+      uniqueQueries: Math.max(uniqueQueries, contextDiversity),
       ...(entry.claimHash ? { claimHash: entry.claimHash } : {}),
       promotedAt: entry.promotedAt,
       firstRecalledAt: entry.firstRecalledAt,

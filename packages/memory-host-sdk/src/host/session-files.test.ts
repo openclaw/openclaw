@@ -150,4 +150,40 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("User: Actual user text");
   });
+
+  it("drops cron and startup scaffolding plus standalone NO_REPLY messages", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "<relevant-memories>ignore</relevant-memories> [cron:job-1 hourly-check] task_role=monitor notify_policy=silent-first reply `NO_REPLY`. Current time: Friday",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "[Startup context loaded by runtime] Bootstrap files like SOUL.md, USER.md, and MEMORY.md are already provided separately when eligible.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "NO_REPLY" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "保留这句" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "scaffold-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("User: 保留这句");
+    expect(entry!.lineMap).toEqual([4]);
+  });
 });

@@ -53,6 +53,26 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("ター");
   });
 
+  it("filters meta conversation scaffolding terms from concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/.dreams/session-corpus/2026-04-25.txt",
+      snippet:
+        "Assistant candidate report reflection snippet confidence evidence wrapper prompt should not outrank real project decisions about gateway failover.",
+    });
+
+    expect(tags).toContain("gateway");
+    expect(tags).toContain("failover");
+    expect(tags).not.toContain("assistant");
+    expect(tags).not.toContain("candidate");
+    expect(tags).not.toContain("report");
+    expect(tags).not.toContain("reflection");
+    expect(tags).not.toContain("snippet");
+    expect(tags).not.toContain("confidence");
+    expect(tags).not.toContain("evidence");
+    expect(tags).not.toContain("wrapper");
+    expect(tags).not.toContain("prompt");
+  });
+
   it("classifies concept tags by script family", () => {
     expect(classifyConceptTagScript("routeur")).toBe("latin");
     expect(classifyConceptTagScript("路由器")).toBe("cjk");

@@ -28,6 +28,7 @@ import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
+  recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
@@ -562,8 +563,48 @@ function trimTrackedSessionScopes(
   return next;
 }
 
+function isSessionCorpusScaffoldingSnippet(value: string): boolean {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/^(?:User|Assistant):\s*(?:NO_REPLY|SKIPPED)$/i.test(normalized)) {
+    return true;
+  }
+  if (/^User:\s*\[Startup context loaded by runtime]/i.test(normalized)) {
+    return true;
+  }
+  if (
+    /^User:\s*System \(untrusted\):\s*\[[^\]]+\]\s*(?:Exec|Process)\s+(?:completed|failed)/i.test(
+      normalized,
+    ) ||
+    /An async command you ran earlier has completed\./i.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    /^User:\s*\[cron:[^\]]+]/i.test(normalized) &&
+    /(?:\btask_role=|\btask_origin=|\bnotify_policy=|Current time:|reply\s+`?NO_REPLY`?|Return your response as plain text|A scheduled reminder has been triggered\.)/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^User:\s*<relevant-memories>/i.test(normalized) ||
+    /<\/relevant-memories>/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeSessionCorpusSnippet(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized || isSessionCorpusScaffoldingSnippet(normalized)) {
+    return "";
+  }
+  return normalized.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
 function hashSessionMessageId(value: string): string {
@@ -1362,6 +1403,175 @@ type RemTruthSelection = {
 
 type RemTruthCandidate = Omit<RemTruthSelection, "key">;
 
+const REM_META_TAGS = new Set([
+  "agent",
+  "assistant",
+  "candidate",
+  "candidates",
+  "confidence",
+  "evidence",
+  "memory",
+  "prompt",
+  "prompts",
+  "reflection",
+  "reflections",
+  "report",
+  "reports",
+  "session",
+  "sessions",
+  "snippet",
+  "snippets",
+  "status",
+  "staged",
+  "truth",
+  "truths",
+  "user",
+  "wrapper",
+  "wrappers",
+]);
+
+const REM_META_SNIPPET_PATTERNS = [
+  /^Assistant:/i,
+  /^User:/i,
+  /<relevant-memories>/i,
+  /\[cron:/i,
+  /Current time:/i,
+  /\bNO_REPLY\b/i,
+  /\bSKIPPED\b/i,
+  /\[Startup context loaded by runtime\]/i,
+  /System \(untrusted\):/i,
+  /session-corpus/i,
+  /dreaming/i,
+  /wrapper\/prompt pollution/i,
+];
+
+const REM_META_TERM_RE =
+  /\b(?:assistant|user|candidate|candidates|reflection|reflections|report|reports|snippet|snippets|session(?:-corpus)?|memory|dreaming|prompt|wrapper)s?\b/gi;
+const REM_POSITIVE_TAGS = new Set([
+  "cadence",
+  "decision",
+  "decisions",
+  "policy",
+  "workflow",
+  "plan",
+  "plans",
+  "project",
+  "projects",
+  "publish",
+  "shipping",
+  "launch",
+  "roadmap",
+  "priority",
+  "priorities",
+  "strategy",
+  "system",
+  "architecture",
+  "release",
+  "releases",
+]);
+const REM_NEGATIVE_TAGS = new Set([
+  "build",
+  "debug",
+  "error",
+  "errors",
+  "fix",
+  "fixes",
+  "patch",
+  "patches",
+  "plugin",
+  "plugins",
+  "smoke",
+  "test",
+  "tests",
+  "timing",
+  "warning",
+  "warnings",
+]);
+const REM_POSITIVE_SNIPPET_PATTERNS = [
+  /\bdecid(?:e|ed|es|ing)\b/i,
+  /\bshould\b/i,
+  /\bpolicy\b/i,
+  /\bworkflow\b/i,
+  /\bplan\b/i,
+  /\bcadence\b/i,
+  /\broadmap\b/i,
+  /\bpriority\b/i,
+  /\bstrategy\b/i,
+  /\bpublish\b/i,
+  /\bship(?:ping|ped)?\b/i,
+  /\blaunch(?:ed|ing)?\b/i,
+  /\bkeep\b/i,
+  /\bdefault\b/i,
+  /\brule\b/i,
+];
+const REM_NEGATIVE_SNIPPET_PATTERNS = [
+  /\bdebug\b/i,
+  /\btest\b/i,
+  /\bsmoke\b/i,
+  /\bpatch\b/i,
+  /\bfix(?:ed|ing)?\b/i,
+  /\bwarning\b/i,
+  /\berror\b/i,
+  /\bplugin\b/i,
+  /\bbuild\b/i,
+];
+
+function normalizeRemMetaText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function isRemMetaTag(tag: string): boolean {
+  const normalized = tag.trim().toLowerCase();
+  return (
+    normalized.length === 0 || REM_META_TAGS.has(normalized) || REM_NEGATIVE_TAGS.has(normalized)
+  );
+}
+
+function isRemMetaSnippet(snippet: string): boolean {
+  const normalized = normalizeRemMetaText(snippet);
+  if (!normalized) {
+    return true;
+  }
+  if (REM_META_SNIPPET_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  const matches = normalized.match(REM_META_TERM_RE) ?? [];
+  return matches.length >= 3;
+}
+
+function calculateRemSignalBias(
+  entry: Pick<ShortTermRecallEntry, "snippet" | "conceptTags" | "path">,
+): number {
+  const snippet = normalizeRemMetaText(entry.snippet || "");
+  if (!snippet) {
+    return -0.25;
+  }
+  let score = 0;
+  if (!/(?:^|\/)memory\/\.dreams\/session-corpus\//i.test(entry.path)) {
+    score += 0.08;
+  }
+  for (const tag of entry.conceptTags ?? []) {
+    const normalizedTag = tag.toLowerCase();
+    if (REM_POSITIVE_TAGS.has(normalizedTag)) {
+      score += 0.08;
+    }
+    if (REM_NEGATIVE_TAGS.has(normalizedTag)) {
+      score -= 0.05;
+    }
+  }
+  for (const pattern of REM_POSITIVE_SNIPPET_PATTERNS) {
+    if (pattern.test(snippet)) {
+      score += 0.06;
+    }
+  }
+  for (const pattern of REM_NEGATIVE_SNIPPET_PATTERNS) {
+    if (pattern.test(snippet)) {
+      score -= 0.04;
+    }
+  }
+  return Math.max(-0.25, Math.min(0.35, score));
+}
+
 export type RemDreamingPreview = {
   sourceEntryCount: number;
   reflections: string[];
@@ -1375,11 +1585,16 @@ function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number 
   const averageScore = entryAverageScore(entry);
   const consolidation = Math.min(1, (entry.recallDays?.length ?? 0) / 3);
   const conceptual = Math.min(1, (entry.conceptTags?.length ?? 0) / 6);
+  const signalBias = calculateRemSignalBias(entry);
   return Math.max(
     0,
     Math.min(
       1,
-      averageScore * 0.45 + recallStrength * 0.25 + consolidation * 0.2 + conceptual * 0.1,
+      averageScore * 0.4 +
+        recallStrength * 0.22 +
+        consolidation * 0.18 +
+        conceptual * 0.08 +
+        signalBias,
     ),
   );
 }
@@ -1392,7 +1607,7 @@ function selectRemCandidateTruths(
     return [];
   }
   return dedupeEntries(
-    entries.filter((entry) => !entry.promotedAt),
+    entries.filter((entry) => !entry.promotedAt && !isRemMetaSnippet(entry.snippet || "")),
     0.88,
   )
     .map((entry) => ({
@@ -1401,7 +1616,7 @@ function selectRemCandidateTruths(
       confidence: calculateCandidateTruthConfidence(entry),
       evidence: `${entry.path}:${entry.startLine}-${entry.endLine}`,
     }))
-    .filter((entry) => entry.confidence >= 0.45)
+    .filter((entry) => entry.confidence >= 0.45 && !isRemMetaSnippet(entry.snippet))
     .toSorted((a, b) => b.confidence - a.confidence || a.snippet.localeCompare(b.snippet))
     .slice(0, limit);
 }
@@ -1413,8 +1628,11 @@ function buildRemReflections(
 ): string[] {
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
+    if (isRemMetaSnippet(entry.snippet || "")) {
+      continue;
+    }
     for (const tag of entry.conceptTags) {
-      if (!tag) {
+      if (!tag || isRemMetaTag(tag)) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
@@ -1426,7 +1644,17 @@ function buildRemReflections(
 
   const ranked = [...tagStats.entries()]
     .map(([tag, stat]) => {
-      const strength = Math.min(1, (stat.count / Math.max(1, entries.length)) * 2);
+      const baseStrength = Math.min(1, (stat.count / Math.max(1, entries.length)) * 2);
+      const thematicBoost = REM_POSITIVE_TAGS.has(tag.toLowerCase()) ? 0.16 : 0;
+      const evidenceBoost = Math.min(
+        0.18,
+        [...stat.evidence].reduce<number>(
+          (sum, evidence) =>
+            sum + (/(?:^|,)memory\/\d{4}-\d{2}-\d{2}\.md:/i.test(evidence) ? 0.06 : 0),
+          0,
+        ),
+      );
+      const strength = Math.min(1, baseStrength + thematicBoost + evidenceBoost);
       return { tag, strength, stat };
     })
     .filter((entry) => entry.strength >= minPatternStrength)
@@ -1455,9 +1683,18 @@ export function previewRemDreaming(params: {
   limit: number;
   minPatternStrength: number;
 }): RemDreamingPreview {
-  const reflections = buildRemReflections(params.entries, params.limit, params.minPatternStrength);
+  const filteredEntries = params.entries
+    .filter((entry) => !isRemMetaSnippet(entry.snippet || ""))
+    .toSorted((a, b) => {
+      const biasDiff = calculateRemSignalBias(b) - calculateRemSignalBias(a);
+      if (biasDiff !== 0) {
+        return biasDiff;
+      }
+      return Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
+    });
+  const reflections = buildRemReflections(filteredEntries, params.limit, params.minPatternStrength);
   const candidateSelections = selectRemCandidateTruths(
-    params.entries,
+    filteredEntries,
     Math.max(1, Math.min(3, params.limit)),
   );
   const candidateTruths = candidateSelections.map((entry) => ({
@@ -1604,6 +1841,32 @@ async function runRemDreaming(params: {
     timezone: params.config.timezone,
     storage: params.config.storage,
   });
+  const candidateEntryMap = new Map(entries.map((entry) => [entry.key, entry]));
+  const remDayBucket = formatMemoryDreamingDay(nowMs, params.config.timezone);
+  const groundedRemCandidates = preview.candidateKeys
+    .map((key) => candidateEntryMap.get(key))
+    .filter((entry): entry is ShortTermRecallEntry => Boolean(entry))
+    .map((entry) => ({
+      path: entry.path,
+      startLine: entry.startLine,
+      endLine: entry.endLine,
+      snippet: entry.snippet,
+      score: calculateCandidateTruthConfidence(entry),
+      signalCount: 3,
+      query: `__dreaming_rem__:${remDayBucket}`,
+      dayBucket: remDayBucket,
+    }));
+  if (groundedRemCandidates.length > 0) {
+    await recordGroundedShortTermCandidates({
+      workspaceDir: params.workspaceDir,
+      query: `__dreaming_rem__:${remDayBucket}`,
+      items: groundedRemCandidates,
+      dedupeByQueryPerDay: true,
+      dayBucket: remDayBucket,
+      nowMs,
+      timezone: params.config.timezone,
+    });
+  }
   await recordDreamingPhaseSignals({
     workspaceDir: params.workspaceDir,
     phase: "rem",

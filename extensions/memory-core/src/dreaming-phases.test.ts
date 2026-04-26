@@ -10,16 +10,40 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { __testing, runDreamingSweepPhases } from "./dreaming-phases.js";
+import { __testing, previewRemDreaming, runDreamingSweepPhases } from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
+  type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
+
+function createRemEntry(overrides: Partial<ShortTermRecallEntry>): ShortTermRecallEntry {
+  return {
+    key: overrides.key ?? "entry-key",
+    path: overrides.path ?? "memory/.dreams/session-corpus/2026-04-25.txt",
+    startLine: overrides.startLine ?? 1,
+    endLine: overrides.endLine ?? 1,
+    source: "memory",
+    snippet: overrides.snippet ?? "Default snippet",
+    recallCount: overrides.recallCount ?? 4,
+    dailyCount: overrides.dailyCount ?? 1,
+    groundedCount: overrides.groundedCount ?? 0,
+    totalScore: overrides.totalScore ?? 3.6,
+    maxScore: overrides.maxScore ?? 0.92,
+    firstRecalledAt: overrides.firstRecalledAt ?? "2026-04-24T10:00:00.000Z",
+    lastRecalledAt: overrides.lastRecalledAt ?? "2026-04-25T10:00:00.000Z",
+    queryHashes: overrides.queryHashes ?? ["q1", "q2", "q3"],
+    recallDays: overrides.recallDays ?? ["2026-04-23", "2026-04-24", "2026-04-25"],
+    conceptTags: overrides.conceptTags ?? ["project-alpha"],
+    ...(overrides.claimHash ? { claimHash: overrides.claimHash } : {}),
+    ...(overrides.promotedAt ? { promotedAt: overrides.promotedAt } : {}),
+  };
+}
 const DREAMING_TEST_DAY = "2026-04-05";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
@@ -187,6 +211,66 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
   });
   return candidates.map((candidate) => candidate.snippet);
 }
+
+describe("previewRemDreaming", () => {
+  it("filters meta scaffolding themes and candidate truths", () => {
+    const preview = previewRemDreaming({
+      entries: [
+        createRemEntry({
+          key: "meta-1",
+          snippet:
+            "Assistant candidate report about session-corpus wrapper/prompt pollution and memory dreaming cleanup.",
+          conceptTags: ["assistant", "candidate", "report", "session"],
+        }),
+        createRemEntry({
+          key: "neutral-1",
+          snippet: "Talked about build warnings and plugin timing noise during a smoke check.",
+          conceptTags: ["build", "warning", "plugin"],
+        }),
+        createRemEntry({
+          key: "real-1",
+          path: "memory/2026-04-25.md",
+          snippet: "Vicente decided Husky should publish on Mon/Wed/Fri with a reusable cadence.",
+          conceptTags: ["husky", "publish", "cadence", "decision"],
+        }),
+      ],
+      limit: 5,
+      minPatternStrength: 0.3,
+    });
+
+    expect(preview.reflections.join("\n")).toContain("`husky`");
+    expect(preview.reflections.join("\n")).toContain("`cadence`");
+    expect(preview.reflections.join("\n")).not.toContain("`assistant`");
+    expect(preview.candidateTruths).toHaveLength(1);
+    const [topTruth] = preview.candidateTruths;
+    expect(topTruth?.snippet).toContain("Vicente decided Husky should publish");
+    expect(topTruth?.snippet).not.toContain("wrapper/prompt pollution");
+  });
+
+  it("filters direct assistant/user transcript lines from lasting truths", () => {
+    const preview = previewRemDreaming({
+      entries: [
+        createRemEntry({
+          key: "assistant-line",
+          snippet: "Assistant: 我继续补这刀，准备重跑 rebuild。",
+          conceptTags: ["project", "plan"],
+        }),
+        createRemEntry({
+          key: "daily-line",
+          path: "memory/2026-04-24.md",
+          snippet: "Vicente 要求关闭 gog 操作 Gmail 的功能，并把它设为 guardrail。",
+          conceptTags: ["gog", "gmail", "guardrail", "policy"],
+        }),
+      ],
+      limit: 5,
+      minPatternStrength: 0.3,
+    });
+
+    expect(preview.candidateTruths).toHaveLength(1);
+    expect(preview.candidateTruths[0]?.snippet).toContain("关闭 gog 操作 Gmail");
+    expect(preview.candidateTruths[0]?.snippet).not.toContain("我继续补这刀");
+  });
+});
 
 describe("memory-core dreaming phases", () => {
   it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {

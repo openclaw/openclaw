@@ -10,6 +10,7 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
@@ -36,15 +37,28 @@ export type BuildSessionEntryOptions = {
   generatedByDreamingNarrative?: boolean;
 };
 
+type SessionRecordLike = {
+  type?: unknown;
+  customType?: unknown;
+  data?: unknown;
+  runId?: unknown;
+  sessionKey?: unknown;
+  message?: unknown;
+  timestamp?: unknown;
+  role?: unknown;
+  content?: unknown;
+  text?: unknown;
+};
+
+function isRecordObject(value: unknown): value is SessionRecordLike {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+  if (!isRecordObject(record)) {
     return false;
   }
-  const candidate = record as {
-    type?: unknown;
-    customType?: unknown;
-    data?: unknown;
-  };
+  const candidate = record;
   if (
     candidate.type !== "custom" ||
     candidate.customType !== "openclaw:bootstrap-context:full" ||
@@ -54,7 +68,7 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   ) {
     return false;
   }
-  const runId = (candidate.data as { runId?: unknown }).runId;
+  const runId = isRecordObject(candidate.data) ? candidate.data.runId : undefined;
   return typeof runId === "string" && runId.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
 }
 
@@ -66,27 +80,20 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
   if (isDreamingNarrativeBootstrapRecord(record)) {
     return true;
   }
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+  if (!isRecordObject(record)) {
     return false;
   }
-  const candidate = record as {
-    runId?: unknown;
-    sessionKey?: unknown;
-    data?: unknown;
-  };
+  const candidate = record;
   if (
     hasDreamingNarrativeRunId(candidate.runId) ||
     hasDreamingNarrativeRunId(candidate.sessionKey)
   ) {
     return true;
   }
-  if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
+  if (!isRecordObject(candidate.data)) {
     return false;
   }
-  const nested = candidate.data as {
-    runId?: unknown;
-    sessionKey?: unknown;
-  };
+  const nested = candidate.data;
   return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
 }
 
@@ -188,6 +195,68 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
+function stripRelevantMemoriesEnvelope(text: string): string {
+  return text.replace(RELEVANT_MEMORIES_BLOCK_RE, " ");
+}
+
+function isSilentReplyScaffolding(text: string): boolean {
+  return /^(?:NO_REPLY|SKIPPED)$/i.test(text.trim());
+}
+
+function isCronTaskEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^\[cron:[^\]]+]/i.test(trimmed)) {
+    return false;
+  }
+  return /(?:\btask_role=|\btask_origin=|\bnotify_policy=|Current time:|reply\s+`?NO_REPLY`?|Return your response as plain text|A scheduled reminder has been triggered\.)/i.test(
+    trimmed,
+  );
+}
+
+function isAsyncExecReceiptEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^System \(untrusted\):\s*\[[^\]]+\]\s*(?:Exec|Process)\s+(?:completed|failed)/i.test(
+      trimmed,
+    ) || /An async command you ran earlier has completed\./i.test(trimmed)
+  );
+}
+
+function isStartupResetEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^\[Startup context loaded by runtime\]/i.test(trimmed) ||
+    /Bootstrap files like SOUL\.md, USER\.md, and MEMORY\.md/i.test(trimmed) ||
+    /A new session was started via \/new or \/reset\./i.test(trimmed) ||
+    /Execute your Session Startup sequence now/i.test(trimmed)
+  );
+}
+
+function stripSessionScaffolding(text: string, role: "user" | "assistant"): string {
+  let next = text;
+  if (role === "user") {
+    next = stripInboundMetadata(next);
+    next = stripRelevantMemoriesEnvelope(next);
+  }
+  next = normalizeSessionText(next);
+  if (!next) {
+    return "";
+  }
+  if (isSilentReplyScaffolding(next)) {
+    return "";
+  }
+  if (role === "user") {
+    if (
+      isCronTaskEnvelope(next) ||
+      isAsyncExecReceiptEnvelope(next) ||
+      isStartupResetEnvelope(next)
+    ) {
+      return "";
+    }
+  }
+  return next;
+}
+
 function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
     return content;
@@ -197,10 +266,10 @@ function collectRawSessionText(content: unknown): string | null {
   }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    if (!isRecordObject(block)) {
       continue;
     }
-    const record = block as { type?: unknown; text?: unknown };
+    const record = block;
     if (record.type === "text" && typeof record.text === "string") {
       parts.push(record.text);
     }
@@ -267,26 +336,6 @@ function renderSessionExportLines(label: string, text: string): string[] {
   return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
 }
 
-/**
- * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
- *
- * User-role messages arriving from external channels (Telegram, Discord,
- * Slack, …) are stored with a multi-line prefix containing Conversation info,
- * Sender info, and other AI-facing metadata blocks. These envelopes must be
- * removed BEFORE normalization, because `stripInboundMetadata` relies on
- * newline structure and fenced `json` code fences to locate sentinels; once
- * `normalizeSessionText` collapses newlines into spaces, stripping is
- * impossible.
- *
- * See: https://github.com/openclaw/openclaw/issues/63921
- */
-function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
-  if (role !== "user") {
-    return text;
-  }
-  return stripInboundMetadata(text);
-}
-
 export function extractSessionText(
   content: unknown,
   role: "user" | "assistant" = "assistant",
@@ -295,7 +344,7 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const stripped = stripSessionScaffolding(rawText, role);
   const normalized = normalizeSessionText(stripped);
   return normalized ? normalized : null;
 }
@@ -349,16 +398,10 @@ export async function buildSessionEntry(
       if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
         generatedByDreamingNarrative = true;
       }
-      if (
-        !record ||
-        typeof record !== "object" ||
-        (record as { type?: unknown }).type !== "message"
-      ) {
+      if (!isRecordObject(record) || record.type !== "message") {
         continue;
       }
-      const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
-        | undefined;
+      const message = isRecordObject(record.message) ? record.message : undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }
@@ -375,10 +418,7 @@ export async function buildSessionEntry(
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
       const renderedLines = renderSessionExportLines(label, safe);
-      const timestampMs = parseSessionTimestampMs(
-        record as { timestamp?: unknown },
-        message as { timestamp?: unknown },
-      );
+      const timestampMs = parseSessionTimestampMs(record, message);
       collected.push(...renderedLines);
       lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
       messageTimestampsMs.push(...renderedLines.map(() => timestampMs));

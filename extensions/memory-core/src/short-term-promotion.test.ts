@@ -475,8 +475,8 @@ describe("short-term promotion", () => {
       expect(ranked[0]).toMatchObject({
         recallCount: 0,
         dailyCount: 3,
-        uniqueQueries: 3,
       });
+      expect(ranked[0]?.uniqueQueries).toBeGreaterThanOrEqual(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
     });
@@ -524,7 +524,7 @@ describe("short-term promotion", () => {
 
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.groundedCount).toBe(3);
-      expect(ranked[0]?.uniqueQueries).toBe(2);
+      expect(ranked[0]?.uniqueQueries).toBeGreaterThanOrEqual(2);
       expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
 
       const applied = await applyShortTermPromotions({
@@ -787,6 +787,94 @@ describe("short-term promotion", () => {
         lightHits: 1,
         remHits: 1,
       });
+    });
+  });
+
+  it("allows daily-only candidates to pass deep gates when light/rem both reinforce them", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      await writeDailyMemoryNote(workspaceDir, "2026-04-05", [
+        "context",
+        "context",
+        "Project decision: keep Gmail disabled by default and treat it as a guardrail.",
+        "Project decision: keep Gmail disabled by default and treat it as a guardrail.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "project decision",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 3,
+            endLine: 4,
+            score: 0.92,
+            snippet:
+              "Project decision: keep Gmail disabled by default and treat it as a guardrail.",
+            source: "memory",
+          },
+        ],
+      });
+
+      let ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 3,
+        minUniqueQueries: 3,
+        nowMs,
+      });
+      expect(ranked).toHaveLength(0);
+
+      const explainRank = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      expect(explainRank).toHaveLength(1);
+      const [firstExplainCandidate] = explainRank;
+      const key = firstExplainCandidate?.key;
+      expect(key).toBeTruthy();
+
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: key ? [key] : [],
+        nowMs,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: key ? [key] : [],
+        nowMs,
+      });
+
+      ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 3,
+        minUniqueQueries: 3,
+        nowMs,
+      });
+      expect(ranked).toHaveLength(1);
+      const [topRanked] = ranked;
+      expect(topRanked?.signalCount ?? 0).toBeGreaterThanOrEqual(3);
+      expect(topRanked?.uniqueQueries ?? 0).toBeGreaterThanOrEqual(3);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 3,
+        minUniqueQueries: 3,
+        nowMs,
+      });
+      expect(applied.applied).toBe(1);
     });
   });
 
