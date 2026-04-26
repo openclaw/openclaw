@@ -74,7 +74,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const sessionStore = { "temp:slug-generator": sessionEntry };
     const authProfileId = await resolveSessionAuthProfileOverride({
       cfg: params.cfg,
-      provider,
+      provider: cliExecutionProvider,
       agentDir,
       sessionEntry,
       sessionStore,

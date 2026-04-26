@@ -47,6 +47,9 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  currentChannelId?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;

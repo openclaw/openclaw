@@ -354,8 +354,12 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
+                  messageChannel: queued.originatingChannel ?? undefined,
                   messageProvider: queued.originatingChannel ?? run.messageProvider,
                   agentAccountId: run.agentAccountId,
+                  messageTo: queued.originatingTo,
+                  messageThreadId: queued.originatingThreadId,
+                  currentChannelId: queued.originatingTo,
                   senderIsOwner: run.senderIsOwner,
                 };
                 let cliResult: Awaited<ReturnType<typeof runCliAgent>>;

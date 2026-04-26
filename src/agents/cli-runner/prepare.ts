@@ -195,6 +195,10 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_MESSAGE_TO: params.messageTo ?? "",
+          OPENCLAW_MCP_THREAD_ID:
+            params.messageThreadId == null ? "" : String(params.messageThreadId),
+          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? params.messageTo ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -343,7 +347,7 @@ export async function prepareCliRunContext(
         modelId,
         messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        channelId: params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
       },
       hookRunner,
     });

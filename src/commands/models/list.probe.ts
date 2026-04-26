@@ -286,16 +286,35 @@ export async function buildProbeTargets(params: {
       catalog,
     });
 
-    const profileIds = listProfilesForProvider(store, providerKey);
+    const cliExecutionProvider = model
+      ? (resolveCliRuntimeExecutionProvider({
+          provider: model.provider,
+          cfg,
+          agentId: resolveDefaultAgentId(cfg),
+        }) ?? model.provider)
+      : providerKey;
+    const runtimeProfileProviderKey = isCliProvider(cliExecutionProvider, cfg)
+      ? normalizeProviderId(cliExecutionProvider)
+      : providerKey;
+    const runtimeProfileIds =
+      runtimeProfileProviderKey !== providerKey
+        ? listProfilesForProvider(store, runtimeProfileProviderKey)
+        : [];
+    const profileProviderKey =
+      runtimeProfileIds.length > 0 ? runtimeProfileProviderKey : providerKey;
+    const profileIds =
+      runtimeProfileIds.length > 0
+        ? runtimeProfileIds
+        : listProfilesForProvider(store, providerKey);
     const explicitOrder = (() => {
       return (
-        findNormalizedProviderValue(store.order, providerKey) ??
-        findNormalizedProviderValue(cfg?.auth?.order, providerKey)
+        findNormalizedProviderValue(store.order, profileProviderKey) ??
+        findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey)
       );
     })();
     const allowedProfiles =
       explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
+        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: profileProviderKey }))
         : null;
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
@@ -324,7 +343,7 @@ export async function buildProbeTargets(params: {
           const eligibility = resolveAuthProfileEligibility({
             cfg,
             store,
-            provider: providerKey,
+            provider: profileProviderKey,
             profileId,
           });
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);

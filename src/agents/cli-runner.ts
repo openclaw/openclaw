@@ -409,6 +409,9 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     images: params.images,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
+    currentChannelId: params.currentChannelId,
     senderIsOwner: params.senderIsOwner,
   };
 }

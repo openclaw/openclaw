@@ -168,6 +168,13 @@ export function createCronPromptExecutor(params: {
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
+            messageTo: params.resolvedDelivery.to,
+            messageThreadId: params.resolvedDelivery.threadId,
+            currentChannelId: await resolveCurrentChannelTarget({
+              channel: params.messageChannel,
+              to: params.resolvedDelivery.to,
+              threadId: params.resolvedDelivery.threadId,
+            }),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
