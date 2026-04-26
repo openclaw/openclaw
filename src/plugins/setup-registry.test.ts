@@ -207,6 +207,26 @@ describe("setup-registry getJiti", () => {
     );
   });
 
+  it("passes explicit plugin id scope into setup manifest reads", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    resolvePluginSetupRegistry({
+      pluginIds: ["test-plugin"],
+      env: {},
+    });
+
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["test-plugin"],
+      }),
+    );
+  });
+
   it("skips setup-api loading when config has no relevant migration triggers", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
