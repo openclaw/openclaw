@@ -370,6 +370,9 @@ describe("createLaneTextDeliverer", () => {
     );
     expect(harness.editPreview).not.toHaveBeenCalled();
     expect(harness.answer.stream?.clear).toHaveBeenCalledTimes(1);
+    expect(harness.answer.stream?.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(harness.lanes.answer.hasStreamedMessage).toBe(false);
+    expect(harness.lanes.answer.lastPartialText).toBe("");
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 

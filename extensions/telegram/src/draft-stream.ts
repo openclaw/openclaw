@@ -404,6 +404,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const forceNewMessage = () => {
+    streamState.stopped = false;
     streamState.final = false;
     generation += 1;
     messageSendAttempted = false;

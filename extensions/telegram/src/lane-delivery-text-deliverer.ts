@@ -215,6 +215,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     } catch (err) {
       params.log(`telegram: ${laneName} fresh final preview cleanup failed: ${String(err)}`);
     }
+    lane.lastPartialText = "";
+    lane.hasStreamedMessage = false;
+    lane.stream?.forceNewMessage();
   };
   const canMaterializeDraftFinal = (
     lane: DraftLaneState,

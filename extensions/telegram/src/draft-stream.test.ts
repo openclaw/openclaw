@@ -458,6 +458,23 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
   });
 
+  it("creates new message after cleanup and forceNewMessage", async () => {
+    const { api, stream } = createForceNewMessageHarness();
+
+    stream.update("Stale preview");
+    await stream.flush();
+
+    await stream.clear();
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+
+    stream.forceNewMessage();
+    stream.update("Next preview");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Next preview", undefined);
+  });
+
   it("sends first update immediately after forceNewMessage within throttle window", async () => {
     vi.useFakeTimers();
     try {
