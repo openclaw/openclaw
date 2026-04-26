@@ -368,11 +368,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: ttsPayload.text,
       routed: false,
     });
+    // sendBlockReply returns Promise<boolean> for same-channel delivery
     const delivered =
-      kind === "tool"
-        ? params.dispatcher.sendToolResult(ttsPayload)
-        : kind === "block"
-          ? params.dispatcher.sendBlockReply(ttsPayload)
+      kind === "block"
+        ? await params.dispatcher.sendBlockReply(ttsPayload)
+        : kind === "tool"
+          ? params.dispatcher.sendToolResult(ttsPayload)
           : params.dispatcher.sendFinalReply(ttsPayload);
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;

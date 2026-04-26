@@ -4,7 +4,7 @@ export type ReplyDispatchKind = "tool" | "block" | "final";
 
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
+  sendBlockReply: (payload: ReplyPayload) => Promise<boolean>;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;

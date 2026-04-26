@@ -301,10 +301,11 @@ export const emptyConfig = {} as OpenClawConfig;
 
 export function createDispatcher(): ReplyDispatcher {
   const acceptReply = () => true;
+  const acceptReplyAsync = async () => true;
   const emptyCounts = () => ({ tool: 0, block: 0, final: 0 });
   return {
     sendToolResult: vi.fn(acceptReply),
-    sendBlockReply: vi.fn(acceptReply),
+    sendBlockReply: vi.fn(acceptReplyAsync),
     sendFinalReply: vi.fn(acceptReply),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(emptyCounts),

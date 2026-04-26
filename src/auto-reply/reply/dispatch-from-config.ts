@@ -1102,7 +1102,10 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(normalizedPayload);
+              // Await delivery so blocks are actually sent before tool execution starts.
+              // Without this, fire-and-forget delivery means text blocks aren't sent
+              // until after tool calls complete (#71664).
+              await dispatcher.sendBlockReply(normalizedPayload);
             }
           };
           return run();

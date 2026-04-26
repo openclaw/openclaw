@@ -305,9 +305,24 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
   };
 
+  // sendBlockReply returns a Promise<boolean> that resolves when the block's
+  // delivery completes (and all prior queued items complete). This allows
+  // callers to await actual delivery instead of fire-and-forget.
+  const sendBlockReply = (payload: ReplyPayload): Promise<boolean> => {
+    const currentChain = sendChain;
+    const queued = enqueue("block", payload);
+    if (!queued) {
+      return Promise.resolve(false);
+    }
+    // Wait for all prior items (including this block's delivery) to complete.
+    // When currentChain settles, the delivery for this block (and prior blocks)
+    // has finished because delivery happens inside currentChain's .then() handler.
+    return currentChain.then(() => true);
+  };
+
   return {
     sendToolResult: (payload) => enqueue("tool", payload),
-    sendBlockReply: (payload) => enqueue("block", payload),
+    sendBlockReply,
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
