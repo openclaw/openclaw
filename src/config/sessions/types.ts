@@ -127,6 +127,7 @@ export type SessionPluginNextTurnInjection = {
   text: string;
   idempotencyKey?: string;
   placement: "prepend_context" | "append_context";
+  priority?: number;
   ttlMs?: number;
   createdAt: number;
   metadata?: SessionPluginJsonValue;
