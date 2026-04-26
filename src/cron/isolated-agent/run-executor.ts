@@ -1,3 +1,5 @@
+import { clearCliSession, setCliSessionBinding } from "../../agents/cli-session.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -145,7 +147,7 @@ export function createCronPromptExecutor(params: {
           const cliSessionBinding = params.cronSession.isNewSession
             ? undefined
             : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider);
-          const result = await runCliAgent({
+          const cliParams: Parameters<typeof runCliAgent>[0] = {
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             agentId: params.agentId,
@@ -171,7 +173,32 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: false,
-          });
+          };
+          let result: Awaited<ReturnType<typeof runCliAgent>>;
+          try {
+            result = await runCliAgent(cliParams);
+          } catch (err) {
+            if (
+              !(err instanceof FailoverError) ||
+              err.reason !== "session_expired" ||
+              !cliSessionBinding?.sessionId
+            ) {
+              throw err;
+            }
+            clearCliSession(params.cronSession.sessionEntry, cliExecutionProvider);
+            result = await runCliAgent({
+              ...cliParams,
+              cliSessionId: undefined,
+              cliSessionBinding: undefined,
+            });
+          }
+          if (result.meta.agentMeta?.cliSessionBinding) {
+            setCliSessionBinding(
+              params.cronSession.sessionEntry,
+              cliExecutionProvider,
+              result.meta.agentMeta.cliSessionBinding,
+            );
+          }
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );

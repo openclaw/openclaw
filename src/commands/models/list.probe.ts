@@ -480,6 +480,10 @@ async function probeTarget(params: {
         agentId,
       }) ?? target.model.provider;
     if (isCliProvider(cliExecutionProvider, cfg)) {
+      const cliAuthProfileId =
+        normalizeProviderId(target.provider) === normalizeProviderId(cliExecutionProvider)
+          ? target.profileId
+          : undefined;
       await runCliAgent({
         sessionId,
         sessionKey,
@@ -492,7 +496,7 @@ async function probeTarget(params: {
         prompt: buildProbePrompt(maxTokens),
         provider: cliExecutionProvider,
         model: target.model.model,
-        authProfileId: target.profileId,
+        authProfileId: cliAuthProfileId,
         thinkLevel: "off",
         timeoutMs,
         runId: `probe-${crypto.randomUUID()}`,

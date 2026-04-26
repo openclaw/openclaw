@@ -5,9 +5,14 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionBinding, setCliSessionBinding } from "../../agents/cli-session.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  setCliSessionBinding,
+} from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -318,7 +323,7 @@ export function createFollowupRunner(params: {
                   activeSessionEntry,
                   cliExecutionProvider,
                 );
-                const cliResult = await runCliAgent({
+                const cliParams: Parameters<typeof runCliAgent>[0] = {
                   sessionId: run.sessionId,
                   sessionKey: run.sessionKey,
                   agentId: run.agentId,
@@ -352,7 +357,27 @@ export function createFollowupRunner(params: {
                   messageProvider: queued.originatingChannel ?? run.messageProvider,
                   agentAccountId: run.agentAccountId,
                   senderIsOwner: run.senderIsOwner,
-                });
+                };
+                let cliResult: Awaited<ReturnType<typeof runCliAgent>>;
+                try {
+                  cliResult = await runCliAgent(cliParams);
+                } catch (err) {
+                  if (
+                    !(err instanceof FailoverError) ||
+                    err.reason !== "session_expired" ||
+                    !cliSessionBinding?.sessionId
+                  ) {
+                    throw err;
+                  }
+                  if (activeSessionEntry) {
+                    clearCliSession(activeSessionEntry, cliExecutionProvider);
+                  }
+                  cliResult = await runCliAgent({
+                    ...cliParams,
+                    cliSessionId: undefined,
+                    cliSessionBinding: undefined,
+                  });
+                }
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   cliResult.meta?.systemPromptReport,
                 );
