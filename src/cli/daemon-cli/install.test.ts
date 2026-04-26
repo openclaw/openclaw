@@ -374,7 +374,55 @@ describe("runDaemonInstall", () => {
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings).toContain(
-      "Gateway service still embeds OPENCLAW_GATEWAY_TOKEN; refreshing the install.",
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+  });
+
+  it("returns already-installed when the embedded gateway token matches the install plan", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "durable-token",
+      },
+    } as never);
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "durable-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("reinstalls when the embedded gateway token differs from the install plan", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+      },
+    } as never);
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+      },
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
     );
   });
 
