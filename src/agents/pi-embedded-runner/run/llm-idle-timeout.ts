@@ -33,8 +33,13 @@ export function resolveLlmIdleTimeoutMs(params?: {
   runTimeoutMs?: number;
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
-  const clampImplicitTimeoutMs = (valueMs: number) =>
-    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
+  const clampImplicitTimeoutMs = (valueMs: number) => {
+    const clamped = clampTimeoutMs(valueMs);
+    if (clamped > MAX_DERIVED_LLM_IDLE_TIMEOUT_MS) {
+      return MAX_DERIVED_LLM_IDLE_TIMEOUT_MS;
+    }
+    return Math.min(clamped, DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  };
   const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
@@ -61,15 +66,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
   ) {
-<<<<<<< HEAD
     return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
-=======
-    // Cap derived idle timeouts to a reasonable maximum.
-    return Math.min(
-      clampTimeoutMs(agentTimeoutSeconds * 1000),
-      MAX_DERIVED_LLM_IDLE_TIMEOUT_MS,
-    );
->>>>>>> 844aed646c (fix(agents): cap LLM request timeout to prevent lane exhaustion)
   }
 
   if (params?.trigger === "cron") {

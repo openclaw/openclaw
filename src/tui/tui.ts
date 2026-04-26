@@ -550,7 +550,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
         }),
-        process.cwd(),
+        (opts.cwd ?? process.cwd()),
       ),
     );
   };

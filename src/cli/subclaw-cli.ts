@@ -28,6 +28,9 @@ export function registerSubclawCli(program: Command) {
     .action(async (directory, opts) => {
       try {
         const targetDir = path.resolve(directory ?? process.cwd());
+        if (directory) {
+          process.chdir(targetDir);
+        }
         const config = loadConfig();
         const agentId = resolveAgentIdByWorkspacePath(config, targetDir) ?? resolveDefaultAgentId(config);
         const sessionKey =
