@@ -20,6 +20,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { buildCompactBoundaryMetadata } from "./compact-boundary-metadata.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
@@ -178,6 +179,22 @@ export async function compactEmbeddedPiSession(
                 postSessionFile: params.sessionFile,
                 postLeafId,
                 postEntryId: postLeafId,
+                boundaryMetadata: buildCompactBoundaryMetadata({
+                  diagId: params.diagId ?? params.runId ?? params.sessionId,
+                  createdAt: Date.now(),
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  sessionAgentId,
+                  channel: params.messageChannel ?? params.messageProvider,
+                  accountId: params.agentAccountId,
+                  targetId: params.currentChannelId,
+                  threadId: params.currentThreadTs,
+                  messageId: params.currentMessageId,
+                  provider: ceProvider,
+                  model: ceModelId,
+                  thinkLevel: params.thinkLevel,
+                  trigger: params.trigger,
+                }),
               });
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {

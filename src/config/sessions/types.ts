@@ -93,8 +93,50 @@ export type SessionCompactionTranscriptReference = {
   entryId?: string;
 };
 
+export type SessionCompactionBoundaryMetadata = {
+  version: 1;
+  type: "compact.boundary";
+  boundaryId: string;
+  createdAt: number;
+  state: {
+    sessionBinding: {
+      sessionKey?: string;
+      sessionId?: string;
+      agentId?: string;
+      channel?: string;
+      accountId?: string;
+      threadId?: string;
+      messageId?: string;
+    };
+    approval: {
+      captured: false;
+      reason: string;
+    };
+    outbound: {
+      channel?: string;
+      targetId?: string;
+      threadId?: string;
+      replyToMessageId?: string;
+    };
+    children: {
+      pendingDescendantState: "live-query-required";
+      livePendingDescendants?: boolean;
+    };
+    policy: {
+      sandboxEnabled?: boolean;
+      sandboxWorkspaceAccess?: string;
+      bashElevated?: boolean;
+      provider?: string;
+      model?: string;
+      thinkingLevel?: string;
+      trigger?: string;
+    };
+  };
+};
+
 export type SessionCompactionCheckpoint = {
   checkpointId: string;
+  boundaryId?: string;
   sessionKey: string;
   sessionId: string;
   createdAt: number;
@@ -105,6 +147,7 @@ export type SessionCompactionCheckpoint = {
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
   postCompaction: SessionCompactionTranscriptReference;
+  boundaryMetadata?: SessionCompactionBoundaryMetadata;
 };
 
 export type SessionPluginDebugEntry = {

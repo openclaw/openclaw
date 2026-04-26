@@ -21,6 +21,7 @@ export const SessionCompactionTranscriptReferenceSchema = Type.Object(
 export const SessionCompactionCheckpointSchema = Type.Object(
   {
     checkpointId: NonEmptyString,
+    boundaryId: Type.Optional(NonEmptyString),
     sessionKey: NonEmptyString,
     sessionId: NonEmptyString,
     createdAt: Type.Integer({ minimum: 0 }),
@@ -31,6 +32,7 @@ export const SessionCompactionCheckpointSchema = Type.Object(
     firstKeptEntryId: Type.Optional(NonEmptyString),
     preCompaction: SessionCompactionTranscriptReferenceSchema,
     postCompaction: SessionCompactionTranscriptReferenceSchema,
+    boundaryMetadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
   { additionalProperties: false },
 );

@@ -11,6 +11,7 @@ import {
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
 } from "./session-compaction-checkpoints.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const tempDirs: string[] = [];
 
@@ -161,5 +162,69 @@ describe("session-compaction-checkpoints", () => {
     expect(
       Object.values(nextStore).find((entry) => entry.compactionCheckpoints)?.compactionCheckpoints,
     ).toHaveLength(25);
+
+test("persist stores boundary id and metadata with the checkpoint", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
+    tempDirs.push(dir);
+    const storePath = path.join(dir, "sessions.json");
+    const cfg = {
+      session: { scope: "global", mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
+    await fs.mkdir(path.dirname(target.storePath), { recursive: true });
+    const checkpointCreatedAt = Date.now();
+    await fs.writeFile(
+      target.storePath,
+      JSON.stringify({
+        [target.canonicalKey]: { sessionId: "session-live", updatedAt: checkpointCreatedAt },
+      }),
+      "utf8",
+    );
+    const boundaryMetadata = {
+      version: 1,
+      type: "compact.boundary",
+      boundaryId: "compact-boundary:diag-1",
+      createdAt: 123,
+      state: {
+        sessionBinding: { sessionKey: "main", sessionId: "session-live" },
+        approval: { captured: false, reason: "captured elsewhere" },
+        outbound: { channel: "discord", targetId: "user-1" },
+        children: { pendingDescendantState: "live-query-required" },
+        policy: { provider: "openai", model: "gpt-test", thinkingLevel: "high" },
+      },
+    } as const;
+
+    const checkpoint = await persistSessionCompactionCheckpoint({
+      cfg,
+      sessionKey: "main",
+      sessionId: "session-live",
+      reason: "manual",
+      snapshot: {
+        sessionId: "session-pre",
+        sessionFile: path.join(dir, "pre.jsonl"),
+        leafId: "leaf-pre",
+      },
+      postSessionFile: path.join(dir, "post.jsonl"),
+      postLeafId: "leaf-post",
+      postEntryId: "leaf-post",
+      createdAt: checkpointCreatedAt,
+      boundaryMetadata,
+    });
+
+    expect(checkpoint?.boundaryId).toBe("compact-boundary:diag-1");
+    expect(checkpoint?.boundaryMetadata).toEqual(boundaryMetadata);
+
+    const stored = JSON.parse(await fs.readFile(target.storePath, "utf8")) as Record<
+      string,
+      { compactionCheckpoints?: Array<Record<string, unknown>> }
+    >;
+    const storedEntry = stored[checkpoint!.sessionKey];
+    expect(storedEntry.compactionCheckpoints).toHaveLength(1);
+    expect(storedEntry.compactionCheckpoints?.[0]).toMatchObject({
+      boundaryId: "compact-boundary:diag-1",
+      boundaryMetadata,
+    });
+
   });
 });

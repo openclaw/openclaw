@@ -5,6 +5,7 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
+  SessionCompactionBoundaryMetadata,
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
   SessionEntry,
@@ -170,6 +171,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   postSessionFile?: string;
   postLeafId?: string;
   postEntryId?: string;
+  boundaryMetadata?: SessionCompactionBoundaryMetadata;
   createdAt?: number;
 }): Promise<SessionCompactionCheckpoint | null> {
   const target = resolveGatewaySessionStoreTarget({
@@ -179,6 +181,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   const createdAt = params.createdAt ?? Date.now();
   const checkpoint: SessionCompactionCheckpoint = {
     checkpointId: randomUUID(),
+    ...(params.boundaryMetadata?.boundaryId ? { boundaryId: params.boundaryMetadata.boundaryId } : {}),
     sessionKey: target.canonicalKey,
     sessionId: params.sessionId,
     createdAt,
@@ -200,6 +203,7 @@ export async function persistSessionCompactionCheckpoint(params: {
       ...(params.postLeafId?.trim() ? { leafId: params.postLeafId.trim() } : {}),
       ...(params.postEntryId?.trim() ? { entryId: params.postEntryId.trim() } : {}),
     },
+    ...(params.boundaryMetadata ? { boundaryMetadata: params.boundaryMetadata } : {}),
   };
 
   let stored = false;

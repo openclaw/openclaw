@@ -99,6 +99,7 @@ import {
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
+import { buildCompactBoundaryMetadata } from "./compact-boundary-metadata.js";
 import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import {
   asCompactionHookRunner,
@@ -1126,6 +1127,25 @@ export async function compactEmbeddedPiSessionDirect(
                 postLeafId: postCompactionLeafId,
                 postEntryId: postCompactionLeafId,
                 createdAt: compactStartedAt,
+                boundaryMetadata: buildCompactBoundaryMetadata({
+                  diagId,
+                  createdAt: compactStartedAt,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  sessionAgentId,
+                  channel: runtimeChannel,
+                  accountId: params.agentAccountId,
+                  targetId: params.currentChannelId,
+                  threadId: params.currentThreadTs,
+                  messageId: params.currentMessageId,
+                  sandboxEnabled: sandbox?.enabled === true,
+                  sandboxWorkspaceAccess: sandbox?.workspaceAccess,
+                  bashElevated: params.bashElevated,
+                  provider,
+                  model: modelId,
+                  thinkLevel,
+                  trigger,
+                }),
               });
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {
