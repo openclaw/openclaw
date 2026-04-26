@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "description": "Canonical wire-format snapshot for the Phase B orchestrator. Mirrored byte-for-byte in (MissionControl) __tests__/contract/wire-contract.json. The pinned SHA-256 in wire-contract.sha256 protects against drift in either repo.",
+  "tasks": [
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL000000000QUEUED",
+      "kind": "live",
+      "state": "queued",
+      "goal": "submit a queued task",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": null,
+      "assignedAgentId": null,
+      "result": null,
+      "rejection": null,
+      "error": null,
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": null,
+      "startedAt": null,
+      "completedAt": null,
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL000000ASSIGNED1",
+      "kind": "live",
+      "state": "assigned",
+      "goal": "route this to coder",
+      "workspaceDir": "/tmp/work",
+      "requiredCapabilities": ["code"],
+      "routing": {
+        "matchedRuleId": "code-tasks",
+        "assignedAgentId": "coder",
+        "capabilityMatches": ["code"],
+        "fallbackUsed": false,
+        "decidedAt": "2026-04-26T10:00:00.500Z"
+      },
+      "assignedAgentId": "coder",
+      "result": null,
+      "rejection": null,
+      "error": null,
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": "2026-04-26T10:00:00.500Z",
+      "startedAt": null,
+      "completedAt": null,
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL000AWAITING0001",
+      "kind": "synthetic",
+      "state": "awaiting_approval",
+      "goal": "synthetic awaiting approval",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": {
+        "matchedRuleId": "code-tasks",
+        "assignedAgentId": "coder",
+        "capabilityMatches": [],
+        "fallbackUsed": false,
+        "decidedAt": "2026-04-26T10:00:00.500Z"
+      },
+      "assignedAgentId": "coder",
+      "result": {
+        "text": "synthetic completion text",
+        "textPath": null,
+        "artefacts": [
+          {
+            "path": "/tmp/work/diff.patch",
+            "mediaType": "text/x-patch",
+            "bytes": 1024
+          }
+        ],
+        "specialistSessionId": "synthetic-T1"
+      },
+      "rejection": null,
+      "error": null,
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": "2026-04-26T10:00:00.500Z",
+      "startedAt": "2026-04-26T10:00:01.000Z",
+      "completedAt": null,
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL000000000DONE001",
+      "kind": "live",
+      "state": "done",
+      "goal": "research finished",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": {
+        "matchedRuleId": "research-tasks",
+        "assignedAgentId": "researcher",
+        "capabilityMatches": [],
+        "fallbackUsed": false,
+        "decidedAt": "2026-04-26T10:00:00.500Z"
+      },
+      "assignedAgentId": "researcher",
+      "result": {
+        "text": "research result",
+        "textPath": null,
+        "artefacts": [],
+        "specialistSessionId": "session-12345"
+      },
+      "rejection": null,
+      "error": null,
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": "2026-04-26T10:00:00.500Z",
+      "startedAt": "2026-04-26T10:00:01.000Z",
+      "completedAt": "2026-04-26T10:00:05.000Z",
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL00000FAILED0001",
+      "kind": "shadow",
+      "state": "failed",
+      "goal": "specialist crashed",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": {
+        "matchedRuleId": null,
+        "assignedAgentId": "main",
+        "capabilityMatches": [],
+        "fallbackUsed": true,
+        "decidedAt": "2026-04-26T10:00:00.500Z"
+      },
+      "assignedAgentId": "main",
+      "result": null,
+      "rejection": null,
+      "error": {
+        "code": "specialist_aborted",
+        "message": "process killed (SIGTERM)"
+      },
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": "2026-04-26T10:00:00.500Z",
+      "startedAt": "2026-04-26T10:00:01.000Z",
+      "completedAt": "2026-04-26T10:00:02.000Z",
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL000REJECTED0001",
+      "kind": "live",
+      "state": "failed",
+      "goal": "rejected with reason",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": {
+        "matchedRuleId": "code-tasks",
+        "assignedAgentId": "coder",
+        "capabilityMatches": [],
+        "fallbackUsed": false,
+        "decidedAt": "2026-04-26T10:00:00.500Z"
+      },
+      "assignedAgentId": "coder",
+      "result": {
+        "text": "the diff",
+        "textPath": null,
+        "artefacts": [],
+        "specialistSessionId": "session-rejected"
+      },
+      "rejection": {
+        "by": "operator",
+        "reason": "wrong agent",
+        "at": "2026-04-26T10:01:00.000Z"
+      },
+      "error": {
+        "code": "rejected",
+        "message": "wrong agent"
+      },
+      "submittedBy": "operator",
+      "createdAt": "2026-04-26T10:00:00.000Z",
+      "assignedAt": "2026-04-26T10:00:00.500Z",
+      "startedAt": "2026-04-26T10:00:01.000Z",
+      "completedAt": "2026-04-26T10:01:00.000Z",
+      "expiresAt": "2026-05-03T10:00:00.000Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "01J0CANONICAL00000EXPIRED001",
+      "kind": "live",
+      "state": "expired",
+      "goal": "stale waiting for approval",
+      "workspaceDir": null,
+      "requiredCapabilities": [],
+      "routing": null,
+      "assignedAgentId": null,
+      "result": null,
+      "rejection": null,
+      "error": null,
+      "submittedBy": "operator",
+      "createdAt": "2026-04-19T10:00:00.000Z",
+      "assignedAt": null,
+      "startedAt": null,
+      "completedAt": "2026-04-26T10:00:00.000Z",
+      "expiresAt": "2026-04-26T10:00:00.000Z"
+    }
+  ],
+  "trajectoryEvents": [
+    {
+      "traceSchema": "openclaw-trajectory",
+      "schemaVersion": 1,
+      "traceId": "fleet-orchestrator-session-1",
+      "source": "runtime",
+      "type": "task.queued",
+      "ts": "2026-04-26T10:00:00.000Z",
+      "seq": 1,
+      "sessionId": "fleet-orchestrator-session-1",
+      "data": {
+        "kind": "queued",
+        "taskId": "01J0CANONICAL000000000QUEUED",
+        "goal": "submit a queued task",
+        "submittedBy": "operator"
+      }
+    },
+    {
+      "traceSchema": "openclaw-trajectory",
+      "schemaVersion": 1,
+      "traceId": "fleet-orchestrator-session-1",
+      "source": "runtime",
+      "type": "task.assigned",
+      "ts": "2026-04-26T10:00:00.500Z",
+      "seq": 2,
+      "sessionId": "fleet-orchestrator-session-1",
+      "data": {
+        "kind": "assigned",
+        "taskId": "01J0CANONICAL000000000QUEUED",
+        "agentId": "coder",
+        "ruleId": "code-tasks",
+        "capabilities": []
+      }
+    },
+    {
+      "traceSchema": "openclaw-trajectory",
+      "schemaVersion": 1,
+      "traceId": "fleet-orchestrator-session-1",
+      "source": "runtime",
+      "type": "task.done",
+      "ts": "2026-04-26T10:00:05.000Z",
+      "seq": 3,
+      "sessionId": "fleet-orchestrator-session-1",
+      "data": {
+        "kind": "done",
+        "taskId": "01J0CANONICAL000000000DONE001",
+        "agentId": "researcher",
+        "durationMs": 5000
+      }
+    }
+  ]
+}
