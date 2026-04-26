@@ -10,9 +10,9 @@ testpaths = ["skills"]
 python_files = ["test_*.py"]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "2 days"
 index-strategy = "first-index"
 
 [tool.uv.pip]
-exclude-newer = "7 days"
+exclude-newer = "2 days"
 index-strategy = "first-index"
