@@ -99,6 +99,8 @@ describe("OpenClaw provider index", () => {
   it("loads the bundled provider index without runtime plugin loading", () => {
     const index = loadOpenClawProviderIndex();
 
+    expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("api");
+    expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("baseUrl");
     expect(index.providers.moonshot?.previewCatalog?.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -108,5 +110,13 @@ describe("OpenClaw provider index", () => {
       ]),
     );
     expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
+    expect(index.providers.deepseek?.previewCatalog?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "deepseek-chat",
+          contextWindow: 131072,
+        }),
+      ]),
+    );
   });
 });

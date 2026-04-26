@@ -740,7 +740,11 @@ Catalog authority order:
 4. OpenClaw Provider Index preview rows.
 
 The Provider Index must not contain secrets, enabled state, runtime hooks, or
-live account-specific model data. Providers with live `/models` discovery should
+live account-specific model data. Its preview catalogs use the same
+`modelCatalog` provider row shape as plugin manifests, but should stay limited
+to stable display metadata unless runtime adapter fields such as `api`,
+`baseUrl`, pricing, or compatibility flags are intentionally kept aligned with
+the installed plugin manifest. Providers with live `/models` discovery should
 write refreshed rows through the explicit model catalog cache path instead of
 making normal listing or onboarding call provider APIs.
 

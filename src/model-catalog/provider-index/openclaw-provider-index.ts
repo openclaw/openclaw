@@ -3,6 +3,9 @@ import type { OpenClawProviderIndex } from "./types.js";
 // OpenClaw-owned preview metadata for providers whose plugins may not be
 // installed yet. Installed plugin manifests remain authoritative; this index is
 // a fallback for installable-provider and pre-install model picker surfaces.
+// Preview catalogs use the shared model catalog type, but intentionally keep to
+// stable display fields unless runtime adapter metadata is kept in sync with
+// the installed plugin manifest.
 export const OPENCLAW_PROVIDER_INDEX = {
   version: 1,
   providers: {
@@ -15,8 +18,6 @@ export const OPENCLAW_PROVIDER_INDEX = {
       docs: "/providers/moonshot",
       categories: ["cloud", "llm"],
       previewCatalog: {
-        api: "openai-responses",
-        baseUrl: "https://api.moonshot.ai/v1",
         models: [
           {
             id: "kimi-k2.6",
@@ -36,21 +37,19 @@ export const OPENCLAW_PROVIDER_INDEX = {
       docs: "/providers/deepseek",
       categories: ["cloud", "llm"],
       previewCatalog: {
-        api: "openai-responses",
-        baseUrl: "https://api.deepseek.com/v1",
         models: [
           {
             id: "deepseek-chat",
             name: "DeepSeek Chat",
             input: ["text"],
-            contextWindow: 64000,
+            contextWindow: 131072,
           },
           {
             id: "deepseek-reasoner",
             name: "DeepSeek Reasoner",
             input: ["text"],
             reasoning: true,
-            contextWindow: 64000,
+            contextWindow: 131072,
           },
         ],
       },
