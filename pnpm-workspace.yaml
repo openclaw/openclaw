@@ -8,6 +8,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "tokenjuice"
   - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"

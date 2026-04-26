@@ -252,7 +252,7 @@ async function* observeModelCallIterator<T>(
   } finally {
     if (!terminalEmitted) {
       await safeReturnIterator(iterator);
-      emitModelCallError(eventBase, startedAt, { errorCategory: "StreamAbandoned" });
+      emitModelCallCompleted(eventBase, startedAt);
     }
   }
 }

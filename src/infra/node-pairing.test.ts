@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -7,6 +8,7 @@ import {
   requestNodePairing,
   verifyNodeToken,
 } from "./node-pairing.js";
+import { resolvePairingPaths } from "./pairing-files.js";
 
 async function setupPairedNode(baseDir: string): Promise<string> {
   const request = await requestNodePairing(
@@ -200,6 +202,25 @@ describe("node pairing tokens", () => {
           commands: undefined,
         }),
       });
+    });
+  });
+
+  test("refuses to overwrite corrupt paired node state when requesting pairing", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const { dir, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(pairedPath, "{not-json}", "utf8");
+
+      await expect(
+        requestNodePairing(
+          {
+            nodeId: "node-1",
+            platform: "darwin",
+          },
+          baseDir,
+        ),
+      ).rejects.toThrow(/paired\.json/);
+      await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
     });
   });
 });

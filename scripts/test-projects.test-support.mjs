@@ -97,6 +97,7 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-c
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
+const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -1056,7 +1057,10 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const expandShard =
+      expandToProjectConfigs ||
+      shard.config === FULL_AGENTIC_VITEST_CONFIG ||
+      shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.map((config) => ({
       config,

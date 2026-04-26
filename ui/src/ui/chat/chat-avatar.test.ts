@@ -39,14 +39,11 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
 }
 
 describe("renderChatAvatar", () => {
-  it("uses the assistant fallback when no assistant avatar is configured", () => {
-    const avatar = renderAvatar(["assistant"]);
-
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-  });
-
   it("renders assistant fallback, blob image, and text avatars", () => {
+    const defaultAvatar = renderAvatar(["assistant"]);
+    expect(defaultAvatar).not.toBeNull();
+    expect(defaultAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+
     const remoteAvatar = renderAvatar([
       "assistant",
       { avatar: "https://example.com/avatar.png", name: "Val" },

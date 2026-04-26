@@ -28,6 +28,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type {
+  DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
@@ -1976,6 +1977,7 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   internalDiagnostics?: {
+    emit: (event: DiagnosticEventInput) => void;
     onEvent: (
       listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
     ) => () => void;

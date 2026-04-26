@@ -616,14 +616,17 @@ async function agentCommandInternal(
       : currentSkillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+      const now = Date.now();
       const current = sessionEntry ?? {
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        sessionStartedAt: now,
       };
       const next: SessionEntry = {
         ...current,
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        sessionStartedAt: current.sessionStartedAt ?? now,
         skillsSnapshot,
       };
       await persistSessionEntry({
@@ -637,9 +640,16 @@ async function agentCommandInternal(
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
+      const now = Date.now();
       const entry = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
+        sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: now,
+        sessionStartedAt: entry.sessionStartedAt ?? now,
+        lastInteractionAt: now,
+      };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
       }
@@ -1064,6 +1074,10 @@ async function agentCommandInternal(
         fallbackProvider,
         fallbackModel,
         result,
+        touchInteraction:
+          opts.bootstrapContextRunKind !== "cron" &&
+          opts.bootstrapContextRunKind !== "heartbeat" &&
+          !opts.internalEvents?.length,
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }

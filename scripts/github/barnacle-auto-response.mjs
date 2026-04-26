@@ -180,6 +180,8 @@ const invalidLabel = "invalid";
 const spamLabel = "r: spam";
 const dirtyLabel = "dirty";
 const badBarnacleLabel = "bad-barnacle";
+const maintainerAuthorLabel = "maintainer";
+const candidateLabelValues = Object.values(candidateLabels);
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
@@ -545,6 +547,32 @@ function createMaintainerChecker(github, context) {
   };
 }
 
+async function isPrivilegedPullRequestAuthor(github, context, pullRequest, labelSet, isMaintainer) {
+  const authorLogin = pullRequest.user?.login ?? "";
+  if (labelSet.has(maintainerAuthorLabel) || pullRequest.author_association === "OWNER") {
+    return true;
+  }
+  if (authorLogin && (await isMaintainer(authorLogin))) {
+    return true;
+  }
+
+  try {
+    const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      username: authorLogin,
+    });
+    const roleName = (permission?.data?.role_name ?? "").toLowerCase();
+    return roleName === "admin" || roleName === "maintain";
+  } catch (error) {
+    if (error?.status !== 404) {
+      throw error;
+    }
+  }
+
+  return false;
+}
+
 async function countMaintainerMentions(body, authorLogin, isMaintainer, owner) {
   if (!body) {
     return 0;
@@ -613,6 +641,27 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     classifyPullRequestCandidateLabels(pullRequest, files),
     labelSet,
   );
+}
+
+async function removeLabels(github, context, issueNumber, labels, labelSet) {
+  for (const label of labels) {
+    if (!labelSet.has(label)) {
+      continue;
+    }
+    try {
+      await github.rest.issues.removeLabel({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: issueNumber,
+        name: label,
+      });
+      labelSet.delete(label);
+    } catch (error) {
+      if (error?.status !== 404) {
+        throw error;
+      }
+    }
+  }
 }
 
 export async function runBarnacleAutoResponse({ github, context, core = console }) {
@@ -764,7 +813,22 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       return;
     }
 
-    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+    const isMaintainerAuthoredPullRequest = await isPrivilegedPullRequestAuthor(
+      github,
+      context,
+      pullRequest,
+      labelSet,
+      isMaintainer,
+    );
+    if (isMaintainerAuthoredPullRequest) {
+      await removeLabels(github, context, pullRequest.number, candidateLabelValues, labelSet);
+      await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
+      core.info(
+        `Skipping Barnacle candidate labels for maintainer-authored PR #${pullRequest.number}.`,
+      );
+    } else {
+      await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+    }
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({

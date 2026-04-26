@@ -23,7 +23,10 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   };
 });
 
-import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
+import {
+  commitConfigWithPendingPluginInstalls,
+  commitConfigWriteWithPendingPluginInstalls,
+} from "./plugins-install-record-commit.js";
 
 describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
@@ -149,6 +152,27 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig,
     });
+    expect(result).toEqual({
+      config: nextConfig,
+      installRecords: {},
+      movedInstallRecords: false,
+    });
+  });
+
+  it("supports non-replace config writers without adding an undefined write options argument", async () => {
+    const writeConfigFile = vi.fn(async () => undefined);
+    const nextConfig: OpenClawConfig = {
+      gateway: {
+        mode: "local",
+      },
+    };
+
+    const result = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig,
+      commit: writeConfigFile,
+    });
+
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(result).toEqual({
       config: nextConfig,
       installRecords: {},
