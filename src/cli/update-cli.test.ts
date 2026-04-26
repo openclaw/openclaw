@@ -28,6 +28,7 @@ const serviceReadRuntime = vi.fn();
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
+const probeGateway = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
@@ -172,6 +173,10 @@ vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
   classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
   formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
+}));
+
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: (...args: unknown[]) => probeGateway(...args),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -446,6 +451,22 @@ describe("update-cli", () => {
     });
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "1.0.0",
+        connId: "conn-test",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
     pathExists.mockResolvedValue(false);
     syncPluginsForUpdateChannel.mockResolvedValue({
       changed: false,
@@ -521,6 +542,22 @@ describe("update-cli", () => {
       tag: "latest",
       version: "2026.4.10",
     });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.10",
+        connId: "downgraded-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
 
     await updateCommand({ yes: true, tag: "2026.4.10" });
 
@@ -528,6 +565,7 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalled();
     expect(updateNpmInstalledPlugins).toHaveBeenCalled();
     expect(runDaemonInstall).toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -1590,6 +1628,22 @@ describe("update-cli", () => {
       },
     },
   ] as const)("updateCommand service refresh behavior: $name", runUpdateCliScenario);
+
+  it("fails a package update when service env refresh cannot complete", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+
+    await updateCommand({ yes: true });
+
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it.each([
     {

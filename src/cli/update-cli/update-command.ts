@@ -50,6 +50,7 @@ import {
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
@@ -748,7 +749,7 @@ async function maybeRestartService(params: {
   gatewayPort: number;
   restartScriptPath?: string | null;
   invocationCwd?: string;
-}): Promise<void> {
+}): Promise<boolean> {
   if (params.shouldRestart) {
     if (!params.opts.json) {
       defaultRuntime.log("");
@@ -756,6 +757,9 @@ async function maybeRestartService(params: {
     }
 
     try {
+      const expectedGatewayVersion = isPackageManagerUpdateMode(params.result.mode)
+        ? normalizeOptionalString(params.result.after?.version)
+        : undefined;
       let restarted = false;
       let restartInitiated = false;
       if (params.refreshServiceEnv) {
@@ -774,6 +778,9 @@ async function maybeRestartService(params: {
             defaultRuntime.error(message);
           } else {
             defaultRuntime.log(theme.warn(message));
+          }
+          if (isPackageManagerUpdateMode(params.result.mode)) {
+            return false;
           }
         }
       }
@@ -806,6 +813,7 @@ async function maybeRestartService(params: {
         let health = await waitForGatewayHealthyRestart({
           service,
           port: params.gatewayPort,
+          expectedVersion: expectedGatewayVersion,
         });
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!params.opts.json) {
@@ -820,6 +828,7 @@ async function maybeRestartService(params: {
           health = await waitForGatewayHealthyRestart({
             service,
             port: params.gatewayPort,
+            expectedVersion: expectedGatewayVersion,
           });
         }
 
@@ -840,6 +849,9 @@ async function maybeRestartService(params: {
           );
         }
         defaultRuntime.log("");
+        if (!health.healthy && health.versionMismatch) {
+          return false;
+        }
       }
     } catch (err) {
       if (!params.opts.json) {
@@ -851,7 +863,7 @@ async function maybeRestartService(params: {
         );
       }
     }
-    return;
+    return true;
   }
 
   if (!params.opts.json) {
@@ -870,6 +882,7 @@ async function maybeRestartService(params: {
       );
     }
   }
+  return true;
 }
 
 async function runPostCorePluginUpdate(params: {
@@ -1423,7 +1436,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       skipPrompt: Boolean(opts.yes),
     });
 
-    await maybeRestartService({
+    const restartOk = await maybeRestartService({
       shouldRestart,
       result,
       opts,
@@ -1432,6 +1445,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       restartScriptPath,
       invocationCwd,
     });
+    if (!restartOk) {
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   if (!opts.json) {

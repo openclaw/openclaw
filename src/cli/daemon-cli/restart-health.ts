@@ -29,6 +29,12 @@ export type GatewayRestartSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
   staleGatewayPids: number[];
+  gatewayVersion?: string | null;
+  expectedVersion?: string;
+  versionMismatch?: {
+    expected: string;
+    actual: string | null;
+  };
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
 };
@@ -36,6 +42,11 @@ export type GatewayRestartSnapshot = {
 export type GatewayPortHealthSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
+};
+
+type GatewayReachability = {
+  reachable: boolean;
+  gatewayVersion: string | null;
 };
 
 function hasListenerAttributionGap(portUsage: PortUsage): boolean {
@@ -69,7 +80,28 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   );
 }
 
-async function confirmGatewayReachable(port: number): Promise<boolean> {
+function applyExpectedVersion(
+  snapshot: GatewayRestartSnapshot,
+  expectedVersion: string | undefined,
+): GatewayRestartSnapshot {
+  if (!expectedVersion) {
+    return snapshot;
+  }
+  if (snapshot.gatewayVersion === expectedVersion) {
+    return { ...snapshot, expectedVersion };
+  }
+  return {
+    ...snapshot,
+    healthy: false,
+    expectedVersion,
+    versionMismatch: {
+      expected: expectedVersion,
+      actual: snapshot.gatewayVersion ?? null,
+    },
+  };
+}
+
+async function confirmGatewayReachable(port: number): Promise<GatewayReachability> {
   const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
   const password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
   const probe = await probeGateway({
@@ -78,7 +110,10 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
     timeoutMs: 3_000,
     includeDetails: false,
   });
-  return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
+  return {
+    reachable: probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason),
+    gatewayVersion: probe.server?.version ?? null,
+  };
 }
 
 async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealthSnapshot> {
@@ -98,7 +133,7 @@ async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealth
   let healthy = false;
   if (portUsage.status === "busy") {
     try {
-      healthy = await confirmGatewayReachable(port);
+      healthy = (await confirmGatewayReachable(port)).reachable;
     } catch {
       // best-effort probe
     }
@@ -111,9 +146,16 @@ export async function inspectGatewayRestart(params: {
   service: GatewayService;
   port: number;
   env?: NodeJS.ProcessEnv;
+  expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
+  const expectedVersion = normalizeOptionalString(params.expectedVersion);
+  let reachability: GatewayReachability | null = null;
+  const loadReachability = async () => {
+    reachability ??= await confirmGatewayReachable(params.port);
+    return reachability;
+  };
   let runtime: GatewayServiceRuntime = { status: "unknown" };
   try {
     runtime = await params.service.readRuntime(env);
@@ -136,14 +178,18 @@ export async function inspectGatewayRestart(params: {
 
   if (portUsage.status === "busy" && runtime.status !== "running") {
     try {
-      const reachable = await confirmGatewayReachable(params.port);
-      if (reachable) {
-        return {
-          runtime,
-          portUsage,
-          healthy: true,
-          staleGatewayPids: [],
-        };
+      const reachable = await loadReachability();
+      if (reachable.reachable) {
+        return applyExpectedVersion(
+          {
+            runtime,
+            portUsage,
+            healthy: true,
+            staleGatewayPids: [],
+            gatewayVersion: reachable.gatewayVersion,
+          },
+          expectedVersion,
+        );
       }
     } catch {
       // Probe is best-effort; keep the ownership-based diagnostics.
@@ -176,9 +222,21 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
-  if (!healthy && running && portUsage.status === "busy") {
+  let gatewayVersion: string | null | undefined;
+  if (expectedVersion && healthy && portUsage.status === "busy") {
     try {
-      healthy = await confirmGatewayReachable(params.port);
+      const reachable = await loadReachability();
+      healthy = reachable.reachable;
+      gatewayVersion = reachable.gatewayVersion;
+    } catch {
+      healthy = false;
+    }
+  }
+  if (!healthy && running && portUsage.status === "busy" && !expectedVersion) {
+    try {
+      const reachable = await loadReachability();
+      healthy = reachable.reachable;
+      gatewayVersion = reachable.gatewayVersion;
     } catch {
       // best-effort probe
     }
@@ -203,12 +261,16 @@ export async function inspectGatewayRestart(params: {
     ]),
   );
 
-  return {
-    runtime,
-    portUsage,
-    healthy,
-    staleGatewayPids,
-  };
+  return applyExpectedVersion(
+    {
+      runtime,
+      portUsage,
+      healthy,
+      staleGatewayPids,
+      ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+    },
+    expectedVersion,
+  );
 }
 
 function shouldEarlyExitStoppedFree(
@@ -243,6 +305,7 @@ export async function waitForGatewayHealthyRestart(params: {
   attempts?: number;
   delayMs?: number;
   env?: NodeJS.ProcessEnv;
+  expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
 }): Promise<GatewayRestartSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -252,6 +315,7 @@ export async function waitForGatewayHealthyRestart(params: {
     service: params.service,
     port: params.port,
     env: params.env,
+    expectedVersion: params.expectedVersion,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
   });
 
@@ -282,6 +346,7 @@ export async function waitForGatewayHealthyRestart(params: {
       service: params.service,
       port: params.port,
       env: params.env,
+      expectedVersion: params.expectedVersion,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
     });
   }
@@ -328,6 +393,12 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
 
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
+  if (snapshot.versionMismatch) {
+    const actual = snapshot.versionMismatch.actual ?? "unavailable";
+    lines.push(
+      `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
+    );
+  }
   const runtimeSummary = [
     snapshot.runtime.status ? `status=${snapshot.runtime.status}` : null,
     snapshot.runtime.state ? `state=${snapshot.runtime.state}` : null,

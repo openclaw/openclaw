@@ -40,6 +40,7 @@ function makeGatewayService(
 async function inspectGatewayRestartWithSnapshot(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
   portUsage: PortUsage;
+  expectedVersion?: string;
   includeUnknownListenersAsStale?: boolean;
 }) {
   const service = makeGatewayService(params.runtime);
@@ -48,6 +49,7 @@ async function inspectGatewayRestartWithSnapshot(params: {
   return inspectGatewayRestart({
     service,
     port: 18789,
+    ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
       : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
@@ -246,6 +248,61 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
+  });
+
+  it("requires the expected gateway version when provided", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.23", connId: "old" },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedVersion: "2026.4.24",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      gatewayVersion: "2026.4.23",
+      expectedVersion: "2026.4.24",
+      versionMismatch: {
+        expected: "2026.4.24",
+        actual: "2026.4.23",
+      },
+    });
+  });
+
+  it("accepts the restarted gateway when the expected version matches", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedVersion: "2026.4.24",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.versionMismatch).toBeUndefined();
   });
 
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
