@@ -158,12 +158,6 @@ export function createSkillWorkshopTool(params: {
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
           });
-          enforceSkillsPromptBudgetIfConfigured({
-            proposal,
-            preparedMarkdown: prepared.content,
-            created: prepared.created,
-            openClawConfig: params.api.config,
-          });
           const critical = prepared.findings.find((finding) => finding.severity === "critical");
           if (critical) {
             const stored = await store.add(
@@ -178,6 +172,12 @@ export function createSkillWorkshopTool(params: {
             );
             return jsonResult({ status: "quarantined", proposal: stored });
           }
+          enforceSkillsPromptBudgetIfConfigured({
+            proposal,
+            preparedMarkdown: prepared.content,
+            created: prepared.created,
+            openClawConfig: params.api.config,
+          });
           const applied = await applyProposalToWorkspace({
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
@@ -198,12 +198,6 @@ export function createSkillWorkshopTool(params: {
           proposal,
           maxSkillBytes: params.config.maxSkillBytes,
         });
-        enforceSkillsPromptBudgetIfConfigured({
-          proposal,
-          preparedMarkdown: prepared.content,
-          created: prepared.created,
-          openClawConfig: params.api.config,
-        });
         const critical = prepared.findings.find((finding) => finding.severity === "critical");
         if (critical) {
           const stored = await store.add(
@@ -218,6 +212,12 @@ export function createSkillWorkshopTool(params: {
           );
           return jsonResult({ status: "quarantined", proposal: stored });
         }
+        enforceSkillsPromptBudgetIfConfigured({
+          proposal,
+          preparedMarkdown: prepared.content,
+          created: prepared.created,
+          openClawConfig: params.api.config,
+        });
         const stored = await store.add(
           { ...proposal, scanFindings: prepared.findings },
           params.config.maxPending,

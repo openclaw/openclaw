@@ -52,12 +52,6 @@ export async function applyOrStoreProposal(params: {
     proposal: params.proposal,
     maxSkillBytes: params.config.maxSkillBytes,
   });
-  enforceSkillsPromptBudgetIfConfigured({
-    proposal: params.proposal,
-    preparedMarkdown: prepared.content,
-    created: prepared.created,
-    openClawConfig: params.openClawConfig,
-  });
   const critical = prepared.findings.find((finding) => finding.severity === "critical");
   if (critical) {
     const stored = await params.store.add(
@@ -72,6 +66,12 @@ export async function applyOrStoreProposal(params: {
     );
     return { status: "quarantined", proposal: stored };
   }
+  enforceSkillsPromptBudgetIfConfigured({
+    proposal: params.proposal,
+    preparedMarkdown: prepared.content,
+    created: prepared.created,
+    openClawConfig: params.openClawConfig,
+  });
   if (params.config.approvalPolicy === "auto") {
     const applied = await applyProposalToWorkspace({
       proposal: params.proposal,
