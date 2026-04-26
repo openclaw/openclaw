@@ -40,15 +40,13 @@ RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 # Example binary 1: Gmail CLI (gogcli — installs as `gog`)
 ARG GOGCLI_VERSION=0.13.0
 RUN curl -L https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_amd64.tar.gz \
-  | tar -xz -C /tmp \
-  && mv /tmp/gog /usr/local/bin/gog \
+  | tar -xzO gog > /usr/local/bin/gog \
   && chmod +x /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
 ARG GOPLACES_VERSION=0.3.0
 RUN curl -L https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_${GOPLACES_VERSION}_linux_amd64.tar.gz \
-  | tar -xz -C /tmp \
-  && mv /tmp/goplaces /usr/local/bin/goplaces \
+  | tar -xzO goplaces > /usr/local/bin/goplaces \
   && chmod +x /usr/local/bin/goplaces
 
 # Example binary 3: WhatsApp CLI
