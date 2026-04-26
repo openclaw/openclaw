@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
@@ -140,18 +141,27 @@ export async function discoverHuggingfaceModels(
   }
 
   try {
-    const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Authorization: `Bearer ${trimmedKey}`,
-        "Content-Type": "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${HUGGINGFACE_BASE_URL}/models`,
+      init: {
+        headers: {
+          Authorization: `Bearer ${trimmedKey}`,
+          "Content-Type": "application/json",
+        },
       },
+      timeoutMs,
+      auditContext: "huggingface-model-discovery",
     });
-    if (!response.ok) {
-      return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-    }
+    let body: OpenAIListModelsResponse | undefined;
+    try {
+      if (!response.ok) {
+        return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+      }
 
-    const body = (await response.json()) as OpenAIListModelsResponse;
+      body = (await response.json()) as OpenAIListModelsResponse;
+    } finally {
+      await release();
+    }
     const data = body?.data;
     if (!Array.isArray(data) || data.length === 0) {
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
