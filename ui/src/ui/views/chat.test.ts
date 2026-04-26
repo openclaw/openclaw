@@ -432,6 +432,53 @@ describe("chat loading skeleton", () => {
   });
 });
 
+describe("chat attachment picker", () => {
+  it("accepts and previews non-video file attachments", async () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentsChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          dataUrl: expect.stringMatching(/^data:application\/pdf;base64,/),
+          fileName: "brief.pdf",
+          mimeType: "application/pdf",
+        }),
+      ]);
+    });
+
+    const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
+    const preview = renderChatView({ attachments: nextAttachments });
+    expect(preview.querySelector(".chat-attachment-thumb--file")).not.toBeNull();
+    expect(preview.textContent).toContain("brief.pdf");
+  });
+
+  it("filters video file attachments", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+});
+
 describe("chat queue", () => {
   it("renders Steer only for queued messages during an active run", () => {
     const onQueueSteer = vi.fn();
