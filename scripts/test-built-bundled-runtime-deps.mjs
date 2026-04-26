@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
@@ -39,6 +42,188 @@ const errors = [
 ];
 
 assert.deepEqual(errors, [], errors.join("\n"));
+
+function packageNodeModulesPath(nodeModulesDir, packageName) {
+  return path.join(nodeModulesDir, ...packageName.split("/"));
+}
+
+function stageBrowserRuntimeDependencyStub(stageNodeModulesDir, packageName) {
+  const packageDir = packageNodeModulesPath(stageNodeModulesDir, packageName);
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    `${JSON.stringify(
+      {
+        name: packageName,
+        version: "0.0.0",
+        main: "./index.cjs",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  if (packageName === "playwright-core") {
+    fs.writeFileSync(
+      path.join(packageDir, "index.cjs"),
+      [
+        "module.exports = {",
+        "  chromium: {",
+        "    marker: 'stub-chromium',",
+        "  },",
+        "  devices: {",
+        "    'Stub Device': { marker: 'stub-device' },",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return;
+  }
+
+  if (packageName === "typebox") {
+    fs.writeFileSync(
+      path.join(packageDir, "index.cjs"),
+      [
+        "const createSchema = (kind, value = {}) => ({ kind, ...value });",
+        "const Type = new Proxy(function Type() {}, {",
+        "  get(_target, prop) {",
+        "    if (prop === Symbol.toStringTag) {",
+        "      return 'Type';",
+        "    }",
+        "    return (...args) => createSchema(String(prop), { args });",
+        "  },",
+        "});",
+        "",
+        "module.exports = { Type };",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return;
+  }
+
+  fs.writeFileSync(
+    path.join(packageDir, "index.cjs"),
+    ["module.exports = {};", ""].join("\n"),
+    "utf8",
+  );
+}
+
+function createBuiltBrowserImportSmokeFixture(packageRoot) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-built-browser-smoke-"));
+  const tempDistDir = path.join(tempRoot, "dist");
+  const tempNodeModulesDir = path.join(tempRoot, "node_modules");
+  const stageNodeModulesDir = path.join(
+    tempRoot,
+    ".openclaw",
+    "plugin-runtime-deps",
+    "browser",
+    "node_modules",
+  );
+
+  fs.cpSync(path.join(packageRoot, "dist"), tempDistDir, {
+    recursive: true,
+    dereference: true,
+  });
+  fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(tempRoot, "package.json"));
+  fs.cpSync(path.join(packageRoot, "node_modules"), tempNodeModulesDir, {
+    recursive: true,
+    dereference: true,
+  });
+  fs.rmSync(path.join(tempNodeModulesDir, "playwright-core"), {
+    force: true,
+    recursive: true,
+  });
+
+  assert.ok(!fs.existsSync(path.join(tempNodeModulesDir, "playwright-core")));
+  fs.mkdirSync(stageNodeModulesDir, { recursive: true });
+  assert.deepEqual(fs.readdirSync(stageNodeModulesDir), []);
+
+  const browserPackageJson = JSON.parse(
+    fs.readFileSync(path.join(tempDistDir, "extensions", "browser", "package.json"), "utf8"),
+  );
+  const browserRuntimeDeps = new Map(
+    [
+      ...Object.entries(browserPackageJson.dependencies ?? {}),
+      ...Object.entries(browserPackageJson.optionalDependencies ?? {}),
+    ].filter((entry) => typeof entry[1] === "string" && entry[1].length > 0),
+  );
+  const missingBrowserRuntimeDeps = [...browserRuntimeDeps.keys()]
+    .filter((packageName) => {
+      const rootSentinel = path.join(tempNodeModulesDir, ...packageName.split("/"), "package.json");
+      const stagedSentinel = path.join(
+        stageNodeModulesDir,
+        ...packageName.split("/"),
+        "package.json",
+      );
+      return !fs.existsSync(rootSentinel) && !fs.existsSync(stagedSentinel);
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+
+  for (const packageName of missingBrowserRuntimeDeps) {
+    stageBrowserRuntimeDependencyStub(stageNodeModulesDir, packageName);
+  }
+
+  return {
+    entryPath: path.join(tempDistDir, "pw-ai.js"),
+    stageNodeModulesDir,
+    tempRoot,
+  };
+}
+
+function runBuiltBrowserImportSmoke(packageRoot) {
+  const fixture = createBuiltBrowserImportSmokeFixture(packageRoot);
+  try {
+    assert.ok(fs.existsSync(fixture.entryPath), `missing built pw-ai entry: ${fixture.entryPath}`);
+    assert.ok(
+      !fs.existsSync(path.join(fixture.tempRoot, "node_modules", "playwright-core")),
+      "package-root playwright-core should be absent in the smoke fixture",
+    );
+    assert.ok(
+      fs.existsSync(path.join(fixture.stageNodeModulesDir, "playwright-core", "package.json")),
+      "staged playwright-core should be present in the repair fixture",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(pathToFileURL(fixture.entryPath).href)});`,
+      ],
+      {
+        cwd: fixture.tempRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: fixture.stageNodeModulesDir,
+        },
+      },
+    );
+
+    assert.equal(
+      result.status,
+      0,
+      [
+        "[build-smoke] built browser pw-ai import failed",
+        `status=${String(result.status)}`,
+        `signal=${String(result.signal)}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true });
+  }
+}
+
+runBuiltBrowserImportSmoke(packageRoot);
+
 process.stdout.write(
   `[build-smoke] bundled runtime dependency smoke passed packageRoot=${packageRoot}\n`,
 );
