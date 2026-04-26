@@ -85,7 +85,6 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -111,11 +110,6 @@ import {
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveSubagentToolPolicyForSession,
-} from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -141,19 +135,11 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import {
-  buildEmptyExplicitToolAllowlistError,
-  collectExplicitToolAllowlistSources,
-} from "../../tool-allowlist-guard.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -354,25 +340,18 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
-export function resolveUnknownToolGuardThreshold(loopDetection?: {
-  enabled?: boolean;
-  unknownToolThreshold?: number;
-}): number {
-  // The unknown-tool guard is a safety net against the model hallucinating a
-  // tool name or calling a tool that has since been removed from the allowlist
-  // (for example after a `skills.allowBundled` config change). After `threshold`
-  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
-  // message content to tell the model to stop, which breaks otherwise-infinite
-  // Tool-not-found loops against the provider. Unlike the genericRepeat /
-  // pingPong / pollNoProgress detectors this guard has no false-positive
-  // surface because the tool is objectively not registered in this run, so it
-  // stays on regardless of `tools.loopDetection.enabled`.
-  const raw = loopDetection?.unknownToolThreshold;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return UNKNOWN_TOOL_THRESHOLD;
-}
+import {
+  applyEmbeddedAttemptToolsAllow,
+  collectAttemptExplicitToolAllowlistSources,
+  resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tools.js";
+
+export {
+  applyEmbeddedAttemptToolsAllow,
+  resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tools.js";
 
 export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
@@ -464,106 +443,8 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
-export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
-  tools: T[],
-  toolsAllow?: string[],
-): T[] {
-  if (!toolsAllow || toolsAllow.length === 0) {
-    return tools;
-  }
-  const allowSet = new Set(toolsAllow);
-  return tools.filter((tool) => allowSet.has(tool.name));
-}
-
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   return stripToolResultDetails(normalizeAssistantReplayContent(messages));
-}
-
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
-  if (!params.toolsEnabled || params.disableTools === true) {
-    return false;
-  }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
-    return true;
-  }
-  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
-}
-
-function collectAttemptExplicitToolAllowlistSources(params: {
-  config?: EmbeddedRunAttemptParams["config"];
-  sessionKey?: string;
-  sandboxSessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  toolsAllow?: string[];
-}) {
-  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sandboxSessionKey &&
-    isSubagentEnvelopeSession(params.sandboxSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  return collectExplicitToolAllowlistSources([
-    { label: "tools.allow", allow: globalPolicy?.allow },
-    { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
-    {
-      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      allow: agentPolicy?.allow,
-    },
-    {
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      allow: agentProviderPolicy?.allow,
-    },
-    { label: "group tools.allow", allow: groupPolicy?.allow },
-    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
-    { label: "subagent tools.allow", allow: subagentPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow },
-  ]);
 }
 
 export async function runEmbeddedAttempt(
