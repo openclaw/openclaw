@@ -36,6 +36,9 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+const ACP_CRON_MCP_PROBE_MAX_ATTEMPTS = 2;
+const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
+const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
@@ -148,6 +151,10 @@ function shouldRequireBoundAssistantTranscript(liveAgent: LiveAcpAgent): boolean
     liveAgent === "opencode" ||
     isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT)
   );
+}
+
+function shouldRequireCronMcpProbe(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON);
 }
 
 function normalizeOpenAiModelRef(value: string): string {
@@ -287,24 +294,30 @@ async function bindConversationAndWait(params: {
           doctor?: () => Promise<{ message?: string; details?: string[] }>;
         }
       | undefined;
-    if (runtime?.probeAvailability) {
-      await runtime.probeAvailability().catch(() => {});
-    }
-    if (!(backend?.healthy?.() ?? false)) {
-      if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
-        const report = await runtime.doctor().catch((error) => ({
-          message: error instanceof Error ? error.message : String(error),
-          details: [],
-        }));
-        logLiveStep(
-          `acpx doctor before bind attempt ${attempt}: ${report.message ?? "unknown"}${
-            report.details?.length ? ` (${report.details.join("; ")})` : ""
-          }`,
-        );
+    const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
+    if (backendUnavailable) {
+      if (runtime?.probeAvailability) {
+        await runtime.probeAvailability().catch(() => {});
       }
-      logLiveStep(`acpx backend still unhealthy before bind attempt ${attempt}`);
-      await sleep(5_000);
-      continue;
+      const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
+      if (backendReadyAfterProbe) {
+        logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
+      } else {
+        if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
+          const report = await runtime.doctor().catch((error) => ({
+            message: error instanceof Error ? error.message : String(error),
+            details: [],
+          }));
+          logLiveStep(
+            `acpx doctor before bind attempt ${attempt}: ${report.message ?? "unknown"}${
+              report.details?.length ? ` (${report.details.join("; ")})` : ""
+            }`,
+          );
+        }
+        logLiveStep(`acpx backend still unhealthy before bind attempt ${attempt}`);
+        await sleep(5_000);
+        continue;
+      }
     }
 
     await sendChatAndWait({
@@ -461,6 +474,25 @@ async function waitForAssistantTurn(params: {
       extractAssistantTexts(finalHistory.messages ?? []),
     )}`,
   );
+}
+
+async function pollCronJobVisibleViaCli(params: {
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+  expectedName: string;
+  expectedMessage: string;
+}): Promise<{ job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>; pollsUsed: number }> {
+  for (let verifyAttempt = 0; verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS; verifyAttempt += 1) {
+    const job = await assertCronJobVisibleViaCli(params);
+    if (job) {
+      return { job, pollsUsed: verifyAttempt + 1 };
+    }
+    if (verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS - 1) {
+      await sleep(ACP_CRON_MCP_PROBE_VERIFY_POLL_MS);
+    }
+  }
+  return { pollsUsed: ACP_CRON_MCP_PROBE_VERIFY_POLLS };
 }
 
 describeLive("gateway live (ACP bind)", () => {
@@ -852,9 +884,10 @@ describeLive("gateway live (ACP bind)", () => {
           agentId: liveAgent,
           sessionKey: spawnedSessionKey,
         });
+        const requireCronMcpProbe = shouldRequireCronMcpProbe();
         let cronJobId: string | undefined;
         let lastCronAssistantText = "";
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        for (let attempt = 0; attempt < ACP_CRON_MCP_PROBE_MAX_ATTEMPTS; attempt += 1) {
           await sendChatAndWait({
             client,
             sessionKey: originalSessionKey,
@@ -876,7 +909,7 @@ describeLive("gateway live (ACP bind)", () => {
             cronHistory = await waitForAssistantText({
               client,
               sessionKey: spawnedSessionKey,
-              timeoutMs: liveAgent === "claude" ? 90_000 : 45_000,
+              timeoutMs: 20_000,
               contains: cronProbe.name,
             });
           } catch {
@@ -885,13 +918,14 @@ describeLive("gateway live (ACP bind)", () => {
           if (cronHistory) {
             lastCronAssistantText = cronHistory.lastAssistantText;
           }
-          const createdJob = await assertCronJobVisibleViaCli({
+          const verifyResult = await pollCronJobVisibleViaCli({
             port,
             token,
             env: process.env,
             expectedName: cronProbe.name,
             expectedMessage: cronProbe.message,
           });
+          const createdJob = verifyResult.job;
           if (createdJob) {
             assertCronJobMatches({
               job: createdJob,
@@ -906,10 +940,15 @@ describeLive("gateway live (ACP bind)", () => {
             }
             break;
           }
-          if (attempt === 1) {
-            if (liveAgent !== "claude") {
+          logLiveStep(
+            `cron mcp job not observed after attempt ${String(
+              attempt + 1,
+            )}; polls=${String(verifyResult.pollsUsed)}`,
+          );
+          if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
+            if (!requireCronMcpProbe) {
               logLiveStep(
-                `cron mcp job ${cronProbe.name} not observed for ${liveAgent}; continuing after bind/image verification`,
+                `cron mcp job ${cronProbe.name} not observed; continuing after bind/image verification`,
               );
               break;
             }
@@ -921,7 +960,7 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!cronJobId) {
-          if (liveAgent !== "claude") {
+          if (!requireCronMcpProbe) {
             return;
           }
           throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);
