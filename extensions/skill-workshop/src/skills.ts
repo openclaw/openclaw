@@ -225,13 +225,13 @@ export async function applyProposalToWorkspace(params: {
   openClawConfig?: OpenClawConfig;
 }): Promise<{ skillPath: string; created: boolean; findings: SkillScanFinding[] }> {
   const prepared = await prepareProposalWrite(params);
+  assertSkillContentSafe(prepared.content);
   enforceSkillsPromptBudgetIfConfigured({
     proposal: params.proposal,
     preparedMarkdown: prepared.content,
     created: prepared.created,
     openClawConfig: params.openClawConfig,
   });
-  assertSkillContentSafe(prepared.content);
   const verified = await prepareProposalWrite(params);
   if (verified.skillPath !== prepared.skillPath || verified.content !== prepared.content) {
     throw new Error("skill proposal stale: workspace changed before write");

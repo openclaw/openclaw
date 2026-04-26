@@ -172,12 +172,6 @@ export function createSkillWorkshopTool(params: {
             );
             return jsonResult({ status: "quarantined", proposal: stored });
           }
-          enforceSkillsPromptBudgetIfConfigured({
-            proposal,
-            preparedMarkdown: prepared.content,
-            created: prepared.created,
-            openClawConfig: params.api.config,
-          });
           const applied = await applyProposalToWorkspace({
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
