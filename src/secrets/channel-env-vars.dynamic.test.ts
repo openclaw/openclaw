@@ -9,13 +9,17 @@ type MockManifestRegistry = {
   diagnostics: unknown[];
 };
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryForInstalledIndex: vi.fn<() => MockManifestRegistry>(() => ({
+const pluginRegistryMocks = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
     plugins: [],
     diagnostics: [],
-  })),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-}));
+  }));
+  return {
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
@@ -23,6 +27,8 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 

@@ -8,6 +8,11 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mocks.loadPluginManifestRegistry(...args),
 }));
 
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistry(...args),
+}));
+
 let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
 let resolveManifestActivationPlan: typeof import("./activation-planner.js").resolveManifestActivationPlan;
 

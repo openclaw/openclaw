@@ -19,9 +19,8 @@ import {
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
@@ -348,17 +347,11 @@ function loadInstalledChannelManifestRecords(params: {
   env: NodeJS.ProcessEnv;
   cache?: boolean;
 }): readonly PluginManifestRecord[] {
-  const index = loadPluginRegistrySnapshot({
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     cache: params.cache,
-  });
-  return loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
     includeDisabled: true,
   }).plugins;
 }

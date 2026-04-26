@@ -7,9 +7,8 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../../plugins/plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
@@ -521,17 +520,11 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const pluginIndex = loadPluginRegistrySnapshot({
+  const manifestRecords = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     workspaceDir,
     env,
     cache: options.cache,
-  });
-  const manifestRecords = loadPluginManifestRegistryForInstalledIndex({
-    index: pluginIndex,
-    config: cfg,
-    workspaceDir,
-    env,
     includeDisabled: true,
   }).plugins;
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);

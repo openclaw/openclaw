@@ -10,9 +10,8 @@ import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
@@ -105,12 +104,7 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
   if (!workspaceDir) {
     return {};
   }
-  const index = loadPluginRegistrySnapshot({
-    workspaceDir,
-    config: params.cfg,
-  });
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.cfg,
     includeDisabled: true,

@@ -30,12 +30,18 @@ vi.mock("../manifest-registry-installed.js", () => ({
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
 }));
 
-vi.mock("../plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: (
-    ...args: Parameters<typeof registryJitiMocks.loadPluginRegistrySnapshot>
-  ) => registryJitiMocks.loadPluginRegistrySnapshot(...args),
-}));
-
+vi.mock("../plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: (
+      ...args: Parameters<typeof registryJitiMocks.loadPluginRegistrySnapshot>
+    ) => registryJitiMocks.loadPluginRegistrySnapshot(...args),
+    loadPluginManifestRegistryForPluginRegistry: (
+      ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
+    ) => registryJitiMocks.loadPluginManifestRegistry(...args),
+  };
+});
 export function resetRegistryJitiMocks(): void {
   registryJitiMocks.createJiti.mockReset();
   registryJitiMocks.discoverOpenClawPlugins.mockReset();

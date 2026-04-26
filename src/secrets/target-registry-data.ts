@@ -1,6 +1,5 @@
-import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -50,11 +49,8 @@ function hasWebProviderContract(
 
 function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  const index = loadPluginRegistrySnapshot({});
-  for (const record of loadPluginManifestRegistryForInstalledIndex({
-    index,
-    includeDisabled: true,
-  }).plugins) {
+  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
+    .plugins) {
     if (record.origin !== "bundled") {
       continue;
     }
@@ -73,11 +69,8 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
-  const index = loadPluginRegistrySnapshot({});
-  for (const record of loadPluginManifestRegistryForInstalledIndex({
-    index,
-    includeDisabled: true,
-  }).plugins) {
+  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
+    .plugins) {
     if (record.origin !== "bundled") {
       continue;
     }

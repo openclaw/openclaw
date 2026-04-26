@@ -7,6 +7,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: (...args: unknown[]) => mocks.loadPluginRegistrySnapshot(...args),
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryForInstalledIndex({
+      ...(args[0] && typeof args[0] === "object" ? args[0] : {}),
+      index: mocks.loadPluginRegistrySnapshot(...args),
+    }),
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({

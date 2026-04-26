@@ -5,16 +5,21 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
-const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-}));
+const hoisted = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn();
+  return {
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
 
 vi.mock("../../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: hoisted.loadPluginManifestRegistryForInstalledIndex,
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: hoisted.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
 }));
 
