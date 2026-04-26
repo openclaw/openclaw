@@ -4,7 +4,7 @@ import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { scopedExecEventWakeOptions } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -39,7 +39,6 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
-  scopedHeartbeatWakeOptions,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
 
@@ -51,31 +50,6 @@ const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
-const EXEC_EVENT_HEARTBEAT_OVERRIDE = {
-  target: "last",
-  to: undefined,
-  accountId: undefined,
-  isolatedSession: false,
-} as const;
-
-function scopedExecEventWakeOptions(sessionKey: string) {
-  const wakeOptions = { reason: "exec-event", coalesceMs: 0 };
-  if (parseAgentSessionKey(sessionKey)) {
-    return scopedHeartbeatWakeOptions(sessionKey, {
-      ...wakeOptions,
-      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
-    });
-  }
-  if (sessionKey.trim() === "global") {
-    return {
-      ...wakeOptions,
-      sessionKey: "global",
-      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
-    };
-  }
-  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
-}
-
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();

@@ -10,6 +10,7 @@ import {
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  scopedExecEventWakeOptions,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -125,6 +126,40 @@ describe("thread session suffix parsing", () => {
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
+    });
+  });
+});
+
+describe("scopedExecEventWakeOptions", () => {
+  const heartbeatOverride = {
+    target: "last",
+    to: undefined,
+    accountId: undefined,
+    isolatedSession: false,
+  };
+
+  it("scopes agent session exec-event wakes and clears pinned heartbeat delivery", () => {
+    expect(scopedExecEventWakeOptions("agent:main:telegram:group:123")).toEqual({
+      reason: "exec-event",
+      coalesceMs: 0,
+      sessionKey: "agent:main:telegram:group:123",
+      heartbeat: heartbeatOverride,
+    });
+  });
+
+  it("treats global as a canonical routed exec-event session", () => {
+    expect(scopedExecEventWakeOptions("global")).toEqual({
+      reason: "exec-event",
+      coalesceMs: 0,
+      sessionKey: "global",
+      heartbeat: heartbeatOverride,
+    });
+  });
+
+  it("leaves legacy fallback keys on legacy heartbeat delivery config", () => {
+    expect(scopedExecEventWakeOptions("node-abc")).toEqual({
+      reason: "exec-event",
+      coalesceMs: 0,
     });
   });
 });
