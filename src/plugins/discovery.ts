@@ -594,6 +594,34 @@ function discoverInDirectory(params: {
 
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      try {
+        const targetStat = fs.statSync(fullPath);
+        if (targetStat.isDirectory()) {
+          if (!shouldIgnoreScannedDirectory(entry.name)) {
+            discoverInDirectory({
+              ...params,
+              dir: fullPath,
+            });
+          }
+        } else if (targetStat.isFile() && isExtensionFile(fullPath)) {
+          addCandidate({
+            candidates: params.candidates,
+            diagnostics: params.diagnostics,
+            seen: params.seen,
+            idHint: path.basename(entry.name, path.extname(entry.name)),
+            source: fullPath,
+            rootDir: path.dirname(fullPath),
+            origin: params.origin,
+            ownershipUid: params.ownershipUid,
+            workspaceDir: params.workspaceDir,
+          });
+        }
+      } catch {
+        // Broken symlink — skip.
+      }
+      continue;
+    }
     if (entry.isFile()) {
       if (!isExtensionFile(fullPath)) {
         continue;

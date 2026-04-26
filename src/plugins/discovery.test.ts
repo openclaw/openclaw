@@ -302,6 +302,44 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
+  it("follows symlinks to plugin directories in global extensions", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+
+    // Real plugin directory outside of the extensions tree
+    const realPluginDir = path.join(stateDir, "external-plugins", "linked-plugin");
+    createPackagePluginWithEntry({
+      packageDir: realPluginDir,
+      packageName: "linked-plugin",
+      pluginId: "linked-plugin",
+    });
+
+    // Symlink inside global extensions pointing to the real plugin dir
+    fs.symlinkSync(realPluginDir, path.join(globalExt, "linked-plugin"));
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    expectCandidateIds(candidates, { includes: ["linked-plugin"] });
+  });
+
+  it("ignores broken symlinks in global extensions without crashing", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+
+    // Broken symlink pointing to a nonexistent directory
+    fs.symlinkSync(
+      path.join(stateDir, "does-not-exist"),
+      path.join(globalExt, "broken-link"),
+    );
+
+    const result = discoverOpenClawPlugins({
+      env: buildDiscoveryEnv(stateDir),
+    });
+    // Should not throw; broken symlink is silently skipped
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
