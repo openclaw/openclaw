@@ -328,7 +328,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("shows mutating tool errors when assistant output claims success", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
@@ -340,6 +340,31 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
     expect(payloads[1]?.text).not.toContain("missing");
+  });
+
+  it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["No issues found. The update is complete."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "edit", error: "file missing" },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("No issues found. The update is complete.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Edit");
+    expect(payloads[1]?.text).not.toContain("missing");
+  });
+
+  it("suppresses mutating tool errors when assistant output explicitly acknowledges the failed action", () => {
+    const text = "I couldn't update the file, so no changes were applied.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "edit", error: "file missing" },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
