@@ -10,6 +10,7 @@ user-invocable: false
 
 - **time-context**: Before any greeting or time-aware response — always use IST, never UTC.
 - **capabilities**: Before claiming to perform any action — do not hallucinate unavailable tools.
+- **proactivity**: Before any task that involves "I'll check X and get back to you" — complete it now.
 - **self-upgrade**: When Dirgh asks to update Bucky's behavior via WhatsApp.
 
 ## The one rule
