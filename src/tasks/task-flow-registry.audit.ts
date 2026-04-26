@@ -90,8 +90,15 @@ function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
   );
 }
 
+/**
+ * Small tolerance for timestamp ordering checks.  Timestamps may originate
+ * from separate `Date.now()` calls, so inversions of a few milliseconds are
+ * expected jitter — not real bugs.  Only flag inversions that exceed this.
+ */
+const TIMESTAMP_JITTER_MS = 100;
+
 function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding | null {
-  if (flow.updatedAt < flow.createdAt) {
+  if (flow.createdAt - flow.updatedAt > TIMESTAMP_JITTER_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -99,7 +106,7 @@ function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding 
       detail: "updatedAt is earlier than createdAt",
     });
   }
-  if (flow.endedAt && flow.endedAt < flow.createdAt) {
+  if (flow.endedAt && flow.createdAt - flow.endedAt > TIMESTAMP_JITTER_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -107,7 +114,7 @@ function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding 
       detail: "endedAt is earlier than createdAt",
     });
   }
-  if (flow.endedAt && flow.endedAt < flow.updatedAt) {
+  if (flow.endedAt && flow.updatedAt - flow.endedAt > TIMESTAMP_JITTER_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",

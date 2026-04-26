@@ -17,6 +17,14 @@ export type TaskAuditOptions = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
+
+/**
+ * Small tolerance for timestamp ordering checks.  `startedAt` and `createdAt`
+ * may originate from separate `Date.now()` calls (or even different runtimes),
+ * so inversions of a few milliseconds are expected jitter — not real bugs.
+ * Only flag inversions that exceed this threshold.
+ */
+const TIMESTAMP_JITTER_MS = 100;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
@@ -47,7 +55,7 @@ function taskReferenceAt(task: TaskRecord): number {
 }
 
 function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
-  if (task.startedAt && task.startedAt < task.createdAt) {
+  if (task.startedAt && task.createdAt - task.startedAt > TIMESTAMP_JITTER_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -55,7 +63,7 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
       detail: "startedAt is earlier than createdAt",
     });
   }
-  if (task.endedAt && task.startedAt && task.endedAt < task.startedAt) {
+  if (task.endedAt && task.startedAt && task.startedAt - task.endedAt > TIMESTAMP_JITTER_MS) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",

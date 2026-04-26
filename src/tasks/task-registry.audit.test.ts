@@ -115,6 +115,68 @@ describe("task-registry audit", () => {
     ]);
   });
 
+  it("ignores startedAt < createdAt inversions within jitter tolerance", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const base = now - 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "tiny-jitter",
+          status: "succeeded",
+          createdAt: base,
+          startedAt: base - 24, // 24 ms jitter — well within tolerance
+          endedAt: base + 1000,
+          cleanupAfter: now + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings.filter((f) => f.code === "inconsistent_timestamps")).toEqual([]);
+  });
+
+  it("flags startedAt < createdAt inversions exceeding jitter tolerance", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const base = now - 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "big-inversion",
+          status: "succeeded",
+          createdAt: base,
+          startedAt: base - 500, // 500 ms — exceeds tolerance
+          endedAt: base + 1000,
+          cleanupAfter: now + 60_000,
+        }),
+      ],
+    });
+
+    const timestamps = findings.filter((f) => f.code === "inconsistent_timestamps");
+    expect(timestamps).toHaveLength(1);
+    expect(timestamps[0].detail).toBe("startedAt is earlier than createdAt");
+  });
+
+  it("ignores endedAt < startedAt inversions within jitter tolerance", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const base = now - 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "ended-jitter",
+          status: "succeeded",
+          createdAt: base,
+          startedAt: base + 100,
+          endedAt: base + 90, // 10 ms jitter
+          cleanupAfter: now + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings.filter((f) => f.code === "inconsistent_timestamps")).toEqual([]);
+  });
+
   it("does not double-report lost tasks as missing cleanup", () => {
     const now = Date.parse("2026-03-30T01:00:00.000Z");
     const findings = listTaskAuditFindings({
