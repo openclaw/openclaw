@@ -1439,6 +1439,17 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+export function computeHistoryCursor(params: {
+  start: number;
+  slicedLength: number;
+  boundedLength: number;
+}): { cursor: number; hasMore: boolean } {
+  const { start, slicedLength, boundedLength } = params;
+  const droppedFromFront = boundedLength > 0 ? slicedLength - boundedLength : 0;
+  const cursor = start + droppedFromFront;
+  return { cursor, hasMore: cursor > 0 };
+}
+
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
   placeholderCount: number;
@@ -1883,10 +1894,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, before } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      before?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1904,7 +1916,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    // Cursor stability relies on rawMessages being append-only between requests.
+    // CLI-imported messages sort by timestamp and new turns always arrive with the
+    // latest timestamp, so they append to the tail and don't shift existing indices.
+    const end =
+      typeof before === "number" ? Math.min(before, rawMessages.length) : rawMessages.length;
+    const start = Math.max(0, end - max);
+    const sliced = rawMessages.slice(start, end);
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
@@ -1918,6 +1936,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const { cursor, hasMore } = computeHistoryCursor({
+      start,
+      slicedLength: sliced.length,
+      boundedLength: bounded.messages.length,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1951,6 +1974,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      cursor,
+      hasMore,
     });
   },
   "chat.abort": ({ params, respond, context, client }) => {
