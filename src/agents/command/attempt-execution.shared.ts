@@ -4,7 +4,10 @@ import {
   formatAgentInternalEventsForAcpPrompt,
   formatAgentInternalEventsForPrompt,
 } from "../internal-events.js";
-import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
+import {
+  hasInternalRuntimeContext,
+  stripInternalRuntimeContext,
+} from "../internal-runtime-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export type PersistSessionEntryParams = {
@@ -34,12 +37,20 @@ export function prependInternalEventContext(
   events: AgentCommandOpts["internalEvents"],
   options?: { targetIsAcpHarness?: boolean },
 ): string {
+  if (options?.targetIsAcpHarness) {
+    const renderedEvents = formatAgentInternalEventsForAcpPrompt(events);
+    if (!renderedEvents) {
+      return hasInternalRuntimeContext(body)
+        ? stripInternalRuntimeContext(body).trim() || "A background task finished."
+        : body;
+    }
+    const visibleBody = stripInternalRuntimeContext(body).trim();
+    return [renderedEvents, visibleBody].filter(Boolean).join("\n\n");
+  }
   if (hasInternalRuntimeContext(body)) {
     return body;
   }
-  const renderedEvents = options?.targetIsAcpHarness
-    ? formatAgentInternalEventsForAcpPrompt(events)
-    : formatAgentInternalEventsForPrompt(events);
+  const renderedEvents = formatAgentInternalEventsForPrompt(events);
   if (!renderedEvents) {
     return body;
   }
