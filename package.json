@@ -596,6 +596,10 @@
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
       "default": "./dist/plugin-sdk/diagnostics-otel.js"
     },
+    "./plugin-sdk/diagnostics-prometheus": {
+      "types": "./dist/plugin-sdk/diagnostics-prometheus.d.ts",
+      "default": "./dist/plugin-sdk/diagnostics-prometheus.js"
+    },
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
