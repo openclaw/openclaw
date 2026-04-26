@@ -301,6 +301,40 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
   });
 
+  it("keeps runtime deps temp dirs owned by a live build process", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const activeTempDir = path.join(pluginDir, ".openclaw-runtime-deps-stage-active");
+    fs.mkdirSync(activeTempDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(activeTempDir, "owner.json"),
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(path.join(activeTempDir, "marker.txt"), "active\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint, stampPath }: RuntimeDepsStampParams) => {
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        writeRuntimeDepsStamp(stampPath, fingerprint);
+      },
+    });
+
+    expect(fs.readFileSync(path.join(activeTempDir, "marker.txt"), "utf8")).toBe("active\n");
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
   it("restages when installed root runtime dependency contents change", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
