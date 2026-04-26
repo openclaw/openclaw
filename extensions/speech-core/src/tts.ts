@@ -1612,15 +1612,25 @@ export async function maybeApplyTtsToPayload(params: {
   const plainSpeechText =
     visibleTtsOverride ?? plainVariantText ?? visibleCleanedText.trim() ?? visibleText;
   const expressiveSpeechText = visibleTtsOverride ?? expressiveVariantText ?? plainSpeechText;
-  // Initial routing uses the configured-active-provider's resolved config so
+  // Initial routing uses the same persona-merged config as synthesis so
   // model-aware capability gates (e.g. ElevenLabs `expressiveTagsModels: ["eleven_v3"]`)
   // see the right modelId. Per chatgpt-codex P2 review on tts.ts:1590 — also
   // merge any per-message directive `providerOverrides[effectiveProvider]` into
   // the initial config so `[[tts:provider=elevenlabs model=eleven_v3]]` is
   // honored by the gate at the pre-flight check too (not just fallback).
+  const activePersona = getTtsPersona(config, prefsPath);
   const initialDirectiveOverride = directives.overrides?.providerOverrides?.[effectiveProvider];
   const initialProviderConfig: SpeechProviderConfig = (() => {
-    const base = getResolvedSpeechProviderConfig(config, effectiveProvider, params.cfg);
+    const resolvedProvider = resolveReadySpeechProvider({
+      provider: effectiveProvider,
+      cfg: params.cfg,
+      config,
+      persona: activePersona,
+    });
+    const base =
+      resolvedProvider.kind === "ready"
+        ? resolvedProvider.providerConfig
+        : getResolvedSpeechProviderConfig(config, effectiveProvider, params.cfg);
     return initialDirectiveOverride ? { ...base, ...initialDirectiveOverride } : base;
   })();
   const initialTtsText = resolveSpeechTextForProvider({
