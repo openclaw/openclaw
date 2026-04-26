@@ -25,6 +25,7 @@
 #include "gateway_client.h"
 #include "diagnostics.h"
 #include "device_pair_prompter.h"
+#include "exec_approval_prompter.h"
 #include "gateway_ws.h"
 #include "chat_window.h"
 #include "gateway_rpc.h"
@@ -634,6 +635,8 @@ void app_window_show(void) {
      * newly-created main window. Safe to call even if the prompter has not
      * been initialized; calls before init are no-ops. */
     device_pair_prompter_set_parent(GTK_WINDOW(main_window));
+    /* Same for the exec-approval dialog. */
+    exec_approval_prompter_set_parent(GTK_WINDOW(main_window));
 
     /* Initial content fill for local/cheap sections + start auto-refresh */
     refresh_active_section(active_section);

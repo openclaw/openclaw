@@ -110,6 +110,14 @@ void device_pair_prompter_init(GtkWindow *parent) {
     stub_device_pair_prompter_init_calls++;
 }
 
+void exec_approval_store_init(void) {
+    /* No state to track for the coordinator-level smoke test. */
+}
+
+void exec_approval_prompter_init(GtkWindow *parent) {
+    (void)parent;
+}
+
 void onboarding_show(void) {
     stub_onboarding_show_calls++;
 }

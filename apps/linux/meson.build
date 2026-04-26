@@ -61,6 +61,10 @@ sources = [
   'src/device_pair_approval_window.c',
   'src/pairing_bootstrap_window.c',
   'src/device_pair_prompter.c',
+  'src/exec_approval_request.c',
+  'src/exec_approval_store.c',
+  'src/exec_approval_window.c',
+  'src/exec_approval_prompter.c',
   'src/gateway_rpc.c',
   'src/gateway_data.c',
   'src/gateway_mutations.c',
@@ -318,6 +322,28 @@ test_device_pair_prompter_exe = executable('test_device_pair_prompter',
    'src/device_pair_prompter.c', 'src/device_pair_request_info.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep])
 test('device_pair_prompter', test_device_pair_prompter_exe)
+
+# Exec-approval Tranche B coverage. All three tests are headless: they
+# stub out gateway_ws / gateway_rpc / exec_approval_window symbols and
+# never spin up GTK/Adwaita.
+test_exec_approval_request_exe = executable('test_exec_approval_request',
+  ['tests/test_exec_approval_request.c', 'src/exec_approval_request.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('exec_approval_request', test_exec_approval_request_exe)
+
+test_exec_approval_store_exe = executable('test_exec_approval_store',
+  ['tests/test_exec_approval_store.c', 'src/exec_approval_store.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('exec_approval_store', test_exec_approval_store_exe)
+
+test_exec_approval_prompter_exe = executable('test_exec_approval_prompter',
+  ['tests/test_exec_approval_prompter.c',
+   'src/exec_approval_prompter.c',
+   'src/exec_approval_request.c',
+   'src/exec_approval_store.c',
+   'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep])
+test('exec_approval_prompter', test_exec_approval_prompter_exe)
 
 # Pure-C coverage for the Pango-markup body builder used by the approval
 # dialog. Uses only GLib (g_markup_escape_text), so no GTK/Adwaita link.
