@@ -118,6 +118,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         model: "opus",
         thinkLevel: "off",
         streamParams: { maxTokens: 16 },
+        cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
@@ -178,6 +179,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         sessionKey: expect.stringMatching(/^agent:main:probe-anthropic-/),
         provider: "claude-cli",
         model: "opus",
+        cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();

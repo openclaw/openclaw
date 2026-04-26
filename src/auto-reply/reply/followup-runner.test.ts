@@ -1099,6 +1099,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
         },
         provider: "claude-cli",
         model: "opus",
+        extraSystemPromptStatic: "Stable CLI session context.",
       },
     });
 
@@ -1122,6 +1123,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
           fail: expect.any(Function),
         }),
         skillsSnapshot: queued.run.skillsSnapshot,
+        extraSystemPromptStatic: "Stable CLI session context.",
         messageProvider: queued.run.messageProvider,
         agentAccountId: queued.run.agentAccountId,
       }),

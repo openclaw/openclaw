@@ -11,8 +11,8 @@ import {
   resolveAgentDir,
 } from "../agents/agent-scope.js";
 import { runCliAgent } from "../agents/cli-runner.js";
-import { isCliProvider, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isCliProvider, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -82,6 +82,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
           model,
           timeoutMs,
           runId,
+          cleanupCliLiveSessionOnRunEnd: true,
         })
       : await runEmbeddedPiAgent({
           sessionId,

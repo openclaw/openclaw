@@ -497,6 +497,7 @@ async function probeTarget(params: {
         timeoutMs,
         runId: `probe-${crypto.randomUUID()}`,
         streamParams: { maxTokens },
+        cleanupCliLiveSessionOnRunEnd: true,
       });
     } else {
       const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();

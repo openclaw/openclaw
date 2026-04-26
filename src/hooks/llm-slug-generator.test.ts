@@ -152,6 +152,7 @@ describe("generateSlugViaLLM", () => {
         provider: "claude-cli",
         model: "opus",
         timeoutMs: 500_000,
+        cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
