@@ -93,7 +93,8 @@
       "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
     },
     "timeoutMs": {
-      "label": "Timeout (ms)"
+      "label": "Timeout (ms)",
+      "help": "Hard timeout for the blocking memory sub-agent. Values above 120000 ms are clamped."
     },
     "queryMode": {
       "label": "Query Mode",

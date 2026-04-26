@@ -20,6 +20,7 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_TIMEOUT_MS = 120_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
 const DEFAULT_RECENT_USER_TURNS = 2;
@@ -637,7 +638,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
       minimumTimeoutMs,
-      120_000,
+      MAX_TIMEOUT_MS,
     ),
     queryMode:
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"

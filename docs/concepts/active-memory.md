@@ -539,7 +539,7 @@ The most important fields are:
 | `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
 | `config.promptOverride`     | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
 | `config.promptAppend`       | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
-| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                    |
+| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent; values above 120000 ms are clamped                    |
 | `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
 | `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
 | `config.persistTranscripts` | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |
@@ -555,6 +555,10 @@ Useful tuning fields:
 | `config.recentUserChars`      | `number` | Max chars per recent user turn                                |
 | `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                           |
 | `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries                    |
+
+If you keep the current session model on a slower provider/model such as Claude
+Opus via Bedrock, consider pinning `config.model` to a faster recall model or
+raising `config.timeoutMs` toward the 120000 ms ceiling.
 
 ## Recommended setup
 

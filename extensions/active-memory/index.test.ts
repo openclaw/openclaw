@@ -1453,6 +1453,50 @@ describe("active-memory plugin", () => {
     expect(startLine).toContain("...");
   });
 
+  it("passes through timeoutMs values up to 120s", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout pass-through", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:timeout-pass-through",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeoutMs: 90_000,
+    });
+  });
+
+  it("clamps timeoutMs values above 120s", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 200_000,
+    };
+    await plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout clamp", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:timeout-clamp",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeoutMs: 120_000,
+    });
+  });
+
   it("uses a canonical agent session key when only sessionId is available", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
