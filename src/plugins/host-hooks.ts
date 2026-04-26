@@ -1,5 +1,6 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import type { ReplyPayload } from "../plugin-sdk/reply-payload.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
@@ -89,8 +90,46 @@ export type PluginControlUiDescriptor = {
   label: string;
   description?: string;
   placement?: string;
+  renderer?: "approval-card" | "mode-switcher" | "sidebar-panel" | "input-guard" | (string & {});
+  stateNamespace?: string;
+  actionIds?: string[];
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
+};
+
+export type PluginSessionActionContext = {
+  pluginId: string;
+  actionId: string;
+  sessionKey?: string;
+  payload?: PluginJsonValue;
+  client?: {
+    connId?: string;
+    scopes: string[];
+  };
+};
+
+export type PluginSessionActionResult =
+  | {
+      ok?: true;
+      data?: PluginJsonValue;
+      reply?: ReplyPayload;
+      continueAgent?: boolean;
+    }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      details?: PluginJsonValue;
+    };
+
+export type PluginSessionActionRegistration = {
+  id: string;
+  description?: string;
+  schema?: PluginJsonValue;
+  requiredScopes?: OperatorScope[];
+  handler: (
+    ctx: PluginSessionActionContext,
+  ) => PluginSessionActionResult | void | Promise<PluginSessionActionResult | void>;
 };
 
 export type PluginRuntimeLifecycleRegistration = {
@@ -149,6 +188,56 @@ export type PluginSessionSchedulerJobHandle = {
   pluginId: string;
   sessionKey: string;
   kind: string;
+};
+
+export type PluginAgentEventEmitParams = {
+  runId: string;
+  stream: AgentEventStream;
+  data: PluginJsonValue;
+  sessionKey?: string;
+};
+
+export type PluginAgentEventEmitResult =
+  | { emitted: true; stream: AgentEventStream }
+  | { emitted: false; reason: string };
+
+export type PluginSessionAttachmentFile = {
+  path: string;
+  name?: string;
+  mime?: string;
+};
+
+export type PluginSessionAttachmentParams = {
+  sessionKey: string;
+  files: PluginSessionAttachmentFile[];
+  text?: string;
+  threadId?: string;
+  forceDocument?: boolean;
+  maxBytes?: number;
+};
+
+export type PluginSessionAttachmentResult =
+  | {
+      ok: true;
+      channel: string;
+      deliveredTo: string;
+      count: number;
+    }
+  | { ok: false; error: string };
+
+export type PluginSessionTurnSchedule =
+  | { at: string | number | Date }
+  | { delayMs: number }
+  | { cron: string; tz?: string };
+
+export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
+  sessionKey: string;
+  message: string;
+  payload?: PluginJsonValue;
+  agentId?: string;
+  deleteAfterRun?: boolean;
+  deliveryMode?: "none" | "default";
+  name?: string;
 };
 
 export function normalizePluginHostHookId(value: string | undefined): string {

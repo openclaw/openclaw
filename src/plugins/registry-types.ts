@@ -15,6 +15,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -303,6 +304,14 @@ export type PluginSessionSchedulerJobRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionActionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  action: PluginSessionActionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -410,6 +419,7 @@ export type PluginRegistry = {
   runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
   agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
   sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions?: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };

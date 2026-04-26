@@ -149,6 +149,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
+    "plugins.sessionAction",
     "sessions.compaction.branch",
     "doctor.memory.backfillDreamDiary",
     "doctor.memory.resetDreamDiary",
