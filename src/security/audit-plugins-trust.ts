@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
-import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
