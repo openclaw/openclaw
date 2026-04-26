@@ -42,7 +42,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -148,7 +148,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           fetch-depth: 1
@@ -162,7 +162,7 @@ jobs:
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}
@@ -207,7 +207,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           fetch-depth: 1
@@ -221,7 +221,7 @@ jobs:
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}

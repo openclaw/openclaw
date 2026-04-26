@@ -83,7 +83,7 @@ runs:
     - name: Restore pnpm store cache
       id: pnpm-cache-restore
       if: inputs.use-actions-cache == 'true'
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: ${{ steps.pnpm-cache-config.outputs.primary-key }}

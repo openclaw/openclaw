@@ -31,7 +31,7 @@ runs:
   using: composite
   steps:
     - name: Setup Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
       with:
         node-version: ${{ inputs.node-version }}
         check-latest: false
@@ -45,7 +45,7 @@ runs:
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
-      uses: oven-sh/setup-bun@v2.2.0
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: "1.3.9"
 
@@ -101,7 +101,7 @@ runs:
 
     - name: Save pnpm store cache
       if: inputs.install-deps == 'true' && steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       continue-on-error: true
       with:
         path: ${{ steps.pnpm-cache.outputs.store-path }}

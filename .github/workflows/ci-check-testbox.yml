@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Begin Testbox
-        uses: useblacksmith/begin-testbox@v2
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67 # v2
         with:
           testbox_id: ${{ inputs.testbox_id }}
       - name: Checkout
@@ -94,7 +94,7 @@ jobs:
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
           sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@v2
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc # v2
         if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
