@@ -12,6 +12,7 @@
 import { enqueueInboxMessage, type InboxOptions } from "./inbox.js";
 import { decide, type CompiledRoutingConfig } from "./routing.js";
 import { type Store } from "./store.js";
+import type { TrajectoryRecorder } from "./trajectory.js";
 import type { Task, TaskKind, TaskResult } from "./types/schema.js";
 
 export type DispatchMode = "synthetic" | "shadow" | "live";
@@ -30,6 +31,13 @@ export interface DispatchOptions {
    * factory; the production path uses a canned "synthetic OK" result.
    */
   syntheticResult?: (task: Task) => TaskResult;
+  /**
+   * Optional trajectory recorder. When supplied, dispatch emits
+   * `task.*` events at each state transition. The recorder is the
+   * orchestrator session's sidecar `<sid>.tasks.jsonl` (Unit 6,
+   * recon A-B1).
+   */
+  recorder?: TrajectoryRecorder;
 }
 
 export interface DispatchResult {
@@ -89,6 +97,7 @@ export function dispatchTask(
   }
 
   const now = options.now ?? Date.now;
+  const recorder = options.recorder;
   const decision = decide(task.goal, task.requiredCapabilities, options.config);
 
   const inferCaps = options.inferCapabilities ?? (() => []);
@@ -99,17 +108,40 @@ export function dispatchTask(
     options.config,
   );
 
+  // The dispatcher receives a queued task — emit task.queued so the
+  // trajectory captures the start of the routing decision.
+  recorder?.record("task.queued", {
+    kind: "queued",
+    taskId: task.id,
+    goal: task.goal,
+    submittedBy: task.submittedBy,
+  });
+
   // queued -> assigned (routing decision recorded).
   let next = store.transition(task.id, {
     type: "route",
     routing: { ...decision, decidedAt: new Date(now()).toISOString() },
   });
+  recorder?.record("task.assigned", {
+    kind: "assigned",
+    taskId: next.id,
+    agentId: decision.assignedAgentId,
+    ruleId: decision.matchedRuleId,
+    capabilities: [...decision.capabilityMatches],
+  });
 
   if (options.mode === "synthetic") {
     // Short-circuit: skip spawn, mint a synthetic in_progress + result.
+    const syntheticSessionId = `synthetic-${task.id}`;
     next = store.transition(task.id, {
       type: "start",
-      specialistSessionId: `synthetic-${task.id}`,
+      specialistSessionId: syntheticSessionId,
+    });
+    recorder?.record("task.in_progress", {
+      kind: "in_progress",
+      taskId: next.id,
+      agentId: decision.assignedAgentId,
+      specialistSessionId: syntheticSessionId,
     });
     const result = (options.syntheticResult ?? DEFAULT_SYNTHETIC_RESULT)(next);
     next = store.transition(task.id, {
@@ -117,6 +149,24 @@ export function dispatchTask(
       result,
       requiresApproval,
     });
+    if (next.state === "awaiting_approval") {
+      recorder?.record("task.awaiting_approval", {
+        kind: "awaiting_approval",
+        taskId: next.id,
+        agentId: decision.assignedAgentId,
+        resultPreviewBytes: Buffer.byteLength(result.text ?? "", "utf8"),
+      });
+    } else {
+      const completedMs = next.completedAt
+        ? Date.parse(next.completedAt) - Date.parse(next.createdAt)
+        : 0;
+      recorder?.record("task.done", {
+        kind: "done",
+        taskId: next.id,
+        agentId: decision.assignedAgentId,
+        durationMs: completedMs,
+      });
+    }
     return {
       task: next,
       state: next.state,
@@ -127,8 +177,8 @@ export function dispatchTask(
 
   // shadow / live: enqueue inbox message for the orchestrator agent to
   // spawn. The actual transition to in_progress and beyond is driven by
-  // the spawn-watch loop (Unit 6). For now we leave the task in
-  // `assigned` and return.
+  // the spawn-watch loop (`spawn-watch.ts`). For now we leave the task
+  // in `assigned` and return.
   const inboxOptions: InboxOptions = {};
   if (options.agentsDir != null) {
     inboxOptions.agentsDir = options.agentsDir;
