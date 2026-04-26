@@ -1,0 +1,23 @@
+{
+  "id": "computer",
+  "enabledByDefault": false,
+  "name": "Computer",
+  "description": "macOS desktop automation via cua-driver. Registers a computer tool that lets any agent harness control apps, capture screenshots, click, type, and inspect UI via the Accessibility tree.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cuaDriverPath": {
+        "type": "string",
+        "description": "Path to the cua-driver binary. Defaults to cua-driver on PATH."
+      }
+    }
+  },
+  "uiHints": {
+    "cuaDriverPath": {
+      "label": "cua-driver path",
+      "help": "Override the cua-driver binary path. Leave unset to use cua-driver from PATH.",
+      "advanced": true
+    }
+  }
+}
