@@ -481,7 +481,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       payloads: [{ text: "sent" }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
+    const abortController = new AbortController();
     const executor = createMessageToolExecutor({
+      abortSignal: abortController.signal,
       cfgWithAgentDefaults: {
         agents: {
           defaults: {
@@ -496,6 +498,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         provider: "anthropic",
         model: "claude-sonnet-4-6",
         authProfileId: "anthropic:work",
+      },
+      resolvedDelivery: {
+        accountId: "ops",
       },
     });
 
@@ -517,6 +522,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
         authProfileId: "anthropic:work",
+        agentAccountId: "ops",
+        abortSignal: expect.any(AbortSignal),
         senderIsOwner: false,
       }),
     );

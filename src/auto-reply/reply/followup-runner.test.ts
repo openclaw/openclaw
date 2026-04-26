@@ -1066,6 +1066,8 @@ describe("createFollowupRunner CLI backend dispatch", () => {
   it("routes CLI-backed followups through runCliAgent", async () => {
     const onBlockReply = vi.fn(async () => {});
     const abortController = new AbortController();
+    const images = [{ type: "image" as const, data: "base64-cat", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "cli reply" }],
       meta: {
@@ -1087,6 +1089,9 @@ describe("createFollowupRunner CLI backend dispatch", () => {
     });
 
     const queued = createQueuedRun({
+      images,
+      imageOrder,
+      transcriptPrompt: "visible transcript prompt",
       run: {
         config: {
           agents: {
@@ -1117,6 +1122,9 @@ describe("createFollowupRunner CLI backend dispatch", () => {
         provider: "claude-cli",
         model: "opus",
         prompt: queued.prompt,
+        transcriptPrompt: "visible transcript prompt",
+        images,
+        imageOrder,
         replyOperation: expect.objectContaining({
           setPhase: expect.any(Function),
           complete: expect.any(Function),

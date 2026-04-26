@@ -326,6 +326,7 @@ export function createFollowupRunner(params: {
                   workspaceDir: run.workspaceDir,
                   config: runtimeConfig,
                   prompt: queued.prompt,
+                  transcriptPrompt: queued.transcriptPrompt,
                   provider: cliExecutionProvider,
                   model,
                   thinkLevel: run.thinkLevel,
@@ -339,6 +340,8 @@ export function createFollowupRunner(params: {
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding,
                   authProfileId: authProfile.authProfileId,
+                  images: queuedImages,
+                  imageOrder: queuedImageOrder,
                   skillsSnapshot: run.skillsSnapshot,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
