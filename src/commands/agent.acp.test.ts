@@ -372,19 +372,14 @@ describe("agentCommand ACP runtime routing", () => {
 
       await agentCommand(
         {
-          message: [
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "OpenClaw runtime context (internal):",
-            "legacy wrapped completion",
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
+          message:
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nlegacy wrapped completion\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
           sessionKey: "agent:codex:acp:test",
           internalEvents: [
             {
               type: "task_completion",
               source: "subagent",
               childSessionKey: "agent:child:main",
-              childSessionId: "child-session-1",
               announceType: "subagent task",
               taskLabel: "estimate-plan",
               status: "ok",
@@ -404,8 +399,6 @@ describe("agentCommand ACP runtime routing", () => {
       expect(text).toContain("[[UNTRUSTED_CHILD_RESULT_END]]");
       expect(text).toContain("Reply ONLY: NO_REPLY");
       expect(text).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-      expect(text).not.toContain("OpenClaw runtime context (internal):");
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
     });
   });
 

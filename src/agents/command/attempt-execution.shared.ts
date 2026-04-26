@@ -39,13 +39,12 @@ export function prependInternalEventContext(
 ): string {
   if (options?.targetIsAcpHarness) {
     const renderedEvents = formatAgentInternalEventsForAcpPrompt(events);
-    if (!renderedEvents) {
-      return hasInternalRuntimeContext(body)
-        ? stripInternalRuntimeContext(body).trim() || "A background task finished."
-        : body;
-    }
-    const visibleBody = stripInternalRuntimeContext(body).trim();
-    return [renderedEvents, visibleBody].filter(Boolean).join("\n\n");
+    const visibleBody = hasInternalRuntimeContext(body)
+      ? stripInternalRuntimeContext(body).trim()
+      : body;
+    return renderedEvents
+      ? [renderedEvents, visibleBody].filter(Boolean).join("\n\n")
+      : visibleBody || "A background task finished.";
   }
   if (hasInternalRuntimeContext(body)) {
     return body;
