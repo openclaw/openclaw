@@ -304,7 +304,9 @@ async function sendSignalOutboundChunked(params: {
   replyToId?: string | null;
   deps?: { [channelId: string]: unknown };
 }): Promise<{ channel: string; messageId: string }> {
-  const limit = resolveTextChunkLimit(params.cfg, "signal", params.accountId ?? undefined);
+  const limit = resolveTextChunkLimit(params.cfg, "signal", params.accountId ?? undefined, {
+    fallbackLimit: SIGNAL_TEXT_CHUNK_LIMIT,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "signal",
