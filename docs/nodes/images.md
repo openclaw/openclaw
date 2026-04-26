@@ -2,7 +2,7 @@
 summary: "Image and media handling rules for send, gateway, and agent replies"
 read_when:
   - Modifying media pipeline or attachments
-title: "Image and Media Support"
+title: "Image and media support"
 ---
 
 # Image & Media Support (2025-12-05)
@@ -48,6 +48,7 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
 - Media understanding (if configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
+  - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image to the model instead.
 - By default only the first matching image/audio/video attachment is processed; set `tools.media.<cap>.attachments` to process multiple attachments.
 
 ## Limits & Errors
@@ -70,3 +71,9 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
 - Cover send + reply flows for image/audio/document cases.
 - Validate recompression for images (size bound) and voice-note flag for audio.
 - Ensure multi-media replies fan out as sequential sends.
+
+## Related
+
+- [Camera capture](/nodes/camera)
+- [Media understanding](/nodes/media-understanding)
+- [Audio and voice notes](/nodes/audio)

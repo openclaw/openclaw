@@ -14,7 +14,7 @@ echo "==> Build image: $IMAGE_NAME"
 docker build \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/scripts/docker/install-sh-e2e/Dockerfile" \
-  "$ROOT_DIR/scripts/docker/install-sh-e2e"
+  "$ROOT_DIR/scripts/docker"
 
 echo "==> Run E2E installer test"
 docker run --rm \
@@ -23,7 +23,9 @@ docker run --rm \
   -e OPENCLAW_E2E_MODELS="$OPENCLAW_E2E_MODELS" \
   -e OPENCLAW_INSTALL_E2E_PREVIOUS="${OPENCLAW_INSTALL_E2E_PREVIOUS:-}" \
   -e OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}" \
-  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  -e ANTHROPIC_API_TOKEN="$ANTHROPIC_API_TOKEN" \
+  -e OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-600}" \
+  -e OPENCLAW_NO_ONBOARD=1 \
+  -e OPENAI_API_KEY \
+  -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_API_TOKEN \
   "$IMAGE_NAME"

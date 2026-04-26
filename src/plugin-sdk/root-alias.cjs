@@ -7,7 +7,19 @@ let monolithicSdk = null;
 let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
-const shouldPreferSourceInTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
+const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
+const isDistRootAlias = __filename.includes(
+  `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
+);
+// Source plugin entry loading must stay on the source graph end-to-end. Mixing a
+// source root alias with dist compat/runtime shims can split singleton deps
+// (for example matrix-js-sdk) across two module graphs.
+const shouldPreferSourceGraph =
+  !isDistRootAlias &&
+  (process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VITEST) ||
+    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -79,7 +91,9 @@ function getPackageRoot() {
 function findDistChunkByPrefix(prefix) {
   const distRoot = path.join(getPackageRoot(), "dist");
   try {
-    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const entries = fs
+      .readdirSync(distRoot, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name));
     const match = entries.find(
       (entry) =>
         entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
@@ -92,8 +106,9 @@ function findDistChunkByPrefix(prefix) {
 
 function listPluginSdkExportedSubpaths() {
   const packageRoot = getPackageRoot();
-  if (pluginSdkSubpathsCache.has(packageRoot)) {
-    return pluginSdkSubpathsCache.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1" ? "1" : "0"}`;
+  if (pluginSdkSubpathsCache.has(cacheKey)) {
+    return pluginSdkSubpathsCache.get(cacheKey);
   }
 
   let subpaths = [];
@@ -102,48 +117,100 @@ function listPluginSdkExportedSubpaths() {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     subpaths = Object.keys(packageJson.exports ?? {})
       .filter((key) => key.startsWith("./plugin-sdk/"))
-      .map((key) => key.slice("./plugin-sdk/".length));
+      .map((key) => key.slice("./plugin-sdk/".length))
+      .filter((subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath))
+      .toSorted();
   } catch {
     subpaths = [];
   }
 
-  pluginSdkSubpathsCache.set(packageRoot, subpaths);
+  pluginSdkSubpathsCache.set(cacheKey, subpaths);
   return subpaths;
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths() {
+  if (process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
+    return [];
+  }
+  try {
+    const raw = fs.readFileSync(
+      path.join(getPackageRoot(), "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (subpath) => typeof subpath === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function listPluginSdkRootAliasSubpaths() {
+  const exportedSubpaths = listPluginSdkExportedSubpaths();
+  return [...new Set([...exportedSubpaths, ...listPrivateLocalOnlyPluginSdkSubpaths()])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 function buildPluginSdkAliasMap(useDist) {
   const packageRoot = getPackageRoot();
   const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
-  const ext = useDist ? ".js" : ".ts";
-  const aliasMap = {
-    "openclaw/plugin-sdk": __filename,
-  };
+  const normalizeTarget = (target) =>
+    process.platform === "win32" ? target.replace(/\\/g, "/") : target;
+  const aliasMap = {};
 
-  for (const subpath of listPluginSdkExportedSubpaths()) {
-    const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
-    if (fs.existsSync(candidate)) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+  for (const subpath of listPluginSdkRootAliasSubpaths()) {
+    if (useDist) {
+      const candidate = path.join(pluginSdkDir, `${subpath}.js`);
+      if (fs.existsSync(candidate)) {
+        for (const packageName of pluginSdkPackageNames) {
+          aliasMap[`${packageName}/${subpath}`] = normalizeTarget(candidate);
+        }
+      }
+      continue;
     }
+    for (const ext of pluginSdkSourceExtensions) {
+      const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      for (const packageName of pluginSdkPackageNames) {
+        aliasMap[`${packageName}/${subpath}`] = normalizeTarget(candidate);
+      }
+      break;
+    }
+  }
+
+  // Keep the bare root alias last so subpath aliases win under resolvers that
+  // perform prefix matching instead of exact-key lookup.
+  for (const packageName of pluginSdkPackageNames) {
+    aliasMap[packageName] = normalizeTarget(__filename);
   }
 
   return aliasMap;
 }
 
 function getJiti(tryNative) {
-  if (jitiLoaders.has(tryNative)) {
-    return jitiLoaders.get(tryNative);
+  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
+
+  if (jitiLoaders.has(effectiveTryNative)) {
+    return jitiLoaders.get(effectiveTryNative);
   }
 
   const { createJiti } = require("jiti");
   const jitiLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(tryNative),
+    alias: buildPluginSdkAliasMap(effectiveTryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative,
+    tryNative: effectiveTryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(tryNative, jitiLoader);
+  jitiLoaders.set(effectiveTryNative, jitiLoader);
   return jitiLoader;
 }
 
@@ -153,7 +220,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -179,7 +246,7 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests) {
+  if (!shouldPreferSourceGraph) {
     const distCandidate =
       (fs.existsSync(directDistCandidate) && directDistCandidate) ||
       findDistChunkByPrefix("diagnostic-events");

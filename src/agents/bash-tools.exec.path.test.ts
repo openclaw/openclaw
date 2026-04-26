@@ -1,25 +1,82 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+const FOREGROUND_TEST_YIELD_MS = 120_000;
+type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
+const shellEnvMocks = vi.hoisted(() => ({
+  getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
+  resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+}));
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
     ...mod,
-    getShellPathFromLoginShell: vi.fn(() => "/custom/bin:/opt/bin"),
-    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+    getShellPathFromLoginShell: shellEnvMocks.getShellPathFromLoginShell,
+    resolveShellEnvFallbackTimeoutMs: shellEnvMocks.resolveShellEnvFallbackTimeoutMs,
   };
 });
 
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  const approvals: ExecApprovalsResolved = {
+vi.mock("../infra/exec-approvals.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
+    "../infra/exec-approvals.js",
+  );
+  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+});
+
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    spawn: async (input: {
+      argv?: string[];
+      env?: NodeJS.ProcessEnv;
+      onStdout?: (chunk: string) => void;
+    }) => {
+      const command = input.argv?.at(-1) ?? "";
+      const env = input.env ?? {};
+      if (command.includes("OPENCLAW_SHELL")) {
+        input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("SSLKEYLOGFILE")) {
+        input.onStdout?.(env.SSLKEYLOGFILE ?? "");
+      } else if (command.includes("$PATH")) {
+        input.onStdout?.(env.PATH ?? "");
+      } else if (command === "echo ok") {
+        input.onStdout?.("ok\n");
+      }
+      return {
+        runId: "mock-path-run",
+        startedAtMs: Date.now(),
+        stdin: undefined,
+        wait: async () => ({
+          reason: "exit" as const,
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+        cancel: vi.fn(),
+      };
+    },
+    cancel: vi.fn(),
+    cancelScope: vi.fn(),
+    reconcileOrphans: vi.fn(),
+    getRecord: vi.fn(),
+  }),
+}));
+
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+
+function createExecApprovals(): ExecApprovalsResolved {
+  return {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
@@ -35,6 +92,11 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       askFallback: "full",
       autoAllowSkills: false,
     },
+    agentSources: {
+      security: "defaults.security",
+      ask: "defaults.ask",
+      askFallback: "defaults.askFallback",
+    },
     allowlist: [],
     file: {
       version: 1,
@@ -48,11 +110,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       agents: {},
     },
   };
-  return { ...mod, resolveExecApprovals: () => approvals };
-});
-
-const { createExecTool } = await import("./bash-tools.exec.js");
-const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
+}
 
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
@@ -69,8 +127,16 @@ const normalizePathEntries = (value?: string) =>
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
+  beforeAll(async () => {
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+  });
+
   beforeEach(() => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
+    shellEnvMocks.getShellPathFromLoginShell.mockReset();
+    shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
+    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
+    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
   });
 
   afterEach(() => {
@@ -83,12 +149,15 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
     shellPathMock.mockClear();
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    const result = await tool.execute("call1", { command: "echo $PATH" });
+    const result = await tool.execute("call1", {
+      command: "echo $PATH",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
     expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
@@ -103,6 +172,7 @@ describe("exec PATH login shell merge", () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
     const result = await tool.execute("call-openclaw-shell", {
       command: 'printf "%s" "${OPENCLAW_SHELL:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
@@ -115,7 +185,7 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
     shellPathMock.mockClear();
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
@@ -160,14 +230,17 @@ describe("exec PATH login shell merge", () => {
     process.env.SHELL = unregisteredShellPath;
 
     try {
-      const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+      const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
       shellPathMock.mockClear();
       shellPathMock.mockImplementation((opts) =>
         opts.env.SHELL?.trim() === unregisteredShellPath ? null : "/custom/bin:/opt/bin",
       );
 
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call1", { command: "echo $PATH" });
+      const result = await tool.execute("call1", {
+        command: "echo $PATH",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      });
       const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
       expect(entries).toEqual(["/usr/bin"]);
@@ -196,6 +269,22 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
   });
 
+  it("blocks proxy and TLS override env vars on host execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+        env: {
+          HTTPS_PROXY: "http://proxy.example.test:8080",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        },
+      }),
+    ).rejects.toThrow(
+      /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
+    );
+  });
+
   it("strips dangerous inherited env vars from host execution", async () => {
     if (isWin) {
       return;
@@ -203,10 +292,10 @@ describe("exec host env validation", () => {
     const original = process.env.SSLKEYLOGFILE;
     process.env.SSLKEYLOGFILE = "/tmp/openclaw-ssl-keys.log";
     try {
-      const { createExecTool } = await import("./bash-tools.exec.js");
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
       });
       const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
       expect(output).not.toContain("/tmp/openclaw-ssl-keys.log");
@@ -219,25 +308,14 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("defaults to sandbox when sandbox runtime is unavailable", async () => {
+  it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
     const result = await tool.execute("call1", {
       command: "echo ok",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
-    expect(text).toContain("ok");
-
-    const err = await tool
-      .execute("call2", {
-        command: "echo ok",
-        host: "gateway",
-      })
-      .then(() => null)
-      .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-    expect(err).toBeTruthy();
-    expect(err?.message).toMatch(/exec host not allowed/);
-    expect(err?.message).toMatch(/tools\.exec\.host=sandbox/);
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
@@ -247,6 +325,33 @@ describe("exec host env validation", () => {
       tool.execute("call1", {
         command: "echo ok",
       }),
-    ).rejects.toThrow(/sandbox runtime is unavailable/);
+    ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it.each([
+    "echo ok && /approve abc123 allow-once",
+    "echo ok | /approve abc123 deny",
+    "echo ok\n/approve abc123 allow-once",
+    "FOO=1 /approve abc123 allow-once",
+    "env -i /approve abc123 deny",
+    "env --ignore-environment /approve abc123 allow-once",
+    "env -i FOO=1 /approve abc123 allow-once",
+    "env -S '/approve abc123 deny'",
+    "command /approve abc123 deny",
+    "command -p /approve abc123 deny",
+    "exec -a openclaw /approve abc123 deny",
+    "sudo /approve abc123 allow-once",
+    "sudo -E /approve abc123 allow-once",
+    "bash -lc '/approve abc123 deny'",
+    "bash -c 'sudo /approve abc123 allow-once'",
+    "sh -c '/approve abc123 allow-once'",
+  ])("rejects /approve shell commands in %s", async (command) => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-approve", {
+        command,
+      }),
+    ).rejects.toThrow(/exec cannot run \/approve commands/);
   });
 });

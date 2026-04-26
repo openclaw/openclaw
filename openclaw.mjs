@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
@@ -85,8 +86,6 @@ const installProcessWarningFilter = async () => {
   }
 };
 
-await installProcessWarningFilter();
-
 const tryImport = async (specifier) => {
   try {
     await import(specifier);
@@ -126,10 +125,75 @@ const buildMissingEntryErrorMessage = async () => {
   return lines.join("\n");
 };
 
-if (await tryImport("./dist/entry.js")) {
+const isBareRootHelpInvocation = (argv) =>
+  argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
+
+const isBrowserHelpInvocation = (argv) =>
+  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+
+const isHelpFastPathDisabled = () =>
+  process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
+
+const loadPrecomputedHelpText = (key) => {
+  try {
+    const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const tryOutputBareRootHelp = async () => {
+  if (!isBareRootHelpInvocation(process.argv)) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText("rootHelpText");
+  if (precomputed) {
+    process.stdout.write(precomputed);
+    return true;
+  }
+  for (const specifier of ["./dist/cli/program/root-help.js", "./dist/cli/program/root-help.mjs"]) {
+    try {
+      const mod = await import(specifier);
+      if (typeof mod.outputRootHelp === "function") {
+        mod.outputRootHelp();
+        return true;
+      }
+    } catch (err) {
+      if (isDirectModuleNotFoundError(err, specifier)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+};
+
+const tryOutputBrowserHelp = () => {
+  if (!isBrowserHelpInvocation(process.argv)) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (!precomputed) {
+    return false;
+  }
+  process.stdout.write(precomputed);
+  return true;
+};
+
+if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
   // OK
-} else if (await tryImport("./dist/entry.mjs")) {
+} else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
   // OK
 } else {
-  throw new Error(await buildMissingEntryErrorMessage());
+  await installProcessWarningFilter();
+  if (await tryImport("./dist/entry.js")) {
+    // OK
+  } else if (await tryImport("./dist/entry.mjs")) {
+    // OK
+  } else {
+    throw new Error(await buildMissingEntryErrorMessage());
+  }
 }

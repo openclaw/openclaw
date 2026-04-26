@@ -1,3 +1,4 @@
+import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 export const DEFAULT_OVERFLOW_ERROR_MESSAGE =
@@ -28,19 +29,41 @@ export function makeCompactionSuccess(params: {
 export function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
+  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
+  const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
-    toolMetas: [],
+    toolMetas,
     lastAssistant: undefined,
     messagesSnapshot: [],
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        successfulCronAdds,
+      }),
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    didSendViaMessagingTool,
+    messagingToolSentTexts,
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     ...overrides,
@@ -96,8 +119,8 @@ export function queueOverflowAttemptWithOversizedToolOutput(
       promptError: overflowError,
       messagesSnapshot: [
         {
-          role: "assistant",
-          content: "big tool output",
+          role: "toolResult",
+          content: [{ type: "text", text: "x".repeat(80_000) }],
         } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
       ],
     }),

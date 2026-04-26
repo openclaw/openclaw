@@ -1,49 +1,80 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { runAgentStep, __testing } from "./agent-step.js";
 
-const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
+const runWaitMocks = vi.hoisted(() => ({
+  waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
 }));
 
-import { readLatestAssistantReply } from "./agent-step.js";
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
 
-describe("readLatestAssistantReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
+vi.mock("../run-wait.js", () => ({
+  waitForAgentRunAndReadUpdatedAssistantReply:
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
+}));
+
+vi.mock("../pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
+}));
+
+describe("runAgentStep", () => {
+  afterEach(() => {
+    __testing.setDepsForTest();
+    vi.clearAllMocks();
   });
 
-  it("returns the most recent assistant message when compaction markers trail history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed and changes were pushed." }],
-        },
-        { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
+  it("retires bundle MCP runtime after successful nested agent steps", async () => {
+    const gatewayCalls: CallGatewayOptions[] = [];
+    __testing.setDepsForTest({
+      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+        gatewayCalls.push(opts);
+        return { runId: "run-nested" } as T;
+      },
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "ok",
+      replyText: "done",
     });
 
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "hello",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBe("done");
 
-    expect(result).toBe("All checks passed and changes were pushed.");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:child", limit: 50 },
+    expect(gatewayCalls[0]?.params).toMatchObject({
+      sessionKey: "agent:main:subagent:child",
+      deliver: false,
+      lane: "nested:agent:main:subagent:child",
+    });
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+      sessionKey: "agent:main:subagent:child",
+      reason: "nested-agent-step-complete",
     });
   });
 
-  it("falls back to older assistant text when latest assistant has no text", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "older output" }] },
-        { role: "assistant", content: [] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
+  it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
+    __testing.setDepsForTest({
+      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T,
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "timeout",
     });
 
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "hello",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBeUndefined();
 
-    expect(result).toBe("older output");
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 });

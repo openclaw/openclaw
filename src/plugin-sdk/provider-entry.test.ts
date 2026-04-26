@@ -35,6 +35,17 @@ function createCatalogContext(
   };
 }
 
+async function captureProviderEntry(params: {
+  entry: ReturnType<typeof defineSingleProviderPluginEntry>;
+  config?: ProviderCatalogContext["config"];
+}) {
+  const captured = capturePluginRegistration(params.entry);
+  const provider = captured.providers[0];
+  const catalog = await provider?.catalog?.run(createCatalogContext(params.config));
+  const staticCatalog = await provider?.staticCatalog?.run(createCatalogContext(params.config));
+  return { captured, provider, catalog, staticCatalog };
+}
+
 describe("defineSingleProviderPluginEntry", () => {
   it("registers a single provider with default wizard metadata", async () => {
     const entry = defineSingleProviderPluginEntry({
@@ -62,13 +73,17 @@ describe("defineSingleProviderPluginEntry", () => {
             baseUrl: "https://api.demo.test/v1",
             models: [createModel("default", "Default")],
           }),
+          buildStaticProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.demo.test/v1",
+            models: [createModel("default", "Default")],
+          }),
         },
       },
     });
 
-    const captured = capturePluginRegistration(entry);
+    const { captured, provider, catalog, staticCatalog } = await captureProviderEntry({ entry });
     expect(captured.providers).toHaveLength(1);
-    const provider = captured.providers[0];
     expect(provider).toMatchObject({
       id: "demo",
       label: "Demo",
@@ -90,11 +105,17 @@ describe("defineSingleProviderPluginEntry", () => {
       methodId: "api-key",
     });
 
-    const catalog = await provider?.catalog?.run(createCatalogContext());
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",
         apiKey: "test-key",
+        baseUrl: "https://api.demo.test/v1",
+        models: [createModel("default", "Default")],
+      },
+    });
+    expect(staticCatalog).toEqual({
+      provider: {
+        api: "openai-completions",
         baseUrl: "https://api.demo.test/v1",
         models: [createModel("default", "Default")],
       },
@@ -159,11 +180,22 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
 
-    const captured = capturePluginRegistration(entry);
+    const { captured, provider, catalog } = await captureProviderEntry({
+      entry,
+      config: {
+        models: {
+          providers: {
+            gateway: {
+              baseUrl: "https://override.test/v1",
+              models: [createModel("router", "Router")],
+            },
+          },
+        },
+      },
+    });
     expect(captured.providers).toHaveLength(1);
     expect(captured.webSearchProviders).toHaveLength(1);
 
-    const provider = captured.providers[0];
     expect(provider).toMatchObject({
       id: "gateway",
       label: "Gateway",
@@ -180,18 +212,6 @@ describe("defineSingleProviderPluginEntry", () => {
       groupHint: "Primary key",
     });
 
-    const catalog = await provider?.catalog?.run(
-      createCatalogContext({
-        models: {
-          providers: {
-            gateway: {
-              baseUrl: "https://override.test/v1",
-              models: [createModel("router", "Router")],
-            },
-          },
-        },
-      }),
-    );
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",

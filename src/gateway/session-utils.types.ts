@@ -1,23 +1,38 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
 import type {
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+};
+
+export type GatewayThinkingLevelOption = {
+  id: string;
+  label: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+export type SubagentRunState = "active" | "interrupted" | "historical";
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: SessionEntry["subagentRole"];
+  subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -34,8 +49,12 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
@@ -45,6 +64,8 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
@@ -58,6 +79,9 @@ export type GatewaySessionRow = {
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: SessionEntry["lastThreadId"];
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

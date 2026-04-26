@@ -130,6 +130,12 @@ export const icons = {
       <path d="m19 12-7 7-7-7" />
     </svg>
   `,
+  cornerDownRight: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="15 10 20 15 15 20" />
+      <path d="M4 4v7a4 4 0 0 0 4 4h12" />
+    </svg>
+  `,
   copy: html`
     <svg viewBox="0 0 24 24">
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
@@ -446,6 +452,22 @@ export const icons = {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M15 3v18" stroke-linecap="round" />
       <path d="M10 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  maximize: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" x2="14" y1="3" y2="10" />
+      <line x1="3" x2="10" y1="21" y2="14" />
+    </svg>
+  `,
+  minimize: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="4 14 10 14 10 20" />
+      <polyline points="20 10 14 10 14 4" />
+      <line x1="14" x2="21" y1="10" y2="3" />
+      <line x1="3" x2="10" y1="21" y2="14" />
     </svg>
   `,
 } as const;

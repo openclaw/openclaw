@@ -1,3 +1,26 @@
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveEffectiveAllowFromLists,
+} from "openclaw/plugin-sdk/channel-policy";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  isDangerousNameMatchingEnabled,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
+import {
+  deliverFormattedTextWithAttachments,
+  type OutboundReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -7,23 +30,6 @@ import {
   resolveIrcGroupSenderAllowed,
   resolveIrcRequireMention,
 } from "./policy.js";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  createChannelPairingController,
-  deliverFormattedTextWithAttachments,
-  dispatchInboundReplyWithBase,
-  logInboundDrop,
-  isDangerousNameMatchingEnabled,
-  readStoreAllowFromForDmPolicy,
-  resolveControlCommandGate,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveEffectiveAllowFromLists,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type OutboundReplyPayload,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -54,6 +60,7 @@ function resolveIrcEffectiveAllowlists(params: {
 
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
+  cfg: CoreConfig;
   target: string;
   accountId: string;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
@@ -66,6 +73,7 @@ async function deliverIrcReply(params: {
         await params.sendReply(params.target, text, replyToId);
       } else {
         await sendMessageIrc(params.target, text, {
+          cfg: params.cfg,
           accountId: params.accountId,
           replyTo: replyToId,
         });
@@ -208,12 +216,13 @@ export async function handleIrcInbound(params: {
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
           await pairing.issueChallenge({
-            senderId: senderDisplay.toLowerCase(),
+            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
             senderIdLine: `Your IRC id: ${senderDisplay}`,
             meta: { name: message.senderNick || undefined },
             sendPairingReply: async (text) => {
               await deliverIrcReply({
                 payload: { text },
+                cfg: config,
                 target: message.senderNick,
                 accountId: account.accountId,
                 sendReply: params.sendReply,
@@ -232,6 +241,7 @@ export async function handleIrcInbound(params: {
   }
 
   if (message.isGroup && commandGate.shouldBlock) {
+    const { logInboundDrop } = await import("openclaw/plugin-sdk/channel-inbound");
     logInboundDrop({
       log: (line) => runtime.log?.(line),
       channel: CHANNEL_ID,
@@ -299,7 +309,7 @@ export async function handleIrcInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -325,6 +335,8 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
+  const { dispatchInboundReplyWithBase } =
+    await import("openclaw/plugin-sdk/inbound-reply-dispatch");
   await dispatchInboundReplyWithBase({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -336,6 +348,7 @@ export async function handleIrcInbound(params: {
     deliver: async (payload) => {
       await deliverIrcReply({
         payload,
+        cfg: config,
         target: peerId,
         accountId: account.accountId,
         sendReply: params.sendReply,

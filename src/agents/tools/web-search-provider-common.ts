@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -13,6 +13,20 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "withTrustedWebToolsEndpoint"
+>;
+
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -30,21 +44,7 @@ type UnsupportedWebSearchFilterName =
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
-
-const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
-
-function getSharedSearchCache(): Map<string, CacheEntry<Record<string, unknown>>> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, CacheEntry<Record<string, unknown>>>;
-  }
-  const next = new Map<string, CacheEntry<Record<string, unknown>>>();
-  root[SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-export const SEARCH_CACHE = getSharedSearchCache();
+export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -82,6 +82,7 @@ export async function withTrustedWebSearchEndpoint<T>(
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
@@ -100,9 +101,11 @@ export async function postTrustedWebToolsJson<T>(
     body: Record<string, unknown>;
     errorLabel: string;
     maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
@@ -110,6 +113,7 @@ export async function postTrustedWebToolsJson<T>(
       init: {
         method: "POST",
         headers: {
+          ...params.extraHeaders,
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
@@ -189,7 +193,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
     return undefined;
   }
   const [, year, month, day] = match;
-  return `${parseInt(month, 10)}/${parseInt(day, 10)}/${year}`;
+  return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
 export function normalizeToIsoDate(value: string): string | undefined {
@@ -206,6 +210,50 @@ export function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
+export function parseIsoDateRange(params: {
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  docs?: string;
+}):
+  | { dateAfter?: string; dateBefore?: string }
+  | {
+      error: "invalid_date" | "invalid_date_range";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const dateAfter = params.rawDateAfter ? normalizeToIsoDate(params.rawDateAfter) : undefined;
+  if (params.rawDateAfter && !dateAfter) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateAfterMessage,
+      docs,
+    };
+  }
+
+  const dateBefore = params.rawDateBefore ? normalizeToIsoDate(params.rawDateBefore) : undefined;
+  if (params.rawDateBefore && !dateBefore) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateBeforeMessage,
+      docs,
+    };
+  }
+
+  if (dateAfter && dateBefore && dateAfter > dateBefore) {
+    return {
+      error: "invalid_date_range",
+      message: params.invalidDateRangeMessage,
+      docs,
+    };
+  }
+
+  return { dateAfter, dateBefore };
+}
+
 export function normalizeFreshness(
   value: string | undefined,
   provider: "brave" | "perplexity",
@@ -218,7 +266,7 @@ export function normalizeFreshness(
     return undefined;
   }
 
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
     return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
   }
@@ -282,6 +330,7 @@ function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): 
     case "date_before":
       return "date_after/date_before filtering";
   }
+  throw new Error("Unsupported web search filter");
 }
 
 export function buildUnsupportedSearchFilterResponse(

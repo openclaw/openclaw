@@ -1,4 +1,4 @@
-import { parseExecArgvToken } from "./exec-approvals-analysis.js";
+import { parseExecArgvToken } from "./exec-command-resolution.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,

@@ -1,13 +1,13 @@
 import {
+  createModelCatalogPresetAppliers,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
-} from "openclaw/plugin-sdk/provider-models";
-import {
-  createModelCatalogPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+} from "./api.js";
 
 export { VENICE_DEFAULT_MODEL_REF };
 

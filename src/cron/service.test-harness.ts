@@ -204,6 +204,24 @@ export function createRunningCronServiceState(params: {
   return state;
 }
 
+export function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+}
+
+export async function withCronServiceStateForTest<T>(
+  state: { timer: NodeJS.Timeout | null },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    disposeCronServiceState(state);
+  }
+}
+
 export function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -227,6 +245,7 @@ export function createMockCronStateForJobs(params: {
     storeFileMtimeMs: null,
     op: Promise.resolve(),
     warnedDisabled: false,
+    warnedMissingSessionTargetJobIds: new Set<string>(),
     deps: {
       storePath: "/mock/path",
       cronEnabled: true,

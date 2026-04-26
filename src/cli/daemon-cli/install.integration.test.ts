@@ -11,6 +11,7 @@ const serviceMock = vi.hoisted(() => ({
   label: "Gateway",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   install: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   uninstall: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
@@ -29,7 +30,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 const { runDaemonInstall } = await import("./install.js");
-const { clearConfigCache } = await import("../../config/config.js");
+const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../../config/config.js");
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as Record<string, unknown>;
@@ -63,6 +64,7 @@ describe("runDaemonInstall integration", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";
@@ -103,6 +105,32 @@ describe("runDaemonInstall integration", () => {
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("SecretRef is configured but unresolved");
     expect(joined).toContain("MISSING_GATEWAY_TOKEN");
+  });
+
+  it("refuses service install when config was written by a newer OpenClaw", async () => {
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          meta: {
+            lastTouchedVersion: "9999.1.1",
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    clearConfigCache();
+
+    await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("Refusing to install or rewrite the gateway service");
   });
 
   it("auto-mints token when no source exists without embedding it into service env", async () => {

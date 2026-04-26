@@ -95,6 +95,8 @@ describe("configureGatewayForSetup", () => {
 
     expect(result.settings.gatewayToken).toBe("generated-token");
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
@@ -117,6 +119,64 @@ describe("configureGatewayForSetup", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
       }
     }
+  });
+
+  it("enables insecure local control ui auth for fresh quickstart loopback setups", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+  });
+
+  it("preserves explicit control ui auth policy in quickstart", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+      nextConfig: {
+        gateway: {
+          controlUi: {
+            allowInsecureAuth: false,
+          },
+        },
+      },
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(false);
+  });
+
+  it("enables insecure local control ui auth when quickstart reuses an existing loopback config", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const prompter = createPrompter({
+      selectQueue: [],
+      textQueue: [],
+    });
+    const runtime = createRuntime();
+
+    const result = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          port: 18789,
+          bind: "loopback",
+        },
+      },
+      localPort: 18789,
+      quickstartGateway: {
+        ...createQuickstartGateway("token"),
+        hasExisting: true,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {

@@ -90,7 +90,7 @@ describe("skills-cli", () => {
       ]);
       const output = formatSkillsList(report, { verbose: true });
       expect(output).toContain("needs-stuff");
-      expect(output).toContain("missing");
+      expect(output).toContain("needs setup");
       expect(output).toContain("anyBins");
       expect(output).toContain("os:");
     });
@@ -147,6 +147,36 @@ describe("skills-cli", () => {
       expect(output).toContain("node");
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
+    });
+
+    it("shows API key storage guidance for the active config path", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "env-aware-skill",
+          skillKey: "env-aware-skill",
+          primaryEnv: "API_KEY",
+          eligible: false,
+          requirements: {
+            bins: [],
+            anyBins: [],
+            env: ["API_KEY"],
+            config: [],
+            os: [],
+          },
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: ["API_KEY"],
+            config: [],
+            os: [],
+          },
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "env-aware-skill", {});
+      expect(output).toContain("OPENCLAW_CONFIG_PATH");
+      expect(output).toContain("default: ~/.openclaw/openclaw.json");
+      expect(output).toContain("skills.entries.env-aware-skill.apiKey");
     });
 
     it("normalizes text-presentation emoji selectors in info output", () => {

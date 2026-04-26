@@ -24,6 +24,12 @@ require_cmd() {
   fi
 }
 
+run_docker_build() {
+  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
+  # BuildKit so hosts defaulting to the legacy builder do not fail.
+  DOCKER_BUILDKIT=1 docker build "$@"
+}
+
 is_truthy_value() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
@@ -99,36 +105,72 @@ read_env_gateway_token() {
   fi
 }
 
-ensure_control_ui_allowed_origins() {
-  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
-    return 0
+sync_gateway_config() {
+  local allowed_origin_json=""
+  local current_allowed_origins=""
+  local batch_json=""
+
+  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
+    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
+    current_allowed_origins="$(
+      run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    )"
+    current_allowed_origins="${current_allowed_origins//$'\r'/}"
   fi
 
-  local allowed_origin_json
-  local current_allowed_origins
-  allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
-  current_allowed_origins="$(
-    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
-  )"
-  current_allowed_origins="${current_allowed_origins//$'\r'/}"
-
-  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
-    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
-    return 0
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    else
+      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
+    fi
   fi
+  batch_json+="]"
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
-  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+  run_prestart_cli config set --batch-json "$batch_json" >/dev/null
+  echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
+      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+    fi
+  fi
 }
 
-sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
-  echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+run_prestart_gateway() {
+  docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps "$@"
+}
+
+run_prestart_cli() {
+  # During setup, avoid the shared-network openclaw-cli service because it
+  # requires the gateway container's network namespace to already exist. That
+  # creates a circular dependency for config writes that are needed before the
+  # gateway can start cleanly.
+  run_prestart_gateway --entrypoint node openclaw-gateway \
+    dist/index.js "$@"
+}
+
+run_runtime_cli() {
+  local compose_scope="${1:-current}"
+  local deps_mode="${2:-with-deps}"
+  shift 2
+
+  local -a compose_args
+  local -a run_args=(run --rm)
+
+  case "$compose_scope" in
+    current) compose_args=("${COMPOSE_ARGS[@]}") ;;
+    base) compose_args=("${BASE_COMPOSE_ARGS[@]}") ;;
+    *) fail "Unknown runtime CLI compose scope: $compose_scope" ;;
+  esac
+
+  case "$deps_mode" in
+    with-deps) ;;
+    no-deps) run_args+=(--no-deps) ;;
+    *) fail "Unknown runtime CLI deps mode: $deps_mode" ;;
+  esac
+
+  docker compose "${compose_args[@]}" "${run_args[@]}" openclaw-cli "$@"
 }
 
 contains_disallowed_chars() {
@@ -233,6 +275,7 @@ export OPENCLAW_WORKSPACE_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-1}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
@@ -242,6 +285,14 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
+export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
+export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
+export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
+export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -416,6 +467,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_GATEWAY_PORT \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
+  OPENCLAW_DISABLE_BONJOUR \
   OPENCLAW_GATEWAY_TOKEN \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
@@ -427,11 +479,19 @@ upsert_env "$ENV_FILE" \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+  OPENCLAW_TZ \
+  OTEL_EXPORTER_OTLP_ENDPOINT \
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
+  OTEL_EXPORTER_OTLP_PROTOCOL \
+  OTEL_SERVICE_NAME \
+  OTEL_SEMCONV_STABILITY_OPT_IN \
+  OPENCLAW_OTEL_PRELOADED
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
-  docker build \
+  run_docker_build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
@@ -458,7 +518,7 @@ echo "==> Fixing data-directory permissions"
 # ownership of all user project files on Linux hosts.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
-docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
+run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
@@ -467,19 +527,20 @@ echo "==> Onboarding (interactive)"
 echo "Docker setup pins Gateway mode to local."
 echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
 echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+if is_truthy_value "$OPENCLAW_DISABLE_BONJOUR"; then
+  echo "Bonjour/mDNS advertising: disabled for Docker bridge networking (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+else
+  echo "Bonjour/mDNS advertising: enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+fi
 echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
 echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+run_prestart_cli onboard --mode local --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
-sync_gateway_mode_and_bind
-
-echo ""
-echo "==> Control UI origin allowlist"
-ensure_control_ui_allowed_origins
+sync_gateway_config
 
 echo ""
 echo "==> Provider setup (optional)"
@@ -503,7 +564,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Build sandbox image if Dockerfile.sandbox exists.
   if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
-    docker build \
+    run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
       -f "$ROOT_DIR/Dockerfile.sandbox" \
       "$ROOT_DIR"
@@ -555,17 +616,17 @@ fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
+  if ! run_runtime_cli current no-deps \
     config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
     sandbox_config_ok=false
   fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
+  if ! run_runtime_cli current no-deps \
     config set agents.defaults.sandbox.scope "agent" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.scope" >&2
     sandbox_config_ok=false
   fi
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
+  if ! run_runtime_cli current no-deps \
     config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.workspaceAccess" >&2
     sandbox_config_ok=false
@@ -579,7 +640,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
     echo "  Skipping gateway restart to avoid exposing Docker socket without a full sandbox policy." >&2
-    if ! docker compose "${BASE_COMPOSE_ARGS[@]}" run --rm --no-deps openclaw-cli \
+    if ! run_runtime_cli base no-deps \
       config set agents.defaults.sandbox.mode "off" >/dev/null; then
       echo "WARNING: Failed to roll back agents.defaults.sandbox.mode to off" >&2
     else
@@ -595,7 +656,7 @@ else
   # Keep reruns deterministic: if sandbox is not active for this run, reset
   # persisted sandbox mode so future execs do not require docker.sock by stale
   # config alone.
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  if ! run_runtime_cli current with-deps \
     config set agents.defaults.sandbox.mode "off" >/dev/null; then
     echo "WARNING: Failed to reset agents.defaults.sandbox.mode to off" >&2
   fi

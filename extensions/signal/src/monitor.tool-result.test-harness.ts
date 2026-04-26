@@ -27,6 +27,9 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalToolResultSessionStorePath = vi.hoisted(
+  () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
+);
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -50,7 +53,31 @@ export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export function createSignalToolResultConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const base = config as { channels?: Record<string, unknown> };
+  const channels = base.channels ?? {};
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
+}
+
+export async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 export function createMockSignalDaemonHandle(
   overrides: {
@@ -78,7 +105,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
     ...actual,
     loadConfig: () => config,
-    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    resolveStorePath: vi.fn(() => signalToolResultSessionStorePath),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -101,7 +128,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         waitForIdle?: () => Promise<void>;
       };
     }) => {
-      const resolved = await replyMock(params.ctx, {}, params.cfg);
+      const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
+        | { text?: string }
+        | undefined;
       const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
       if (text) {
         params.dispatcher.sendFinalReply({ text });
@@ -164,11 +193,11 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   );
   return {
     ...actual,
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
     enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
       enqueueSystemEventMock(...args);
       return actual.enqueueSystemEvent(...args);
     },
+    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
 
@@ -181,6 +210,7 @@ export function installSignalToolResultTestHooks() {
     resetInboundDedupe();
     config = {
       messages: { responsePrefix: "PFX" },
+      session: { store: signalToolResultSessionStorePath },
       channels: {
         signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
       },

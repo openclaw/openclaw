@@ -21,18 +21,29 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
+import {
+  confirmDoctorServiceRepair,
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+  resolveServiceRepairPolicy,
+} from "./doctor-service-repair-policy.js";
 
 const execFileAsync = promisify(execFile);
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
   if (first) {
-    const base = path.basename(first).toLowerCase();
+    const base = normalizeLowercaseStringOrEmpty(path.basename(first));
     if (base === "bun" || base === "bun.exe") {
       return "bun";
     }
@@ -257,7 +268,7 @@ export async function maybeRepairGatewayServiceConfig(
       note(warning, "Gateway runtime");
     }
     note(
-      "System Node 22 LTS (22.16+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+      "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
       "Gateway runtime",
     );
   }
@@ -297,6 +308,9 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+
   note(
     audit.issues
       .map((issue) =>
@@ -316,26 +330,37 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
+  if (serviceRepairExternal) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+    return;
+  }
+
   const repair = needsAggressive
-    ? await prompter.confirmAggressive({
+    ? await prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config with current defaults now?",
-        initialValue: Boolean(prompter.shouldForce),
+        initialValue: prompter.shouldForce,
       })
-    : await prompter.confirmRepair({
+    : await prompter.confirmAutoFix({
         message: "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });
   if (!repair) {
     return;
   }
+  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
   const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
   const configuredGatewayToken =
     typeof cfg.gateway?.auth?.token === "string"
-      ? cfg.gateway.auth.token.trim() || undefined
+      ? normalizeOptionalString(cfg.gateway.auth.token)
       : undefined;
   let cfgForServiceInstall = cfg;
-  if (!tokenRefConfigured && !configuredGatewayToken && gatewayTokenForRepair) {
+  if (
+    !updateRepairMode &&
+    !tokenRefConfigured &&
+    !configuredGatewayToken &&
+    gatewayTokenForRepair
+  ) {
     const nextCfg: OpenClawConfig = {
       ...cfg,
       gateway: {
@@ -372,7 +397,7 @@ export async function maybeRepairGatewayServiceConfig(
     config: cfgForServiceInstall,
   });
   try {
-    await service.install({
+    await (updateRepairMode ? service.stage : service.install)({
       env: process.env,
       stdout: process.stdout,
       programArguments: updatedPlan.programArguments,
@@ -403,10 +428,21 @@ export async function maybeScanExtraGatewayServices(
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
-    const shouldRemove = await prompter.confirmSkipInNonInteractive({
-      message: "Remove legacy gateway services (clawdbot/moltbot) now?",
-      initialValue: true,
-    });
+    const serviceRepairPolicy = resolveServiceRepairPolicy();
+    const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+    }
+    const shouldRemove = serviceRepairExternal
+      ? false
+      : await confirmDoctorServiceRepair(
+          prompter,
+          {
+            message: "Remove legacy gateway services now?",
+            initialValue: true,
+          },
+          serviceRepairPolicy,
+        );
     if (shouldRemove) {
       const removed: string[] = [];
       const { darwinUserServices, linuxUserServices, failed } =

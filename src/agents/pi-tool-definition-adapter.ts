@@ -5,7 +5,9 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
@@ -35,6 +37,7 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   ? P
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
@@ -58,6 +61,58 @@ function describeToolExecutionError(err: unknown): {
     return { message, stack: err.stack };
   }
   return { message: String(err) };
+}
+
+function serializeToolParams(value: unknown): string {
+  if (value === undefined) {
+    return "<undefined>";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // Fall through to String(value).
+  }
+  if (typeof value === "function") {
+    return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  return Object.prototype.toString.call(value);
+}
+
+function formatToolParamPreview(label: string, value: unknown): string {
+  const serialized = serializeToolParams(value);
+  const redacted = redactToolDetail(serialized);
+  const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
+  return `${label}=${preview}`;
+}
+
+function describeToolFailureInputs(params: {
+  rawParams: unknown;
+  effectiveParams: unknown;
+}): string {
+  const parts = [formatToolParamPreview("raw_params", params.rawParams)];
+  const rawSerialized = serializeToolParams(params.rawParams);
+  const effectiveSerialized = serializeToolParams(params.effectiveParams);
+  if (effectiveSerialized !== rawSerialized) {
+    parts.push(formatToolParamPreview("effective_params", params.effectiveParams));
+  }
+  return parts.join(" ");
 }
 
 function normalizeToolExecutionResult(params: {
@@ -114,6 +169,50 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+
+export function findClientToolNameConflicts(params: {
+  tools: ClientToolDefinition[];
+  existingToolNames?: Iterable<string>;
+}): string[] {
+  const existingNormalized = new Set<string>();
+  for (const name of params.existingToolNames ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      existingNormalized.add(normalizeToolName(trimmed));
+    }
+  }
+
+  const conflicts = new Set<string>();
+  const seenClientNames = new Map<string, string>();
+  for (const tool of params.tools) {
+    const rawName = (tool.function?.name ?? "").trim();
+    if (!rawName) {
+      continue;
+    }
+    const normalizedName = normalizeToolName(rawName);
+    if (existingNormalized.has(normalizedName)) {
+      conflicts.add(rawName);
+    }
+    const priorClientName = seenClientNames.get(normalizedName);
+    if (priorClientName) {
+      conflicts.add(priorClientName);
+      conflicts.add(rawName);
+      continue;
+    }
+    seenClientNames.set(normalizedName, rawName);
+  }
+  return Array.from(conflicts);
+}
+
+export function createClientToolNameConflictError(conflicts: string[]): Error {
+  return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
+}
+
+export function isClientToolNameConflictError(err: unknown): err is Error {
+  return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
+}
+
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
@@ -160,7 +259,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
+          const inputPreview = describeToolFailureInputs({
+            rawParams: params,
+            effectiveParams: executeParams,
+          });
+          logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
 
           return buildToolExecutionErrorResult({
             toolName: normalizedName,
@@ -170,6 +273,38 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       },
     } satisfies ToolDefinition;
   });
+}
+
+/**
+ * Coerce tool-call params into a plain object.
+ *
+ * Some providers (e.g. Gemini) stream tool-call arguments as incremental
+ * string deltas.  By the time the framework invokes the tool's `execute`
+ * callback the accumulated value may still be a JSON **string** rather than
+ * a parsed object.  `isPlainObject()` returns `false` for strings, which
+ * caused the params to be silently replaced with `{}`.
+ *
+ * This helper tries `JSON.parse` when the value is a string and falls back
+ * to an empty object only when parsing genuinely fails.
+ */
+function coerceParamsRecord(value: unknown): Record<string, unknown> {
+  if (isPlainObject(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (isPlainObject(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // not valid JSON – fall through to empty object
+      }
+    }
+  }
+  return {};
 }
 
 // Convert client tools (OpenResponses hosted tools) to ToolDefinition format
@@ -198,7 +333,7 @@ export function toClientToolDefinitions(
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
-        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
+        const paramsRecord = coerceParamsRecord(adjustedParams);
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);

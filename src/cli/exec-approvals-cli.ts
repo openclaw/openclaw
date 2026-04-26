@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  collectExecPolicyScopeSnapshots,
+  type ExecPolicyScopeSnapshot,
+} from "../infra/exec-approvals-effective.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -9,10 +15,11 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -23,6 +30,20 @@ type ExecApprovalsSnapshot = {
   hash: string;
   file: ExecApprovalsFile;
 };
+
+type ConfigSnapshotLike = {
+  config?: OpenClawConfig;
+};
+type ConfigLoadResult = {
+  config: OpenClawConfig | null;
+  timedOut: boolean;
+};
+type ApprovalsTargetSource = "gateway" | "node" | "local";
+type EffectivePolicyReport = {
+  scopes: ExecPolicyScopeSnapshot[];
+  note?: string;
+};
+const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -44,7 +65,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (opts.gateway) {
     return null;
   }
-  const raw = opts.node?.trim() ?? "";
+  const raw = normalizeOptionalString(opts.node) ?? "";
   if (!raw) {
     return null;
   }
@@ -79,7 +100,7 @@ function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
 }> {
   if (!opts.gateway && !opts.node) {
     return { snapshot: loadSnapshotLocal(), nodeId: null, source: "local" };
@@ -106,7 +127,7 @@ function requireTrimmedNonEmpty(value: string, message: string): string {
 async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
 }> {
@@ -124,7 +145,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 
 async function saveSnapshotTargeted(params: {
   opts: ExecApprovalsCliOpts;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
   nodeId: string | null;
   file: ExecApprovalsFile;
   baseHash: string;
@@ -143,8 +164,116 @@ async function saveSnapshotTargeted(params: {
 }
 
 function formatCliError(err: unknown): string {
-  const msg = describeUnknownError(err);
-  return msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const msg = formatErrorMessage(err);
+  const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
+  const safe = sanitizeForLog(firstLine);
+  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
+}
+
+async function loadConfigForApprovalsTarget(params: {
+  opts: ExecApprovalsCliOpts;
+  source: ApprovalsTargetSource;
+}): Promise<ConfigLoadResult> {
+  try {
+    if (params.source === "local") {
+      return { config: await readBestEffortConfig(), timedOut: false };
+    }
+    const snapshot = (await callGatewayFromCli(
+      "config.get",
+      params.opts,
+      {},
+    )) as ConfigSnapshotLike;
+    return {
+      config: snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null,
+      timedOut: false,
+    };
+  } catch (err) {
+    return {
+      config: null,
+      timedOut: /^gateway timeout after \d+ms\b/i.test(formatCliError(err)),
+    };
+  }
+}
+
+function buildEffectivePolicyReport(params: {
+  configLoad: ConfigLoadResult;
+  source: ApprovalsTargetSource;
+  approvals: ExecApprovalsFile;
+  hostPath: string;
+}): EffectivePolicyReport {
+  const cfg = params.configLoad.config;
+  const timeoutNote = params.configLoad.timedOut
+    ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
+    : null;
+  if (params.source === "node") {
+    if (!cfg) {
+      return {
+        scopes: [],
+        note:
+          timeoutNote ??
+          "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
+      };
+    }
+    return {
+      scopes: collectExecPolicyScopeSnapshots({
+        cfg,
+        approvals: params.approvals,
+        hostPath: params.hostPath,
+      }),
+      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+    };
+  }
+  if (!cfg) {
+    return {
+      scopes: [],
+      note: timeoutNote ?? "Config unavailable.",
+    };
+  }
+  return {
+    scopes: collectExecPolicyScopeSnapshots({
+      cfg,
+      approvals: params.approvals,
+      hostPath: params.hostPath,
+    }),
+    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+  };
+}
+
+function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  if (params.report.scopes.length === 0 && !params.report.note) {
+    return;
+  }
+  defaultRuntime.log("");
+  defaultRuntime.log(heading("Effective Policy"));
+  if (params.report.scopes.length === 0) {
+    defaultRuntime.log(muted(params.report.note ?? "No effective policy details available."));
+    return;
+  }
+  const rows = params.report.scopes.map((summary) => ({
+    Scope: summary.scopeLabel,
+    Requested: `security=${summary.security.requested} (${summary.security.requestedSource})\nask=${summary.ask.requested} (${summary.ask.requestedSource})`,
+    Host: `security=${summary.security.host} (${summary.security.hostSource})\nask=${summary.ask.host} (${summary.ask.hostSource})\naskFallback=${summary.askFallback.effective} (${summary.askFallback.source})`,
+    Effective: `security=${summary.security.effective}\nask=${summary.ask.effective}`,
+    Notes: `${summary.security.note}; ${summary.ask.note}`,
+  }));
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "Scope", header: "Scope", minWidth: 12 },
+        { key: "Requested", header: "Requested", minWidth: 24, flex: true },
+        { key: "Host", header: "Host", minWidth: 24, flex: true },
+        { key: "Effective", header: "Effective", minWidth: 16 },
+        { key: "Notes", header: "Notes", minWidth: 20, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+  defaultRuntime.log("");
+  defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
 }
 
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
@@ -170,7 +299,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
-      const pattern = entry?.pattern?.trim() ?? "";
+      const pattern = normalizeOptionalString(entry?.pattern) ?? "";
       if (!pattern) {
         continue;
       }
@@ -243,12 +372,12 @@ async function saveSnapshot(
 }
 
 function resolveAgentKey(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? trimmed : "*";
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  const pattern = entry?.pattern?.trim() ?? "";
+  const pattern = normalizeOptionalString(entry?.pattern) ?? "";
   return pattern ? pattern : null;
 }
 
@@ -364,8 +493,15 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
+        const configLoad = await loadConfigForApprovalsTarget({ opts, source });
+        const effectivePolicy = buildEffectivePolicyReport({
+          configLoad,
+          source,
+          approvals: snapshot.file,
+          hostPath: snapshot.path,
+        });
         if (opts.json) {
-          defaultRuntime.writeJson(snapshot, 0);
+          defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
           return;
         }
 
@@ -376,12 +512,13 @@ export function registerExecApprovalsCli(program: Command) {
         }
         const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
         renderApprovalsSnapshot(snapshot, targetLabel);
+        renderEffectivePolicy({ report: effectivePolicy });
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
       }
     });
-  nodesCallOpts(getCmd);
+  nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
 
   const setCmd = approvals
     .command("set")

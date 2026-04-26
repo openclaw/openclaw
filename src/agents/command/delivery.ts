@@ -1,9 +1,15 @@
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -12,15 +18,18 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
+  createOutboundPayloadPlan,
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
+  projectOutboundPayloadPlanForJson,
+  projectOutboundPayloadPlanForOutbound,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { isNestedAgentLane } from "../lanes.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
@@ -64,6 +73,110 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
+}
+
+async function normalizeReplyMediaPathsForDelivery(params: {
+  cfg: OpenClawConfig;
+  payloads: ReplyPayload[];
+  sessionKey?: string;
+  outboundSession: OutboundSessionContext | undefined;
+  deliveryChannel: string;
+  accountId?: string;
+}): Promise<ReplyPayload[]> {
+  if (params.payloads.length === 0) {
+    return params.payloads;
+  }
+  const agentId =
+    params.outboundSession?.agentId ??
+    resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  const workspaceDir = agentId ? resolveAgentWorkspaceDir(params.cfg, agentId) : undefined;
+  if (!workspaceDir) {
+    return params.payloads;
+  }
+  const normalizeMediaPaths = createReplyMediaPathNormalizer({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId,
+    workspaceDir,
+    messageProvider: params.deliveryChannel,
+    accountId: params.accountId,
+  });
+  const result: ReplyPayload[] = [];
+  for (const payload of params.payloads) {
+    result.push(await normalizeMediaPaths(payload));
+  }
+  return result;
+}
+
+export function normalizeAgentCommandReplyPayloads(params: {
+  cfg: OpenClawConfig;
+  opts: AgentCommandOpts;
+  outboundSession: OutboundSessionContext | undefined;
+  payloads: RunResult["payloads"];
+  result: RunResult;
+  deliveryChannel?: string;
+  accountId?: string;
+  applyChannelTransforms?: boolean;
+}): ReplyPayload[] {
+  const payloads = params.payloads ?? [];
+  if (payloads.length === 0) {
+    return [];
+  }
+  const channel =
+    params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
+      ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
+      : undefined;
+  if (!channel) {
+    return payloads as ReplyPayload[];
+  }
+  const applyChannelTransforms = params.applyChannelTransforms ?? true;
+  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
+
+  const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
+  const agentId =
+    params.outboundSession?.agentId ??
+    resolveSessionAgentId({
+      sessionKey,
+      config: params.cfg,
+    });
+  const replyPrefix = createReplyPrefixContext({
+    cfg: params.cfg,
+    agentId,
+    channel,
+    accountId: params.accountId,
+  });
+  const modelUsed = params.result.meta.agentMeta?.model;
+  const providerUsed = params.result.meta.agentMeta?.provider;
+  if (providerUsed && modelUsed) {
+    replyPrefix.onModelSelected({
+      provider: providerUsed,
+      model: modelUsed,
+      thinkLevel: undefined,
+    });
+  }
+  const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
+  const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
+    ? (payload: ReplyPayload) =>
+        deliveryPlugin.messaging?.transformReplyPayload?.({
+          payload,
+          cfg: params.cfg,
+          accountId: params.accountId,
+        }) ?? payload
+    : undefined;
+
+  const normalizedPayloads: ReplyPayload[] = [];
+  for (const payload of payloads) {
+    const normalized = normalizeReplyPayload(payload as ReplyPayload, {
+      responsePrefix: replyPrefix.responsePrefix,
+      applyChannelTransforms,
+      responsePrefixContext,
+      transformReplyPayload,
+    });
+    if (normalized) {
+      normalizedPayloads.push(normalized);
+    }
+  }
+  return normalizedPayloads;
 }
 
 export async function deliverAgentCommandResult(params: {
@@ -114,9 +227,10 @@ export async function deliverAgentCommandResult(params: {
           resolvedChannel: deliveryChannel,
         };
   // Channel docking: delivery channels are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
-    ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
-    : undefined;
+  const deliveryPlugin =
+    deliver && !isInternalMessageChannel(deliveryChannel)
+      ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+      : undefined;
 
   const isDeliveryChannelKnown =
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
@@ -142,9 +256,17 @@ export async function deliverAgentCommandResult(params: {
   const resolvedTarget = resolved.resolvedTarget;
   const deliveryTarget = resolved.resolvedTo;
   const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
-  const resolvedReplyToId =
-    deliveryChannel === "slack" && resolvedThreadId != null ? String(resolvedThreadId) : undefined;
-  const resolvedThreadTarget = deliveryChannel === "slack" ? undefined : resolvedThreadId;
+  const replyTransport =
+    deliveryPlugin?.threading?.resolveReplyTransport?.({
+      cfg,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+    }) ?? null;
+  const resolvedReplyToId = replyTransport?.replyToId ?? undefined;
+  const resolvedThreadTarget =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (resolvedThreadId ?? null);
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
@@ -177,7 +299,34 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
+  const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
+    cfg,
+    opts,
+    outboundSession,
+    payloads,
+    result,
+    deliveryChannel,
+    accountId: resolvedAccountId,
+    applyChannelTransforms: deliver,
+  });
+  // Auto-reply-style media-path normalization must also run for the CLI
+  // `--deliver` path. Without it, relative `MEDIA:./out/photo.png` tokens
+  // reach the outbound loader unresolved and `assertLocalMediaAllowed` fails
+  // with "Local media path is not under an allowed directory". Mirrors the
+  // normalizer wiring in `src/auto-reply/reply/agent-runner.ts`.
+  const mediaNormalizedReplyPayloads =
+    deliver && !isInternalMessageChannel(deliveryChannel)
+      ? await normalizeReplyMediaPathsForDelivery({
+          cfg,
+          payloads: normalizedReplyPayloads,
+          sessionKey: effectiveSessionKey,
+          outboundSession,
+          deliveryChannel,
+          accountId: resolvedAccountId,
+        })
+      : normalizedReplyPayloads;
+  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -190,6 +339,25 @@ export async function deliverAgentCommandResult(params: {
       ),
     );
     if (!deliver) {
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
+  }
+
+  const hadNoUpstreamPayloads = (payloads ?? []).length === 0;
+  if (hadNoUpstreamPayloads) {
+    const meta = result.meta;
+    const toolSentWithoutFinalPayload =
+      result.didSendViaMessagingTool === true ||
+      (result.messagingToolSentTexts?.length ?? 0) > 0 ||
+      (result.messagingToolSentMediaUrls?.length ?? 0) > 0;
+    const succeededWithoutDeliverableOutput =
+      !meta.aborted && !meta.error && toolSentWithoutFinalPayload;
+    if (succeededWithoutDeliverableOutput) {
+      runtime.log("No reply from agent.");
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
+    if (!deliver) {
+      runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
     }
   }
@@ -207,20 +375,20 @@ export async function deliverAgentCommandResult(params: {
       (parsed.mediaUrls?.some((url) => Boolean(url?.trim())) ?? false);
     return !hasMedia;
   });
-  const deliveryPayloads = normalizeOutboundPayloads(payloads ?? []);
+  const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   if (deliveryPayloads.length === 0) {
     if (hasExplicitSilentPayload) {
       runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
     }
     const meta = result.meta;
-    const hadNoUpstreamPayloads = (payloads ?? []).length === 0;
+    const hadNoUpstream = (payloads ?? []).length === 0;
     const toolSentWithoutFinalPayload =
       result.didSendViaMessagingTool === true ||
       (result.messagingToolSentTexts?.length ?? 0) > 0 ||
       (result.messagingToolSentMediaUrls?.length ?? 0) > 0;
     const succeededWithoutDeliverableOutput =
-      hadNoUpstreamPayloads && !meta.aborted && !meta.error && toolSentWithoutFinalPayload;
+      hadNoUpstream && !meta.aborted && !meta.error && toolSentWithoutFinalPayload;
     if (succeededWithoutDeliverableOutput) {
       runtime.log("No reply from agent.");
       return { payloads: normalizedPayloads, meta: result.meta };
@@ -230,7 +398,7 @@ export async function deliverAgentCommandResult(params: {
       { text: NORMALIZED_EMPTY_FALLBACK_TEXT },
     ]);
     if (!deliver) {
-      if (opts.lane === AGENT_LANE_NESTED) {
+      if (isNestedAgentLane(opts.lane)) {
         logNestedOutput(runtime, opts, NORMALIZED_EMPTY_FALLBACK_TEXT, effectiveSessionKey);
       } else {
         runtime.log(NORMALIZED_EMPTY_FALLBACK_TEXT);
@@ -257,7 +425,7 @@ export async function deliverAgentCommandResult(params: {
           if (!output) {
             return;
           }
-          if (opts.lane === AGENT_LANE_NESTED) {
+          if (isNestedAgentLane(opts.lane)) {
             logNestedOutput(runtime, opts, output, effectiveSessionKey);
             return;
           }
@@ -278,7 +446,7 @@ export async function deliverAgentCommandResult(params: {
     if (!output) {
       return;
     }
-    if (opts.lane === AGENT_LANE_NESTED) {
+    if (isNestedAgentLane(opts.lane)) {
       logNestedOutput(runtime, opts, output, effectiveSessionKey);
       return;
     }

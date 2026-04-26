@@ -1,13 +1,16 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
+  ModelCatalogEntry,
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../types.ts";
@@ -191,34 +194,87 @@ export function normalizeAgentLabel(agent: {
   name?: string;
   identity?: { name?: string };
 }) {
-  return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
+  return (
+    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+  );
 }
 
-const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+
+export function isRenderableControlUiAvatarUrl(value: string): boolean {
+  return CONTROL_UI_AVATAR_URL_RE.test(value);
+}
 
 export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
   const candidates = [
-    agentIdentity?.avatar?.trim(),
-    agent.identity?.avatarUrl?.trim(),
-    agent.identity?.avatar?.trim(),
+    normalizeOptionalString(agentIdentity?.avatar),
+    normalizeOptionalString(agent.identity?.avatarUrl),
+    normalizeOptionalString(agent.identity?.avatar),
   ];
   for (const candidate of candidates) {
     if (!candidate) {
       continue;
     }
-    if (AVATAR_URL_RE.test(candidate)) {
+    if (isRenderableControlUiAvatarUrl(candidate)) {
       return candidate;
     }
   }
   return null;
 }
 
+// Chat-render variant: accept `blob:` URLs (produced locally by
+// `URL.createObjectURL` after an authenticated avatar fetch) in addition to
+// config-sanitized candidates. The config path still gates untrusted
+// http(s)/data sources through `resolveAgentAvatarUrl`.
+export function resolveChatAvatarRenderUrl(
+  candidate: string | null | undefined,
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const trimmed = normalizeOptionalString(candidate);
+  if (trimmed?.startsWith("blob:")) {
+    return trimmed;
+  }
+  return resolveAgentAvatarUrl(agent, agentIdentity);
+}
+
 export function agentLogoUrl(basePath: string): string {
-  const base = basePath?.trim() ? basePath.replace(/\/$/, "") : "";
+  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
   return base ? `${base}/favicon.svg` : "favicon.svg";
+}
+
+export function assistantAvatarFallbackUrl(basePath: string): string {
+  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
+  return base ? `${base}/apple-touch-icon.png` : "apple-touch-icon.png";
+}
+
+function isAvatarUrl(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
+}
+
+const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
+
+export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
+    return null;
+  }
+  if (isAvatarUrl(trimmed)) {
+    return null;
+  }
+  if (
+    trimmed.length > 8 ||
+    /\s/.test(trimmed) ||
+    /[\\/.:]/.test(trimmed) ||
+    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
+  ) {
+    return null;
+  }
+  return trimmed;
 }
 
 function isLikelyEmoji(value: string) {
@@ -249,19 +305,19 @@ export function resolveAgentEmoji(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ) {
-  const identityEmoji = agentIdentity?.emoji?.trim();
+  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji);
   if (identityEmoji && isLikelyEmoji(identityEmoji)) {
     return identityEmoji;
   }
-  const agentEmoji = agent.identity?.emoji?.trim();
+  const agentEmoji = normalizeOptionalString(agent.identity?.emoji);
   if (agentEmoji && isLikelyEmoji(agentEmoji)) {
     return agentEmoji;
   }
-  const identityAvatar = agentIdentity?.avatar?.trim();
+  const identityAvatar = normalizeOptionalString(agentIdentity?.avatar);
   if (identityAvatar && isLikelyEmoji(identityAvatar)) {
     return identityAvatar;
   }
-  const avatar = agent.identity?.avatar?.trim();
+  const avatar = normalizeOptionalString(agent.identity?.avatar);
   if (avatar && isLikelyEmoji(avatar)) {
     return avatar;
   }
@@ -328,14 +384,20 @@ export function buildAgentContext(
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
-    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
+    workspaceFromFiles ||
+    config.entry?.workspace ||
+    config.defaults?.workspace ||
+    agent.workspace ||
+    "default";
   const modelLabel = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
+    : config.defaults?.model
+      ? resolveModelLabel(config.defaults?.model)
+      : resolveModelLabel(agent.model);
   const identityName =
-    agentIdentity?.name?.trim() ||
-    agent.identity?.name?.trim() ||
-    agent.name?.trim() ||
+    normalizeOptionalString(agentIdentity?.name) ||
+    normalizeOptionalString(agent.identity?.name) ||
+    normalizeOptionalString(agent.name) ||
     config.entry?.name ||
     agent.id;
   const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
@@ -356,11 +418,11 @@ export function resolveModelLabel(model?: unknown): string {
     return "-";
   }
   if (typeof model === "string") {
-    return model.trim() || "-";
+    return normalizeOptionalString(model) || "-";
   }
   if (typeof model === "object" && model) {
     const record = model as { primary?: string; fallbacks?: string[] };
-    const primary = record.primary?.trim();
+    const primary = normalizeOptionalString(record.primary);
     if (primary) {
       const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
       return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
@@ -379,7 +441,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
     return null;
   }
   if (typeof model === "string") {
-    const trimmed = model.trim();
+    const trimmed = normalizeOptionalString(model);
     return trimmed || null;
   }
   if (typeof model === "object" && model) {
@@ -394,7 +456,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
             : typeof record.value === "string"
               ? record.value
               : null;
-    const primary = candidate?.trim();
+    const primary = normalizeOptionalString(candidate);
     return primary || null;
   }
   return null;
@@ -574,16 +636,38 @@ function resolveConfiguredModels(
 export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
+  catalog?: ModelCatalogEntry[],
 ) {
-  const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
+  const seen = new Set<string>();
+  const options: ConfiguredModelOption[] = [];
+  const addOption = (value: string, label: string) => {
+    const key = normalizeLowercaseStringOrEmpty(value);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({ value, label });
+  };
+
+  for (const opt of resolveConfiguredModels(configForm)) {
+    addOption(opt.value, opt.label);
+  }
+
+  if (catalog) {
+    for (const entry of catalog) {
+      const provider = entry.provider?.trim();
+      const value = provider ? `${provider}/${entry.id}` : entry.id;
+      const label = provider ? `${entry.id} · ${provider}` : entry.id;
+      addOption(value, label);
+    }
+  }
+
+  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
+
   if (options.length === 0) {
-    return html`
-      <option value="" disabled>No configured models</option>
-    `;
+    return nothing;
   }
   return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
 }

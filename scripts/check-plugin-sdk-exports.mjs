@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 
 /**
- * Verifies that critical plugin-sdk exports are present in the compiled dist output.
- * Regression guard for #27569 where isDangerousNameMatchingEnabled was missing
- * from the compiled output, breaking channel extension plugins at runtime.
+ * Verifies that the root plugin-sdk runtime surface is present in the compiled
+ * dist output.
  *
- * Run after `pnpm build` to catch missing exports before release.
+ * Run after `pnpm build` to catch missing root exports or leaked repo-only type
+ * aliases before release.
  */
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
-
 if (!existsSync(distFile)) {
   console.error("ERROR: dist/plugin-sdk/index.js not found. Run `pnpm build` first.");
   process.exit(1);
@@ -43,33 +42,24 @@ const exportedNames = exportMatch[1]
 const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
+const requiredSubpathExports = {
+  "secret-input-runtime": [
+    "coerceSecretRef",
+    "hasConfiguredSecretInput",
+    "isSecretRef",
+    "normalizeResolvedSecretInputString",
+    "normalizeSecretInputString",
+    "resolveSecretInputString",
+  ],
+};
 
-// Critical functions that channel extension plugins import from openclaw/plugin-sdk.
-// If any of these are missing, plugins will fail at runtime with:
-//   TypeError: (0 , _pluginSdk.<name>) is not a function
+// The root plugin-sdk entry intentionally stays tiny. Keep this list aligned
+// with src/plugin-sdk/index.ts runtime exports.
 const requiredExports = [
-  "isDangerousNameMatchingEnabled",
-  "createAccountListHelpers",
-  "buildAgentMediaPayload",
-  "createReplyPrefixOptions",
-  "createTypingCallbacks",
-  "logInboundDrop",
-  "logTypingFailure",
-  "buildPendingHistoryContextFromMap",
-  "clearHistoryEntriesIfEnabled",
-  "recordPendingHistoryEntryIfEnabled",
-  "resolveControlCommandGate",
-  "resolveDmGroupAccessWithLists",
-  "resolveAllowlistProviderRuntimeGroupPolicy",
-  "resolveDefaultGroupPolicy",
-  "resolveChannelMediaMaxBytes",
-  "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
   "onDiagnosticEvent",
-  "normalizePluginHttpPath",
-  "registerPluginHttpRoute",
-  "DEFAULT_ACCOUNT_ID",
-  "DEFAULT_GROUP_HISTORY_LIMIT",
+  "registerContextEngine",
+  "delegateCompactionToRuntime",
 ];
 
 let missing = 0;
@@ -101,12 +91,36 @@ for (const entry of requiredRuntimeShimEntries) {
   }
 }
 
+for (const [entry, names] of Object.entries(requiredSubpathExports)) {
+  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
+  if (!existsSync(jsPath)) {
+    continue;
+  }
+  let runtime;
+  try {
+    runtime = await import(pathToFileURL(jsPath).href);
+  } catch (err) {
+    console.error(`BROKEN SUBPATH JS: dist/plugin-sdk/${entry}.js`);
+    console.error(err instanceof Error ? err.message : String(err));
+    missing += 1;
+    continue;
+  }
+  for (const name of names) {
+    if (typeof runtime[name] !== "function") {
+      console.error(`MISSING SUBPATH EXPORT: dist/plugin-sdk/${entry}.js#${name}`);
+      missing += 1;
+    }
+  }
+}
+
 if (missing > 0) {
   console.error(
     `\nERROR: ${missing} required plugin-sdk artifact(s) missing (named exports or subpath files).`,
   );
-  console.error("This will break channel extension plugins at runtime.");
-  console.error("Check src/plugin-sdk/index.ts, subpath entries, and rebuild.");
+  console.error("This will break published plugin-sdk artifacts.");
+  console.error(
+    "Check src/plugin-sdk/index.ts, generated d.ts rewrites, subpath entries, and rebuild.",
+  );
   process.exit(1);
 }
 

@@ -8,7 +8,10 @@ export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 export { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 export { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
-export { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
+export {
+  resolveAuthStatePathForDisplay,
+  resolveAuthStorePathForDisplay,
+} from "./auth-profiles/paths.js";
 export {
   dedupeProfileIds,
   listProfilesForProvider,
@@ -24,7 +27,10 @@ export {
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
@@ -35,6 +41,7 @@ export type {
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileIdRepairResult,
+  AuthProfileState,
   AuthProfileStore,
   OAuthCredential,
   ProfileUsageStats,

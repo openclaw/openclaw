@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
+
 const FILE_REF_EXTENSIONS = ["md", "go", "py", "pl", "sh", "am", "at", "be", "cc"] as const;
 
 export const FILE_REF_EXTENSIONS_WITH_TLD = new Set<string>(FILE_REF_EXTENSIONS);
@@ -11,7 +13,7 @@ export function isAutoLinkedFileRef(href: string, label: string): boolean {
   if (dotIndex < 1) {
     return false;
   }
-  const ext = label.slice(dotIndex + 1).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(label.slice(dotIndex + 1));
   if (!FILE_REF_EXTENSIONS_WITH_TLD.has(ext)) {
     return false;
   }

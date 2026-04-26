@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { parseMessageContent } from "./bot-content.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
@@ -47,9 +48,32 @@ describe("toMessageResourceType", () => {
   });
 });
 
+describe("parseMessageContent media placeholders", () => {
+  it("uses an audio placeholder instead of leaking raw file_key JSON", () => {
+    expect(
+      parseMessageContent(JSON.stringify({ file_key: "file_audio", duration: 1200 }), "audio"),
+    ).toBe("<media:audio>");
+  });
+
+  it("prefers Feishu-provided audio transcript text when present", () => {
+    expect(
+      parseMessageContent(
+        JSON.stringify({ file_key: "file_audio", speech_to_text: " spoken words " }),
+        "audio",
+      ),
+    ).toBe("spoken words");
+  });
+
+  it("keeps media filenames as placeholder context without raw payload fields", () => {
+    expect(
+      parseMessageContent(JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }), "file"),
+    ).toBe("<media:document> (q1.pdf)");
+  });
+});
+
 describe("resolveBroadcastAgents", () => {
   it("returns agent list when broadcast config has the peerId", () => {
-    const cfg = { broadcast: { oc_group123: ["susan", "main"] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_group123: ["susan", "main"] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toEqual(["susan", "main"]);
   });
 
@@ -59,12 +83,12 @@ describe("resolveBroadcastAgents", () => {
   });
 
   it("returns null when peerId not in broadcast", () => {
-    const cfg = { broadcast: { oc_other: ["susan"] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_other: ["susan"] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
   });
 
   it("returns null when agent list is empty", () => {
-    const cfg = { broadcast: { oc_group123: [] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_group123: [] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 ---
-title: "Default AGENTS.md"
 summary: "Default OpenClaw agent instructions and skills roster for the personal assistant setup"
+title: "Default AGENTS.md"
 read_when:
   - Starting a new OpenClaw agent session
   - Enabling or auditing default skills
@@ -49,7 +49,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ## Session start (required)
 
 - Read `SOUL.md`, `USER.md`, and today+yesterday in `memory/`.
-- Read `MEMORY.md` when present; only fall back to lowercase `memory.md` when `MEMORY.md` is absent.
+- Read `MEMORY.md` when present.
 - Do it before responding.
 
 ## Soul (required)
@@ -67,8 +67,8 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
 - Long-term memory: `MEMORY.md` for durable facts, preferences, and decisions.
-- Lowercase `memory.md` is legacy fallback only; do not keep both root files on purpose.
-- On session start, read today + yesterday + `MEMORY.md` when present, otherwise `memory.md`.
+- Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
+- On session start, read today + yesterday + `MEMORY.md` when present.
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 
@@ -124,3 +124,8 @@ git commit -m "Add Clawd workspace"
 - For browser-driven verification, use `openclaw browser` (tabs/status/screenshot) with the OpenClaw-managed Chrome profile.
 - For DOM inspection, use `openclaw browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
 - For interactions, use `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type require snapshot refs; use `evaluate` for CSS selectors).
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)
+- [Agent runtime](/concepts/agent)

@@ -1,5 +1,7 @@
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
+const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
@@ -21,9 +23,32 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  hasLocalUserIdentity,
+  normalizeLocalUserIdentity,
+  type LocalUserIdentity,
+} from "./user-identity.ts";
+
+export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
+export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
+
+function snapBorderRadius(value: number): BorderRadiusStop {
+  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
+  let bestDist = Math.abs(value - best);
+  for (const stop of BORDER_RADIUS_STOPS) {
+    const dist = Math.abs(value - stop);
+    if (dist < bestDist) {
+      best = stop;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -40,8 +65,11 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   borderRadius: number; // Corner roundness (0–100, default 50)
+  customTheme?: ImportedCustomTheme;
   locale?: string;
 };
+
+export type { LocalUserIdentity } from "./user-identity.ts";
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -59,8 +87,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
-    typeof window.__OPENCLAW_CONTROL_UI_BASE_PATH__ === "string" &&
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__.trim();
+    normalizeOptionalString(window.__OPENCLAW_CONTROL_UI_BASE_PATH__);
   const basePath = configured
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
@@ -73,17 +100,11 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 }
 
 function getSessionStorage(): Storage | null {
-  if (typeof window !== "undefined" && window.sessionStorage) {
-    return window.sessionStorage;
-  }
-  if (typeof sessionStorage !== "undefined") {
-    return sessionStorage;
-  }
-  return null;
+  return getSafeSessionStorage();
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
-  const trimmed = gatewayUrl.trim();
+  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
   if (!trimmed) {
     return "default";
   }
@@ -112,27 +133,20 @@ function resolveScopedSessionSelection(
 ): ScopedSessionSelection {
   const scope = normalizeGatewayTokenScope(gatewayUrl);
   const scoped = parsed.sessionsByGateway?.[scope];
-  if (
-    scoped &&
-    typeof scoped.sessionKey === "string" &&
-    scoped.sessionKey.trim() &&
-    typeof scoped.lastActiveSessionKey === "string" &&
-    scoped.lastActiveSessionKey.trim()
-  ) {
+  const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
+  const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
+  if (scopedSessionKey && scopedLastActiveSessionKey) {
     return {
-      sessionKey: scoped.sessionKey.trim(),
-      lastActiveSessionKey: scoped.lastActiveSessionKey.trim(),
+      sessionKey: scopedSessionKey,
+      lastActiveSessionKey: scopedLastActiveSessionKey,
     };
   }
 
-  const legacySessionKey =
-    typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
-      ? parsed.sessionKey.trim()
-      : defaults.sessionKey;
+  const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? defaults.sessionKey;
   const legacyLastActiveSessionKey =
-    typeof parsed.lastActiveSessionKey === "string" && parsed.lastActiveSessionKey.trim()
-      ? parsed.lastActiveSessionKey.trim()
-      : legacySessionKey || defaults.lastActiveSessionKey;
+    normalizeOptionalString(parsed.lastActiveSessionKey) ??
+    legacySessionKey ??
+    defaults.lastActiveSessionKey;
 
   return {
     sessionKey: legacySessionKey,
@@ -147,8 +161,8 @@ function loadSessionToken(gatewayUrl: string): string {
       return "";
     }
     storage.removeItem(LEGACY_TOKEN_SESSION_KEY);
-    const token = storage.getItem(tokenSessionKeyForGateway(gatewayUrl)) ?? "";
-    return token.trim();
+    const token = storage.getItem(tokenSessionKeyForGateway(gatewayUrl));
+    return normalizeOptionalString(token) ?? "";
   } catch {
     return "";
   }
@@ -162,7 +176,7 @@ function persistSessionToken(gatewayUrl: string, token: string) {
     }
     storage.removeItem(LEGACY_TOKEN_SESSION_KEY);
     const key = tokenSessionKeyForGateway(gatewayUrl);
-    const normalized = token.trim();
+    const normalized = normalizeOptionalString(token) ?? "";
     if (normalized) {
       storage.setItem(key, normalized);
       return;
@@ -205,12 +219,10 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
-    const parsedGatewayUrl =
-      typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
-        ? parsed.gatewayUrl.trim()
-        : defaults.gatewayUrl;
+    const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
+    const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
@@ -221,7 +233,7 @@ export function loadSettings(): UiSettings {
       token: loadSessionToken(gatewayUrl),
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
-      theme,
+      theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
@@ -253,8 +265,9 @@ export function loadSettings(): UiSettings {
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
         parsed.borderRadius <= 100
-          ? parsed.borderRadius
+          ? snapBorderRadius(parsed.borderRadius)
           : defaults.borderRadius,
+      customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
     if ("token" in parsed) {
@@ -268,6 +281,64 @@ export function loadSettings(): UiSettings {
 
 export function saveSettings(next: UiSettings) {
   persistSettings(next);
+}
+
+export function loadLocalUserIdentity(): LocalUserIdentity {
+  const storage = getSafeLocalStorage();
+  try {
+    const raw = storage?.getItem(LOCAL_USER_IDENTITY_KEY);
+    if (!raw) {
+      return normalizeLocalUserIdentity();
+    }
+    return normalizeLocalUserIdentity(JSON.parse(raw) as Partial<LocalUserIdentity>);
+  } catch {
+    return normalizeLocalUserIdentity();
+  }
+}
+
+export function saveLocalUserIdentity(next: LocalUserIdentity) {
+  const storage = getSafeLocalStorage();
+  const normalized = normalizeLocalUserIdentity(next);
+  try {
+    if (!hasLocalUserIdentity(normalized)) {
+      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
+      return;
+    }
+    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory identity updates from being applied
+  }
+}
+
+export type LocalAssistantIdentity = { avatar: string | null };
+
+export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+  const storage = getSafeLocalStorage();
+  try {
+    const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+    if (!raw) {
+      return { avatar: null };
+    }
+    const parsed = JSON.parse(raw) as Partial<LocalAssistantIdentity>;
+    return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
+  } catch {
+    return { avatar: null };
+  }
+}
+
+export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
+  const storage = getSafeLocalStorage();
+  try {
+    if (!next.avatar) {
+      storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      return;
+    }
+    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory identity updates from being applied
+  }
 }
 
 function persistSettings(next: UiSettings) {
@@ -315,6 +386,7 @@ function persistSettings(next: UiSettings) {
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
     borderRadius: next.borderRadius,
+    ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };

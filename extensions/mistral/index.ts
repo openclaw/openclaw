@@ -1,9 +1,19 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
+import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
+export function buildMistralReplayPolicy() {
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict9" as const,
+  };
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -32,20 +42,20 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
     },
-    capabilities: {
-      transcriptToolCallIdMode: "strict9",
-      transcriptToolCallIdModelHints: [
-        "mistral",
-        "mixtral",
-        "codestral",
-        "pixtral",
-        "devstral",
-        "ministral",
-        "mistralai",
-      ],
-    },
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
+    normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
+    contributeResolvedModelCompat: ({ modelId, model }) =>
+      contributeMistralResolvedModelCompat({ modelId, model }),
+    resolveThinkingProfile: ({ modelId }) =>
+      modelId === MISTRAL_SMALL_LATEST_ID
+        ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
+        : undefined,
+    buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
+    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },
 });

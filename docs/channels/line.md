@@ -7,19 +7,21 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
-
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+Status: bundled plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Bundled plugin
 
-Install the LINE plugin:
+LINE ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes LINE, install it
+manually:
 
 ```bash
 openclaw plugins install @openclaw/line
@@ -28,7 +30,7 @@ openclaw plugins install @openclaw/line
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/line
+openclaw plugins install ./path/to/local/line-plugin
 ```
 
 ## Setup
@@ -184,6 +186,27 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 /card info "Welcome" "Thanks for joining!"
 ```
 
+## ACP support
+
+LINE supports ACP (Agent Communication Protocol) conversation bindings:
+
+- `/acp spawn <agent> --bind here` binds the current LINE chat to an ACP session without creating a child thread.
+- Configured ACP bindings and active conversation-bound ACP sessions work on LINE like other conversation channels.
+
+See [ACP agents](/tools/acp-agents) for details.
+
+## Outbound media
+
+The LINE plugin supports sending images, videos, and audio files through the agent message tool. Media is sent via the LINE-specific delivery path with appropriate preview and tracking handling:
+
+- **Images**: sent as LINE image messages with automatic preview generation.
+- **Videos**: sent with explicit preview and content-type handling.
+- **Audio**: sent as LINE audio messages.
+
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
+
+Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
+
 ## Troubleshooting
 
 - **Webhook verification fails:** ensure the webhook URL is HTTPS and the
@@ -192,3 +215,11 @@ The LINE plugin also ships a `/card` command for Flex message presets:
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

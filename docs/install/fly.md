@@ -1,6 +1,6 @@
 ---
-title: Fly.io
 summary: "Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS"
+title: Fly.io
 read_when:
   - Deploying OpenClaw on Fly.io
   - Setting up Fly volumes, secrets, and first-run config
@@ -110,7 +110,7 @@ read_when:
 
     **Notes:**
 
-    - Non-loopback binds (`--bind lan`) require `OPENCLAW_GATEWAY_TOKEN` for security.
+    - Non-loopback binds (`--bind lan`) require a valid gateway auth path. This Fly.io example uses `OPENCLAW_GATEWAY_TOKEN`, but `gateway.auth.password` or a correctly configured non-loopback `trusted-proxy` deployment also satisfy the requirement.
     - Treat these tokens like passwords.
     - **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
 
@@ -156,7 +156,7 @@ read_when:
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-4o"]
+            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
           },
           "maxConcurrent": 4
         },
@@ -193,7 +193,14 @@ read_when:
       },
       "gateway": {
         "mode": "local",
-        "bind": "auto"
+        "bind": "auto",
+        "controlUi": {
+          "allowedOrigins": [
+            "https://my-openclaw.fly.dev",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000"
+          ]
+        }
       },
       "meta": {}
     }
@@ -201,6 +208,12 @@ read_when:
     ```
 
     **Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
+
+    **Note:** Replace `https://my-openclaw.fly.dev` with your real Fly app
+    origin. Gateway startup seeds local Control UI origins from the runtime
+    `--bind` and `--port` values so first boot can proceed before config exists,
+    but browser access through Fly still needs the exact HTTPS origin listed in
+    `gateway.controlUi.allowedOrigins`.
 
     **Note:** The Discord token can come from either:
 
@@ -229,7 +242,9 @@ read_when:
 
     Or visit `https://my-openclaw.fly.dev/`
 
-    Paste your gateway token (the one from `OPENCLAW_GATEWAY_TOKEN`) to authenticate.
+    Authenticate with the configured shared secret. This guide uses the gateway
+    token from `OPENCLAW_GATEWAY_TOKEN`; if you switched to password auth, use
+    that password instead.
 
     ### Logs
 
@@ -297,7 +312,7 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/openclaw.json` should be read on restart.
+`--allow-unconfigured` only bypasses the startup guard. It does not create or repair `/data/openclaw.json`, so make sure your real config exists and includes `gateway.mode="local"` when you want a normal local gateway start.
 
 Verify the config exists:
 
@@ -326,7 +341,8 @@ fly ssh console --command "rm /data/openclaw.json"
 
 ### State Not Persisting
 
-If you lose credentials or sessions after a restart, the state dir is writing to the container filesystem.
+If you lose auth profiles, channel/provider state, or sessions after a restart,
+the state dir is writing to the container filesystem.
 
 **Fix:** Ensure `OPENCLAW_STATE_DIR=/data` is set in `fly.toml` and redeploy.
 
@@ -499,3 +515,10 @@ See [Fly.io pricing](https://fly.io/docs/about/pricing/) for details.
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
 - Keep OpenClaw up to date: [Updating](/install/updating)
+
+## Related
+
+- [Install overview](/install)
+- [Hetzner](/install/hetzner)
+- [Docker](/install/docker)
+- [VPS hosting](/vps)

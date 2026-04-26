@@ -1,11 +1,15 @@
 // Private helper surface for the bundled zalouser plugin.
-// Keep this list additive and scoped to symbols used under extensions/zalouser.
+// Keep this list additive and scoped to the bundled Zalo user surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+export {
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
+} from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -31,7 +35,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -47,7 +51,11 @@ export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
+export type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
@@ -73,6 +81,37 @@ export {
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+
+import type { SecurityAuditFinding } from "../security/audit.types.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+type FacadeModule = {
+  collectZalouserSecurityAuditFindings: (params: {
+    accountId?: string | null;
+    account: {
+      accountId?: string;
+      config?: {
+        groups?: Record<string, unknown>;
+        dangerouslyAllowNameMatching?: boolean;
+      };
+    };
+    orderedAccountIds: string[];
+    hasExplicitAccountPath: boolean;
+  }) => SecurityAuditFinding[];
+};
+
+function loadFacadeModule(): FacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+    dirName: "zalouser",
+    artifactBasename: "contract-api.js",
+  });
+}
+
+export const collectZalouserSecurityAuditFindings: FacadeModule["collectZalouserSecurityAuditFindings"] =
+  ((...args) =>
+    loadFacadeModule().collectZalouserSecurityAuditFindings(
+      ...args,
+    )) as FacadeModule["collectZalouserSecurityAuditFindings"];
 
 const zalouserSetup = createOptionalChannelSetupSurface({
   channel: "zalouser",

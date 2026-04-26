@@ -1,6 +1,7 @@
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
@@ -82,12 +83,22 @@ export async function probeTwitch(
       });
     });
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
     });
 
     client.connect();
-    await Promise.race([connectionPromise, timeout]);
+    try {
+      await Promise.race([connectionPromise, timeout]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
 
     client.quit();
     client = undefined;
@@ -102,7 +113,7 @@ export async function probeTwitch(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
       username: account.username,
       channel: account.channel,
       elapsedMs: Date.now() - started,

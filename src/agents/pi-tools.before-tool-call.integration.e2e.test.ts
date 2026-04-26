@@ -4,7 +4,9 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import type { PluginHookRegistration } from "../plugins/types.js";
 
 type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
 type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
@@ -39,6 +41,12 @@ beforeEach(async () => {
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
+type BeforeToolCallHookInstall = {
+  pluginId: string;
+  priority?: number;
+  handler: BeforeToolCallHandlerMock;
+};
+
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
   runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
@@ -54,6 +62,21 @@ function installBeforeToolCallHook(params?: {
   return handler;
 }
 
+function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
+  resetGlobalHookRunner();
+  const registry = createEmptyPluginRegistry();
+  for (const hook of hooks) {
+    addTestHook({
+      registry,
+      pluginId: hook.pluginId,
+      hookName: "before_tool_call",
+      handler: hook.handler as PluginHookRegistration["handler"],
+      priority: hook.priority,
+    });
+  }
+  initializeGlobalHookRunner(registry);
+}
+
 describe("before_tool_call hook integration", () => {
   let beforeToolCallHook: BeforeToolCallHandlerMock;
 
@@ -67,7 +90,6 @@ describe("before_tool_call hook integration", () => {
   it("executes tool normally when no hook is registered", async () => {
     beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
       agentId: "main",
       sessionKey: "main",
@@ -90,7 +112,6 @@ describe("before_tool_call hook integration", () => {
       runBeforeToolCallImpl: async () => ({ params: { mode: "safe" } }),
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -112,7 +133,6 @@ describe("before_tool_call hook integration", () => {
       }),
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -122,25 +142,41 @@ describe("before_tool_call hook integration", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("continues execution when hook throws", async () => {
+  it("does not execute lower-priority hooks after block=true", async () => {
+    const high = vi.fn().mockResolvedValue({ block: true, blockReason: "blocked-high" });
+    const low = vi.fn().mockResolvedValue({ params: { shouldNotApply: true } });
+    installBeforeToolCallHooks([
+      { pluginId: "high", priority: 100, handler: high },
+      { pluginId: "low", priority: 0, handler: low },
+    ]);
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await expect(
+      tool.execute("call-stop", { cmd: "rm -rf /" }, undefined, extensionContext),
+    ).rejects.toThrow("blocked-high");
+
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("blocks tool execution when hook throws", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => {
         throw new Error("boom");
       },
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext);
-
-    expect(execute).toHaveBeenCalledWith(
-      "call-4",
-      { path: "/tmp/file" },
-      undefined,
-      extensionContext,
-    );
+    await expect(
+      tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext),
+    ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("normalizes non-object params for hook contract", async () => {
@@ -148,7 +184,6 @@ describe("before_tool_call hook integration", () => {
       runBeforeToolCallImpl: async () => undefined,
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
       agentId: "main",
       sessionKey: "main",
@@ -185,11 +220,9 @@ describe("before_tool_call hook integration", () => {
         .mockResolvedValueOnce({ params: { marker: "B" } }),
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const toolA = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
       runId: "run-a",
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const toolB = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
       runId: "run-b",
     });
@@ -225,7 +258,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
   it("fires hook exactly once when tool goes through wrap + toToolDefinitions", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const baseTool = { name: "web_fetch", execute, description: "fetch", parameters: {} } as any;
 
     const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
@@ -247,7 +279,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
   it("fires hook exactly once when tool goes through wrap + abort + toToolDefinitions", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
 
     const abortController = new AbortController();

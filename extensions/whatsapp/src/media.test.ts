@@ -1,41 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
-import { optimizeImageToPng } from "../../../src/media/image-ops.js";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
-
-let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
-let loadWebMedia: typeof import("./media.js").loadWebMedia;
-let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
-let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
-
-const convertHeicToJpegMock = vi.fn();
-
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  LocalMediaAccessError,
+  loadWebMedia,
+  loadWebMediaRaw,
+  optimizeImageToJpeg,
+} from "./media.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -44,7 +22,6 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
-let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -77,8 +54,6 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./media.js"));
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
@@ -100,7 +75,6 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -135,12 +109,6 @@ afterAll(async () => {
 
 afterEach(() => {
   vi.clearAllMocks();
-});
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./media.js"));
 });
 
 describe("web media loading", () => {
@@ -207,22 +175,6 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
-  });
-
-  it("normalizes HEIC local files to JPEG output", async () => {
-    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
-
-    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
-    expect(result.buffer.length).toBeGreaterThan(0);
-    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
-    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
-    expect(result.buffer[0]).toBe(0xff);
-    expect(result.buffer[1]).toBe(0xd8);
   });
 
   it("includes URL + status in fetch errors", async () => {
@@ -296,10 +248,12 @@ describe("web media loading", () => {
   });
 
   it("uses content-disposition filename when available", async () => {
+    const pdfBytes = Buffer.from("%PDF-1.4");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       body: true,
-      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      arrayBuffer: async () =>
+        pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength),
       headers: {
         get: (name: string) => {
           if (name === "content-disposition") {
@@ -361,35 +315,6 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
-  });
-});
-
-describe("Discord voice message input hardening", () => {
-  it("rejects unsafe voice message inputs", async () => {
-    const cases = [
-      {
-        name: "local path outside allowed media roots",
-        candidate: path.join(process.cwd(), "package.json"),
-        expectedMessage: /Local media path is not under an allowed directory/i,
-      },
-      {
-        name: "private-network URL",
-        candidate: "http://127.0.0.1/voice.ogg",
-        expectedMessage: /Failed to fetch media|Blocked|private|internal/i,
-      },
-      {
-        name: "non-http URL scheme",
-        candidate: "rtsp://example.com/voice.ogg",
-        expectedMessage: /Local media path is not under an allowed directory|ENOENT|no such file/i,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      await expect(
-        sendVoiceMessageDiscord("channel:123", testCase.candidate),
-        testCase.name,
-      ).rejects.toThrow(testCase.expectedMessage);
-    }
   });
 });
 

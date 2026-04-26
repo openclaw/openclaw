@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 const log = createSubsystemLogger("hooks");
@@ -25,11 +26,12 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.config,
     // Hook discovery should reflect freshly written bundle manifests immediately.
     cache: false,
+    includeDisabled: true,
   });
   if (registry.plugins.length === 0) {
     return [];
@@ -45,13 +47,13 @@ export function resolvePluginHookDirs(params: {
     if (!record.hooks || record.hooks.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
 
@@ -64,7 +66,7 @@ export function resolvePluginHookDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
-    if (memoryDecision.selected && record.kind === "memory") {
+    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
 

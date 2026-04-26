@@ -1,12 +1,10 @@
 ---
-title: "Pi Integration Architecture"
 summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
+title: "Pi integration architecture"
 read_when:
   - Understanding Pi SDK integration design in OpenClaw
   - Modifying agent session lifecycle, tooling, or provider wiring for Pi
 ---
-
-# Pi Integration Architecture
 
 This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
 
@@ -25,10 +23,10 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 
 ```json
 {
-  "@mariozechner/pi-agent-core": "0.61.1",
-  "@mariozechner/pi-ai": "0.61.1",
-  "@mariozechner/pi-coding-agent": "0.61.1",
-  "@mariozechner/pi-tui": "0.61.1"
+  "@mariozechner/pi-agent-core": "0.70.2",
+  "@mariozechner/pi-ai": "0.70.2",
+  "@mariozechner/pi-coding-agent": "0.70.2",
+  "@mariozechner/pi-tui": "0.70.2"
 }
 ```
 
@@ -88,7 +86,7 @@ src/agents/
 ├── pi-tools.types.ts              # AnyAgentTool type alias
 ├── pi-tool-definition-adapter.ts  # AgentTool -> ToolDefinition adapter
 ├── pi-settings.ts                 # Settings overrides
-├── pi-extensions/                 # Custom pi extensions
+├── pi-hooks/                      # Custom pi hooks
 │   ├── compaction-safeguard.ts    # Safeguard extension
 │   ├── compaction-safeguard-runtime.ts
 │   ├── context-pruning.ts         # Cache-TTL context pruning extension
@@ -132,12 +130,12 @@ src/agents/
 Channel-specific message action runtimes now live in the plugin-owned extension
 directories instead of under `src/agents/tools`, for example:
 
-- `extensions/discord/src/actions/runtime*.ts`
-- `extensions/slack/src/action-runtime.ts`
-- `extensions/telegram/src/action-runtime.ts`
-- `extensions/whatsapp/src/action-runtime.ts`
+- the Discord plugin action runtime files
+- the Slack plugin action runtime file
+- the Telegram plugin action runtime file
+- the WhatsApp plugin action runtime file
 
-## Core Integration Flow
+## Core integration flow
 
 ### 1. Running an Embedded Agent
 
@@ -154,7 +152,7 @@ const result = await runEmbeddedPiAgent({
   config: openclawConfig,
   prompt: "Hello, how are you?",
   provider: "anthropic",
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-4-6",
   timeoutMs: 120_000,
   runId: "run-abc",
   onBlockReply: async (payload) => {
@@ -225,7 +223,7 @@ Events handled include:
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end`
 - `turn_start` / `turn_end`
 - `agent_start` / `agent_end`
-- `auto_compaction_start` / `auto_compaction_end`
+- `compaction_start` / `compaction_end`
 
 ### 4. Prompting
 
@@ -287,7 +285,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 This ensures OpenClaw's policy filtering, sandbox integration, and extended toolset remain consistent across providers.
 
-## System Prompt Construction
+## System prompt construction
 
 The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
@@ -326,7 +324,12 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### Compaction
 
-Auto-compaction triggers on context overflow. `compactEmbeddedPiSessionDirect()` handles manual compaction:
+Auto-compaction triggers on context overflow. Common overflow signatures
+include `request_too_large`, `context length exceeded`, `input exceeds the
+maximum number of tokens`, `input token count exceeds the maximum number of
+input tokens`, `input is too long for the model`, and `ollama error: context
+length exceeded`. `compactEmbeddedPiSessionDirect()` handles manual
+compaction:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -390,7 +393,7 @@ OpenClaw loads custom pi extensions for specialized behavior:
 
 ### Compaction Safeguard
 
-`src/agents/pi-extensions/compaction-safeguard.ts` adds guardrails to compaction, including adaptive token budgeting plus tool failure and file operation summaries:
+`src/agents/pi-hooks/compaction-safeguard.ts` adds guardrails to compaction, including adaptive token budgeting plus tool failure and file operation summaries:
 
 ```typescript
 if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -401,7 +404,7 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 
 ### Context Pruning
 
-`src/agents/pi-extensions/context-pruning.ts` implements cache-TTL based context pruning:
+`src/agents/pi-hooks/context-pruning.ts` implements cache-TTL based context pruning:
 
 ```typescript
 if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
@@ -498,13 +501,11 @@ if (sandboxRoot) {
 
 - Refusal magic string scrubbing
 - Turn validation for consecutive roles
-- Claude Code parameter compatibility
+- Strict upstream Pi tool parameter validation
 
 ### Google/Gemini
 
-- Turn ordering fixes (`applyGoogleTurnOrderingFix`)
-- Tool schema sanitization (`sanitizeToolsForGoogle`)
-- Session history sanitization (`sanitizeSessionHistory`)
+- Plugin-owned tool schema sanitization
 
 ### OpenAI
 
@@ -558,10 +559,15 @@ Pi integration coverage spans these suites:
 - `src/agents/pi-tools*.test.ts`
 - `src/agents/pi-tool-definition-adapter*.test.ts`
 - `src/agents/pi-settings.test.ts`
-- `src/agents/pi-extensions/**/*.test.ts`
+- `src/agents/pi-hooks/**/*.test.ts`
 
 Live/opt-in:
 
 - `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `OPENCLAW_LIVE_TEST=1`)
 
 For current run commands, see [Pi Development Workflow](/pi-dev).
+
+## Related
+
+- [Pi development workflow](/pi-dev)
+- [Install overview](/install)

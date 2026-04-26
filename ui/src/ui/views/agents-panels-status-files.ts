@@ -1,8 +1,11 @@
+import { applyPreviewTheme } from "@create-markdown/preview";
+import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { marked } from "marked";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -10,7 +13,6 @@ import {
   formatNextRun,
 } from "../presenter.ts";
 import type {
-  AgentFileEntry,
   AgentsFilesListResult,
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
@@ -18,9 +20,76 @@ import type {
   CronStatus,
 } from "../types.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import type { AgentsPanel } from "./agents.types.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
 
-function renderAgentContextCard(context: AgentContext, subtitle: string) {
+function countWords(text: string) {
+  const normalized = text.trim();
+  return normalized ? normalized.split(/\s+/).length : 0;
+}
+
+function countLines(text: string) {
+  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
+}
+
+function estimateReadingTimeLabel(wordCount: number) {
+  if (wordCount <= 0) {
+    return "Empty draft";
+  }
+  return `${Math.max(1, Math.round(wordCount / 220))} min read`;
+}
+
+function getExtensionLabel(fileName: string) {
+  const ext = fileName.split(".").pop()?.trim().toLowerCase();
+  if (ext === "md" || ext === "markdown") {
+    return "Markdown Preview";
+  }
+  return ext ? `${ext.toUpperCase()} Preview` : "Preview";
+}
+
+function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
+  const normalizedPath = filePath.trim();
+  const normalizedWorkspace = workspace?.trim();
+  if (!normalizedPath) {
+    return "";
+  }
+  if (normalizedWorkspace && normalizedPath === normalizedWorkspace) {
+    return ".";
+  }
+  if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
+    return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
+  }
+  const pathParts = normalizedPath.split(/[\\/]+/);
+  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
+    const pathPart = pathParts[index];
+    if (pathPart) {
+      return pathPart;
+    }
+  }
+  return normalizedPath;
+}
+
+function toDomId(value: string) {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "preview";
+}
+
+function setPreviewExpandButtonState(button: Element | null | undefined, isFullscreen: boolean) {
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  const label = isFullscreen ? "Collapse preview" : "Expand preview";
+  button.classList.toggle("is-fullscreen", isFullscreen);
+  button.setAttribute("aria-pressed", String(isFullscreen));
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
+}
+
+function renderAgentContextCard(
+  context: AgentContext,
+  subtitle: string,
+  onSelectPanel: (panel: AgentsPanel) => void,
+) {
   return html`
     <section class="card">
       <div class="card-title">Agent Context</div>
@@ -28,7 +97,16 @@ function renderAgentContextCard(context: AgentContext, subtitle: string) {
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
           <div class="label">Workspace</div>
-          <div class="mono">${context.workspace}</div>
+          <div>
+            <button
+              type="button"
+              class="workspace-link mono"
+              @click=${() => onSelectPanel("files")}
+              title="Open Files tab"
+            >
+              ${context.workspace}
+            </button>
+          </div>
         </div>
         <div class="agent-kv">
           <div class="label">Primary Model</div>
@@ -140,6 +218,7 @@ export function renderAgentChannels(params: {
   error: string | null;
   lastSuccess: number | null;
   onRefresh: () => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const entries = resolveChannelEntries(params.snapshot);
   const lastSuccessLabel = params.lastSuccess
@@ -147,7 +226,11 @@ export function renderAgentChannels(params: {
     : "never";
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace, identity, and model configuration.")}
+      ${renderAgentContextCard(
+        params.context,
+        "Workspace, identity, and model configuration.",
+        params.onSelectPanel,
+      )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -155,12 +238,10 @@ export function renderAgentChannels(params: {
             <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
-        <div class="muted" style="margin-top: 8px;">
-          Last refresh: ${lastSuccessLabel}
-        </div>
+        <div class="muted" style="margin-top: 8px;">Last refresh: ${lastSuccessLabel}</div>
         ${
           params.error
             ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
@@ -179,59 +260,57 @@ export function renderAgentChannels(params: {
                 <div class="muted" style="margin-top: 16px">No channels found.</div>
               `
             : html`
-                <div class="list" style="margin-top: 16px;">
-                  ${entries.map((entry) => {
-                    const summary = summarizeChannelAccounts(entry.accounts);
-                    const status = summary.total
-                      ? `${summary.connected}/${summary.total} connected`
-                      : "no accounts";
-                    const configLabel = summary.configured
-                      ? `${summary.configured} configured`
-                      : "not configured";
-                    const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
-                    const extras = resolveChannelExtrasFromConfig({
-                      configForm: params.configForm,
-                      channelId: entry.id,
-                      fields: CHANNEL_EXTRA_FIELDS,
-                    });
-                    return html`
-                      <div class="list-item">
-                        <div class="list-main">
-                          <div class="list-title">${entry.label}</div>
-                          <div class="list-sub mono">${entry.id}</div>
-                        </div>
-                        <div class="list-meta">
-                          <div>${status}</div>
-                          <div>${configLabel}</div>
-                          <div>${enabled}</div>
-                          ${
-                            summary.configured === 0
-                              ? html`
-                                  <div>
-                                    <a
-                                      href="https://docs.openclaw.ai/channels"
-                                      target="_blank"
-                                      rel="noopener"
-                                      style="color: var(--accent); font-size: 12px"
-                                      >Setup guide</a
-                                    >
-                                  </div>
-                                `
-                              : nothing
-                          }
-                          ${
-                            extras.length > 0
-                              ? extras.map(
-                                  (extra) => html`<div>${extra.label}: ${extra.value}</div>`,
-                                )
-                              : nothing
-                          }
-                        </div>
+              <div class="list" style="margin-top: 16px;">
+                ${entries.map((entry) => {
+                  const summary = summarizeChannelAccounts(entry.accounts);
+                  const status = summary.total
+                    ? `${summary.connected}/${summary.total} connected`
+                    : "no accounts";
+                  const configLabel = summary.configured
+                    ? `${summary.configured} configured`
+                    : "not configured";
+                  const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
+                  const extras = resolveChannelExtrasFromConfig({
+                    configForm: params.configForm,
+                    channelId: entry.id,
+                    fields: CHANNEL_EXTRA_FIELDS,
+                  });
+                  return html`
+                    <div class="list-item">
+                      <div class="list-main">
+                        <div class="list-title">${entry.label}</div>
+                        <div class="list-sub mono">${entry.id}</div>
                       </div>
-                    `;
-                  })}
-                </div>
-              `
+                      <div class="list-meta">
+                        <div>${status}</div>
+                        <div>${configLabel}</div>
+                        <div>${enabled}</div>
+                        ${
+                          summary.configured === 0
+                            ? html`
+                                <div>
+                                  <a
+                                    href="https://docs.openclaw.ai/channels"
+                                    target="_blank"
+                                    rel="noopener"
+                                    style="color: var(--accent); font-size: 12px"
+                                    >Setup guide</a
+                                  >
+                                </div>
+                              `
+                            : nothing
+                        }
+                        ${
+                          extras.length > 0
+                            ? extras.map((extra) => html`<div>${extra.label}: ${extra.value}</div>`)
+                            : nothing
+                        }
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>
+            `
         }
       </section>
     </section>
@@ -247,11 +326,16 @@ export function renderAgentCron(params: {
   error: string | null;
   onRefresh: () => void;
   onRunNow: (jobId: string) => void;
+  onSelectPanel: (panel: AgentsPanel) => void;
 }) {
   const jobs = params.jobs.filter((job) => job.agentId === params.agentId);
   return html`
     <section class="grid grid-cols-2">
-      ${renderAgentContextCard(params.context, "Workspace and scheduling targets.")}
+      ${renderAgentContextCard(
+        params.context,
+        "Workspace and scheduling targets.",
+        params.onSelectPanel,
+      )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -259,19 +343,25 @@ export function renderAgentCron(params: {
             <div class="card-sub">Gateway cron status.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
-            <div class="stat-label">Enabled</div>
+            <div class="stat-label">${t("common.enabled")}</div>
             <div class="stat-value">
-              ${params.status ? (params.status.enabled ? "Yes" : "No") : "n/a"}
+              ${
+                params.status
+                  ? params.status.enabled
+                    ? t("common.yes")
+                    : t("common.no")
+                  : t("common.na")
+              }
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Jobs</div>
-            <div class="stat-value">${params.status?.jobs ?? "n/a"}</div>
+            <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
@@ -294,40 +384,42 @@ export function renderAgentCron(params: {
               <div class="muted" style="margin-top: 16px">No jobs assigned.</div>
             `
           : html`
-              <div class="list" style="margin-top: 16px;">
-                ${jobs.map(
-                  (job) => html`
-                    <div class="list-item">
-                      <div class="list-main">
-                        <div class="list-title">${job.name}</div>
-                        ${
-                          job.description
-                            ? html`<div class="list-sub">${job.description}</div>`
-                            : nothing
-                        }
-                        <div class="chip-row" style="margin-top: 6px;">
-                          <span class="chip">${formatCronSchedule(job)}</span>
-                          <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                            ${job.enabled ? "enabled" : "disabled"}
-                          </span>
-                          <span class="chip">${job.sessionTarget}</span>
-                        </div>
-                      </div>
-                      <div class="list-meta">
-                        <div class="mono">${formatCronState(job)}</div>
-                        <div class="muted">${formatCronPayload(job)}</div>
-                        <button
-                          class="btn btn--sm"
-                          style="margin-top: 6px;"
-                          ?disabled=${!job.enabled}
-                          @click=${() => params.onRunNow(job.id)}
-                        >Run Now</button>
+            <div class="list" style="margin-top: 16px;">
+              ${jobs.map(
+                (job) => html`
+                  <div class="list-item">
+                    <div class="list-main">
+                      <div class="list-title">${job.name}</div>
+                      ${
+                        job.description
+                          ? html`<div class="list-sub">${job.description}</div>`
+                          : nothing
+                      }
+                      <div class="chip-row" style="margin-top: 6px;">
+                        <span class="chip">${formatCronSchedule(job)}</span>
+                        <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
+                          ${job.enabled ? "enabled" : "disabled"}
+                        </span>
+                        <span class="chip">${job.sessionTarget}</span>
                       </div>
                     </div>
-                  `,
-                )}
-              </div>
-            `
+                    <div class="list-meta">
+                      <div class="mono">${formatCronState(job)}</div>
+                      <div class="muted">${formatCronPayload(job)}</div>
+                      <button
+                        class="btn btn--sm"
+                        style="margin-top: 6px;"
+                        ?disabled=${!job.enabled}
+                        @click=${() => params.onRunNow(job.id)}
+                      >
+                        Run Now
+                      </button>
+                    </div>
+                  </div>
+                `,
+              )}
+            </div>
+          `
       }
     </section>
   `;
@@ -355,6 +447,33 @@ export function renderAgentFiles(params: {
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
+  const previewHtml = activeEntry
+    ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
+        sanitize: (h: string) => DOMPurify.sanitize(h),
+      })
+    : "";
+  const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
+  const draftWordCount = countWords(draft);
+  const draftLineCount = countLines(draft);
+  const activePathLabel = activeEntry
+    ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
+    : "";
+  const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
+  const previewStatusLabel = activeEntry?.missing
+    ? "Will Create on Save"
+    : isDirty
+      ? "Live Draft Preview"
+      : "Saved Preview";
+  const previewStatusClass = activeEntry?.missing
+    ? "is-missing"
+    : isDirty
+      ? "is-dirty"
+      : "is-synced";
+  const previewUpdatedLabel = activeEntry?.updatedAtMs
+    ? `Updated ${formatRelativeTimestamp(activeEntry.updatedAtMs)}`
+    : activeEntry?.missing
+      ? "Not Created Yet"
+      : "Updated Unknown";
 
   return html`
     <section class="card">
@@ -368,17 +487,21 @@ export function renderAgentFiles(params: {
           ?disabled=${params.agentFilesLoading}
           @click=${() => params.onLoadFiles(params.agentId)}
         >
-          ${params.agentFilesLoading ? "Loading…" : "Refresh"}
+          ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       ${
         list
-          ? html`<div class="muted mono" style="margin-top: 8px;">Workspace: ${list.workspace}</div>`
+          ? html`<div class="muted mono" style="margin-top: 8px;">
+            Workspace: <span>${list.workspace}</span>
+          </div>`
           : nothing
       }
       ${
         params.agentFilesError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${params.agentFilesError}</div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">
+            ${params.agentFilesError}
+          </div>`
           : nothing
       }
       ${
@@ -388,139 +511,211 @@ export function renderAgentFiles(params: {
                 Load the agent workspace files to edit core instructions.
               </div>
             `
-          : html`
-              <div class="agent-files-grid" style="margin-top: 16px;">
-                <div class="agent-files-list">
-                  ${
-                    files.length === 0
-                      ? html`
-                          <div class="muted">No files found.</div>
-                        `
-                      : files.map((file) =>
-                          renderAgentFileRow(file, active, () => params.onSelectFile(file.name)),
-                        )
-                  }
-                </div>
-                <div class="agent-files-editor">
-                  ${
-                    !activeEntry
-                      ? html`
-                          <div class="muted">Select a file to edit.</div>
-                        `
-                      : html`
-                          <div class="agent-file-header">
-                            <div>
-                              <div class="agent-file-title mono">${activeEntry.name}</div>
-                              <div class="agent-file-sub mono">${activeEntry.path}</div>
+          : files.length === 0
+            ? html`
+                <div class="muted" style="margin-top: 16px">No files found.</div>
+              `
+            : html`
+              <div class="agent-tabs" style="margin-top: 14px;">
+                ${files.map((file) => {
+                  const isActive = active === file.name;
+                  const label = file.name.replace(/\.md$/i, "");
+                  return html`
+                    <button
+                      class="agent-tab ${isActive ? "active" : ""} ${
+                        file.missing ? "agent-tab--missing" : ""
+                      }"
+                      @click=${() => params.onSelectFile(file.name)}
+                    >
+                      ${label}${
+                        file.missing
+                          ? html`
+                              <span class="agent-tab-badge">missing</span>
+                            `
+                          : nothing
+                      }
+                    </button>
+                  `;
+                })}
+              </div>
+              ${
+                !activeEntry
+                  ? html`
+                      <div class="muted" style="margin-top: 16px">Select a file to edit.</div>
+                    `
+                  : html`
+                    <div class="agent-file-header" style="margin-top: 14px;">
+                      <div>
+                        <div class="agent-file-sub mono">${activeEntry.path}</div>
+                      </div>
+                      <div class="agent-file-actions">
+                        <button
+                          class="btn btn--sm"
+                          title="Preview rendered markdown"
+                          @click=${(e: Event) => {
+                            const btn = e.currentTarget as HTMLElement;
+                            const dialog = btn.closest(".card")?.querySelector("dialog");
+                            if (dialog) {
+                              dialog.showModal();
+                            }
+                          }}
+                        >
+                          ${icons.eye} Preview
+                        </button>
+                        <button
+                          class="btn btn--sm"
+                          ?disabled=${!isDirty}
+                          @click=${() => params.onFileReset(activeEntry.name)}
+                        >
+                          Reset
+                        </button>
+                        <button
+                          class="btn btn--sm primary"
+                          ?disabled=${params.agentFileSaving || !isDirty}
+                          @click=${() => params.onFileSave(activeEntry.name)}
+                        >
+                          ${params.agentFileSaving ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                    ${
+                      activeEntry.missing
+                        ? html`
+                            <div class="callout info" style="margin-top: 10px">
+                              This file is missing. Saving will create it in the agent workspace.
                             </div>
-                            <div class="agent-file-actions">
-                              <button
-                                class="btn btn--sm"
-                                title="Preview rendered markdown"
-                                @click=${(e: Event) => {
-                                  const btn = e.currentTarget as HTMLElement;
-                                  const dialog = btn
-                                    .closest(".agent-files-editor")
-                                    ?.querySelector("dialog");
-                                  if (dialog) {
-                                    dialog.showModal();
-                                  }
-                                }}
+                          `
+                        : nothing
+                    }
+                    <label class="field agent-file-field" style="margin-top: 12px;">
+                      <span>Content</span>
+                      <textarea
+                        class="agent-file-textarea"
+                        .value=${draft}
+                        @input=${(e: Event) =>
+                          params.onFileDraftChange(
+                            activeEntry.name,
+                            (e.target as HTMLTextAreaElement).value,
+                          )}
+                      ></textarea>
+                    </label>
+                    <dialog
+                      class="md-preview-dialog"
+                      aria-labelledby=${previewTitleId}
+                      @click=${(e: Event) => {
+                        const dialog = e.currentTarget as HTMLDialogElement;
+                        if (e.target === dialog) {
+                          dialog.close();
+                        }
+                      }}
+                      @close=${(e: Event) => {
+                        const dialog = e.currentTarget as HTMLElement;
+                        dialog
+                          .querySelector(".md-preview-dialog__panel")
+                          ?.classList.remove("fullscreen");
+                        setPreviewExpandButtonState(
+                          dialog.querySelector(".md-preview-expand-btn"),
+                          false,
+                        );
+                      }}
+                    >
+                      <div class="md-preview-dialog__panel">
+                        <div class="md-preview-dialog__header">
+                          <div class="md-preview-dialog__header-main">
+                            <div class="md-preview-dialog__eyebrow">
+                              ${icons.scrollText}
+                              <span>${getExtensionLabel(activeEntry.name)}</span>
+                            </div>
+                            <div class="md-preview-dialog__title-wrap">
+                              <div
+                                id=${previewTitleId}
+                                class="md-preview-dialog__title"
+                                translate="no"
                               >
-                                ${icons.eye} Preview
-                              </button>
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${!isDirty}
-                                @click=${() => params.onFileReset(activeEntry.name)}
-                              >
-                                Reset
-                              </button>
-                              <button
-                                class="btn btn--sm primary"
-                                ?disabled=${params.agentFileSaving || !isDirty}
-                                @click=${() => params.onFileSave(activeEntry.name)}
-                              >
-                                ${params.agentFileSaving ? "Saving…" : "Save"}
-                              </button>
+                                ${activeEntry.name}
+                              </div>
+                              <div class="md-preview-dialog__path mono" translate="no">
+                                ${activePathLabel}
+                              </div>
                             </div>
                           </div>
-                          ${
-                            activeEntry.missing
-                              ? html`
-                                  <div class="callout info" style="margin-top: 10px">
-                                    This file is missing. Saving will create it in the agent workspace.
-                                  </div>
-                                `
-                              : nothing
-                          }
-                          <label class="field agent-file-field" style="margin-top: 12px;">
-                            <span>Content</span>
-                            <textarea
-                              class="agent-file-textarea"
-                              .value=${draft}
-                              @input=${(e: Event) =>
-                                params.onFileDraftChange(
-                                  activeEntry.name,
-                                  (e.target as HTMLTextAreaElement).value,
-                                )}
-                            ></textarea>
-                          </label>
-                          <dialog
-                            class="md-preview-dialog"
-                            @click=${(e: Event) => {
-                              const dialog = e.currentTarget as HTMLDialogElement;
-                              if (e.target === dialog) {
-                                dialog.close();
-                              }
-                            }}
-                          >
-                            <div class="md-preview-dialog__panel">
-                              <div class="md-preview-dialog__header">
-                                <div class="md-preview-dialog__title mono">${activeEntry.name}</div>
-                                <button
-                                  class="btn btn--sm"
-                                  @click=${(e: Event) => {
-                                    (e.currentTarget as HTMLElement).closest("dialog")?.close();
-                                  }}
-                                >${icons.x} Close</button>
-                              </div>
-                              <div class="md-preview-dialog__body sidebar-markdown">
-                                ${unsafeHTML(toSanitizedMarkdownHtml(draft))}
-                              </div>
-                            </div>
-                          </dialog>
-                        `
-                  }
-                </div>
-              </div>
+                          <div class="md-preview-dialog__actions">
+                            <button
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
+                              title="Expand preview"
+                              aria-label="Expand preview"
+                              aria-pressed="false"
+                              @click=${(e: Event) => {
+                                const btn = e.currentTarget as HTMLElement;
+                                const panel = btn.closest(".md-preview-dialog__panel");
+                                if (!panel) {
+                                  return;
+                                }
+                                const isFullscreen = panel.classList.toggle("fullscreen");
+                                setPreviewExpandButtonState(btn, isFullscreen);
+                              }}
+                            >
+                              <span class="when-normal" aria-hidden="true">${icons.maximize}</span
+                              ><span class="when-fullscreen" aria-hidden="true"
+                                >${icons.minimize}</span
+                              >
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn"
+                              title="Edit file"
+                              aria-label="Edit file"
+                              @click=${(e: Event) => {
+                                (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                                const textarea =
+                                  document.querySelector<HTMLElement>(".agent-file-textarea");
+                                textarea?.focus();
+                              }}
+                            >
+                              <span aria-hidden="true">${icons.edit}</span>
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn"
+                              title="Close preview"
+                              aria-label="Close preview"
+                              @click=${(e: Event) => {
+                                (e.currentTarget as HTMLElement).closest("dialog")?.close();
+                              }}
+                            >
+                              <span aria-hidden="true">${icons.x}</span>
+                            </button>
+                          </div>
+                        </div>
+                        <div class="md-preview-dialog__meta">
+                          <div class="md-preview-dialog__chip ${previewStatusClass}">
+                            <strong>${previewStatusLabel}</strong>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
+                            <span>${draftWordCount} words</span>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${draftLineCount}</strong>
+                            <span>lines</span>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${draftByteSize}</strong>
+                            <span>${previewUpdatedLabel}</span>
+                          </div>
+                        </div>
+                        <div class="md-preview-dialog__body">
+                          <article class="md-preview-dialog__reader sidebar-markdown">
+                            ${unsafeHTML(previewHtml)}
+                          </article>
+                        </div>
+                      </div>
+                    </dialog>
+                  `
+              }
             `
       }
     </section>
-  `;
-}
-
-function renderAgentFileRow(file: AgentFileEntry, active: string | null, onSelect: () => void) {
-  const status = file.missing
-    ? "Missing"
-    : `${formatBytes(file.size)} · ${formatRelativeTimestamp(file.updatedAtMs ?? null)}`;
-  return html`
-    <button
-      type="button"
-      class="agent-file-row ${active === file.name ? "active" : ""}"
-      @click=${onSelect}
-    >
-      <div>
-        <div class="agent-file-name mono">${file.name}</div>
-        <div class="agent-file-meta">${status}</div>
-      </div>
-      ${
-        file.missing
-          ? html`
-              <span class="agent-pill warn">missing</span>
-            `
-          : nothing
-      }
-    </button>
   `;
 }

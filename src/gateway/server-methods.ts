@@ -6,18 +6,21 @@ import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
-import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
+import { commandsHandlers } from "./server-methods/commands.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
+import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
+import { modelsAuthStatusHandlers } from "./server-methods/models-auth-status.js";
 import { modelsHandlers } from "./server-methods/models.js";
+import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -27,10 +30,12 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
+import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
+import { voicewakeRoutingHandlers } from "./server-methods/voicewake-routing.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
@@ -69,19 +74,25 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...connectHandlers,
   ...logsHandlers,
   ...voicewakeHandlers,
+  ...voicewakeRoutingHandlers,
   ...healthHandlers,
   ...channelsHandlers,
   ...chatHandlers,
+  ...commandsHandlers,
   ...cronHandlers,
   ...deviceHandlers,
+  ...diagnosticsHandlers,
   ...doctorHandlers,
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
+  ...modelsAuthStatusHandlers,
+  ...nativeHookRelayHandlers,
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
   ...toolsCatalogHandlers,
+  ...toolsEffectiveHandlers,
   ...ttsHandlers,
   ...skillsHandlers,
   ...sessionsHandlers,
@@ -94,7 +105,6 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,
-  ...browserHandlers,
 };
 
 export async function handleGatewayRequest(
@@ -104,6 +114,18 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  if (context.unavailableGatewayMethods?.has(req.method)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
+        retryable: true,
+        retryAfterMs: 500,
+        details: { method: req.method },
+      }),
+    );
     return;
   }
   if (CONTROL_PLANE_WRITE_METHODS.has(req.method)) {

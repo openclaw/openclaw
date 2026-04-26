@@ -4,7 +4,7 @@ read_when:
   - You want to switch between stable/beta/dev
   - You want to pin a specific version, tag, or SHA
   - You are tagging or publishing prereleases
-title: "Release Channels"
+title: "Release channels"
 sidebarTitle: "Release Channels"
 ---
 
@@ -13,13 +13,17 @@ sidebarTitle: "Release Channels"
 OpenClaw ships three update channels:
 
 - **stable**: npm dist-tag `latest`. Recommended for most users.
-- **beta**: npm dist-tag `beta` (builds under test).
+- **beta**: npm dist-tag `beta` when it is current; if beta is missing or older than
+  the latest stable release, the update flow falls back to `latest`.
 - **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
   The `main` branch is for experimentation and active development. It may contain
   incomplete features or breaking changes. Do not use it for production gateways.
 
-We ship builds to **beta**, test them, then **promote a vetted build to `latest`**
-without changing the version number -- dist-tags are the source of truth for npm installs.
+We usually ship stable builds to **beta** first, test them there, then run an
+explicit promotion step that moves the vetted build to `latest` without
+changing the version number. Maintainers can also publish a stable release
+directly to `latest` when needed. Dist-tags are the source of truth for npm
+installs.
 
 ## Switching channels
 
@@ -32,8 +36,12 @@ openclaw update --channel dev
 `--channel` persists your choice in config (`update.channel`) and aligns the
 install method:
 
-- **`stable`/`beta`** (package installs): updates via the matching npm dist-tag.
-- **`stable`/`beta`** (git installs): checks out the latest matching git tag.
+- **`stable`** (package installs): updates via npm dist-tag `latest`.
+- **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
+  `latest` when `beta` is missing or older than the current stable tag.
+- **`stable`** (git installs): checks out the latest stable git tag.
+- **`beta`** (git installs): prefers the latest beta git tag, but falls back to
+  the latest stable git tag when beta is missing or older.
 - **`dev`**: ensures a git checkout (default `~/openclaw`, override with
   `OPENCLAW_GIT_DIR`), switches to `main`, rebases on upstream, builds, and
   installs the global CLI from that checkout.
@@ -48,7 +56,7 @@ update **without** changing your persisted channel:
 
 ```bash
 # Install a specific version
-openclaw update --tag 2026.3.22
+openclaw update --tag 2026.4.1-beta.1
 
 # Install from the beta dist-tag (one-off, does not persist)
 openclaw update --tag beta
@@ -57,7 +65,7 @@ openclaw update --tag beta
 openclaw update --tag main
 
 # Install a specific npm package spec
-openclaw update --tag openclaw@2026.3.22
+openclaw update --tag openclaw@2026.4.1-beta.1
 ```
 
 Notes:
@@ -67,6 +75,9 @@ Notes:
   channel as usual.
 - Downgrade protection: if the target version is older than your current version,
   OpenClaw prompts for confirmation (skip with `--yes`).
+- `--channel beta` is different from `--tag beta`: the channel flow can fall back
+  to stable/latest when beta is missing or older, while `--tag beta` targets the
+  raw `beta` dist-tag for that one run.
 
 ## Dry run
 
@@ -75,7 +86,7 @@ Preview what `openclaw update` would do without making changes:
 ```bash
 openclaw update --dry-run
 openclaw update --channel beta --dry-run
-openclaw update --tag 2026.3.22 --dry-run
+openclaw update --tag 2026.4.1-beta.1 --dry-run
 openclaw update --dry-run --json
 ```
 
@@ -109,7 +120,7 @@ source (config, git tag, git branch, or default).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable
-  - `beta` -> candidate build
+  - `beta` -> candidate build or beta-first stable build
   - `dev` -> main snapshot (optional)
 
 ## macOS app availability
@@ -118,3 +129,8 @@ Beta and dev builds may **not** include a macOS app release. That is OK:
 
 - The git tag and npm dist-tag can still be published.
 - Call out "no macOS build for this beta" in release notes or changelog.
+
+## Related
+
+- [Updating](/install/updating)
+- [Installer internals](/install/installer)

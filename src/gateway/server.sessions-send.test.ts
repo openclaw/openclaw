@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, type Mock } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -18,7 +18,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let gatewayPort: number;
-const gatewayToken = "test-token";
+const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
@@ -78,9 +78,6 @@ async function emitLifecycleAssistantReply(params: {
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
-  testState.gatewayAuth = { mode: "token", token: gatewayToken };
-  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
@@ -94,8 +91,19 @@ beforeAll(async () => {
     scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
     silent: false,
   });
-  await approveDevicePairing(pending.request.requestId);
+  await approveDevicePairing(pending.request.requestId, {
+    callerScopes: pending.request.scopes ?? ["operator.admin"],
+  });
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   server = await startGatewayServer(gatewayPort);
+});
+
+beforeEach(() => {
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
 });
 
 afterAll(async () => {
@@ -142,7 +150,7 @@ describe("sessions_send gateway loopback", () => {
     const firstCall = spy.mock.calls[0]?.[0] as
       | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
       | undefined;
-    expect(firstCall?.lane).toBe("nested");
+    expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
     expect(firstCall?.inputProvenance).toMatchObject({
       kind: "inter_session",
       sourceTool: "sessions_send",

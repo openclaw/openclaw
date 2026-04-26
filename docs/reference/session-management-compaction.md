@@ -4,12 +4,10 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
-# Session Management & Compaction (Deep Dive)
-
-This document explains how OpenClaw manages sessions end-to-end:
+This page explains how OpenClaw manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
@@ -21,10 +19,12 @@ This document explains how OpenClaw manages sessions end-to-end:
 
 If you want a higher-level overview first, start with:
 
-- [/concepts/session](/concepts/session)
-- [/concepts/compaction](/concepts/compaction)
-- [/concepts/session-pruning](/concepts/session-pruning)
-- [/reference/transcript-hygiene](/reference/transcript-hygiene)
+- [Session management](/concepts/session)
+- [Compaction](/concepts/compaction)
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Session pruning](/concepts/session-pruning)
+- [Transcript hygiene](/reference/transcript-hygiene)
 
 ---
 
@@ -101,6 +101,14 @@ Isolated cron runs also create session entries/transcripts, and they have dedica
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
 
+When cron force-creates a new isolated run session, it sanitizes the previous
+`cron:<jobId>` session entry before writing the new row. It carries safe
+preferences such as thinking/fast/verbose settings, labels, and explicit
+user-selected model/auth overrides. It drops ambient conversation context such
+as channel/group routing, send or queue policy, elevation, origin, and ACP
+runtime binding so a fresh isolated run cannot inherit stale delivery or
+runtime authority from an older run.
+
 ---
 
 ## Session keys (`sessionKey`)
@@ -128,6 +136,7 @@ Rules of thumb:
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
@@ -141,7 +150,14 @@ The store’s value type is `SessionEntry` in `src/config/sessions.ts`.
 Key fields (not exhaustive):
 
 - `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `updatedAt`: last activity timestamp
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
+  freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
+  freshness uses this so heartbeat, cron, and exec events do not keep sessions
+  alive. Legacy rows without this field fall back to the recovered session start
+  time for idle freshness.
+- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+  bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
@@ -208,13 +224,30 @@ After compaction, future turns see:
 
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
+## Compaction chunk boundaries and tool pairing
+
+When OpenClaw splits a long transcript into compaction chunks, it keeps
+assistant tool calls paired with their matching `toolResult` entries.
+
+- If the token-share split lands between a tool call and its result, OpenClaw
+  shifts the boundary to the assistant tool-call message instead of separating
+  the pair.
+- If a trailing tool-result block would otherwise push the chunk over target,
+  OpenClaw preserves that pending tool block and keeps the unsummarized tail
+  intact.
+- Aborted/error tool-call blocks do not hold a pending split open.
+
 ---
 
 ## When auto-compaction happens (Pi runtime)
 
 In the embedded Pi agent, auto-compaction triggers in two cases:
 
-1. **Overflow recovery**: the model returns a context overflow error → compact → retry.
+1. **Overflow recovery**: the model returns a context overflow error
+   (`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, `ollama error: context length
+exceeded`, and similar provider-shaped variants) → compact → retry.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`
@@ -248,11 +281,34 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it’s already higher, OpenClaw leaves it alone.
+- Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
+  and keeps Pi's recent-tail cut point. Without an explicit keep budget,
+  manual compaction remains a hard checkpoint and rebuilt context starts from
+  the new summary.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
 Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.ts`
 (called from `src/agents/pi-embedded-runner.ts`).
+
+---
+
+## Pluggable compaction providers
+
+Plugins can register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
+
+- `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization.
+- Setting a `provider` forces `mode: "safeguard"`.
+- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
+- The safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Built-in safeguard summarization re-distills prior summaries with new messages
+  instead of preserving the full previous summary verbatim.
+- Safeguard mode enables summary quality audits by default; set
+  `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
+- Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
+
+Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
 
 ---
 
@@ -273,10 +329,17 @@ OpenClaw supports “silent” turns for background tasks where the user should 
 
 Convention:
 
-- The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
+- The assistant starts its output with the exact silent token `NO_REPLY` /
+  `no_reply` to indicate “do not deliver a reply to the user”.
 - OpenClaw strips/suppresses this in the delivery layer.
+- Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
+  `no_reply` both count when the whole payload is just the silent token.
+- This is for true background/no-delivery turns only; it is not a shortcut for
+  ordinary actionable user requests.
 
-As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
+As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
+partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial
+output mid-turn.
 
 ---
 
@@ -291,7 +354,8 @@ OpenClaw uses the **pre-threshold flush** approach:
 1. Monitor session context usage.
 2. When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
    “write memory now” directive to the agent.
-3. Use `NO_REPLY` so the user sees nothing.
+3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
+   nothing.
 
 Config (`agents.defaults.compaction.memoryFlush`):
 
@@ -302,7 +366,8 @@ Config (`agents.defaults.compaction.memoryFlush`):
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The default prompt/system prompt include a `NO_REPLY` hint to suppress
+  delivery.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
@@ -321,4 +386,10 @@ flush logic lives on the Gateway side today.
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
-- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
+- [Context engine](/concepts/context-engine)
