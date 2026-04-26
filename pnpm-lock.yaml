@@ -292,6 +292,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/azure-speech:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/bluebubbles:
     devDependencies:
       '@openclaw/plugin-sdk':
