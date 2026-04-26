@@ -26,6 +26,7 @@ const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
+  /^dist\/extensions\/[^/]+\/\.openclaw-install-stage(?:-[^/]+)?(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/\.openclaw-runtime-deps-[^/]+(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
