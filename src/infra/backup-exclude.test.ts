@@ -23,6 +23,10 @@ function makeSpec(overrides: Partial<ExcludeSpec> = {}): ExcludeSpec {
   };
 }
 
+// Stat shapes the buildExcludeFilter consumes (mirrors what tar.c passes).
+const dirStat = (size = 0) => ({ size, isDirectory: () => true });
+const fileStat = (size: number) => ({ size, isDirectory: () => false });
+
 describe("resolveExcludePatterns", () => {
   let tempDir: string;
 
@@ -283,6 +287,34 @@ describe("resolveExcludePatterns", () => {
     ).rejects.toThrow(ProtectedPathError);
   });
 
+  // Codex Finding 1 (round 2): patterns whose match requires content under a
+  // protected directory (e.g. `**/credentials/**`) bypassed the bare-name guard
+  // because `ignore("credentials")` returns false for them. Without a descendant
+  // probe the tar filter would still strip the contents and leave an empty
+  // protected folder in the archive.
+  it.each([
+    ["**/credentials/**"],
+    ["**/extensions/**"],
+    ["**/cron/**"],
+    ["credentials/**"],
+    ["**/credentials/"],
+  ])("catches descendant glob %s in non-interactive mode", async (pattern) => {
+    await expect(
+      resolveExcludePatterns(makeSpec({ exclude: [pattern], nonInteractive: true }), tempDir),
+    ).rejects.toThrow(ProtectedPathError);
+  });
+
+  it("--allow-exclude-protected overrides descendant glob check", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["**/credentials/**"], allowExcludeProtected: true }),
+      tempDir,
+    );
+    expect(patterns).toContain("**/credentials/**");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   // Finding 3b: case-variation bypass
   it("catches case-variant Credentials/ (case-insensitive guard)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -440,7 +472,23 @@ describe("buildExcludeFilter", () => {
   it("filter returns false (exclude) for exact directory match", () => {
     const sources = new Map([["venvs/", "default" as const]]);
     const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
-    expect(filter("venvs", { size: 0 })).toBe(false);
+    expect(filter("venvs", dirStat())).toBe(false);
+  });
+
+  it("filter returns true (include) for a regular file whose name matches a directory-only pattern", () => {
+    // Codex Finding 3 (round 2): pattern `logs/` must NOT match a regular file
+    // named `logs` — gitignore semantics treat the trailing `/` as
+    // directory-only.
+    const sources = new Map([
+      ["logs/", "default" as const],
+      ["venvs/", "default" as const],
+    ]);
+    const { filter } = buildExcludeFilter(["logs/", "venvs/"], sources, tempDir);
+    expect(filter("logs", fileStat(100))).toBe(true);
+    expect(filter("venvs", fileStat(100))).toBe(true);
+    // …but a directory by the same name is still excluded.
+    expect(filter("logs", dirStat())).toBe(false);
+    expect(filter("venvs", dirStat())).toBe(false);
   });
 
   it("filter returns false for nested file under excluded directory", () => {
@@ -468,7 +516,7 @@ describe("buildExcludeFilter", () => {
     const sources = new Map([["venvs/", "default" as const]]);
     const { filter, getExcludedStats } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
-    filter("venvs", { size: 0 });
+    filter("venvs", dirStat());
     filter("memory/notes.md", { size: 100 });
 
     const stats = getExcludedStats();
@@ -511,8 +559,8 @@ describe("buildExcludeFilter", () => {
       tempDir,
     );
 
-    filter("venvs", { size: 0 });
-    filter("models", { size: 0 });
+    filter("venvs", dirStat());
+    filter("models", dirStat());
 
     const stats = getExcludedStats();
     expect(stats.totalFiles).toBe(2);
@@ -529,7 +577,7 @@ describe("buildExcludeFilter", () => {
     const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
     // Normal operation should work fine
-    expect(filter("venvs", { size: 0 })).toBe(false);
+    expect(filter("venvs", dirStat())).toBe(false);
     expect(filter("safe-file.txt", { size: 100 })).toBe(true);
 
     warnSpy.mockRestore();
@@ -540,14 +588,14 @@ describe("buildExcludeFilter", () => {
     const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
     // Absolute path under baseDir should be converted to relative
-    expect(filter(path.join(tempDir, "venvs"), { size: 0 })).toBe(false);
+    expect(filter(path.join(tempDir, "venvs"), dirStat())).toBe(false);
     expect(filter(path.join(tempDir, "memory/notes.md"), { size: 100 })).toBe(true);
   });
 
   it("handles path with leading ./ gracefully", () => {
     const sources = new Map([["venvs/", "default" as const]]);
     const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
-    expect(filter("./venvs", { size: 0 })).toBe(false);
+    expect(filter("./venvs", dirStat())).toBe(false);
   });
 
   it("getExcludedStats() does not include individual file paths", () => {
@@ -572,7 +620,7 @@ describe("buildExcludeFilter", () => {
     const sources = new Map([["venvs/", "default" as const]]);
     const { filter, getExcludedStats } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
-    filter("venvs", { size: 0 });
+    filter("venvs", dirStat());
     const first = getExcludedStats();
     const second = getExcludedStats();
 

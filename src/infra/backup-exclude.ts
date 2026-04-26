@@ -15,9 +15,20 @@ export interface ExcludeSpec {
   readonly nonInteractive: boolean;
 }
 
+/**
+ * Subset of `fs.Stats` / `tar.ReadEntry` that the filter consumes. Both expose
+ * `isDirectory()`; ReadEntry also exposes `type === "Directory"`. Either is
+ * accepted so callers can pass the raw tar entry through.
+ */
+export interface ExcludeFilterStat {
+  readonly size?: number;
+  readonly type?: string;
+  isDirectory?(): boolean;
+}
+
 export interface ExcludeFilterResult {
   /** Return `true` to include the entry in the archive, `false` to exclude. */
-  readonly filter: (entryPath: string, stat: { size?: number }) => boolean;
+  readonly filter: (entryPath: string, stat: ExcludeFilterStat) => boolean;
   /** Aggregated per-pattern exclusion stats (populated as a side-effect of filter calls). */
   readonly getExcludedStats: () => ExcludedStats;
 }
@@ -238,11 +249,17 @@ export async function resolveExcludePatterns(
       const protectedNormalized = protectedPath.replace(/\/$/, "");
       const protectedLower = protectedNormalized.toLowerCase();
       // Check exact match (case-insensitive), descendant prefix, AND glob match.
-      // ignore() defaults to ignorecase:true, so no toLowerCase needed for it.
+      // The descendant probe (`${protected}/x`) catches patterns whose match
+      // requires content under the protected directory — e.g. `**/credentials/**`,
+      // `**/credentials/`, or `credentials/**`. Without it the bare-name probe
+      // returns false and the pattern silently passes the guard, leaving an
+      // empty protected folder in the archive while dropping its contents.
+      const ig = ignore().add(pattern);
       const wouldMatch =
         normalizedLower === protectedLower ||
         normalizedLower.startsWith(`${protectedLower}/`) ||
-        ignore().add(pattern).ignores(protectedNormalized);
+        ig.ignores(protectedNormalized) ||
+        ig.ignores(`${protectedNormalized}/x`);
       if (wouldMatch && !spec.allowExcludeProtected) {
         if (spec.nonInteractive) {
           throw new ProtectedPathError(pattern);
@@ -319,7 +336,7 @@ export function buildExcludeFilter(
     }
   }
 
-  const filter = (entryPath: string, stat: { size?: number }): boolean => {
+  const filter = (entryPath: string, stat: ExcludeFilterStat): boolean => {
     try {
       // Normalize to relative path with forward slashes — required by `ignore`.
       // Normalize separators early: tar on Windows may pass mixed separators
@@ -356,8 +373,12 @@ export function buildExcludeFilter(
 
       // Directory-only patterns (trailing `/`) require a trailing `/` on the
       // path for `ignore` to recognise it as a directory. Tar entries for
-      // directories may or may not include the trailing slash, so test both.
-      if (!rel.endsWith("/")) {
+      // directories may or may not include the trailing slash, so retry with
+      // a trailing `/` only when the entry is actually a directory — otherwise
+      // a regular file named `logs` would match the pattern `logs/`, which
+      // violates gitignore semantics.
+      const isDirectoryEntry = stat.type === "Directory" || (stat.isDirectory?.() ?? false);
+      if (isDirectoryEntry && !rel.endsWith("/")) {
         const dirResult = ig.test(`${rel}/`);
         if (dirResult.ignored && !dirResult.unignored) {
           const matchedPattern = dirResult.rule?.pattern ?? "(pattern)";

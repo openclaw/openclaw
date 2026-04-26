@@ -443,9 +443,7 @@ export async function createBackupArchive(
         {
           ...baseTarOpts,
           file: uncompressedTarPath,
-          filter: (entryPath: string, stat: { size?: number }) => {
-            return excludeFilter(entryPath, stat);
-          },
+          filter: excludeFilter,
         },
         result.assets.map((asset) => asset.sourcePath),
       );
