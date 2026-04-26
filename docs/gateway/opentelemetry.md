@@ -147,9 +147,9 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - **Traces:** `diagnostics.otel.sampleRate` (root-span only, `0.0` drops all,
   `1.0` keeps all).
 - **Metrics:** `diagnostics.otel.flushIntervalMs` (minimum `1000`).
-- **Logs:** OTLP logs respect `logging.level` (file log level). Console
-  redaction does **not** apply to OTLP logs. High-volume installs should
-  prefer OTLP collector sampling/filtering over local sampling.
+- **Logs:** OTLP logs respect `logging.level` (file log level). They use the
+  diagnostic log-record redaction path, not console formatting. High-volume
+  installs should prefer OTLP collector sampling/filtering over local sampling.
 
 ## Exported metrics
 
