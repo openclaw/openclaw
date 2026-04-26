@@ -73,6 +73,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
     await expect(fs.access(generated.wrapperPath)).resolves.toBeUndefined();
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain('"--", "codex-acp"');
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -121,15 +123,22 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not override an explicitly configured Codex agent command", async () => {
+  it("wraps an explicitly configured Codex agent command with isolated CODEX_HOME", async () => {
     const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "config.toml"),
+      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
           codex: {
-            command: "custom-codex-acp",
+            command: "npx @zed-industries/codex-acp@^0.11.1 -c 'model=\"gpt-5.4\"'",
           },
         },
       },
@@ -141,7 +150,15 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stateDir,
     });
 
-    expect(resolved.agents.codex).toBe("custom-codex-acp");
-    await expect(fs.access(generated.wrapperPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    expect(resolved.agents.codex).toContain("npx @zed-industries/codex-acp@^0.11.1");
+    expect(resolved.agents.codex).toContain("-c 'model=\"gpt-5.4\"'");
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain("process.argv.slice(2)");
+    expect(wrapper).toContain("CODEX_HOME: codexHome");
+    expect(wrapper).not.toContain(sourceCodexHome);
   });
 });

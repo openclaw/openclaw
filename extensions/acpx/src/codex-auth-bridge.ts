@@ -22,6 +22,7 @@ const env = {
   ...process.env,
   CODEX_HOME: codexHome,
 };
+const configuredArgs = process.argv.slice(2);
 
 function resolveNpmCliPath() {
   const candidate = path.resolve(
@@ -37,10 +38,12 @@ function resolveNpmCliPath() {
 }
 
 const npmCliPath = resolveNpmCliPath();
-const command = npmCliPath ? process.execPath : process.platform === "win32" ? "npx.cmd" : "npx";
-const args = npmCliPath
-  ? [npmCliPath, "exec", "--yes", "--package=${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"]
-  : ["--yes", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}"];
+const defaultCommand = npmCliPath ? process.execPath : process.platform === "win32" ? "npx.cmd" : "npx";
+const defaultArgs = npmCliPath
+  ? [npmCliPath, "exec", "--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"]
+  : ["--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"];
+const command = configuredArgs[0] ?? defaultCommand;
+const args = configuredArgs.length > 0 ? configuredArgs.slice(1) : defaultArgs;
 
 const child = spawn(command, args, {
   env,
@@ -87,25 +90,28 @@ async function writeCodexAcpWrapper(baseDir: string): Promise<string> {
   return wrapperPath;
 }
 
+function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+  const baseCommand = `${quoteCommandPart(process.execPath)} ${quoteCommandPart(wrapperPath)}`;
+  const trimmedConfiguredCommand = configuredCommand?.trim();
+  return trimmedConfiguredCommand ? `${baseCommand} ${trimmedConfiguredCommand}` : baseCommand;
+}
+
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
   logger?: unknown;
 }): Promise<ResolvedAcpxPluginConfig> {
-  if (params.pluginConfig.agents.codex) {
-    return params.pluginConfig;
-  }
-
   void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
   await prepareIsolatedCodexHome(codexBaseDir);
   const wrapperPath = await writeCodexAcpWrapper(codexBaseDir);
+  const configuredCodexCommand = params.pluginConfig.agents.codex;
 
   return {
     ...params.pluginConfig,
     agents: {
       ...params.pluginConfig.agents,
-      codex: `${quoteCommandPart(process.execPath)} ${quoteCommandPart(wrapperPath)}`,
+      codex: buildCodexAcpWrapperCommand(wrapperPath, configuredCodexCommand),
     },
   };
 }
