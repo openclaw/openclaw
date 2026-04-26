@@ -6,7 +6,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned label automation; no untrusted checkout or code execution
-    types: [labeled]
+    types: [opened, edited, synchronize, reopened, labeled]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -94,6 +94,89 @@ jobs:
               },
             ];
 
+            const managedLabelSpecs = {
+              "r: skill": {
+                color: "5319E7",
+                description: "Auto-close: skills should be published on ClawHub, not added to core.",
+              },
+              "r: support": {
+                color: "0E8A16",
+                description: "Auto-close: support requests belong in Discord or support docs.",
+              },
+              "r: no-ci-pr": {
+                color: "D93F0B",
+                description: "Auto-close: PR only chasing known main CI/test failures.",
+              },
+              "r: too-many-prs": {
+                color: "D93F0B",
+                description: "Auto-close: author has more than ten active PRs.",
+              },
+              "r: too-many-prs-override": {
+                color: "C2E0C6",
+                description: "Maintainer override for the active-PR limit auto-close.",
+              },
+              "r: testflight": {
+                color: "D93F0B",
+                description: "Auto-close: TestFlight access/request issues are off-topic here.",
+              },
+              "r: third-party-extension": {
+                color: "5319E7",
+                description: "Auto-close: third-party plugins/capabilities belong on ClawHub.",
+              },
+              "r: moltbook": {
+                color: "B60205",
+                description: "Auto-close and lock: Moltbook is off-topic for OpenClaw.",
+              },
+              "r: spam": {
+                color: "B60205",
+                description: "Auto-close and lock spam.",
+              },
+              dirty: {
+                color: "B60205",
+                description: "Maintainer-applied auto-close for dirty/unrelated PR branches.",
+              },
+              "bad-barnacle": {
+                color: "E99695",
+                description: "Suppress Barnacle automation on this issue or PR.",
+              },
+              "trigger-response": {
+                color: "FBCA04",
+                description: "Maintainer trigger to rerun Barnacle auto-response on an item.",
+              },
+              "triage: low-signal-docs": {
+                color: "C5DEF5",
+                description: "Candidate: docs-only change looks low signal; maintainer review needed.",
+              },
+              "triage: docs-discoverability": {
+                color: "C5DEF5",
+                description: "Candidate: docs discoverability/listing change may belong elsewhere.",
+              },
+              "triage: test-only-no-bug": {
+                color: "C5DEF5",
+                description: "Candidate: test-only change has no linked bug or behavior evidence.",
+              },
+              "triage: refactor-only": {
+                color: "C5DEF5",
+                description: "Candidate: refactor/cleanup-only PR without maintainer context.",
+              },
+              "triage: blank-template": {
+                color: "C5DEF5",
+                description: "Candidate: PR template appears mostly untouched.",
+              },
+              "triage: dirty-candidate": {
+                color: "C5DEF5",
+                description: "Candidate: broad unrelated surfaces; may need splitting or cleanup.",
+              },
+              "triage: risky-infra": {
+                color: "C5DEF5",
+                description: "Candidate: infra/CI/release change needs maintainer review.",
+              },
+              "triage: external-plugin-candidate": {
+                color: "C5DEF5",
+                description: "Candidate: plugin/capability may belong on ClawHub.",
+              },
+            };
+
             const maintainerTeam = "maintainer";
             const pingWarningMessage =
               "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
@@ -143,13 +226,26 @@ jobs:
               return "";
             };
 
-            const ensureLabelExists = async (name, color, description) => {
+            const ensureLabelSynced = async (name, color, description) => {
               try {
-                await github.rest.issues.getLabel({
+                const current = await github.rest.issues.getLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   name,
                 });
+                const currentDescription = current.data.description ?? "";
+                if (
+                  current.data.color.toLowerCase() !== color.toLowerCase() ||
+                  currentDescription !== description
+                ) {
+                  await github.rest.issues.updateLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color,
+                    description,
+                  });
+                }
               } catch (error) {
                 if (error?.status !== 404) {
                   throw error;
@@ -161,6 +257,12 @@ jobs:
                   color,
                   description,
                 });
+              }
+            };
+
+            const syncManagedLabels = async () => {
+              for (const [name, spec] of Object.entries(managedLabelSpecs)) {
+                await ensureLabelSynced(name, spec.color, spec.description);
               }
             };
 
@@ -176,7 +278,7 @@ jobs:
               }
 
               const targetSpec = bugSubtypeLabelSpecs[targetLabel];
-              await ensureLabelExists(targetLabel, targetSpec.color, targetSpec.description);
+              await ensureLabelSynced(targetLabel, targetSpec.color, targetSpec.description);
 
               for (const subtypeLabel of bugSubtypeLabels) {
                 if (subtypeLabel === targetLabel) {
@@ -359,7 +461,12 @@ jobs:
             }
 
             const isLabelEvent = context.payload.action === "labeled";
-            if (!hasTriggerLabel && !isLabelEvent) {
+            const isPrCandidateEvent =
+              pullRequest &&
+              ["opened", "edited", "synchronize", "reopened", "labeled"].includes(
+                context.payload.action,
+              );
+            if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
               return;
             }
 
@@ -403,8 +510,268 @@ jobs:
             const spamLabel = "r: spam";
             const dirtyLabel = "dirty";
             const badBarnacleLabel = "bad-barnacle";
+            const candidateLabels = {
+              blankTemplate: "triage: blank-template",
+              lowSignalDocs: "triage: low-signal-docs",
+              docsDiscoverability: "triage: docs-discoverability",
+              testOnlyNoBug: "triage: test-only-no-bug",
+              refactorOnly: "triage: refactor-only",
+              dirtyCandidate: "triage: dirty-candidate",
+              riskyInfra: "triage: risky-infra",
+              externalPluginCandidate: "triage: external-plugin-candidate",
+            };
             const noisyPrMessage =
               "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
+
+            const hasLinkedReference = (text) =>
+              /(?:#\d+|github\.com\/openclaw\/openclaw\/(?:issues|pull)\/\d+)/i.test(
+                text,
+              );
+
+            const hasFilledTemplateLine = (body, field) => {
+              const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(
+                `^\\s*-\\s*${escapedField}:\\s*\\S`,
+                "im",
+              );
+              return regex.test(body);
+            };
+
+            const hasMostlyBlankTemplate = (body) => {
+              if (!body) {
+                return true;
+              }
+              const emptyFields = [
+                "Problem",
+                "Why it matters",
+                "What changed",
+                "What did NOT change",
+                "Root cause",
+                "Target test or file",
+              ].filter((field) => {
+                const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const regex = new RegExp(
+                  `^\\s*-\\s*${escapedField}(?: \\([^)]*\\))?:\\s*$`,
+                  "im",
+                );
+                return regex.test(body);
+              }).length;
+              const hasTemplateIntro = body.includes(
+                "Describe the problem and fix in 2–5 bullets",
+              );
+              const emptyClosingRef = /^\s*-\s*(?:Closes|Related)\s+#\s*$/im.test(
+                body,
+              );
+              return hasTemplateIntro && emptyFields >= 3 && emptyClosingRef;
+            };
+
+            const hasConcreteBehaviorContext = (body, text) => {
+              if (hasLinkedReference(text)) {
+                return true;
+              }
+              if (
+                hasFilledTemplateLine(body, "Problem") &&
+                hasFilledTemplateLine(body, "Why it matters") &&
+                hasFilledTemplateLine(body, "What changed")
+              ) {
+                return true;
+              }
+              return /\b(repro|regression|root cause|crash|bug|failure|failing|broken|behavior|scenario|fixes?)\b/i.test(
+                text,
+              );
+            };
+
+            const hasClearDesignContext = (body, text) =>
+              hasConcreteBehaviorContext(body, text) ||
+              /\b(rfc|design|architecture|migration|maintainer request|owner request|requested by maintainer|approved by maintainer|beta blocker)\b/i.test(
+                text,
+              );
+
+            const isMarkdownOrDocsFile = (filename) =>
+              /^docs\//.test(filename) ||
+              /\.mdx?$/i.test(filename) ||
+              /(^|\/)(README|CHANGELOG|CONTRIBUTING|AGENTS|CLAUDE)\.md$/i.test(
+                filename,
+              );
+
+            const isTestLikeFile = (filename) =>
+              /(^|\/)(__tests__|fixtures?|snapshots?)(\/|$)/i.test(filename) ||
+              /(^|\/)test\/helpers\//i.test(filename) ||
+              /(^|\/)src\/test-utils\//i.test(filename) ||
+              /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(filename) ||
+              /\.(?:snap|snapshot)$/i.test(filename);
+
+            const isInfraLikeFile = (filename) =>
+              /^\.github\/(?:workflows|actions)\//.test(filename) ||
+              /^scripts\//.test(filename) ||
+              /^Dockerfile(?:\.|$)/.test(filename) ||
+              /^docker\//.test(filename) ||
+              /(^|\/)(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lockb?|actionlint\.yaml|dependabot\.yml)$/i.test(
+                filename,
+              ) ||
+              /\brelease\b/i.test(filename);
+
+            const surfacesForFile = (filename) => {
+              const surfaces = new Set();
+              if (/\.generated\/|generated|\.snap$/i.test(filename)) {
+                surfaces.add("generated");
+              }
+              if (filename.startsWith("ui/")) {
+                surfaces.add("ui");
+              } else if (filename.startsWith("src/gateway/")) {
+                surfaces.add("src/gateway");
+              } else if (filename.startsWith("src/plugins/")) {
+                surfaces.add("src/plugins");
+              } else if (filename.startsWith("extensions/")) {
+                surfaces.add("extensions");
+              } else if (filename.startsWith("apps/")) {
+                surfaces.add("apps");
+              } else if (filename.startsWith(".github/")) {
+                surfaces.add(".github");
+              } else if (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)) {
+                surfaces.add("docs");
+              } else if (filename.startsWith("scripts/")) {
+                surfaces.add("scripts");
+              } else {
+                surfaces.add("other");
+              }
+              return [...surfaces];
+            };
+
+            const listPullRequestFiles = async (pullRequest) =>
+              github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pullRequest.number,
+                per_page: 100,
+              });
+
+            const addMissingLabels = async (issueNumber, labels, labelSet) => {
+              const missingLabels = labels.filter((label) => !labelSet.has(label));
+              if (missingLabels.length === 0) {
+                return;
+              }
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: missingLabels,
+              });
+              for (const label of missingLabels) {
+                labelSet.add(label);
+              }
+              core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
+            };
+
+            const applyPullRequestCandidateLabels = async (pullRequest, labelSet) => {
+              const files = await listPullRequestFiles(pullRequest);
+              if (files.length === 0) {
+                return;
+              }
+
+              const filenames = files.map((file) => file.filename);
+              const body = pullRequest.body ?? "";
+              const text = `${pullRequest.title ?? ""}\n${body}`;
+              const lowerText = text.toLowerCase();
+              const linkedReference = hasLinkedReference(text);
+              const blankTemplate = hasMostlyBlankTemplate(body);
+              const concreteBehaviorContext = hasConcreteBehaviorContext(body, text);
+              const clearDesignContext = hasClearDesignContext(body, text);
+              const labelsToAdd = [];
+
+              if (blankTemplate) {
+                labelsToAdd.push(candidateLabels.blankTemplate);
+              }
+
+              const docsOnly = filenames.every(isMarkdownOrDocsFile);
+              const docsSignal =
+                /\b(add|adds|update|updates|fix|fixes|improve|cleanup|clean up|typo|readme|docs?|documentation|translation|translate)\b/i.test(
+                  text,
+                );
+              const discoverabilityDocs = filenames.some((filename) =>
+                /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md|docs\/start\/showcase\.md)$/i.test(
+                  filename,
+                ),
+              );
+              if (docsOnly && !linkedReference && (blankTemplate || docsSignal)) {
+                labelsToAdd.push(candidateLabels.lowSignalDocs);
+              }
+              if (
+                docsOnly &&
+                !linkedReference &&
+                (discoverabilityDocs ||
+                  /\b(community plugin|plugin listing|discoverability|showcase|clawhub)\b/i.test(
+                    text,
+                  ))
+              ) {
+                labelsToAdd.push(candidateLabels.docsDiscoverability);
+              }
+
+              const testOnly = filenames.every(isTestLikeFile);
+              const lowSignalTestTitle =
+                /\b(add|adds|added|improve|increase|boost|expand|fix|stabilize|update)\b.*\b(test|tests|coverage|flaky|flake|snapshot|fixtures?)\b/i.test(
+                  pullRequest.title ?? "",
+                ) ||
+                /\b(test|tests|coverage|flaky|flake)\b.*\b(add|increase|improve|fix|update|stabilize)\b/i.test(
+                  pullRequest.title ?? "",
+                );
+              if (
+                testOnly &&
+                !linkedReference &&
+                !concreteBehaviorContext &&
+                lowSignalTestTitle
+              ) {
+                labelsToAdd.push(candidateLabels.testOnlyNoBug);
+              }
+
+              if (
+                !linkedReference &&
+                !concreteBehaviorContext &&
+                /\b(refactor|cleanup|clean up|rename|formatting|style-only|style only)\b/i.test(
+                  text,
+                )
+              ) {
+                labelsToAdd.push(candidateLabels.refactorOnly);
+              }
+
+              if (
+                filenames.every(isInfraLikeFile) &&
+                !linkedReference &&
+                !clearDesignContext
+              ) {
+                labelsToAdd.push(candidateLabels.riskyInfra);
+              }
+
+              const addsPluginManifest = files.some(
+                (file) =>
+                  file.status === "added" &&
+                  /^extensions\/[^/]+\/openclaw\.plugin\.json$/i.test(
+                    file.filename,
+                  ),
+              );
+              if (
+                !clearDesignContext &&
+                (addsPluginManifest ||
+                  /\b(third[- ]party|external plugin|community plugin|clawhub)\b/i.test(
+                    lowerText,
+                  ))
+              ) {
+                labelsToAdd.push(candidateLabels.externalPluginCandidate);
+              }
+
+              const surfaces = new Set(filenames.flatMap(surfacesForFile));
+              if (surfaces.size >= 4 && !clearDesignContext) {
+                labelsToAdd.push(candidateLabels.dirtyCandidate);
+              }
+
+              await addMissingLabels(
+                pullRequest.number,
+                [...new Set(labelsToAdd)],
+                labelSet,
+              );
+            };
+
+            await syncManagedLabels();
 
             if (pullRequest) {
               if (labelSet.has(badBarnacleLabel)) {
@@ -412,23 +779,9 @@ jobs:
                 return;
               }
 
+              await applyPullRequestCandidateLabels(pullRequest, labelSet);
+
               if (labelSet.has(dirtyLabel)) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  body: noisyPrMessage,
-                });
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  state: "closed",
-                });
-                return;
-              }
-              const labelCount = labelSet.size;
-              if (labelCount > 20) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
