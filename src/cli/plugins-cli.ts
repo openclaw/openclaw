@@ -571,12 +571,12 @@ export function registerPluginsCli(program: Command) {
       } = await import("../plugins/installed-plugin-index-records.js");
       const { buildPluginDiagnosticsReport } = await import("../plugins/status.js");
       const {
+        applyPluginUninstallDirectoryRemoval,
         formatUninstallActionLabels,
         formatUninstallSlotResetPreview,
+        planPluginUninstall,
         resolveUninstallChannelConfigKeys,
-        resolveUninstallDirectoryTarget,
         UNINSTALL_ACTION_LABELS,
-        uninstallPlugin,
       } = await import("../plugins/uninstall.js");
       const { commitPluginInstallRecordsWithConfig } =
         await import("./plugins-install-record-commit.js");
