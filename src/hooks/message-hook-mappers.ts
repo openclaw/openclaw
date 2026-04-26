@@ -78,7 +78,6 @@ export type CanonicalSentMessageHookContext = {
   callDepth?: number;
   isGroup?: boolean;
   groupId?: string;
-  sessionKey?: string;
 };
 
 export function deriveInboundMessageHookContext(
@@ -157,8 +156,7 @@ export function deriveInboundMessageHookContext(
     channelName: ctx.GroupChannel,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
-sessionKey: ctx.SessionKey,
-topicName: ctx.TopicName,
+    topicName: ctx.TopicName,
   };
 }
 
@@ -177,7 +175,6 @@ export function buildCanonicalSentMessageHookContext(params: {
   callDepth?: number;
   isGroup?: boolean;
   groupId?: string;
-  sessionKey?: string;
 }): CanonicalSentMessageHookContext {
   return {
     to: params.to,
@@ -194,7 +191,6 @@ export function buildCanonicalSentMessageHookContext(params: {
     callDepth: params.callDepth,
     isGroup: params.isGroup,
     groupId: params.groupId,
-    sessionKey: params.sessionKey,
   };
 }
 
@@ -299,7 +295,6 @@ export function toPluginInboundClaimContext(
     accountId: canonical.accountId,
     sessionKey: canonical.sessionKey,
     conversationId: conversation.conversationId,
-    sessionKey: canonical.sessionKey,
     parentConversationId: conversation.parentConversationId,
     senderId: canonical.senderId,
     messageId: canonical.messageId,
