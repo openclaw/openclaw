@@ -85,6 +85,27 @@ export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
   return feishuLifecycleTestMocks;
 }
 
+export function resetFeishuLifecycleTestMocks(): void {
+  for (const mock of Object.values(feishuLifecycleTestMocks)) {
+    mock.mockReset();
+  }
+  feishuLifecycleTestMocks.monitorWebSocketMock.mockResolvedValue(undefined);
+  feishuLifecycleTestMocks.monitorWebhookMock.mockResolvedValue(undefined);
+  feishuLifecycleTestMocks.createFeishuThreadBindingManagerMock.mockReturnValue({ stop: vi.fn() });
+  feishuLifecycleTestMocks.resolveBoundConversationMock.mockReturnValue(null);
+  feishuLifecycleTestMocks.finalizeInboundContextMock.mockImplementation((ctx) => ctx);
+  feishuLifecycleTestMocks.getMessageFeishuMock.mockResolvedValue(null);
+  feishuLifecycleTestMocks.listFeishuThreadMessagesMock.mockResolvedValue([]);
+  feishuLifecycleTestMocks.sendMessageFeishuMock.mockResolvedValue({
+    messageId: "om_sent",
+    chatId: "chat_default",
+  });
+  feishuLifecycleTestMocks.sendCardFeishuMock.mockResolvedValue({
+    messageId: "om_card",
+    chatId: "chat_default",
+  });
+}
+
 const {
   createEventDispatcherMock,
   monitorWebSocketMock,

@@ -7,8 +7,6 @@ read_when:
 title: "Mistral"
 ---
 
-# Mistral
-
 OpenClaw supports Mistral for both text/image model routing (`mistral/...`) and
 audio transcription via Voxtral in media understanding.
 Mistral can also be used for memory embeddings (`memorySearch.provider = "mistral"`).
@@ -172,7 +170,7 @@ matching `sampleRate` only if your upstream stream is already raw PCM.
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Media understanding" href="/tools/media-understanding" icon="microphone">
+  <Card title="Media understanding" href="/nodes/media-understanding" icon="microphone">
     Audio transcription setup and provider selection.
   </Card>
 </CardGroup>

@@ -5,18 +5,19 @@ export {
 } from "./openai-strict-tool-setting.js";
 
 type ToolWithParameters = {
+  name?: unknown;
   parameters: unknown;
 };
 
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
+  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}), 0);
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
+function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
       changed ||= next !== entry;
       return next;
     });
@@ -30,7 +31,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(value);
+    const next = normalizeStrictOpenAIJsonSchemaRecursive(
+      value,
+      key === "properties" ? depth : depth + 1,
+    );
     normalized[key] = next;
     changed ||= next !== value;
   }
@@ -44,6 +48,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
         : undefined;
     if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
       normalized.required = [];
+      changed = true;
+    }
+    if (depth === 0 && !("additionalProperties" in normalized)) {
+      normalized.additionalProperties = false;
       changed = true;
     }
   }
@@ -60,6 +68,33 @@ export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolea
 
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+}
+
+export type OpenAIStrictToolSchemaDiagnostic = {
+  toolIndex: number;
+  toolName?: string;
+  violations: string[];
+};
+
+export function findOpenAIStrictToolSchemaDiagnostics(
+  tools: readonly ToolWithParameters[],
+): OpenAIStrictToolSchemaDiagnostic[] {
+  return tools.flatMap((tool, toolIndex) => {
+    const violations = findStrictOpenAIJsonSchemaViolations(
+      normalizeStrictOpenAIJsonSchema(tool.parameters),
+      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
+    );
+    if (violations.length === 0) {
+      return [];
+    }
+    return [
+      {
+        toolIndex,
+        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
+        violations,
+      },
+    ];
+  });
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -107,6 +142,72 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
     }
     return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
   });
+}
+
+function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      findStrictOpenAIJsonSchemaViolations(entry, `${path}[${index}]`),
+    );
+  }
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    if (key in record) {
+      violations.push(`${path}.${key}`);
+    }
+  }
+  if (Array.isArray(record.type)) {
+    violations.push(`${path}.type`);
+  }
+  if (record.type === "object") {
+    if (record.additionalProperties !== false) {
+      violations.push(`${path}.additionalProperties`);
+    }
+    const properties =
+      record.properties &&
+      typeof record.properties === "object" &&
+      !Array.isArray(record.properties)
+        ? (record.properties as Record<string, unknown>)
+        : {};
+    const required = Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    if (!required) {
+      violations.push(`${path}.required`);
+    } else {
+      const requiredSet = new Set(required);
+      for (const key of Object.keys(properties)) {
+        if (!requiredSet.has(key)) {
+          violations.push(`${path}.required.${key}`);
+        }
+      }
+    }
+  }
+
+  if (
+    record.properties &&
+    typeof record.properties === "object" &&
+    !Array.isArray(record.properties)
+  ) {
+    for (const [key, value] of Object.entries(record.properties)) {
+      violations.push(...findStrictOpenAIJsonSchemaViolations(value, `${path}.properties.${key}`));
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "properties") {
+      continue;
+    }
+    if (value && typeof value === "object") {
+      violations.push(...findStrictOpenAIJsonSchemaViolations(value, `${path}.${key}`));
+    }
+  }
+
+  return violations;
 }
 
 export function resolveOpenAIStrictToolFlagForInventory(

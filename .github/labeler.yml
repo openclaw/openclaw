@@ -24,6 +24,16 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: google-meet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-meet/**"
+          - "docs/plugins/google-meet.md"
+"plugin: bonjour":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bonjour/**"
+          - "docs/gateway/bonjour.md"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
@@ -297,6 +307,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: inworld":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/inworld/**"
+          - "docs/providers/inworld.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -305,6 +320,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lmstudio/**"
+"extensions: litellm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/litellm/**"
+          - "docs/providers/litellm.md"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
@@ -341,6 +361,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: senseaudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/senseaudio/**"
+          - "docs/providers/senseaudio.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
@@ -357,6 +382,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/together/**"
+"extensions: tts-local-cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tts-local-cli/**"
+          - "docs/tools/tts.md"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:
@@ -377,3 +407,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: gradium":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gradium/**"
