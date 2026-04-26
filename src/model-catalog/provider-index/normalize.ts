@@ -51,13 +51,10 @@ function normalizePreviewCatalog(params: {
   if (!provider) {
     return undefined;
   }
-  return {
-    ...provider,
-    models: provider.models.map((model) => ({
-      ...model,
-      status: model.status ?? "preview",
-    })),
-  };
+  for (const model of provider.models) {
+    model.status ??= "preview";
+  }
+  return provider;
 }
 
 function normalizeProvider(
