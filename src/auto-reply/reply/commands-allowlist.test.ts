@@ -553,7 +553,7 @@ describe("handleAllowlistCommand", () => {
     const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("channels.telegram.configWrites=true");
+    expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
