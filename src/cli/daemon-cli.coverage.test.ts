@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
@@ -139,17 +142,19 @@ function parseFirstJsonRuntimeLine<T>() {
 
 describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tmpDir: string;
 
   beforeEach(() => {
     daemonProgram = createDaemonProgram();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-cli-"));
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_PROFILE",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tmpDir, "openclaw.json");
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
@@ -160,6 +165,7 @@ describe("daemon-cli coverage", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("probes gateway status by default", async () => {

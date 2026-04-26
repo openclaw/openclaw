@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/CLI: let flag-driven `openclaw channels add` install the selected channel plugin from its default source without opening an interactive prompt, fixing published npm Telegram setup in stdin-closed automation. Thanks @codex.
 - Onboarding/setup: keep first-run config reads, plugin compatibility notices, and post-model sanity checks on cold metadata paths unless the user chooses to browse all models, avoiding full plugin/runtime catalog work between prompts. Thanks @shakkernerd.
 - Onboarding/auth: run manifest-owned provider auth choices through scoped setup providers so selecting OpenAI Codex browser/device auth no longer loads every provider runtime before OAuth starts. Thanks @shakkernerd.
 - Onboarding/auth: keep the post-auth default-model policy lookup on manifest/setup metadata so the next prompt appears without loading broad provider runtime. Thanks @shakkernerd.
