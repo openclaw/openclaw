@@ -190,6 +190,16 @@ function resolveFlowBlockedSummary(
   );
 }
 
+function resolveTaskFlowTerminalTimestamps(params: {
+  createdAt: number;
+  updatedAt?: number;
+  endedAt?: number;
+}) {
+  const updatedAt = params.updatedAt ?? params.endedAt ?? params.createdAt;
+  const endedAt = Math.max(params.endedAt ?? updatedAt, updatedAt);
+  return { updatedAt, endedAt };
+}
+
 export function deriveTaskFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): TaskFlowStatus {
@@ -389,9 +399,13 @@ export function createTaskFlowForTask(params: {
     terminalFlowStatus === "failed" ||
     terminalFlowStatus === "cancelled" ||
     terminalFlowStatus === "lost";
-  const endedAt = isTerminal
-    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
-    : undefined;
+  const terminalTimestamps = isTerminal
+    ? resolveTaskFlowTerminalTimestamps({
+        createdAt: params.task.createdAt,
+        updatedAt: params.task.lastEventAt,
+        endedAt: params.task.endedAt,
+      })
+    : null;
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
@@ -404,8 +418,8 @@ export function createTaskFlowForTask(params: {
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
-    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
-    ...(endedAt !== undefined ? { endedAt } : {}),
+    updatedAt: terminalTimestamps?.updatedAt ?? params.task.lastEventAt ?? params.task.createdAt,
+    ...(terminalTimestamps ? { endedAt: terminalTimestamps.endedAt } : {}),
   });
 }
 
@@ -603,6 +617,14 @@ export function syncFlowFromTask(
     terminalFlowStatus === "failed" ||
     terminalFlowStatus === "cancelled" ||
     terminalFlowStatus === "lost";
+  const now = Date.now();
+  const terminalTimestamps = isTerminal
+    ? resolveTaskFlowTerminalTimestamps({
+        createdAt: flow.createdAt,
+        updatedAt: task.lastEventAt ?? now,
+        endedAt: task.endedAt,
+      })
+    : null;
   return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
@@ -611,12 +633,8 @@ export function syncFlowFromTask(
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     waitJson: null,
-    updatedAt: task.lastEventAt ?? Date.now(),
-    ...(isTerminal
-      ? {
-          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
-        }
-      : { endedAt: null }),
+    updatedAt: terminalTimestamps?.updatedAt ?? task.lastEventAt ?? now,
+    ...(terminalTimestamps ? { endedAt: terminalTimestamps.endedAt } : { endedAt: null }),
   });
 }
 

@@ -334,6 +334,43 @@ describe("task-flow-registry", () => {
     });
   });
 
+  it("keeps mirrored terminal flow timestamps monotonic when the terminal event lands after endedAt", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const mirrored = createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-running",
+          notifyPolicy: "done_only",
+          status: "running",
+          task: "Fix permissions",
+          createdAt: 100,
+          lastEventAt: 100,
+        },
+      });
+
+      const terminal = syncFlowFromTask({
+        taskId: "task-done",
+        parentFlowId: mirrored.flowId,
+        status: "succeeded",
+        terminalOutcome: "succeeded",
+        notifyPolicy: "done_only",
+        task: "Fix permissions",
+        lastEventAt: 205,
+        endedAt: 200,
+      });
+
+      expect(terminal).toMatchObject({
+        flowId: mirrored.flowId,
+        status: "succeeded",
+        updatedAt: 205,
+        endedAt: 205,
+      });
+    });
+  });
+
   it("preserves explicit json null in state and wait payloads", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
