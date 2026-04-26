@@ -1,16 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
-import type { ClaudeCliCredential } from "./cli-credentials.js";
 
-const { readClaudeCliCredentialsCachedMock, readCodexCliCredentialsCachedMock } = vi.hoisted(
-  () => ({
-    readClaudeCliCredentialsCachedMock: vi.fn<() => ClaudeCliCredential | null>(() => null),
-    readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
-  }),
-);
+const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
+}));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: readClaudeCliCredentialsCachedMock,
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -63,8 +59,6 @@ describe("buildAuthHealthSummary", () => {
   });
 
   beforeEach(() => {
-    readClaudeCliCredentialsCachedMock.mockReset();
-    readClaudeCliCredentialsCachedMock.mockReturnValue(null);
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
   });
@@ -144,15 +138,8 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
-  it("uses fresh Claude CLI OAuth credentials for claude-cli profile health", () => {
+  it("uses runtime provider credentials for profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
-    readClaudeCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-    });
     const store = {
       version: 1,
       profiles: {
@@ -169,6 +156,17 @@ describe("buildAuthHealthSummary", () => {
     const summary = buildAuthHealthSummary({
       store,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      runtimeCredentialsByProvider: new Map([
+        [
+          "claude-cli",
+          {
+            type: "token",
+            provider: "claude-cli",
+            token: "fresh-cli-access",
+            expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+          },
+        ],
+      ]),
     });
 
     const profile = summary.profiles.find((entry) => entry.profileId === "anthropic:claude-cli");
