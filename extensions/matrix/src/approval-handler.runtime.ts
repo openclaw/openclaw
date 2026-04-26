@@ -26,9 +26,15 @@ import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
+import {
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendSingleTextMessageMatrix,
+} from "./matrix/send.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
+
+const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval" as const;
 
 type PendingMessage = {
   roomId: string;
@@ -44,6 +50,7 @@ type PendingApprovalContent = {
   approvalId: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  extraContent: Record<string, unknown>;
 };
 type ReactionTargetRef = {
   roomId: string;
@@ -144,6 +151,56 @@ async function prepareTarget(
   };
 }
 
+function removeUndefinedValues(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+function buildMatrixApprovalMetadata(params: {
+  view: PendingApprovalView;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): Record<string, unknown> {
+  const base = removeUndefinedValues({
+    version: 1,
+    id: params.view.approvalId,
+    kind: params.view.approvalKind,
+    phase: params.view.phase,
+    title: params.view.title,
+    description: params.view.description ?? undefined,
+    expiresAtMs: params.view.expiresAtMs,
+    metadata: params.view.metadata,
+    allowedDecisions: Array.from(params.allowedDecisions),
+    actions: params.view.actions.map((action) => ({
+      decision: action.decision,
+      label: action.label,
+      style: action.style,
+      command: action.command,
+    })),
+  });
+
+  if (params.view.approvalKind === "plugin") {
+    return removeUndefinedValues({
+      ...base,
+      agentId: params.view.agentId ?? undefined,
+      pluginId: params.view.pluginId ?? undefined,
+      toolName: params.view.toolName ?? undefined,
+      severity: params.view.severity,
+    });
+  }
+
+  return removeUndefinedValues({
+    ...base,
+    ask: params.view.ask ?? undefined,
+    agentId: params.view.agentId ?? undefined,
+    commandText: params.view.commandText,
+    commandPreview: params.view.commandPreview ?? undefined,
+    cwd: params.view.cwd ?? undefined,
+    envKeys: params.view.envKeys,
+    host: params.view.host ?? undefined,
+    nodeId: params.view.nodeId ?? undefined,
+    sessionKey: params.view.sessionKey ?? undefined,
+  });
+}
+
 function buildPendingApprovalContent(params: {
   view: PendingApprovalView;
   nowMs: number;
@@ -189,6 +246,12 @@ function buildPendingApprovalContent(params: {
     approvalId: params.view.approvalId,
     text: hint ? (text ? `${hint}\n\n${text}` : hint) : text,
     allowedDecisions,
+    extraContent: {
+      [MATRIX_APPROVAL_METADATA_KEY]: buildMatrixApprovalMetadata({
+        view: params.view,
+        allowedDecisions,
+      }),
+    },
   };
 }
 
@@ -292,14 +355,22 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!resolved) {
         return null;
       }
-      const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+      const sendMessage = resolved.context.deps?.sendMessage;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
-      const result = await sendMessage(preparedTarget.to, pendingPayload.text, {
-        cfg: cfg as CoreConfig,
-        accountId: resolved.accountId,
-        client: resolved.context.client,
-        threadId: preparedTarget.threadId,
-      });
+      const result = sendMessage
+        ? await sendMessage(preparedTarget.to, pendingPayload.text, {
+            cfg: cfg as CoreConfig,
+            accountId: resolved.accountId,
+            client: resolved.context.client,
+            threadId: preparedTarget.threadId,
+          })
+        : await sendSingleTextMessageMatrix(preparedTarget.to, pendingPayload.text, {
+            cfg: cfg as CoreConfig,
+            accountId: resolved.accountId,
+            client: resolved.context.client,
+            threadId: preparedTarget.threadId,
+            extraContent: pendingPayload.extraContent,
+          });
       const messageIds = Array.from(
         new Set(
           (result.messageIds ?? [result.messageId])
