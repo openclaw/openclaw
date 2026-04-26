@@ -306,6 +306,7 @@ export function createFollowupRunner(params: {
                 provider,
                 cfg: runtimeConfig,
                 agentId: run.agentId,
+                runtimeOverride: activeSessionEntry?.agentRuntimeOverride?.trim() || undefined,
               }) ?? provider;
             const authProfile = resolveRunAuthProfile(run, cliExecutionProvider, {
               config: runtimeConfig,

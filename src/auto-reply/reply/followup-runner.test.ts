@@ -1181,6 +1181,58 @@ describe("createFollowupRunner CLI backend dispatch", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
+  it("honors the session runtime override for canonical queued followups", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli reply" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        agentRuntimeOverride: "claude-cli",
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-sonnet-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: {
+            agents: {
+              defaults: {
+                cliBackends: {
+                  "claude-cli": { command: "claude" },
+                },
+              },
+            },
+          },
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      }),
+    );
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("reuses the latest CLI session binding from the active session entry", async () => {
     const onBlockReply = vi.fn(async () => {});
     const staleSessionEntry: SessionEntry = {

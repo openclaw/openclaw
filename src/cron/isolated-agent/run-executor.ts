@@ -137,6 +137,8 @@ export function createCronPromptExecutor(params: {
             provider: providerOverride,
             cfg: params.cfgWithAgentDefaults,
             agentId: params.agentId,
+            runtimeOverride:
+              params.cronSession.sessionEntry.agentRuntimeOverride?.trim() || undefined,
           }) ?? providerOverride;
         if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
@@ -165,7 +167,7 @@ export function createCronPromptExecutor(params: {
             onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
-            senderIsOwner: true,
+            senderIsOwner: false,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

@@ -517,6 +517,56 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
         authProfileId: "anthropic:work",
+        senderIsOwner: false,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("honors the cron session runtime override for canonical providers", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const executor = createMessageToolExecutor({
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as never,
+      liveSelection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      cronSession: makeCronSession({
+        sessionEntry: {
+          sessionId: "test-session-id",
+          updatedAt: 0,
+          agentRuntimeOverride: "claude-cli",
+        },
+      }) as MutableCronSession,
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(resolveCliRuntimeExecutionProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        runtimeOverride: "claude-cli",
+      }),
+    );
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        senderIsOwner: false,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
