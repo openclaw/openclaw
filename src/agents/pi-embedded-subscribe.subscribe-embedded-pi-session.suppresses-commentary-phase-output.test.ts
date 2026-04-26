@@ -117,6 +117,10 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
       const text = "I'll check this now.";
 
+      const commentaryContent = commentaryMessage.content as unknown as Array<
+        Record<string, unknown>
+      >;
+
       emit({ type: "message_start", message: commentaryMessage });
       emit({
         type: "message_update",
@@ -128,7 +132,7 @@ describe("subscribeEmbeddedPiSession", () => {
           partial: commentaryMessage,
         },
       });
-      (commentaryMessage.content as Array<Record<string, unknown>>)[0] = {
+      commentaryContent[0] = {
         type: "text",
         text,
         textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
@@ -144,7 +148,7 @@ describe("subscribeEmbeddedPiSession", () => {
         },
       });
       emit({ type: "tool_execution_start", toolName: "read", toolCallId: "call-1", args: {} });
-      (commentaryMessage.content as Array<Record<string, unknown>>).push({
+      commentaryContent.push({
         type: "toolCall",
         id: "call-1",
         name: "read",
