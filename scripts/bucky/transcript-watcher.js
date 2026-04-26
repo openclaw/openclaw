@@ -27,7 +27,7 @@ function parseTranscript(filePath, fromLine = 0) {
     filesModified: [],
     lastBashCommand: null,
     recentError: null,
-    lastActivityMs: Date.now(),
+    lastActivityMs: null,
     lineCount: lines.length,
   };
 
@@ -39,6 +39,7 @@ function parseTranscript(filePath, fromLine = 0) {
       continue;
     }
 
+    state.lastActivityMs = Date.now();
     const msg = entry.message || {};
     const content = Array.isArray(msg.content) ? msg.content : [];
 
@@ -52,7 +53,7 @@ function parseTranscript(filePath, fromLine = 0) {
         }
         if (block.type === "tool_result") {
           const output =
-            typeof block.content === "string" ? block.content : JSON.stringify(block.content || "");
+            typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "");
           if (isError(output)) {
             state.recentError = output.slice(0, 300);
           } else {
@@ -133,8 +134,9 @@ function shortPath(p) {
 
 /**
  * Derive project cwd from Claude Code session directory name.
- * Simple mechanical fallback — works for paths without hyphens in directory names.
- * Prefer extractCwdFromTranscript() when a JSONL file is available.
+ * WARNING: produces wrong results for paths whose directory names contain hyphens
+ * (e.g. "Personal-openclaw" → "Personal/openclaw"). Always prefer
+ * extractCwdFromTranscript() when a JSONL file is available.
  */
 function cwdFromProjectDir(dirName) {
   if (!dirName) {
