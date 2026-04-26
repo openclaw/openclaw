@@ -1414,6 +1414,19 @@ describe("gateway server sessions", () => {
     const { dir, storePath } = await createSessionStoreDir();
     const fixture = await createCheckpointFixture(dir);
     const { SessionManager } = await getSessionManagerModule();
+    const boundaryMetadata = {
+      version: 1,
+      type: "compact.boundary",
+      boundaryId: "compact-boundary:test-1",
+      createdAt: Date.now(),
+      state: {
+        sessionBinding: { sessionKey: "agent:main:main", sessionId: fixture.sessionId },
+        approval: { captured: false, reason: "captured elsewhere" },
+        outbound: { channel: "discord", targetId: "user-1" },
+        children: { pendingDescendantState: "live-query-required" },
+        policy: { provider: "openai", model: "gpt-test", thinkingLevel: "high" },
+      },
+    } as const;
     await writeSessionStore({
       entries: {
         main: {
@@ -1423,6 +1436,7 @@ describe("gateway server sessions", () => {
           compactionCheckpoints: [
             {
               checkpointId: "checkpoint-1",
+              boundaryId: boundaryMetadata.boundaryId,
               sessionKey: "agent:main:main",
               sessionId: fixture.sessionId,
               createdAt: Date.now(),
@@ -1442,6 +1456,7 @@ describe("gateway server sessions", () => {
                 leafId: fixture.postCompactionLeafId,
                 entryId: fixture.postCompactionLeafId,
               },
+              boundaryMetadata,
             },
           ],
         },
@@ -1502,7 +1517,12 @@ describe("gateway server sessions", () => {
       ok: true;
       sourceKey: string;
       key: string;
-      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        parentSessionKey?: string;
+        continuityRestore?: { usedBoundary?: { checkpointId?: string; boundaryId?: string } };
+      };
     }>(ws, "sessions.compaction.branch", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -1510,6 +1530,10 @@ describe("gateway server sessions", () => {
     expect(branched.ok).toBe(true);
     expect(branched.payload?.sourceKey).toBe("agent:main:main");
     expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    expect(branched.payload?.entry.continuityRestore?.usedBoundary).toMatchObject({
+      checkpointId: "checkpoint-1",
+      boundaryId: boundaryMetadata.boundaryId,
+    });
     const branchedSessionFile = branched.payload?.entry.sessionFile;
     expect(branchedSessionFile).toBeTruthy();
     const branchedSession = SessionManager.open(branchedSessionFile!, dir);
@@ -1523,17 +1547,27 @@ describe("gateway server sessions", () => {
         parentSessionKey?: string;
         compactionCheckpoints?: unknown[];
         sessionId?: string;
+        continuityRestore?: { usedBoundary?: { checkpointId?: string; boundaryId?: string } };
       }
     >;
     const branchedEntry = storeAfterBranch[branched.payload!.key];
     expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
     expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
+    expect(branchedEntry?.continuityRestore?.usedBoundary).toMatchObject({
+      checkpointId: "checkpoint-1",
+      boundaryId: boundaryMetadata.boundaryId,
+    });
 
     const restored = await rpcReq<{
       ok: true;
       key: string;
       sessionId: string;
-      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        compactionCheckpoints?: unknown[];
+        continuityRestore?: { usedBoundary?: { checkpointId?: string; boundaryId?: string } };
+      };
     }>(ws, "sessions.compaction.restore", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -1542,6 +1576,10 @@ describe("gateway server sessions", () => {
     expect(restored.payload?.key).toBe("agent:main:main");
     expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
     expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+    expect(restored.payload?.entry.continuityRestore?.usedBoundary).toMatchObject({
+      checkpointId: "checkpoint-1",
+      boundaryId: boundaryMetadata.boundaryId,
+    });
     const restoredSessionFile = restored.payload?.entry.sessionFile;
     expect(restoredSessionFile).toBeTruthy();
     const restoredSession = SessionManager.open(restoredSessionFile!, dir);
@@ -1551,10 +1589,18 @@ describe("gateway server sessions", () => {
 
     const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
-      { compactionCheckpoints?: unknown[]; sessionId?: string }
+      {
+        compactionCheckpoints?: unknown[];
+        sessionId?: string;
+        continuityRestore?: { usedBoundary?: { checkpointId?: string; boundaryId?: string } };
+      }
     >;
     expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
     expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
+    expect(storeAfterRestore["agent:main:main"]?.continuityRestore?.usedBoundary).toMatchObject({
+      checkpointId: "checkpoint-1",
+      boundaryId: boundaryMetadata.boundaryId,
+    });
 
     ws.close();
   });

@@ -17,6 +17,8 @@ import {
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  type SessionCompactionCheckpoint,
+  type SessionContinuityRestoreBoundaryMarker,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -27,6 +29,7 @@ import {
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { emitContinuityDiagnostic } from "../../infra/continuity-diagnostics.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -249,6 +252,62 @@ function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function buildContinuityRestoreBoundaryMarker(params: {
+  checkpoint: SessionCompactionCheckpoint;
+  restoredAt: number;
+}): SessionContinuityRestoreBoundaryMarker | undefined {
+  const boundaryMetadata = params.checkpoint.boundaryMetadata;
+  if (!isPlainObject(boundaryMetadata)) {
+    return undefined;
+  }
+  const boundaryId =
+    typeof boundaryMetadata.boundaryId === "string" && boundaryMetadata.boundaryId.trim()
+      ? boundaryMetadata.boundaryId.trim()
+      : typeof params.checkpoint.boundaryId === "string" && params.checkpoint.boundaryId.trim()
+        ? params.checkpoint.boundaryId.trim()
+        : undefined;
+  return {
+    type: "continuity.restore.used_boundary",
+    checkpointId: params.checkpoint.checkpointId,
+    ...(boundaryId ? { boundaryId } : {}),
+    restoredAt: params.restoredAt,
+    boundaryMetadata,
+  };
+}
+
+function emitRestoreUsedBoundaryDiagnostic(params: {
+  marker?: SessionContinuityRestoreBoundaryMarker;
+  sessionKey: string;
+  sessionId: string;
+  phase: "checkpoint_branch" | "checkpoint_restore";
+}): void {
+  const marker = params.marker;
+  if (!marker) {
+    return;
+  }
+  emitContinuityDiagnostic({
+    type: "continuity.restore.used_boundary",
+    severity: "info",
+    runId: marker.boundaryId ?? marker.checkpointId,
+    sessionKey: params.sessionKey,
+    phase: params.phase,
+    correlation: {
+      checkpointId: marker.checkpointId,
+      boundaryId: marker.boundaryId,
+    },
+    details: {
+      sessionId: params.sessionId,
+      stateKeys: isPlainObject(marker.boundaryMetadata.state)
+        ? Object.keys(marker.boundaryMetadata.state)
+        : undefined,
+    },
+  });
+}
+
 function cloneCheckpointSessionEntry(params: {
   currentEntry: SessionEntry;
   nextSessionId: string;
@@ -257,12 +316,20 @@ function cloneCheckpointSessionEntry(params: {
   parentSessionKey?: string;
   totalTokens?: number;
   preserveCompactionCheckpoints?: boolean;
+  checkpoint?: SessionCompactionCheckpoint;
 }): SessionEntry {
+  const restoredAt = Date.now();
+  const restoreBoundaryMarker = params.checkpoint
+    ? buildContinuityRestoreBoundaryMarker({
+        checkpoint: params.checkpoint,
+        restoredAt,
+      })
+    : undefined;
   return {
     ...params.currentEntry,
     sessionId: params.nextSessionId,
     sessionFile: params.nextSessionFile,
-    updatedAt: Date.now(),
+    updatedAt: restoredAt,
     systemSent: false,
     abortedLastRun: false,
     startedAt: undefined,
@@ -287,6 +354,7 @@ function cloneCheckpointSessionEntry(params: {
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
+    ...(restoreBoundaryMarker ? { continuityRestore: { usedBoundary: restoreBoundaryMarker } } : {}),
   };
 }
 
@@ -1051,10 +1119,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       label,
       parentSessionKey: canonicalKey,
       totalTokens: checkpoint.tokensBefore,
+      checkpoint,
     });
 
     await updateSessionStore(target.storePath, (store) => {
       store[nextKey] = nextEntry;
+    });
+    emitRestoreUsedBoundaryDiagnostic({
+      marker: nextEntry.continuityRestore?.usedBoundary,
+      sessionKey: nextKey,
+      sessionId: nextEntry.sessionId,
+      phase: "checkpoint_branch",
     });
 
     respond(
@@ -1176,10 +1251,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       nextSessionFile: restoredSessionFile,
       totalTokens: checkpoint.tokensBefore,
       preserveCompactionCheckpoints: true,
+      checkpoint,
     });
 
     await updateSessionStore(storePath, (store) => {
       store[canonicalKey] = nextEntry;
+    });
+    emitRestoreUsedBoundaryDiagnostic({
+      marker: nextEntry.continuityRestore?.usedBoundary,
+      sessionKey: canonicalKey,
+      sessionId: nextEntry.sessionId,
+      phase: "checkpoint_restore",
     });
 
     respond(

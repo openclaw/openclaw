@@ -150,6 +150,18 @@ export type SessionCompactionCheckpoint = {
   boundaryMetadata?: SessionCompactionBoundaryMetadata;
 };
 
+export type SessionContinuityRestoreBoundaryMarker = {
+  type: "continuity.restore.used_boundary";
+  checkpointId: string;
+  boundaryId?: string;
+  restoredAt: number;
+  boundaryMetadata: SessionCompactionBoundaryMetadata;
+};
+
+export type SessionContinuityRestoreState = {
+  usedBoundary?: SessionContinuityRestoreBoundaryMarker;
+};
+
 export type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
@@ -292,6 +304,7 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
+  continuityRestore?: SessionContinuityRestoreState;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
