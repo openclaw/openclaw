@@ -199,4 +199,28 @@ describe("createOpenClawTools cron context wiring", () => {
       },
     });
   });
+
+  it("uses agent route context when auto-threading context is unavailable", async () => {
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+
+    createOpenClawTools({
+      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      agentChannel: "matrix",
+      agentAccountId: "bot-a",
+      agentTo: "room:!FallbackRoom:Example.Org",
+      agentThreadId: "$FallbackThread:Example.Org",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      currentDeliveryContext: {
+        channel: "matrix",
+        to: "room:!FallbackRoom:Example.Org",
+        accountId: "bot-a",
+        threadId: "$FallbackThread:Example.Org",
+      },
+    });
+  });
 });

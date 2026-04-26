@@ -15,6 +15,14 @@ vi.mock("../agent-scope.js", async () => {
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  type TestDelivery = {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+
   function createTestCronTool(
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
@@ -64,7 +72,7 @@ describe("cron tool", () => {
     currentDeliveryContext?: NonNullable<
       Parameters<typeof createCronTool>[0]
     >["currentDeliveryContext"];
-    delivery?: { mode?: string; channel?: string; to?: string } | null;
+    delivery?: TestDelivery | null;
   }) {
     const tool = createTestCronTool({
       agentSessionKey: params.agentSessionKey,
@@ -79,7 +87,7 @@ describe("cron tool", () => {
     });
 
     const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+      params?: { delivery?: TestDelivery };
     };
     return call?.params?.delivery;
   }
@@ -461,6 +469,53 @@ describe("cron tool", () => {
       mode: "announce",
       channel: "telegram",
       to: "-100123",
+    });
+  });
+
+  it("keeps explicit delivery account and thread while filling target from context", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-explicit-delivery-fields-win",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "!AbCdEf1234567890:example.org",
+          accountId: "context-bot",
+          threadId: "$ContextThread:Example.Org",
+        },
+        delivery: {
+          mode: "announce",
+          accountId: "explicit-bot",
+          threadId: "$ExplicitThread:Example.Org",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:example.org",
+      accountId: "explicit-bot",
+      threadId: "$ExplicitThread:Example.Org",
+    });
+  });
+
+  it("trims current context fields without changing provider target casing", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-trim-current-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: " Matrix ",
+          to: "  !AbCdEf1234567890:Example.Org  ",
+          accountId: " Bot-A ",
+          threadId: "  $RootEvent:Example.Org  ",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:Example.Org",
+      accountId: "bot-a",
+      threadId: "$RootEvent:Example.Org",
     });
   });
 

@@ -644,8 +644,8 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
-                  ...delivery,
                   ...inferred,
+                  ...delivery,
                 } satisfies CronDelivery;
               }
             }

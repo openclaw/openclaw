@@ -140,13 +140,18 @@ forever.
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
 For isolated jobs, chat delivery is shared. If a chat route is available, the
 agent can use the `message` tool even when the job uses `--no-deliver`. If the
 agent sends to the configured/current target, OpenClaw skips the fallback
 announce. Otherwise `announce`, `webhook`, and `none` only control what the
 runner does with the final reply after the agent turn.
+
+When an agent creates an isolated reminder from an active chat, OpenClaw stores
+the preserved live delivery target for the fallback announce route. Internal
+session keys may be lowercase; provider delivery targets are not reconstructed
+from those keys when current chat context is available.
 
 Failure notifications follow a separate destination path:
 
@@ -418,6 +423,9 @@ openclaw doctor
 - Delivery mode `none` means no runner fallback send is expected. The agent can
   still send directly with the `message` tool when a chat route is available.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
+- For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can
+  fail because Matrix room IDs are case-sensitive. Edit the job to the exact
+  `!room:server` or `room:!room:server` value from Matrix.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
   OpenClaw suppresses direct outbound delivery and also suppresses the fallback
