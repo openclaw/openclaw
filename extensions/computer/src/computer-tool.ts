@@ -200,6 +200,9 @@ export async function executeComputerTool(
           error: `page action=${action} requires pid and window_id.`,
         });
       }
+      if (action === "execute_javascript" && !params.javascript) {
+        return jsonResult({ ok: false, error: "execute_javascript requires javascript." });
+      }
       const args: Record<string, unknown> = {
         pid: params.pid,
         window_id: params.window_id,

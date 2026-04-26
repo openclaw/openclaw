@@ -21,6 +21,10 @@ export const ComputerToolSchema = Type.Object({
       "key — press a single key.",
       "hotkey — press a key combination, e.g. cmd+s.",
       "set_value — set a value on a select/popup or slider element.",
+      "execute_javascript — run JS in the active browser tab (Chrome, Safari, Electron) and return the result.",
+      "get_text — get the full text content of the active browser page.",
+      "query_dom — query DOM elements by CSS selector and return their attributes.",
+      "enable_javascript_apple_events — one-time opt-in to allow JS execution via Apple Events; ask the user before calling.",
     ].join(" "),
   }),
 

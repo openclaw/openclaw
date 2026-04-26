@@ -28,8 +28,14 @@ export class CuaDriverClient {
 
   async callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     await this.ensureConnected();
-    const result = await this.client!.callTool({ name, arguments: args });
-    return result as CallToolResult;
+    try {
+      const result = await this.client!.callTool({ name, arguments: args });
+      return result as CallToolResult;
+    } catch (err) {
+      // If the subprocess crashed, null the client so the next call reconnects.
+      this.client = null;
+      throw err;
+    }
   }
 
   private async ensureConnected(): Promise<void> {
@@ -41,9 +47,11 @@ export class CuaDriverClient {
     this.connectPromise = this.connect();
     try {
       await this.connectPromise;
-    } finally {
+    } catch (err) {
       this.connectPromise = null;
+      throw err;
     }
+    this.connectPromise = null;
   }
 
   private async connect(): Promise<void> {
