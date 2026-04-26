@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -12,7 +11,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -25,16 +23,11 @@ import {
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
-  type AuthProfileStore,
   markAuthProfileFailure,
   resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
-import {
-  resolveSessionKeyForRequest,
-  resolveStoredSessionKeyForSessionId,
-} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
@@ -127,6 +120,12 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
+  backfillSessionKey,
+  buildHandledReplyPayloads,
+  buildTraceToolSummary,
+  createEmptyAuthProfileStore,
+} from "./run/run-orchestration-helpers.js";
+import {
   buildBeforeModelResolveAttachments,
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
@@ -141,7 +140,6 @@ import type {
   EmbeddedPiAgentMeta,
   EmbeddedPiRunResult,
   TraceAttempt,
-  ToolSummaryTrace,
   EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
@@ -149,92 +147,6 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
-
-function createEmptyAuthProfileStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {},
-  };
-}
-
-function buildTraceToolSummary(params: {
-  toolMetas: Array<{ toolName: string; meta?: string }>;
-  hadFailure: boolean;
-}): ToolSummaryTrace | undefined {
-  if (params.toolMetas.length === 0) {
-    return undefined;
-  }
-  const tools: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of params.toolMetas) {
-    const toolName = normalizeOptionalString(entry.toolName);
-    if (!toolName || seen.has(toolName)) {
-      continue;
-    }
-    seen.add(toolName);
-    tools.push(toolName);
-  }
-  return {
-    calls: params.toolMetas.length,
-    tools,
-    failures: params.hadFailure ? 1 : 0,
-  };
-}
-
-/**
- * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
- * The return value is normalized: whitespace-only inputs collapse to undefined, and
- * successful resolution returns a trimmed session key. This is a read-only lookup
- * with no side effects.
- * See: https://github.com/openclaw/openclaw/issues/60552
- */
-function backfillSessionKey(params: {
-  config: RunEmbeddedPiAgentParams["config"];
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.sessionKey);
-  if (trimmed) {
-    return trimmed;
-  }
-  if (!params.config || !params.sessionId) {
-    return undefined;
-  }
-  try {
-    const resolved = normalizeOptionalString(params.agentId)
-      ? resolveStoredSessionKeyForSessionId({
-          cfg: params.config,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-        })
-      : resolveSessionKeyForRequest({
-          cfg: params.config,
-          sessionId: params.sessionId,
-        });
-    return normalizeOptionalString(resolved.sessionKey);
-  } catch (err) {
-    log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
-    );
-    return undefined;
-  }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
-}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
