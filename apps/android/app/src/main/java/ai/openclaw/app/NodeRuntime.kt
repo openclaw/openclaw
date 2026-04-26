@@ -412,7 +412,7 @@ class NodeRuntime(
   }
 
   private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = normalizeMainKey(candidate) ?: return
+    val trimmed = normalizeMainKey(candidate)
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
     emitWearProxyEvent("mainSessionKey", trimmed)
