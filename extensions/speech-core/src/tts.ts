@@ -640,7 +640,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
-const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu"]);
+const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu", "whatsapp"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;

@@ -63,6 +63,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
+  retry once, repair replay, and allow configured model fallback instead of
+  preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed model call instead of exporting a misleading `StreamAbandoned` error span. Thanks @vincentkoc.
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from being treated as empty state, preserving `paired.json` for repair instead of overwriting approved pairings. Fixes #71873. Thanks @iret77.
 - ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`, on the Gateway path inside ACP-bound threads so they are not consumed as ACP prompt text. Fixes #66298. Thanks @kindomLee.
@@ -119,6 +122,7 @@ Docs: https://docs.openclaw.ai
 - CLI/agents: keep `openclaw agents list --json` on the config-only path by default, avoiding bundled plugin loading unless callers request `--bindings`. Fixes #71739. Thanks @kaloster.
 - Plugins/install: force plugin dependency installs to stay project-local even when inherited npm config requests global installs, so successful installs still materialize the plugin's staged `node_modules`.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so WhatsApp and other native voice-note replies can play as voice messages.
+- TTS/WhatsApp: mark non-Opus provider output as voice-note intent so channel delivery transcodes MP3/WebM replies to Ogg/Opus PTT audio.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when mirrored plugin roots are inspected again, avoiding second-generation `openclaw-unknown-*` stages and repeated first-turn restaging. Fixes #71599.
 - iOS/macOS Talk Mode: allow `talk.speechLocale` to set the speech recognition locale for non-English voice conversations. Fixes #44688.
 - Plugins/providers: honor explicit plugin candidate lists instead of reading a persisted registry snapshot from local state, keeping candidate-scoped provider discovery hermetic.
@@ -234,6 +238,7 @@ Docs: https://docs.openclaw.ai
 - Slack: stop treating user mentions in assistant-authored message edit blocks as sender attribution, preventing edited bot messages from spoofing a mentioned DM user. (#71700) Thanks @vincentkoc.
 - Codex: consume unauthorized bound conversation inbound claims before they can fall through to other claim handlers or enqueue Codex turns. (#71702) Thanks @vincentkoc.
 - Codex media understanding: require approval-checked app-server image turns while explicitly declining tool, file, permission, and elicitation approval requests for the bounded image worker. (#71703) Thanks @vincentkoc.
+- Agents/Claude CLI: allow large live `stream-json` JSONL lines up to the existing per-turn raw limit, preventing large Telegram, WebChat, MCP, and image turns from aborting on the old stdout buffer cap. Fixes #71793, #71080, and #70766. (#71897) Thanks @chacher86, @shivamgrover21, and @tpjordan.
 
 ## 2026.4.24
 
