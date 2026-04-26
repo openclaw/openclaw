@@ -3,8 +3,8 @@ import { normalizeOptionalLowercaseString } from "./shared/string-coerce.js";
 /**
  * Per-session emotion mode.
  *
- * - `off`: no expressive layer. The agent emits plain text; visible chat,
- *   history snapshots, and TTS source text are all the same string.
+ * - `off`: no expressive layer is exposed. Replies are treated as plain text;
+ *   visible chat, history snapshots, and TTS source text use sanitized text.
  * - `on`: the agent may emit ElevenLabs v3 expressive tags (e.g. `[whisper]`).
  *   Visible chat and persisted history are sanitized; tag-aware TTS providers
  *   receive the unsanitized variant via `ReplyPayloadMetadata.ttsSourceText`.

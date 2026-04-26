@@ -125,6 +125,10 @@ function isAllowlistPrefix(partial: string): boolean {
 }
 
 type StripEmotionTagsOptions = {
+  /**
+   * Legacy name: when true, callers allow this sanitizer to treat an allowlisted
+   * trailing partial tag fragment as tag syntax during streaming.
+   */
   allowTrailingPartialTag?: boolean;
 };
 
