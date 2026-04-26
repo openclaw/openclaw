@@ -119,7 +119,10 @@ function resolveInstallInfoFromProviderIndex(
   provider: OpenClawProviderIndexProvider,
 ): PluginPackageInstall | null {
   const install = provider.plugin.install;
-  const npmSpec = install?.npmSpec?.trim();
+  if (!install) {
+    return null;
+  }
+  const npmSpec = install.npmSpec?.trim();
   if (!npmSpec) {
     return null;
   }
