@@ -10,16 +10,12 @@ import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-conte
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { resolveUserPath } from "../../utils.js";
-import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
-  resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
@@ -70,11 +66,9 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
@@ -112,6 +106,14 @@ import {
   resolveRunLivenessState,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import {
+  buildEmbeddedRunQueuePlan,
+  isEmbeddedProbeSession,
+  logEmbeddedRunWorkspaceFallback,
+  resolveEmbeddedRunToolResultFormat,
+  resolveEmbeddedRunWorkspaceContext,
+  throwIfEmbeddedRunAborted,
+} from "./run/lane-workspace.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -159,37 +161,20 @@ export async function runEmbeddedPiAgent(
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
   }
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
-  const channelHint = params.messageChannel ?? params.messageProvider;
-  const resolvedToolResultFormat =
-    params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
-  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+  const { enqueueGlobal, enqueueSession } = buildEmbeddedRunQueuePlan({
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    lane: params.lane,
+    enqueue: params.enqueue,
+  });
+  const resolvedToolResultFormat = resolveEmbeddedRunToolResultFormat({
+    toolResultFormat: params.toolResultFormat,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+  });
+  const isProbeSession = isEmbeddedProbeSession(params.sessionId);
 
-  const throwIfAborted = () => {
-    if (!params.abortSignal?.aborted) {
-      return;
-    }
-    const reason = params.abortSignal.reason;
-    if (reason instanceof Error) {
-      throw reason;
-    }
-    const abortErr =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortErr.name = "AbortError";
-    throw abortErr;
-  };
+  const throwIfAborted = () => throwIfEmbeddedRunAborted(params.abortSignal);
 
   throwIfAborted();
 
@@ -198,25 +183,20 @@ export async function runEmbeddedPiAgent(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
-      const workspaceResolution = resolveRunWorkspaceDir({
-        workspaceDir: params.workspaceDir,
+      const { workspaceResolution, resolvedWorkspace, isCanonicalWorkspace } =
+        resolveEmbeddedRunWorkspaceContext({
+          workspaceDir: params.workspaceDir,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        });
+      logEmbeddedRunWorkspaceFallback({
+        workspaceResolution,
+        resolvedWorkspace,
+        runId: params.runId,
+        sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
       });
-      const resolvedWorkspace = workspaceResolution.workspaceDir;
-      const canonicalWorkspace = resolveUserPath(
-        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-      );
-      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
-      const redactedSessionId = redactRunIdentifier(params.sessionId);
-      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
-      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
-      if (workspaceResolution.usedFallback) {
-        log.warn(
-          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
-        );
-      }
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
