@@ -902,4 +902,25 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+
+  it("omits temperature for Claude Opus 4.7 requests", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Be concise." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        temperature: 0.2,
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("temperature");
+  });
 });

@@ -109,7 +109,8 @@ type MutableAssistantOutput = {
 };
 
 function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return normalizedModelId.includes("opus-4-7") || normalizedModelId.includes("opus-4.7");
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -765,7 +766,11 @@ function buildAnthropicParams(
       },
     ];
   }
-  if (options?.temperature !== undefined && !options.thinkingEnabled) {
+  if (
+    options?.temperature !== undefined &&
+    !options.thinkingEnabled &&
+    !isClaudeOpus47Model(model.id)
+  ) {
     params.temperature = options.temperature;
   }
   if (context.tools) {
