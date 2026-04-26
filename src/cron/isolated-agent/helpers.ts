@@ -157,7 +157,21 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // Native ===DONE_OK=== sentinel: when an agent's actual work succeeded but its
+  // *trailing* tool call (often a bookkeeping Edit/Write) errors, the run was
+  // previously misclassified as fatal because no non-error payload follows the
+  // last error. Cron prompts already use the ===DONE_OK=== convention as a
+  // workaround; honoring it natively closes the misclassification loop without
+  // widening tolerance for runs that genuinely failed (the agent must explicitly
+  // emit the sentinel — error-only runs never will).
+  const DONE_OK_SENTINEL_RE = /===\s*DONE_OK\s*===/;
+  const finalTextForSentinel =
+    (params.finalAssistantVisibleText ?? "") +
+    "\n" +
+    params.payloads.map((p) => p?.text ?? "").join("\n");
+  const hasDoneOkSentinel = !params.runLevelError && DONE_OK_SENTINEL_RE.test(finalTextForSentinel);
+  const hasFatalErrorPayload =
+    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasDoneOkSentinel;
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
