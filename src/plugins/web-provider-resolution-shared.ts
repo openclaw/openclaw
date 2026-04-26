@@ -63,11 +63,13 @@ function loadInstalledWebProviderManifestRecords(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  pluginIds?: readonly string[];
 }): readonly PluginManifestRecord[] {
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    pluginIds: params.pluginIds,
     includeDisabled: true,
   }).plugins;
 }
@@ -82,11 +84,15 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   origin?: PluginManifestRecord["origin"];
 }): string[] | undefined {
   const scopedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+  if (scopedPluginIds?.length === 0) {
+    return [];
+  }
   const onlyPluginIdSet = createPluginIdScopeSet(scopedPluginIds);
   const ids = loadInstalledWebProviderManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    pluginIds: scopedPluginIds,
   })
     .filter(
       (plugin) =>
@@ -99,7 +105,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   if (ids.length > 0) {
     return ids;
   }
-  return scopedPluginIds?.length === 0 ? [] : undefined;
+  return undefined;
 }
 
 function resolveBundledWebProviderCompatPluginIds(params: {
