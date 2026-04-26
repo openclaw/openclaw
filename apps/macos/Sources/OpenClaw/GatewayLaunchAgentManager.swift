@@ -207,9 +207,9 @@ extension GatewayLaunchAgentManager {
     }
 
     #if DEBUG
-    nonisolated(unsafe) private static var testingDisableLaunchAgentMarkerURL: URL?
-    nonisolated(unsafe) private static var testingInterceptDaemonCommands = false
-    nonisolated(unsafe) private static var testingDaemonCommandCalls: [[String]] = []
+    private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
+    private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
+    private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
