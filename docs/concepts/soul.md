@@ -4,8 +4,10 @@ read_when:
   - You want your agent to sound less generic
   - You are editing SOUL.md
   - You want a stronger personality without breaking safety or brevity
-title: "SOUL.md personality guide"
+title: "SOUL.md Personality Guide"
 ---
+
+# SOUL.md Personality Guide
 
 `SOUL.md` is where your agent's voice lives.
 
