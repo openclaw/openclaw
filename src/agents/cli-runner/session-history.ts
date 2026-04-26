@@ -14,6 +14,7 @@ import {
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 
 type HistoryMessage = {
   role?: unknown;
@@ -48,8 +49,10 @@ function coerceHistoryText(content: unknown): string {
 export function buildCliSessionHistoryPrompt(params: {
   messages: unknown[];
   prompt: string;
+  maxHistoryChars?: number;
 }): string | undefined {
-  const renderedHistory = params.messages
+  const maxHistoryChars = params.maxHistoryChars ?? MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
+  const renderedHistoryRaw = params.messages
     .flatMap((message) => {
       if (!message || typeof message !== "object") {
         return [];
@@ -74,6 +77,10 @@ export function buildCliSessionHistoryPrompt(params: {
     })
     .join("\n\n")
     .trim();
+  const renderedHistory =
+    renderedHistoryRaw.length > maxHistoryChars
+      ? `${renderedHistoryRaw.slice(0, maxHistoryChars).trimEnd()}\n[OpenClaw reseed history truncated]`
+      : renderedHistoryRaw;
 
   if (!renderedHistory) {
     return undefined;

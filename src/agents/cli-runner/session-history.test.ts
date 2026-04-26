@@ -329,4 +329,16 @@ describe("buildCliSessionHistoryPrompt", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("caps rendered reseed history before adding the next user message", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [{ role: "compactionSummary", summary: "x".repeat(100) }],
+      prompt: "current ask must survive",
+      maxHistoryChars: 20,
+    });
+
+    expect(prompt).toContain("[OpenClaw reseed history truncated]");
+    expect(prompt).toContain("<next_user_message>\ncurrent ask must survive\n</next_user_message>");
+    expect(prompt).not.toContain("x".repeat(80));
+  });
 });
