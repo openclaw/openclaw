@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/doctor: label model auth warnings with the agent id when checking multiple agent auth stores so per-agent credential drift is visible. Fixes #71867. Thanks @balric-seo.
 - TTS: strip model-emitted TTS directives from streamed block text before channel
   delivery, including directives split across adjacent blocks, while preserving
   the accumulated raw reply for final-mode synthesis. Fixes #38937.
