@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type SyntheticAuthRegistrySnapshotResult = {
+  source: "persisted" | "provided" | "derived";
+  snapshot: {
+    plugins: Array<{ syntheticAuthRefs?: string[] }>;
+  };
+  diagnostics: [];
+};
+
 const getPluginRegistryState = vi.hoisted(() => vi.fn());
 const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshotWithMetadata: vi.fn((_params?: unknown) => ({
-    source: "persisted",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  })),
+  loadPluginRegistrySnapshotWithMetadata: vi.fn(
+    (_params?: unknown): SyntheticAuthRegistrySnapshotResult => ({
+      source: "persisted",
+      snapshot: { plugins: [] },
+      diagnostics: [],
+    }),
+  ),
 }));
 
 vi.mock("./runtime-state.js", () => ({

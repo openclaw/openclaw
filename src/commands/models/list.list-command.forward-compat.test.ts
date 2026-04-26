@@ -12,19 +12,6 @@ const OPENAI_CODEX_MODEL = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-const OPENAI_CODEX_MINI_MODEL = {
-  ...OPENAI_CODEX_MODEL,
-  id: "gpt-5.4-mini",
-  name: "GPT-5.4 Mini",
-  contextWindow: 272_000,
-};
-
-const OPENAI_CODEX_PRO_MODEL = {
-  ...OPENAI_CODEX_MODEL,
-  id: "gpt-5.4-pro",
-  name: "GPT-5.4 Pro",
-};
-
 const OPENAI_CODEX_53_MODEL = {
   ...OPENAI_CODEX_MODEL,
   id: "gpt-5.4",
