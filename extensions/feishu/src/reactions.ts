@@ -24,8 +24,95 @@ function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string 
 }
 
 /**
+ * Feishu emoji type enum values.
+ * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+ */
+export const FeishuEmoji = {
+  THUMBSUP: "THUMBSUP",
+  THUMBSDOWN: "THUMBSDOWN",
+  HEART: "HEART",
+  SMILE: "SMILE",
+  GRINNING: "GRINNING",
+  LAUGHING: "LAUGHING",
+  CRY: "CRY",
+  ANGRY: "ANGRY",
+  SURPRISED: "SURPRISED",
+  THINKING: "THINKING",
+  CLAP: "CLAP",
+  OK: "OK",
+  FIST: "FIST",
+  PRAY: "PRAY",
+  FIRE: "FIRE",
+  PARTY: "PARTY",
+  CHECK: "CHECK",
+  CROSS: "CROSS",
+  QUESTION: "QUESTION",
+  EXCLAMATION: "EXCLAMATION",
+} as const;
+
+export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];
+
+/**
+ * Convert a raw Unicode emoji (or Feishu emoji code) to a Feishu-compatible emoji_type value.
+ *
+ * Feishu's message reaction API expects enum strings like "THUMBSUP", not raw Unicode
+ * emoji characters like "👍". This function normalises user-supplied emoji input so that
+ * callers can pass either form.
+ *
+ * - Feishu enum strings (e.g. "THUMBSUP") are passed through unchanged.
+ * - Raw Unicode emojis (e.g. "👍") are mapped to the corresponding Feishu enum value.
+ * - Unrecognised inputs fall back to "THUMBSUP" (the most universal reaction).
+ *
+ * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+ */
+export function toFeishuEmojiType(input: string): string {
+  // Feishu enum strings pass through unchanged (case-sensitive)
+  if (Object.values(FeishuEmoji).includes(input as FeishuEmojiType)) {
+    return input;
+  }
+  // Map common Unicode emojis to Feishu enum values
+  const unicodeMap: Record<string, FeishuEmojiType> = {
+    "👍": "THUMBSUP",
+    "👎": "THUMBSDOWN",
+    "❤️": "HEART",
+    "🧡": "HEART",
+    "💛": "HEART",
+    "💚": "HEART",
+    "💙": "HEART",
+    "💜": "HEART",
+    "🖤": "HEART",
+    "🤍": "HEART",
+    "😊": "SMILE",
+    "😄": "SMILE",
+    "😁": "GRINNING",
+    "😂": "LAUGHING",
+    "🤣": "LAUGHING",
+    "😭": "CRY",
+    "😡": "ANGRY",
+    "😮": "SURPRISED",
+    "🤔": "THINKING",
+    "👏": "CLAP",
+    "🙌": "CLAP",
+    "👍🏿": "THUMBSUP",
+    "👍🏾": "THUMBSUP",
+    "👍🏽": "THUMBSUP",
+    "👍🏼": "THUMBSUP",
+    "👍🏻": "THUMBSUP",
+    "🙏": "PRAY",
+    "🔥": "FIRE",
+    "🎉": "PARTY",
+    "✅": "CHECK",
+    "❌": "CROSS",
+    "❓": "QUESTION",
+    "❗": "EXCLAMATION",
+    "💯": "EXCLAMATION",
+  };
+  return unicodeMap[input] ?? "THUMBSUP";
+}
+
+/**
  * Add a reaction (emoji) to a message.
- * @param emojiType - Feishu emoji type, e.g., "SMILE", "THUMBSUP", "HEART"
+ * @param emojiType - Feishu emoji type, e.g. "SMILE", "THUMBSUP", "HEART", or a raw Unicode emoji
  * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
  */
 export async function addReactionFeishu(params: {
@@ -41,7 +128,7 @@ export async function addReactionFeishu(params: {
     path: { message_id: messageId },
     data: {
       reaction_type: {
-        emoji_type: emojiType,
+        emoji_type: toFeishuEmojiType(emojiType),
       },
     },
   })) as {
@@ -96,7 +183,7 @@ export async function listReactionsFeishu(params: {
 
   const response = (await client.im.messageReaction.list({
     path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
+    params: emojiType ? { reaction_type: toFeishuEmojiType(emojiType) } : undefined,
   })) as {
     code?: number;
     msg?: string;
@@ -121,33 +208,3 @@ export async function listReactionsFeishu(params: {
       item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
   }));
 }
-
-/**
- * Common Feishu emoji types for convenience.
- * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
- */
-export const FeishuEmoji = {
-  // Common reactions
-  THUMBSUP: "THUMBSUP",
-  THUMBSDOWN: "THUMBSDOWN",
-  HEART: "HEART",
-  SMILE: "SMILE",
-  GRINNING: "GRINNING",
-  LAUGHING: "LAUGHING",
-  CRY: "CRY",
-  ANGRY: "ANGRY",
-  SURPRISED: "SURPRISED",
-  THINKING: "THINKING",
-  CLAP: "CLAP",
-  OK: "OK",
-  FIST: "FIST",
-  PRAY: "PRAY",
-  FIRE: "FIRE",
-  PARTY: "PARTY",
-  CHECK: "CHECK",
-  CROSS: "CROSS",
-  QUESTION: "QUESTION",
-  EXCLAMATION: "EXCLAMATION",
-} as const;
-
-export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];
