@@ -185,24 +185,6 @@ describe("plugin registry facade", () => {
     ).toEqual(["demo"]);
   });
 
-  it("resolves indexed contribution owners without reopening manifest roots", () => {
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const index = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-    fs.rmSync(rootDir, { recursive: true, force: true });
-
-    expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
-    expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual(["demo"]);
-    expect(resolveChannelOwners({ index, channelId: "demo-chat" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ index, cliBackendId: "demo-setup-cli" })).toEqual(["demo"]);
-    expect(resolveSetupProviderOwners({ index, setupProviderId: "demo-setup" })).toEqual(["demo"]);
-    expect(createPluginRegistryIdNormalizer(index)("demo-chat")).toBe("demo");
-  });
-
   it("keeps disabled records inspectable while excluding owners by default", () => {
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
