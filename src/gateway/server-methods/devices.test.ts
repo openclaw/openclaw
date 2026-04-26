@@ -181,6 +181,7 @@ describe("deviceHandlers", () => {
   });
 
   it("disconnects active clients after revoking a device token", async () => {
+    getPairedDeviceMock.mockResolvedValue(null);
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions("device.token.revoke", {
       deviceId: " device-1 ",
@@ -205,6 +206,7 @@ describe("deviceHandlers", () => {
   });
 
   it("allows admin-scoped callers to revoke another device's token", async () => {
+    getPairedDeviceMock.mockResolvedValue(null);
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions(
       "device.token.revoke",
@@ -226,6 +228,7 @@ describe("deviceHandlers", () => {
   });
 
   it("treats normalized device ids as self-owned for token revocation", async () => {
+    getPairedDeviceMock.mockResolvedValue(null);
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions(
       "device.token.revoke",
@@ -351,6 +354,7 @@ describe("deviceHandlers", () => {
   });
 
   it("does not disconnect clients when token revocation fails", async () => {
+    getPairedDeviceMock.mockResolvedValue(null);
     revokeDeviceTokenMock.mockResolvedValue(null);
     const opts = createOptions("device.token.revoke", {
       deviceId: "device-1",
@@ -684,6 +688,131 @@ describe("deviceHandlers", () => {
       true,
       { requestId: "req-2", deviceId: "device-2", rejectedAtMs: 456 },
       undefined,
+    );
+  });
+
+  it("rejects revoking a token whose role scopes exceed the caller's scopes", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.admin"],
+      tokens: {
+        operator: {
+          token: "admin-token",
+          role: "operator",
+          scopes: ["operator.admin"],
+          createdAtMs: 123,
+        },
+      },
+    });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "device token revocation denied" }),
+    );
+  });
+
+  it("allows revoking a token when the caller holds all target role scopes", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.pairing"],
+      tokens: {
+        operator: {
+          token: "pairing-token",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          createdAtMs: 123,
+        },
+      },
+    });
+    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "operator",
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
+      undefined,
+    );
+  });
+
+  it("allows revoking a higher-scope token when the caller has operator.admin", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-2",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.admin"],
+      tokens: {
+        operator: {
+          token: "admin-token",
+          role: "operator",
+          scopes: ["operator.admin"],
+          createdAtMs: 123,
+        },
+      },
+    });
+    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 789 });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-2", role: "operator" },
+      { client: createClient(["operator.admin", "operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-2",
+      role: "operator",
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { deviceId: "device-2", role: "operator", revokedAtMs: 789 },
+      undefined,
+    );
+  });
+
+  it("falls back to device scopes when the role token has no explicit scopes", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.write"],
+      tokens: {},
+    });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "device token revocation denied" }),
     );
   });
 });

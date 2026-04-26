@@ -452,6 +452,28 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const pairedDevice = await getPairedDevice(deviceId);
+    if (pairedDevice) {
+      const targetScopes = normalizeDeviceAuthScopes(
+        pairedDevice.tokens?.[role.trim()]?.scopes ?? pairedDevice.scopes,
+      );
+      const missingScope = resolveMissingRequestedScope({
+        role,
+        requestedScopes: targetScopes,
+        allowedScopes: authz.callerScopes,
+      });
+      if (missingScope) {
+        context.logGateway.warn(
+          `device token revocation denied device=${deviceId} role=${role} reason=caller-missing-scope scope=${missingScope}`,
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "device token revocation denied"),
+        );
+        return;
+      }
+    }
     const entry = await revokeDeviceToken({ deviceId, role });
     if (!entry) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));

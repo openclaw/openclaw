@@ -331,6 +331,47 @@ describe("gateway device.token.rotate caller scope guard", () => {
     }
   });
 
+  test("rejects revoking a token whose role scopes exceed the caller session scopes", async () => {
+    const started = await startServer("secret");
+    const target = await issueOperatorToken({
+      name: "revoke-scope-target",
+      approvedScopes: ["operator.admin"],
+      tokenScopes: ["operator.admin"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+    const attacker = await issueOperatorToken({
+      name: "revoke-scope-attacker",
+      approvedScopes: ["operator.pairing"],
+      tokenScopes: ["operator.pairing"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      pairingWs = await connectPairingScopedOperator({
+        port: started.port,
+        identityPath: attacker.identityPath,
+        deviceToken: attacker.token,
+      });
+
+      const revoke = await rpcReq(pairingWs, "device.token.revoke", {
+        deviceId: target.deviceId,
+        role: "operator",
+      });
+      expect(revoke.ok).toBe(false);
+      expect(revoke.error?.message).toBe("device token revocation denied");
+
+      const paired = await getPairedDevice(target.deviceId);
+      expect(paired?.tokens?.operator?.revokedAtMs).toBeUndefined();
+    } finally {
+      pairingWs?.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("rejects rotating a token for an unapproved role on an existing paired device", async () => {
     const started = await startServer("secret");
     const attacker = await issueOperatorToken({
