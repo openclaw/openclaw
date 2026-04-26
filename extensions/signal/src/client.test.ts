@@ -138,6 +138,23 @@ describe("signalRpcRequest", () => {
       }),
     ).rejects.toThrow("Signal HTTP response exceeded size limit");
   });
+
+  it("uses an absolute deadline for slow-drip RPC responses", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const interval = setInterval(() => {
+        res.write(" ");
+      }, 5);
+      res.on("close", () => clearInterval(interval));
+    });
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl,
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow("Signal HTTP exceeded deadline after 25ms");
+  });
 });
 
 describe("signalCheck", () => {
@@ -199,10 +216,24 @@ describe("streamSignalEvents", () => {
     ).rejects.toThrow("Signal SSE failed (503 Unavailable)");
   });
 
-  it("rejects oversized SSE buffers", async () => {
+  it("rejects event streams that do not send headers before the deadline", async () => {
+    const baseUrl = await withSignalServer(() => {
+      // Leave the request open without response headers.
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        timeoutMs: 25,
+        onEvent: () => {},
+      }),
+    ).rejects.toThrow("Signal SSE connection timed out after 25ms");
+  });
+
+  it("rejects oversized SSE line buffers by byte size", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end(`data: ${"x".repeat(1_048_577)}`);
+      res.end(`data: ${"🙂".repeat(262_145)}`);
     });
 
     await expect(
@@ -211,5 +242,23 @@ describe("streamSignalEvents", () => {
         onEvent: () => {},
       }),
     ).rejects.toThrow("Signal SSE buffer exceeded size limit");
+  });
+
+  it("rejects oversized SSE events split across smaller data lines", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const line = `data: ${"x".repeat(4096)}\n`;
+      for (let index = 0; index < 260; index += 1) {
+        res.write(line);
+      }
+      res.end();
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        onEvent: () => {},
+      }),
+    ).rejects.toThrow("Signal SSE event data exceeded size limit");
   });
 });

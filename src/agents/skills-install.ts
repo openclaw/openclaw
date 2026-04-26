@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../infra/brew.js";
@@ -9,7 +10,7 @@ import {
   type SkillInstallSpecMetadata,
 } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.types.js";
@@ -35,6 +36,7 @@ export type { SkillInstallResult } from "./skills-install.types.js";
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
   loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
+  resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
@@ -42,6 +44,7 @@ type SkillsInstallDeps = {
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
   hasBinary: defaultHasBinary,
   loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
+  resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
 };
@@ -107,13 +110,31 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
   }
 }
 
+function resolveDefaultNodeInstallStateDir({
+  cwd = process.cwd(),
+  getuid = process.getuid?.bind(process),
+  homedir = os.homedir,
+  platform = process.platform,
+}: {
+  cwd?: string;
+  getuid?: () => number;
+  homedir?: () => string;
+  platform?: NodeJS.Platform;
+} = {}): string {
+  if (platform !== "win32" && getuid?.() === 0) {
+    return path.join(path.parse(cwd).root, "var", "lib", "openclaw");
+  }
+  return path.join(homedir(), ".openclaw");
+}
+
 async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
   if (prefs.nodeManager !== "npm") {
     return {};
   }
 
-  const prefix = path.join(resolveConfigDir(process.env), "tools", "node", "npm");
-  await fs.promises.mkdir(prefix, { recursive: true });
+  const stateDir = getSkillsInstallDeps().resolveNodeInstallStateDir();
+  const prefix = path.join(stateDir, "tools", "node", "npm");
+  await fs.promises.mkdir(prefix, { recursive: true, mode: 0o700 });
   return {
     NPM_CONFIG_PREFIX: prefix,
     npm_config_prefix: prefix,
@@ -552,6 +573,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 }
 
 export const __testing = {
+  resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
       ...defaultSkillsInstallDeps,

@@ -30,7 +30,8 @@ export type SignalSseEvent = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_SIGNAL_HTTP_RESPONSE_BYTES = 1_048_576;
-const MAX_SIGNAL_SSE_BUFFER_CHARS = 1_048_576;
+const MAX_SIGNAL_SSE_BUFFER_BYTES = 1_048_576;
+const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
 type SignalHttpResponse = {
   status: number;
@@ -107,7 +108,12 @@ function requestSignalHttpText(
   return new Promise((resolve, reject) => {
     let settled = false;
     let request: ClientRequest | undefined;
+    const deadline = setTimeout(() => {
+      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    deadline.unref?.();
     const cleanup = () => {
+      clearTimeout(deadline);
       request?.setTimeout(0);
     };
     const rejectOnce = (error: unknown) => {
@@ -229,6 +235,7 @@ export async function signalCheck(
 function openSignalEventStream(
   url: URL,
   abortSignal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ response: IncomingMessage; cleanup: () => void }> {
   assertSignalHttpProtocol(url, "SSE");
   if (abortSignal?.aborted) {
@@ -240,7 +247,16 @@ function openSignalEventStream(
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
+    let request: ClientRequest;
+    const headerDeadline = setTimeout(() => {
+      const error = new Error(`Signal SSE connection timed out after ${timeoutMs}ms`);
+      response?.destroy(error);
+      request.destroy(error);
+      rejectOnce(error);
+    }, timeoutMs);
+    headerDeadline.unref?.();
     const cleanup = () => {
+      clearTimeout(headerDeadline);
       abortSignal?.removeEventListener("abort", onAbort);
     };
     const rejectOnce = (error: unknown) => {
@@ -251,7 +267,7 @@ function openSignalEventStream(
       cleanup();
       reject(error);
     };
-    const request = client.request(
+    request = client.request(
       url,
       {
         method: "GET",
@@ -268,6 +284,7 @@ function openSignalEventStream(
           res.destroy();
           return;
         }
+        clearTimeout(headerDeadline);
         settled = true;
         response = res;
         resolve({ response: res, cleanup });
@@ -290,6 +307,7 @@ export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;
   abortSignal?: AbortSignal;
+  timeoutMs?: number;
   onEvent: (event: SignalSseEvent) => void;
 }): Promise<void> {
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
@@ -297,10 +315,16 @@ export async function streamSignalEvents(params: {
     url.searchParams.set("account", params.account);
   }
 
-  const { response, cleanup } = await openSignalEventStream(url, params.abortSignal);
+  const { response, cleanup } = await openSignalEventStream(
+    url,
+    params.abortSignal,
+    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
   const decoder = new TextDecoder();
   let buffer = "";
+  let bufferedBytes = 0;
   let currentEvent: SignalSseEvent = {};
+  let currentEventDataBytes = 0;
 
   const flushEvent = () => {
     if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
@@ -312,6 +336,7 @@ export async function streamSignalEvents(params: {
       id: currentEvent.id,
     });
     currentEvent = {};
+    currentEventDataBytes = 0;
   };
 
   const processLine = (line: string) => {
@@ -329,7 +354,12 @@ export async function streamSignalEvents(params: {
     if (field === "event") {
       currentEvent.event = value;
     } else if (field === "data") {
-      currentEvent.data = currentEvent.data ? `${currentEvent.data}\n${value}` : value;
+      const segment = currentEvent.data ? `\n${value}` : value;
+      currentEventDataBytes += Buffer.byteLength(segment, "utf8");
+      if (currentEventDataBytes > MAX_SIGNAL_SSE_EVENT_DATA_BYTES) {
+        throw new Error("Signal SSE event data exceeded size limit");
+      }
+      currentEvent.data = currentEvent.data ? `${currentEvent.data}${segment}` : segment;
     } else if (field === "id") {
       currentEvent.id = value;
     }
@@ -346,19 +376,25 @@ export async function streamSignalEvents(params: {
       processLine(line);
       lineEnd = buffer.indexOf("\n");
     }
+    bufferedBytes = Buffer.byteLength(buffer, "utf8");
   };
 
   try {
     for await (const chunk of response as AsyncIterable<Buffer | string>) {
       const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      buffer += decoder.decode(value, { stream: true });
-      if (buffer.length > MAX_SIGNAL_SSE_BUFFER_CHARS) {
+      bufferedBytes += value.byteLength;
+      if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
         throw new Error("Signal SSE buffer exceeded size limit");
       }
+      buffer += decoder.decode(value, { stream: true });
       drainCompleteLines();
     }
-    buffer += decoder.decode();
-    if (buffer.length > MAX_SIGNAL_SSE_BUFFER_CHARS) {
+    const tail = decoder.decode();
+    if (tail) {
+      buffer += tail;
+      bufferedBytes = Buffer.byteLength(buffer, "utf8");
+    }
+    if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
       throw new Error("Signal SSE buffer exceeded size limit");
     }
     drainCompleteLines();

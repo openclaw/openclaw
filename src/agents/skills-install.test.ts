@@ -122,11 +122,18 @@ async function withWorkspaceCase(
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
-    skillsInstallTesting.setDepsForTest({
-      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
-    });
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
+    skillsInstallTesting.setDepsForTest({
+      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+      resolveNodeInstallStateDir: () => {
+        const stateDir = process.env.OPENCLAW_STATE_DIR;
+        if (!stateDir) {
+          throw new Error("OPENCLAW_STATE_DIR missing in skills install test");
+        }
+        return stateDir;
+      },
+    });
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
       stdout: "ok",
@@ -210,6 +217,35 @@ describe("installSkill code safety scanning", () => {
       const stat = await fs.stat(npmPrefix);
       expect(stat.isDirectory()).toBe(true);
     });
+  });
+
+  it("keeps the default npm prefix out of env-overridden state paths", () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    try {
+      process.env.OPENCLAW_STATE_DIR = "/tmp/untrusted-state";
+      process.env.OPENCLAW_CONFIG_PATH = "/tmp/untrusted-config/openclaw.json";
+
+      expect(
+        skillsInstallTesting.resolveDefaultNodeInstallStateDir({
+          getuid: () => 501,
+          homedir: () => "/Users/tester",
+          platform: "darwin",
+        }),
+      ).toBe("/Users/tester/.openclaw");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("uses a fixed system state root for root npm installs", () => {
+    expect(
+      skillsInstallTesting.resolveDefaultNodeInstallStateDir({
+        cwd: "/workspace/openclaw",
+        getuid: () => 0,
+        homedir: () => "/root",
+        platform: "linux",
+      }),
+    ).toBe("/var/lib/openclaw");
   });
 
   it("blocks install when skill scan fails", async () => {
