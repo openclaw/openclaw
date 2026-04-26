@@ -218,7 +218,7 @@ function withDiagnosticTraceparentHeader(
   }
   headers[TRACEPARENT_HEADER_NAME] = traceparent;
   return {
-    ...(options ?? {}),
+    ...options,
     headers,
   };
 }
