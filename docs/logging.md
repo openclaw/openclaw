@@ -164,6 +164,13 @@ OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
 `parentSpanId`, `traceFlags`) so external log processors can correlate the line
 with OTEL spans and provider `traceparent` propagation.
 
+Gateway HTTP requests and Gateway WebSocket frames establish an internal request
+trace scope. Logs and diagnostic events emitted inside that async scope inherit
+the request trace when they do not pass an explicit trace context. Agent run and
+model-call traces become children of the active request trace, so local logs,
+diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
+be joined by `traceId` without logging raw request or model content.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without

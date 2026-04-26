@@ -1230,6 +1230,23 @@ if (mode === "memory-lancedb") {
     },
   };
 }
+if (mode === "acpx") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+    allow:
+      Array.isArray(config.plugins?.allow) && config.plugins.allow.length > 0
+        ? [...new Set([...config.plugins.allow, "acpx"])]
+        : config.plugins?.allow,
+    entries: {
+      ...(config.plugins?.entries || {}),
+      acpx: {
+        ...(config.plugins?.entries?.acpx || {}),
+        enabled: true,
+      },
+    },
+  };
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -1465,6 +1482,7 @@ fi
 
 if should_run_update_target acpx; then
   echo "Removing ACPX runtime package and rerunning same-version update path..."
+  write_config acpx
   remove_runtime_dep acpx acpx
   assert_no_dep_available acpx acpx
   run_update_and_capture acpx /tmp/openclaw-update-acpx.json

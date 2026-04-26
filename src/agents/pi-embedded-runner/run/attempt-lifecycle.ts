@@ -1,7 +1,7 @@
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
-  createDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
@@ -45,7 +45,9 @@ function buildRunDiagnosticBase(
 export function startRunLifecycleDiagnostics(
   params: RunLifecycleDiagnosticsParams,
 ): RunLifecycleDiagnostics {
-  const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
+  const diagnosticTrace = freezeDiagnosticTraceContext(
+    createDiagnosticTraceContextFromActiveScope(),
+  );
   const runTrace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(diagnosticTrace));
   const diagnosticRunBase = buildRunDiagnosticBase(params, runTrace);
   const diagnosticRunStartedAt = Date.now();

@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  createDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 
@@ -25,6 +30,7 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
   }
+  resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);
 });
@@ -92,6 +98,26 @@ describe("file log redaction", () => {
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record.traceId).toBe(TRACE_ID);
     expect(record.spanId).toBe(SPAN_ID);
+    expect(record).toMatchObject({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+  });
+
+  it("writes active request trace context as top-level JSONL fields", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      getLogger().info({ route: "/api/health" }, "request completed");
+    });
+
+    const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record).toMatchObject({
       traceId: TRACE_ID,
       spanId: SPAN_ID,

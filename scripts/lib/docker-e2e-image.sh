@@ -4,6 +4,7 @@ DOCKER_E2E_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DOCKER_E2E_LIB_DIR/../.." && pwd)}"
 
 source "$DOCKER_E2E_LIB_DIR/docker-e2e-logs.sh"
+source "$DOCKER_E2E_LIB_DIR/docker-build.sh"
 
 docker_e2e_resolve_image() {
   local default_image="$1"
@@ -48,10 +49,10 @@ docker_e2e_build_or_reuse() {
   fi
 
   echo "Building Docker image: $image_name"
-  local build_cmd=(docker build)
+  local build_args=()
   if [ -n "$target" ]; then
-    build_cmd+=(--target "$target")
+    build_args+=(--target "$target")
   fi
-  build_cmd+=(-t "$image_name" -f "$dockerfile" "$context")
-  run_logged "$label-build" "${build_cmd[@]}"
+  build_args+=(-t "$image_name" -f "$dockerfile" "$context")
+  docker_build_run "$label-build" "${build_args[@]}"
 }

@@ -628,7 +628,8 @@ jobs:
           cache-from: type=gha,scope=docker-e2e
           cache-to: type=gha,mode=max,scope=docker-e2e
           tags: ${{ steps.image.outputs.image }}
-          provenance: false
+          sbom: true
+          provenance: mode=max
           push: true
 
   validate_live_models_docker:

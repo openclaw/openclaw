@@ -4,6 +4,7 @@ import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
+  getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
@@ -252,7 +253,7 @@ function findLogTraceContext(
 
 function buildTraceFileLogFields(logObj: TsLogRecord): Record<string, string> | undefined {
   const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
-  const trace = findLogTraceContext(bindings, args);
+  const trace = findLogTraceContext(bindings, args) ?? getActiveDiagnosticTraceContext();
   if (!trace) {
     return undefined;
   }
@@ -282,7 +283,7 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     | undefined;
   const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
 
-  const trace = findLogTraceContext(bindings, numericArgs);
+  const trace = findLogTraceContext(bindings, numericArgs) ?? getActiveDiagnosticTraceContext();
   const structuredArg = numericArgs[0];
   const structuredBindings = isPlainLogRecordObject(structuredArg) ? structuredArg : undefined;
   if (structuredBindings) {

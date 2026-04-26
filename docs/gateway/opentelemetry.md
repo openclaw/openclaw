@@ -154,6 +154,10 @@ When any subkey is enabled, model and tool spans get bounded, redacted
   `spanId`, `parentSpanId`, and `traceFlags` when the log call carries a valid
   diagnostic trace context, which lets log processors join local log lines with
   exported spans.
+- **Request correlation:** Gateway HTTP requests and WebSocket frames create an
+  internal request trace scope. Logs and diagnostic events inside that scope
+  inherit the request trace by default, while agent run and model-call spans are
+  created as children so provider `traceparent` headers stay on the same trace.
 
 ## Exported metrics
 
