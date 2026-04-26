@@ -10,15 +10,11 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type RunLifecycleDiagnosticsParams = Pick<
   EmbeddedRunAttemptParams,
-  | "runId"
-  | "sessionKey"
-  | "sessionId"
-  | "provider"
-  | "modelId"
-  | "trigger"
-  | "messageChannel"
-  | "messageProvider"
->;
+  "runId" | "provider" | "modelId" | "trigger" | "messageChannel" | "messageProvider"
+> & {
+  sessionKey?: string;
+  sessionId?: string;
+};
 
 export type RunLifecycleDiagnosticOutcome = "completed" | "aborted" | "error";
 
