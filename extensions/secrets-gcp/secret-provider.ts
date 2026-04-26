@@ -2,6 +2,21 @@ import type { SecretProviderPlugin } from "openclaw/plugin-sdk/secret-provider";
 
 const GCP_MODULE = "@google-cloud/secret-manager";
 
+const SOURCE_ID = "gcp";
+
+// GCP project id grammar:
+// https://cloud.google.com/resource-manager/docs/creating-managing-projects#identifying_projects
+// Permitted chars: lowercase letters, digits, dashes; must start with a letter; 6–30 chars total.
+const PROJECT_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+
+// Secret resource id grammar:
+// https://cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets/create#path-parameters
+// Permitted chars: A-Z, a-z, 0-9, underscore; 1–255 chars.
+const SECRET_ID_PATTERN = /^[A-Za-z0-9_]{1,255}$/;
+
+// Version suffix: "latest" or a positive integer.
+const VERSION_PATTERN = /^(latest|[1-9][0-9]*)$/;
+
 interface GcpSecretManagerClient {
   accessSecretVersion(req: { name: string }): Promise<[{ payload?: { data?: unknown } }]>;
 }
@@ -27,16 +42,10 @@ async function getGcpClient(): Promise<GcpSecretManagerClient> {
 }
 
 type GcpSecretProviderConfig = {
-  source: "gcp";
+  source: typeof SOURCE_ID;
   project: string;
   versionSuffix?: string;
 };
-
-function isGcpConfig(value: unknown): value is GcpSecretProviderConfig {
-  if (typeof value !== "object" || value === null) return false;
-  const cfg = value as { source?: unknown; project?: unknown };
-  return cfg.source === "gcp" && typeof cfg.project === "string" && cfg.project.trim().length > 0;
-}
 
 function decodePayload(payload: unknown, refId: string): string {
   if (payload === undefined || payload === null) {
@@ -53,17 +62,39 @@ function decodePayload(payload: unknown, refId: string): string {
 
 export function createGcpSecretProvider(): SecretProviderPlugin {
   return {
-    id: "gcp",
+    id: SOURCE_ID,
     label: "Google Cloud Secret Manager",
     validateConfig(cfg) {
-      if (!isGcpConfig(cfg)) {
+      if (typeof cfg !== "object" || cfg === null) {
+        throw new Error(`GCP secret provider config must be an object with source "${SOURCE_ID}".`);
+      }
+      const c = cfg as Partial<GcpSecretProviderConfig>;
+      if (c.source !== SOURCE_ID) {
+        throw new Error(`GCP secret provider: config.source must be "${SOURCE_ID}".`);
+      }
+      if (typeof c.project !== "string" || !PROJECT_PATTERN.test(c.project)) {
         throw new Error(
-          'GCP secret provider config requires a non-empty "project" string and source "gcp".',
+          `GCP secret provider: config.project must match ${PROJECT_PATTERN.source} (GCP project id grammar).`,
         );
+      }
+      if (c.versionSuffix !== undefined) {
+        if (typeof c.versionSuffix !== "string" || !VERSION_PATTERN.test(c.versionSuffix)) {
+          throw new Error(
+            `GCP secret provider: config.versionSuffix must match ${VERSION_PATTERN.source} (e.g. "latest" or "3").`,
+          );
+        }
       }
     },
     async resolve(ctx) {
       const cfg = ctx.providerConfig as GcpSecretProviderConfig;
+      // resolve() is the runtime guard for ref ids — validateConfig only sees the static config.
+      for (const ref of ctx.refs) {
+        if (!SECRET_ID_PATTERN.test(ref.id)) {
+          throw new Error(
+            `GCP secret provider: ref id "${ref.id}" must match ${SECRET_ID_PATTERN.source}.`,
+          );
+        }
+      }
       const client = await getGcpClient();
       const out = new Map<string, unknown>();
       const version = cfg.versionSuffix ?? "latest";

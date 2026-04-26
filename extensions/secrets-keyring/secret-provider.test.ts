@@ -118,15 +118,17 @@ describe("secrets-keyring createKeyringSecretProvider", () => {
     ).rejects.toThrow(/not supported/);
   });
 
-  it("throws an actionable error on Linux when secret-tool fails", async () => {
+  it("throws an actionable error on Linux when secret-tool is not installed", async () => {
     vi.resetModules();
     vi.doMock("node:os", async (importOriginal) => {
       const real = await importOriginal<typeof import("node:os")>();
       return { ...real, platform: () => "linux" };
     });
     vi.doMock("node:child_process", () => ({
-      execFile: (_cmd: string, _args: string[], cb: (err: Error) => void) =>
-        cb(new Error("secret-tool: not found")),
+      execFile: (_cmd: string, _args: string[], cb: (err: Error) => void) => {
+        const err = Object.assign(new Error("spawn secret-tool ENOENT"), { code: "ENOENT" });
+        cb(err);
+      },
     }));
 
     const { createKeyringSecretProvider: freshFactory } = await import("./secret-provider.js");
@@ -138,6 +140,115 @@ describe("secrets-keyring createKeyringSecretProvider", () => {
         providerConfig: { source: "keyring" },
         env: process.env,
       }),
-    ).rejects.toThrow(/Ensure secret-tool is installed/);
+    ).rejects.toThrow(/libsecret.*was not found on PATH/);
+  });
+
+  it("throws a distinct error on Linux when the secret is missing", async () => {
+    vi.resetModules();
+    vi.doMock("node:os", async (importOriginal) => {
+      const real = await importOriginal<typeof import("node:os")>();
+      return { ...real, platform: () => "linux" };
+    });
+    vi.doMock("node:child_process", () => ({
+      execFile: (
+        _cmd: string,
+        _args: string[],
+        cb: (err: null, out: { stdout: string; stderr: string }) => void,
+      ) => cb(null, { stdout: "", stderr: "" }),
+    }));
+
+    const { createKeyringSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await expect(
+      provider.resolve({
+        refs: [{ source: "keyring", provider: "local", id: "x" }],
+        providerName: "local",
+        providerConfig: { source: "keyring" },
+        env: process.env,
+      }),
+    ).rejects.toThrow(/not found in libsecret.*secret-tool store/);
+  });
+
+  describe("validateConfig", () => {
+    const provider = createKeyringSecretProvider();
+
+    it("rejects a service name starting with a dash (argv-injection guard)", () => {
+      expect(() => provider.validateConfig?.({ source: "keyring", service: "-D" })).toThrow(
+        /must not start with "-"/,
+      );
+    });
+
+    it("rejects a service name with shell metacharacters", () => {
+      expect(() =>
+        provider.validateConfig?.({ source: "keyring", service: "evil; rm -rf /" }),
+      ).toThrow(/must match/);
+    });
+
+    it("rejects a relative keychainPath", () => {
+      expect(() =>
+        provider.validateConfig?.({ source: "keyring", keychainPath: "openclaw.keychain-db" }),
+      ).toThrow(/must be an absolute path/);
+    });
+
+    it("rejects a keychainPath that does not look like a keychain", () => {
+      expect(() =>
+        provider.validateConfig?.({ source: "keyring", keychainPath: "/etc/passwd" }),
+      ).toThrow(/must end with/);
+    });
+
+    it("rejects a keychainPath starting with a dash", () => {
+      expect(() =>
+        provider.validateConfig?.({ source: "keyring", keychainPath: "-vfoo.keychain-db" }),
+      ).toThrow(/must not start with "-"/);
+    });
+
+    it("rejects wrong source string", () => {
+      expect(() => provider.validateConfig?.({ source: "env" })).toThrow(/config.source must be/);
+    });
+
+    it("accepts a minimal config with no overrides", () => {
+      expect(() => provider.validateConfig?.({ source: "keyring" })).not.toThrow();
+    });
+
+    it("accepts a config with valid service and keychainPath", () => {
+      expect(() =>
+        provider.validateConfig?.({
+          source: "keyring",
+          service: "my_service",
+          keychainPath: "/Users/test/Library/Keychains/custom.keychain-db",
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  it("resolve() rejects ref ids starting with a dash before spawning", async () => {
+    vi.resetModules();
+    vi.doMock("node:os", async (importOriginal) => {
+      const real = await importOriginal<typeof import("node:os")>();
+      return { ...real, platform: () => "linux" };
+    });
+    let spawnCalled = false;
+    vi.doMock("node:child_process", () => ({
+      execFile: (
+        _cmd: string,
+        _args: string[],
+        cb: (err: null, out: { stdout: string; stderr: string }) => void,
+      ) => {
+        spawnCalled = true;
+        cb(null, { stdout: "should-not-reach-here\n", stderr: "" });
+      },
+    }));
+
+    const { createKeyringSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await expect(
+      provider.resolve({
+        refs: [{ source: "keyring", provider: "local", id: "-vfoo" }],
+        providerName: "local",
+        providerConfig: { source: "keyring" },
+        env: process.env,
+      }),
+    ).rejects.toThrow(/ref id .*must not start with "-"/);
+    expect(spawnCalled).toBe(false);
   });
 });
