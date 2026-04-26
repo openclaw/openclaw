@@ -833,6 +833,9 @@ export async function syncSkillsToWorkspace(params: {
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        // Remove the partially copied destination so snapshot builders
+        // don't find a broken/incomplete skill directory.
+        await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
       }
     }
   });
