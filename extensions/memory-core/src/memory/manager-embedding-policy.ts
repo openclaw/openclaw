@@ -80,9 +80,20 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
+  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(fetch failed|network error|socket hang up|socket terminated|other side closed|connection (?:reset|refused|aborted|timed out)|read ECONNRESET|write EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|DNS_RESOLVE_FAILED|CONNECT|SOCKET|HEADERS_TIMEOUT|BODY_TIMEOUT))/i;
+
+export function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
+  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+}
+
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
-    message,
+  return (
+    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
+    isRetryableMemoryEmbeddingTransportError(message)
   );
 }
 
@@ -121,6 +132,43 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       delayMs *= 2;
       attempt += 1;
     }
+  }
+}
+
+export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
+  items: TInput[];
+  run: (items: TInput[]) => Promise<TOutput[]>;
+  isRetryable: (message: string) => boolean;
+  isSplittable: (message: string) => boolean;
+  waitForRetry: (delayMs: number) => Promise<void>;
+  maxAttempts: number;
+  baseDelayMs: number;
+  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
+}): Promise<TOutput[]> {
+  try {
+    return await runMemoryEmbeddingRetryLoop({
+      run: async () => await params.run(params.items),
+      isRetryable: params.isRetryable,
+      waitForRetry: params.waitForRetry,
+      maxAttempts: params.maxAttempts,
+      baseDelayMs: params.baseDelayMs,
+    });
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    if (params.items.length <= 1 || !params.isSplittable(message)) {
+      throw err;
+    }
+    const splitAt = Math.ceil(params.items.length / 2);
+    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    const left = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(0, splitAt),
+    });
+    const right = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(splitAt),
+    });
+    return [...left, ...right];
   }
 }
 

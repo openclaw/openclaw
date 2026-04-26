@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
+  isRetryableMemoryEmbeddingTransportError,
   isRetryableMemoryEmbeddingError,
   isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
+  runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 
@@ -94,6 +96,73 @@ describe("memory embedding policy", () => {
     expect(result).toBe("ok");
     expect(calls).toBe(2);
     expect(waits).toEqual([500]);
+  });
+
+  it("classifies transient transport embedding errors as retryable", () => {
+    const retryableMessages = [
+      "TypeError: fetch failed",
+      "read ECONNRESET",
+      "socket hang up",
+      "UND_ERR_SOCKET: other side closed",
+      "connection refused",
+    ];
+
+    for (const message of retryableMessages) {
+      expect(isRetryableMemoryEmbeddingTransportError(message)).toBe(true);
+      expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
+    }
+    expect(isRetryableMemoryEmbeddingTransportError("worker terminated by user")).toBe(false);
+    expect(isRetryableMemoryEmbeddingTransportError("embedding validation failed")).toBe(false);
+  });
+
+  it("splits transport-failed batches after retries are exhausted", async () => {
+    const waits: number[] = [];
+    const splits: string[] = [];
+    const run = vi.fn(async (items: string[]) => {
+      if (items.length > 1) {
+        throw new TypeError("fetch failed");
+      }
+      return items.map((item) => [item.charCodeAt(0)]);
+    });
+
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items: ["a", "b", "c", "d"],
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isRetryableMemoryEmbeddingTransportError,
+      waitForRetry: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      maxAttempts: 1,
+      baseDelayMs: 500,
+      onSplit: ({ itemCount, splitAt }) => {
+        splits.push(`${itemCount}:${splitAt}`);
+      },
+    });
+
+    expect(result).toEqual([[97], [98], [99], [100]]);
+    expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 4, 2, 2, 1, 1, 2, 2, 1, 1]);
+    expect(waits).toEqual([500, 500, 500]);
+    expect(splits).toEqual(["4:2", "2:1", "2:1"]);
+  });
+
+  it("does not split exhausted service retry errors", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("openai embeddings failed: 429 rate limit");
+    });
+
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["a", "b"],
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        isSplittable: isRetryableMemoryEmbeddingTransportError,
+        waitForRetry: async () => {},
+        maxAttempts: 0,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("429 rate limit");
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("classifies oversized structured-input errors", () => {
