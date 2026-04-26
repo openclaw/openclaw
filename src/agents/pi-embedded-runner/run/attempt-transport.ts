@@ -158,7 +158,10 @@ export async function configureAttemptTransportRuntime(params: {
       : undefined;
   const effectiveAgentTransport = agentTransportOverride ?? sessionTransport;
   if (agentTransportOverride && params.activeSession.agent.transport !== agentTransportOverride) {
-    const previousTransport = params.activeSession.agent.transport;
+    const previousTransport =
+      typeof params.activeSession.agent.transport === "string"
+        ? params.activeSession.agent.transport
+        : "session-managed";
     params.logDebug(
       `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
         `(${params.provider}/${params.modelId})`,
