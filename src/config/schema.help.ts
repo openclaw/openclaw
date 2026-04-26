@@ -1348,6 +1348,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.typingIntervalSeconds":
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
+  "session.typingTtlSeconds":
+    "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
   "session.parentForkMaxTokens":

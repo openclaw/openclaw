@@ -649,13 +649,14 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
     defaults: {
       typingMode: "instant", // never | instant | thinking | message
       typingIntervalSeconds: 6,
+      typingTtlSeconds: 300,
     },
   },
 }
 ```
 
 - Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
-- Per-session overrides: `session.typingMode`, `session.typingIntervalSeconds`.
+- Per-session overrides: `session.typingMode`, `session.typingIntervalSeconds`, `session.typingTtlSeconds`.
 
 See [Typing Indicators](/concepts/typing-indicators).
 

@@ -81,6 +81,25 @@ describe("typing persistence bug fix", () => {
     expect(onCleanupSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps typing alive for the default 5 minute TTL", async () => {
+    const onReplyStart = vi.fn();
+    const onCleanup = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      onCleanup,
+      typingIntervalSeconds: 1_000,
+    });
+
+    await typing.startTypingLoop();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(299_999);
+    expect(onCleanup).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("returns an inert controller when typing callbacks are absent", async () => {
     const inert = createTypingController({});
 

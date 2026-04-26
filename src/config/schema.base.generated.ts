@@ -5212,6 +5212,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              typingTtlSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               typingMode: {
                 anyOf: [
                   {
@@ -19752,6 +19757,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
           },
+          typingTtlSeconds: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Session Typing TTL (seconds)",
+            description:
+              "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
+          },
           typingMode: {
             anyOf: [
               {
@@ -26591,6 +26604,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Session Typing Interval (seconds)",
       help: "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
       tags: ["performance", "storage"],
+    },
+    "session.typingTtlSeconds": {
+      label: "Session Typing TTL (seconds)",
+      help: "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
+      tags: ["storage"],
     },
     "session.typingMode": {
       label: "Session Typing Mode",
