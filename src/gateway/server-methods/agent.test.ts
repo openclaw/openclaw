@@ -1075,6 +1075,129 @@ describe("gateway agent handler", () => {
     expect(call?.sessionKey).toBe("agent:main:main");
   });
 
+  it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "stale-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "daily rollover",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "daily-rollover-agent-session",
+        },
+        { reqId: "daily-rollover-agent-session" },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+        sessionId?: string;
+        sessionKey?: string;
+      };
+      expect(call?.sessionKey).toBe("agent:main:main");
+      expect(call?.sessionId).not.toBe("stale-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now);
+      expect(capturedEntry?.lastInteractionAt).toBe(now);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let explicit sessionId bypass stale gateway session freshness", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "stale-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "daily rollover",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "stale-session-id",
+          idempotencyKey: "daily-rollover-agent-session-id",
+        },
+        { reqId: "daily-rollover-agent-session-id" },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+        sessionId?: string;
+        sessionKey?: string;
+      };
+      expect(call?.sessionKey).toBe("agent:main:main");
+      expect(call?.sessionId).not.toBe("stale-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now);
+      expect(capturedEntry?.lastInteractionAt).toBe(now);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not forward a non-main agent id with canonical global session keys", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:ops:main");
