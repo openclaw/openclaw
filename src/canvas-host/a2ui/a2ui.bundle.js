@@ -13338,7 +13338,19 @@ const toASCII = function(input) {
 };
 /** Define the public API */
 const punycode = {
+	/**
+	* A string representing the current Punycode.js version number.
+	* @memberOf punycode
+	* @type String
+	*/
 	"version": "2.3.1",
+	/**
+	* An object of methods to convert from JavaScript's internal character
+	* representation (UCS-2) to Unicode code points, and back.
+	* @see <https://mathiasbynens.be/notes/javascript-encoding>
+	* @memberOf punycode
+	* @type Object
+	*/
 	"ucs2": {
 		"decode": ucs2decode,
 		"encode": ucs2encode

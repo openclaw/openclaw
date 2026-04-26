@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -17,6 +18,13 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
     }
   }
 
+  const existing = await fs.lstat(filePath).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    await fs.rm(filePath, { force: true });
+    await fs.rename(tempPath, filePath);
+    return;
+  }
+
   await fs.copyFile(tempPath, filePath);
   try {
     await fs.chmod(filePath, mode);
@@ -30,6 +38,15 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
     return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function readJsonFileSync(filePath: string): unknown {
+  try {
+    const raw = readFileSync(filePath, "utf8");
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }

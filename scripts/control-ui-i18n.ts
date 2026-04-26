@@ -58,7 +58,7 @@ type TranslationBatchItem = {
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.4";
+const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
@@ -96,6 +96,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
   { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
   { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
+  { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -186,6 +187,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Indonesian";
     case "pl":
       return "Polish";
+    case "th":
+      return "Thai";
     case "de":
       return "German";
     case "es":
