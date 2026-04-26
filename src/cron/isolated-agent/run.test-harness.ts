@@ -45,6 +45,7 @@ export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
+export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
@@ -170,6 +171,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
+  resolveCliRuntimeExecutionProvider: resolveCliRuntimeExecutionProviderMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
@@ -345,6 +347,7 @@ function resetRunConfigMocks(): void {
 
 function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
+  resolveCliRuntimeExecutionProviderMock.mockReturnValue(undefined);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);

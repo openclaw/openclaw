@@ -7,13 +7,16 @@ import {
   dispatchCronDeliveryMock,
   getChannelPluginMock,
   isHeartbeatOnlyResponseMock,
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   resolveCronPayloadOutcomeMock,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCliRuntimeExecutionProviderMock,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
+  runCliAgentMock,
   restoreFastTestEnv,
   runEmbeddedPiAgentMock,
 } from "./run.test-harness.js";
@@ -468,6 +471,53 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       messageThreadId: 42,
       currentChannelId: "room#42",
     });
+  });
+
+  it("uses the configured CLI runtime for canonical cron providers", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const executor = createMessageToolExecutor({
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as never,
+      liveSelection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(resolveCliRuntimeExecutionProviderMock).toHaveBeenCalledWith({
+      provider: "anthropic",
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            agentRuntime: { id: "claude-cli" },
+          }),
+        }),
+      }),
+      agentId: "default",
+    });
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("lets channels build currentChannelId from split delivery fields", async () => {

@@ -113,6 +113,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
       expect.objectContaining({
         prompt:
           "Reply with exactly OK and nothing else. Do not use tools. Keep the reply to at most 16 tokens.",
+        sessionKey: expect.stringMatching(/^agent:main:probe-claude-cli-/),
         provider: "claude-cli",
         model: "opus",
         thinkLevel: "off",
@@ -127,6 +128,59 @@ describe("runAuthProbes CLI backend dispatch", () => {
         status: "ok",
       }),
     ]);
+  });
+
+  it("uses the configured CLI runtime for canonical provider probes", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "test-token",
+        },
+      },
+      order: {},
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    });
+
+    await runAuthProbes({
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/opus"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:main:probe-anthropic-/),
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("uses a singular token label when the probe cap is one token", async () => {

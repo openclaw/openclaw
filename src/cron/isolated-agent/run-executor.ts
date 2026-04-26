@@ -17,6 +17,7 @@ import {
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCliRuntimeExecutionProvider,
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
@@ -131,10 +132,16 @@ export function createCronPromptExecutor(params: {
         }
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+        const cliExecutionProvider =
+          resolveCliRuntimeExecutionProvider({
+            provider: providerOverride,
+            cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+          }) ?? providerOverride;
+        if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+            : await getCliSessionId(params.cronSession.sessionEntry, cliExecutionProvider);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -145,7 +152,7 @@ export function createCronPromptExecutor(params: {
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
-            provider: providerOverride,
+            provider: cliExecutionProvider,
             model: modelOverride,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,

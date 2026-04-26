@@ -9,6 +9,8 @@ import { getCliSessionBinding, setCliSessionBinding } from "../../agents/cli-ses
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -299,11 +301,22 @@ export function createFollowupRunner(params: {
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const cliExecutionProvider =
+              resolveCliRuntimeExecutionProvider({
+                provider,
+                cfg: runtimeConfig,
+                agentId: run.agentId,
+              }) ?? provider;
+            const authProfile = resolveRunAuthProfile(run, cliExecutionProvider, {
+              config: runtimeConfig,
+            });
             let attemptCompactionCount = 0;
             try {
-              if (isCliProvider(provider, runtimeConfig)) {
-                const cliSessionBinding = getCliSessionBinding(activeSessionEntry, provider);
+              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+                const cliSessionBinding = getCliSessionBinding(
+                  activeSessionEntry,
+                  cliExecutionProvider,
+                );
                 const cliResult = await runCliAgent({
                   sessionId: run.sessionId,
                   sessionKey: run.sessionKey,
@@ -312,7 +325,7 @@ export function createFollowupRunner(params: {
                   workspaceDir: run.workspaceDir,
                   config: runtimeConfig,
                   prompt: queued.prompt,
-                  provider,
+                  provider: cliExecutionProvider,
                   model,
                   thinkLevel: run.thinkLevel,
                   timeoutMs: run.timeoutMs,
