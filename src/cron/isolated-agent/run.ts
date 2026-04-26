@@ -809,8 +809,13 @@ async function finalizeCronRun(params: {
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
-    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
-    if (cliSessionId) {
+    const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
+    const cliSessionId =
+      cliSessionBinding?.sessionId?.trim() || finalRunResult.meta?.agentMeta?.sessionId?.trim();
+    if (cliSessionBinding?.sessionId?.trim()) {
+      const { setCliSessionBinding } = await loadCliRunnerRuntime();
+      setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
+    } else if (cliSessionId) {
       const { setCliSessionId } = await loadCliRunnerRuntime();
       setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
     }

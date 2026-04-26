@@ -179,7 +179,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         sessionKey: expect.stringMatching(/^agent:main:probe-anthropic-/),
         provider: "claude-cli",
         model: "opus",
-        authProfileId: undefined,
+        authProfileId: "anthropic:default",
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );

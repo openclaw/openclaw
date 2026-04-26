@@ -10,6 +10,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentDir,
 } from "../agents/agent-scope.js";
+import { resolveSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -69,6 +70,17 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         cfg: params.cfg,
         agentId,
       }) ?? provider;
+    const sessionEntry = { sessionId, updatedAt: Date.now() };
+    const sessionStore = { "temp:slug-generator": sessionEntry };
+    const authProfileId = await resolveSessionAuthProfileOverride({
+      cfg: params.cfg,
+      provider,
+      agentDir,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "temp:slug-generator",
+      isNewSession: true,
+    });
     const result = isCliProvider(cliExecutionProvider, params.cfg)
       ? await runCliAgent({
           sessionId,
@@ -80,6 +92,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
           prompt,
           provider: cliExecutionProvider,
           model,
+          authProfileId,
           timeoutMs,
           runId,
           cleanupCliLiveSessionOnRunEnd: true,
