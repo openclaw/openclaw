@@ -5,7 +5,11 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+} from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -16,7 +20,54 @@ type AgentListEntry = {
   id: string;
   name?: string;
   configured: boolean;
+  model?: string;
+  embeddedHarness?: {
+    runtime: string;
+    fallback?: "pi" | "none";
+    source: "env" | "agent" | "defaults" | "implicit";
+  };
 };
+
+function normalizeRuntimeValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+function resolveAgentEmbeddedHarnessMetadata(
+  cfg: ReturnType<typeof loadConfig>,
+  agentId: string,
+): AgentListEntry["embeddedHarness"] {
+  const envRuntime = normalizeRuntimeValue(process.env.OPENCLAW_AGENT_RUNTIME);
+  if (envRuntime) {
+    return {
+      runtime: envRuntime,
+      source: "env",
+    };
+  }
+
+  const agentEntry = listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
+  const agentRuntime = normalizeRuntimeValue(agentEntry?.embeddedHarness?.runtime);
+  if (agentRuntime) {
+    return {
+      runtime: agentRuntime,
+      fallback: agentEntry?.embeddedHarness?.fallback,
+      source: "agent",
+    };
+  }
+
+  const defaultsRuntime = normalizeRuntimeValue(cfg.agents?.defaults?.embeddedHarness?.runtime);
+  if (defaultsRuntime) {
+    return {
+      runtime: defaultsRuntime,
+      fallback: cfg.agents?.defaults?.embeddedHarness?.fallback,
+      source: "defaults",
+    };
+  }
+
+  return {
+    runtime: "pi",
+    source: "implicit",
+  };
+}
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;
@@ -89,6 +140,8 @@ export function createAgentsListTool(opts?: {
         id,
         name: configuredNameMap.get(id),
         configured: configuredIds.includes(id),
+        model: resolveAgentEffectiveModelPrimary(cfg, id),
+        embeddedHarness: resolveAgentEmbeddedHarnessMetadata(cfg, id),
       }));
 
       return jsonResult({

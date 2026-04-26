@@ -2,7 +2,13 @@ import { createOpencodeCatalogApiKeyAuthMethod } from "openclaw/plugin-sdk/openc
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
-import { normalizeOpencodeGoBaseUrl } from "./provider-catalog.js";
+import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  listOpencodeGoSupplementalModelCatalogEntries,
+  normalizeOpencodeGoBaseUrl,
+  resolveOpencodeGoSupplementalModel,
+} from "./provider-catalog.js";
+import { createOpencodeGoDeepSeekV4Wrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
 export default definePluginEntry({
@@ -59,8 +65,12 @@ export default definePluginEntry({
             }
           : undefined;
       },
+      resolveDynamicModel: ({ modelId }) => resolveOpencodeGoSupplementalModel(modelId),
+      augmentModelCatalog: () => listOpencodeGoSupplementalModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      wrapStreamFn: (ctx) => createOpencodeGoDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });
+    api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
   },
 });

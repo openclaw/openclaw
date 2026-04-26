@@ -39,6 +39,7 @@ export type ResolvedMemorySearchConfig = {
   local: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   store: {
     driver: "sqlite";
@@ -61,6 +62,7 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    embeddingBatchTimeoutSeconds: number | undefined;
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
@@ -195,6 +197,7 @@ function mergeConfig(
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
@@ -358,6 +361,8 @@ function resolveSyncConfig(
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    embeddingBatchTimeoutSeconds:
+      overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??

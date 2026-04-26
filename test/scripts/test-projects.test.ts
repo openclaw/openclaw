@@ -1,6 +1,9 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
@@ -9,6 +12,7 @@ import {
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
+  shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
 
 describe("scripts/test-projects changed-target routing", () => {
@@ -110,12 +114,38 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes browser extension changes to the browser extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/browser/src/browser/cdp.helpers.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-browser.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/browser/src/browser/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps the broad changed run for shared test helpers", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/helpers/channels/plugin.ts",
       ]),
     ).toBeNull();
+  });
+
+  it("routes precise plugin contract helpers without broad-running every shard", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/plugins/tts-contract-suites.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ]);
   });
 
   it("keeps the broad changed run for unknown root surfaces", () => {
@@ -223,6 +253,110 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes changed source files to sibling tests when present", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "src/agents/live-model-turn-probes.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/live-model-turn-probes.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed ui support files to the ui lane without dead include globs", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/styles/base.css",
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes auto-reply route source files to route regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/auto-reply/reply/dispatch-from-config.ts",
+        "src/auto-reply/reply/effective-reply-route.ts",
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    });
+  });
+
+  it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/cli.test.ts"],
+    });
+  });
+
+  it("routes Google Meet OAuth edits to the lightweight OAuth tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/oauth.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/oauth.test.ts"],
+    });
+  });
+
+  it("routes Google Meet entry edits to the plugin entry tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/index.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/index.test.ts"],
+    });
+  });
+
+  it("routes memory doctor and embedding default edits to focused tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/commands/doctor-memory-search.ts",
+        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "src/memory-host-sdk/host/embeddings.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/doctor-memory-search.test.ts",
+        "src/memory-host-sdk/host/embeddings.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider auth choice edits to focused auth-choice tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugins/provider-auth-choice.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/auth-choice.apply.plugin-provider.test.ts",
+        "src/commands/auth-choice.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider env var edits to focused secret tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/secrets/provider-env-vars.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/secrets/provider-env-vars.dynamic.test.ts",
+        "src/secrets/provider-env-vars.test.ts",
+      ],
+    });
   });
 
   it("routes changed utils and shared files to their light scoped lanes", () => {
@@ -363,6 +497,12 @@ describe("scripts/test-projects changed-target routing", () => {
 });
 
 describe("scripts/test-projects local heavy-check lock", () => {
+  const localCheckEnv = () => ({
+    ...process.env,
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: undefined,
+    OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
+  });
+
   it("skips the lock for a single scoped tooling run", () => {
     expect(
       shouldAcquireLocalHeavyCheckLock(
@@ -373,7 +513,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(false);
   });
@@ -388,9 +528,27 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(true);
+  });
+
+  it("skips the lock when a parent changed gate already holds it", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.unit.config.ts",
+            includePatterns: ["src/infra/vitest-config.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...localCheckEnv(),
+          OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+        },
+      ),
+    ).toBe(false);
   });
 
   it("allows forcing the lock back on", () => {
@@ -404,7 +562,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
           },
         ],
         {
-          ...process.env,
+          ...localCheckEnv(),
           OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
         },
       ),
@@ -805,5 +963,138 @@ describe("scripts/test-projects parallel cache paths", () => {
     );
 
     expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+  });
+});
+
+describe("scripts/test-projects Vitest stall watchdog", () => {
+  it("adds a default no-output timeout to non-watch specs", () => {
+    const [spec] = applyDefaultVitestNoOutputTimeout(
+      [
+        {
+          config: "test/vitest/vitest.extension-feishu.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+      ],
+      { env: { PATH: "/usr/bin" } },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+      DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+    );
+  });
+
+  it("keeps explicit watchdog settings and watch mode untouched", () => {
+    const specs = applyDefaultVitestNoOutputTimeout(
+      [
+        {
+          config: "test/vitest/vitest.extension-feishu.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: true,
+        },
+        {
+          config: "test/vitest/vitest.extension-memory.config.ts",
+          env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0", PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+      ],
+      { env: { PATH: "/usr/bin" } },
+    );
+
+    expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBeUndefined();
+    expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("0");
+  });
+
+  it("allows changed checks to disable automatic silent-run retries", () => {
+    expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1" })).toBe(true);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0" })).toBe(false);
+    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "false" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("scripts/test-projects Vitest cache isolation", () => {
+  it("assigns isolated fs-module caches to multi-spec non-watch runs", () => {
+    const specs = applyDefaultMultiSpecVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.unit-fast.config.ts",
+          env: {},
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.extension-memory.config.ts",
+          env: {},
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+      ],
+      { cwd: "/repo", env: {} },
+    );
+
+    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      path.join(
+        "/repo",
+        "node_modules",
+        ".experimental-vitest-cache",
+        "0-test-vitest-vitest.unit-fast.config.ts",
+      ),
+      path.join(
+        "/repo",
+        "node_modules",
+        ".experimental-vitest-cache",
+        "1-test-vitest-vitest.extension-memory.config.ts",
+      ),
+    ]);
+  });
+
+  it("keeps single-spec and watch runs on the default cache", () => {
+    const single = [
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        env: {},
+        includeFilePath: null,
+        includePatterns: null,
+        pnpmArgs: [],
+        watchMode: false,
+      },
+    ];
+    expect(applyDefaultMultiSpecVitestCachePaths(single, { cwd: "/repo", env: {} })).toBe(single);
+
+    const watch = [
+      {
+        config: "vitest.config.ts",
+        env: {},
+        includeFilePath: null,
+        includePatterns: null,
+        pnpmArgs: [],
+        watchMode: true,
+      },
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        env: {},
+        includeFilePath: null,
+        includePatterns: null,
+        pnpmArgs: [],
+        watchMode: false,
+      },
+    ];
+    expect(applyDefaultMultiSpecVitestCachePaths(watch, { cwd: "/repo", env: {} })).toBe(watch);
   });
 });

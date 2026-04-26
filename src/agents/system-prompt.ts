@@ -347,8 +347,8 @@ function buildMessagingSection(params: {
   const hasSubagents = params.availableTools.has("subagents");
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
-      ? "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children."
-      : "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work."
+      ? '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.'
+      : '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.'
     : hasSubagents
       ? "- Sub-agent orchestration → use `subagents(action=list|steer|kill)` to manage already-spawned children."
       : "";
@@ -381,6 +381,14 @@ function buildMessagingSection(params: {
   ];
 }
 
+function hasNativeCommand(params: { nativeCommandNames?: string[]; command: string }): boolean {
+  const target = normalizeLowercaseStringOrEmpty(params.command);
+  return (params.nativeCommandNames ?? []).some((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name).replace(/^\/+/, "");
+    return normalized === target;
+  });
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -392,22 +400,35 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
+function buildDocsSection(params: {
+  docsPath?: string;
+  sourcePath?: string;
+  isMinimal: boolean;
+  readToolName: string;
+}) {
   const docsPath = params.docsPath?.trim();
-  if (!docsPath || params.isMinimal) {
+  const sourcePath = params.sourcePath?.trim();
+  if (params.isMinimal) {
     return [];
   }
-  return [
+  const lines = [
     "## Documentation",
-    `OpenClaw docs: ${docsPath}`,
+    docsPath ? `OpenClaw docs: ${docsPath}` : "OpenClaw docs: https://docs.openclaw.ai",
     "Mirror: https://docs.openclaw.ai",
+    sourcePath ? `Local source: ${sourcePath}` : undefined,
     "Source: https://github.com/openclaw/openclaw",
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawhub.ai",
-    "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+    docsPath
+      ? "For OpenClaw behavior, commands, config, or architecture: consult local docs first."
+      : "For OpenClaw behavior, commands, config, or architecture: consult the docs mirror first.",
+    sourcePath
+      ? "If docs are incomplete or stale, inspect the local OpenClaw source code before answering."
+      : "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
+  return lines.filter((line): line is string => line !== undefined);
 }
 
 function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
@@ -441,12 +462,15 @@ export function buildAgentSystemPrompt(params: {
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
+  sourcePath?: string;
   workspaceNotes?: string[];
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Registered runtime slash/native command names such as `codex`. */
+  nativeCommandNames?: string[];
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -501,8 +525,8 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
+      ? 'Spawn a sub-agent or ACP coding session; defaults to isolated, native subagents may use context="fork" when current transcript context is required (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      : 'Spawn an isolated sub-agent session; use context="fork" only when current transcript context is required',
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
@@ -555,6 +579,10 @@ export function buildAgentSystemPrompt(params: {
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
+  const nativeCodexCommandAvailable = hasNativeCommand({
+    nativeCommandNames: params.nativeCommandNames,
+    command: "codex",
+  });
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
@@ -663,6 +691,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
+    sourcePath: params.sourcePath,
     isMinimal,
     readToolName,
   });
@@ -702,9 +731,16 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
+    ...(nativeCodexCommandAvailable
+      ? [
+          "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP.",
+          "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+        ]
+      : []),
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',

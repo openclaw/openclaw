@@ -4,14 +4,12 @@ read_when:
   - You want to use Ollama for web_search
   - You want a key-free web_search provider
   - You need Ollama Web Search setup guidance
-title: "Ollama Web Search"
+title: "Ollama web search"
 ---
 
-# Ollama Web Search
-
-OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
-It uses Ollama's experimental web-search API and returns structured results
-with titles, URLs, and snippets.
+OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider. It
+uses Ollama's web-search API and returns structured results with titles, URLs,
+and snippets.
 
 Unlike the Ollama model provider, this setup does not need an API key by
 default. It does require:
@@ -91,8 +89,7 @@ for web-search requests too.
   it does not block selection.
 - Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
   credentialed provider is configured.
-- The provider uses Ollama's experimental `/api/experimental/web_search`
-  endpoint.
+- The provider uses Ollama's `/api/web_search` endpoint.
 
 ## Related
 

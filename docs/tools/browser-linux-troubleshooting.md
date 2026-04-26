@@ -1,10 +1,8 @@
 ---
 summary: "Fix Chrome/Brave/Edge/Chromium CDP startup issues for OpenClaw browser control on Linux"
 read_when: "Browser control fails on Linux, especially with snap Chromium"
-title: "Browser Troubleshooting"
+title: "Browser troubleshooting"
 ---
-
-# Browser Troubleshooting (Linux)
 
 ## Problem: "Failed to start Chrome CDP on port 18800"
 
@@ -26,6 +24,21 @@ chromium-browser is already the newest version (2:1snap1-0ubuntu2).
 ```
 
 This is NOT a real browser - it's just a wrapper.
+
+Other common Linux launch failures:
+
+- `The profile appears to be in use by another Chromium process` means Chrome
+  found stale `Singleton*` lock files in the managed profile directory. OpenClaw
+  removes those locks and retries once when the lock points at a dead or
+  different-host process.
+- `Missing X server or $DISPLAY` means a visible browser was explicitly
+  requested on a host without a desktop session. By default, local managed
+  profiles now fall back to headless mode on Linux when `DISPLAY` and
+  `WAYLAND_DISPLAY` are both unset. If you set `OPENCLAW_BROWSER_HEADLESS=0`,
+  `browser.headless: false`, or `browser.profiles.<name>.headless: false`,
+  remove that headed override, set `OPENCLAW_BROWSER_HEADLESS=1`, start `Xvfb`,
+  run `openclaw browser start --headless` for a one-shot managed launch, or run
+  OpenClaw in a real desktop session.
 
 ### Solution 1: Install Google Chrome (Recommended)
 
@@ -112,14 +125,23 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Config Reference
 
-| Option                   | Description                                                          | Default                                                     |
-| ------------------------ | -------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `browser.enabled`        | Enable browser control                                               | `true`                                                      |
-| `browser.executablePath` | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
-| `browser.headless`       | Run without GUI                                                      | `false`                                                     |
-| `browser.noSandbox`      | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                     |
-| `browser.attachOnly`     | Don't launch browser, only attach to existing                        | `false`                                                     |
-| `browser.cdpPort`        | Chrome DevTools Protocol port                                        | `18800`                                                     |
+| Option                           | Description                                                          | Default                                                     |
+| -------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `browser.enabled`                | Enable browser control                                               | `true`                                                      |
+| `browser.executablePath`         | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
+| `browser.headless`               | Run without GUI                                                      | `false`                                                     |
+| `OPENCLAW_BROWSER_HEADLESS`      | Per-process override for local managed browser headless mode         | unset                                                       |
+| `browser.noSandbox`              | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                     |
+| `browser.attachOnly`             | Don't launch browser, only attach to existing                        | `false`                                                     |
+| `browser.cdpPort`                | Chrome DevTools Protocol port                                        | `18800`                                                     |
+| `browser.localLaunchTimeoutMs`   | Local managed Chrome discovery timeout                               | `15000`                                                     |
+| `browser.localCdpReadyTimeoutMs` | Local managed post-launch CDP readiness timeout                      | `8000`                                                      |
+
+On Raspberry Pi, older VPS hosts, or slow storage, raise
+`browser.localLaunchTimeoutMs` when Chrome needs more time to expose its CDP HTTP
+endpoint. Raise `browser.localCdpReadyTimeoutMs` when launch succeeds but
+`openclaw browser start` still reports `not reachable after start`. Values must
+be positive integers up to `120000` ms; invalid config values are rejected.
 
 ### Problem: "No Chrome tabs found for profile=\"user\""
 
@@ -143,3 +165,9 @@ Notes:
 - Remote CDP profiles accept `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser login](/tools/browser-login)
+- [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

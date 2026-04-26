@@ -2,6 +2,7 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -21,10 +22,14 @@ export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
   prompt: string;
+  /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
+  transcriptPrompt?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  imageOrder?: PromptImageOrderEntry[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
