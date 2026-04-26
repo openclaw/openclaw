@@ -168,18 +168,32 @@ function setupPluginInstallDirs() {
   return { tmpDir, pluginDir, extensionsDir };
 }
 
-function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
+function setupInstallPluginFromDirFixture(params?: {
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  omitDependencies?: boolean;
+}) {
   const caseDir = suiteTempRootTracker.makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(installPluginFromDirTemplateDir, pluginDir, { recursive: true });
-  if (params?.devDependencies) {
+  if (params?.devDependencies || params?.optionalDependencies || params?.omitDependencies) {
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
     };
-    manifest.devDependencies = params.devDependencies;
+    if (params.omitDependencies) {
+      delete manifest.dependencies;
+    }
+    if (params.devDependencies) {
+      manifest.devDependencies = params.devDependencies;
+    }
+    if (params.optionalDependencies) {
+      manifest.optionalDependencies = params.optionalDependencies;
+    }
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
   }
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
@@ -2100,6 +2114,32 @@ describe("installPluginFromDir", () => {
           dirPath: pluginDir,
           extensionsDir,
         }),
+    });
+  });
+
+  it("runs npm install for optional-only dependencies", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
+      omitDependencies: true,
+      optionalDependencies: {
+        "left-pad": "1.3.0",
+      },
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    mockSuccessfulCommandRun(run);
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedTargetDir: res.targetDir,
     });
   });
 
