@@ -122,16 +122,54 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                         |
-| ------------------------------ | --------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                  |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)       |
-| `OPENCLAW_EXTENSIONS`          | Pre-install plugin deps at build time (space-separated names)   |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`) |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                   |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                     |
-| `OPENCLAW_DISABLE_BONJOUR`     | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
+| Variable                        | Purpose                                                         |
+| ------------------------------- | --------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                | Use a remote image instead of building locally                  |
+| `OPENCLAW_DOCKER_APT_PACKAGES`  | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_EXTENSIONS`           | Pre-install plugin deps at build time (space-separated names)   |
+| `OPENCLAW_EXTRA_MOUNTS`         | Extra host bind mounts (comma-separated `source:target[:opts]`) |
+| `OPENCLAW_HOME_VOLUME`          | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_SANDBOX`              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_DOCKER_SOCKET`        | Override Docker socket path                                     |
+| `OPENCLAW_DISABLE_BONJOUR`      | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT` | Signal-specific OTLP endpoints for traces, metrics, or logs     |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`   | OTLP protocol override. Only `http/protobuf` is supported today |
+| `OTEL_SERVICE_NAME`             | Service name used for OpenTelemetry resources                   |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | Opt in to latest experimental GenAI semantic attributes         |
+| `OPENCLAW_OTEL_PRELOADED`       | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+
+### Observability
+
+OpenTelemetry export is outbound from the Gateway container to your OTLP
+collector. It does not require a published Docker port. If you build the image
+locally and want the bundled OpenTelemetry exporter available inside the image,
+include its runtime dependencies:
+
+```bash
+export OPENCLAW_EXTENSIONS="diagnostics-otel"
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
+export OTEL_SERVICE_NAME="openclaw-gateway"
+./scripts/docker/setup.sh
+```
+
+The official OpenClaw Docker release image includes `diagnostics-otel`
+dependencies. To enable export, allow and enable the `diagnostics-otel` plugin
+in config, then set `diagnostics.otel.enabled=true` or use the config example in
+[OpenTelemetry export](/gateway/opentelemetry). Collector auth headers are
+configured through `diagnostics.otel.headers`, not through Docker environment
+variables.
+
+Prometheus metrics use the already-published Gateway port. Enable the
+`diagnostics-prometheus` plugin, then scrape:
+
+```text
+http://<gateway-host>:18789/api/diagnostics/prometheus
+```
+
+The route is protected by Gateway authentication. Do not expose a separate
+public `/metrics` port or unauthenticated reverse-proxy path. See
+[Prometheus metrics](/gateway/prometheus).
 
 ### Health checks
 
