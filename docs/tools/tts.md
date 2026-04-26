@@ -5,6 +5,7 @@ read_when:
   - Configuring a TTS provider, fallback chain, or persona
   - Using /tts commands or directives
 title: "Text-to-speech"
+sidebarTitle: "Text to speech (TTS)"
 ---
 
 OpenClaw can convert outbound replies into audio across **13 speech providers**
