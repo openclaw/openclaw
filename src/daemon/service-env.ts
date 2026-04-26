@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -28,6 +29,7 @@ export type MinimalServicePathOptions = {
   extraDirs?: string[];
   home?: string;
   env?: Record<string, string | undefined>;
+  pathExists?: (dir: string) => boolean;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -79,6 +81,24 @@ function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   }
 }
 
+function defaultPathExists(dir: string): boolean {
+  try {
+    return fs.existsSync(dir);
+  } catch {
+    return false;
+  }
+}
+
+function addExistingDir(
+  dirs: string[],
+  dir: string | undefined,
+  pathExists: (dir: string) => boolean,
+): void {
+  if (dir && pathExists(dir)) {
+    dirs.push(dir);
+  }
+}
+
 function appendSubdir(base: string | undefined, subdir: string): string | undefined {
   if (!base) {
     return undefined;
@@ -90,9 +110,16 @@ function addCommonUserBinDirs(dirs: string[], home: string): void {
   dirs.push(`${home}/.local/bin`);
   dirs.push(`${home}/.npm-global/bin`);
   dirs.push(`${home}/bin`);
-  dirs.push(`${home}/.volta/bin`);
-  dirs.push(`${home}/.asdf/shims`);
-  dirs.push(`${home}/.bun/bin`);
+}
+
+function addCommonVersionManagerFallbackDirs(
+  dirs: string[],
+  home: string,
+  pathExists: (dir: string) => boolean,
+): void {
+  addExistingDir(dirs, `${home}/.volta/bin`, pathExists);
+  addExistingDir(dirs, `${home}/.asdf/shims`, pathExists);
+  addExistingDir(dirs, `${home}/.bun/bin`, pathExists);
 }
 
 function addCommonEnvConfiguredBinDirs(
@@ -144,6 +171,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 export function resolveDarwinUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  pathExists: (dir: string) => boolean = defaultPathExists,
 ): string[] {
   if (!home) {
     return [];
@@ -164,6 +192,7 @@ export function resolveDarwinUserBinDirs(
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
+  addCommonVersionManagerFallbackDirs(dirs, home, pathExists);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env);
@@ -171,11 +200,11 @@ export function resolveDarwinUserBinDirs(
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, pathExists); // fnm default
+  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, pathExists); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  dirs.push(`${home}/Library/pnpm`); // pnpm default
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+  addExistingDir(dirs, `${home}/Library/pnpm`, pathExists); // pnpm default
+  addExistingDir(dirs, `${home}/.local/share/pnpm`, pathExists); // pnpm XDG fallback
 
   return dirs;
 }
@@ -187,6 +216,7 @@ export function resolveDarwinUserBinDirs(
 export function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  pathExists: (dir: string) => boolean = defaultPathExists,
 ): string[] {
   if (!home) {
     return [];
@@ -202,23 +232,25 @@ export function resolveLinuxUserBinDirs(
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
+  addCommonVersionManagerFallbackDirs(dirs, home, pathExists);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env);
 
   // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.local/share/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.local/share/fnm/current/bin`); // fnm legacy current symlink
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
-  dirs.push(`${home}/.fnm/current/bin`); // fnm legacy current symlink
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  addExistingDir(dirs, `${home}/.nvm/current/bin`, pathExists); // nvm with current symlink
+  addExistingDir(dirs, `${home}/.local/share/fnm/aliases/default/bin`, pathExists); // fnm default
+  addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, pathExists); // fnm legacy current symlink
+  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, pathExists); // fnm if customized to ~/.fnm
+  addExistingDir(dirs, `${home}/.fnm/current/bin`, pathExists); // fnm legacy current symlink
+  addExistingDir(dirs, `${home}/.local/share/pnpm`, pathExists); // pnpm global bin
 
   return dirs;
 }
 
 export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
+  const pathExists = options.pathExists ?? defaultPathExists;
   if (platform === "win32") {
     return [];
   }
@@ -230,9 +262,9 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
   const userDirs =
     platform === "linux"
-      ? resolveLinuxUserBinDirs(options.home, options.env)
+      ? resolveLinuxUserBinDirs(options.home, options.env, pathExists)
       : platform === "darwin"
-        ? resolveDarwinUserBinDirs(options.home, options.env)
+        ? resolveDarwinUserBinDirs(options.home, options.env, pathExists)
         : [];
 
   const add = (dir: string) => {

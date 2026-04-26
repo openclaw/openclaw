@@ -13,25 +13,43 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
-  it("includes user bin directories when HOME is set on Linux", () => {
+  it("includes common user bin directories but skips missing version-manager fallbacks on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      pathExists: () => false,
     });
 
-    // Should include all common user bin directories
+    // Stable user bin conventions remain available.
     expect(result).toContain("/home/testuser/.local/bin");
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
-    expect(result).toContain("/home/testuser/.nvm/current/bin");
-    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
-    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
-    expect(result).toContain("/home/testuser/.fnm/aliases/default/bin");
-    expect(result).toContain("/home/testuser/.fnm/current/bin");
+
+    // Version/package-manager fallbacks should not be written unless present on disk.
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.local/share/pnpm");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+  });
+
+  it("includes Linux version-manager fallback dirs that exist on disk", () => {
+    const existing = new Set(["/home/testuser/.volta/bin", "/home/testuser/.local/share/pnpm"]);
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      pathExists: (dir) => existing.has(dir),
+    });
+
     expect(result).toContain("/home/testuser/.volta/bin");
-    expect(result).toContain("/home/testuser/.asdf/shims");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
-    expect(result).toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
   });
 
   it("excludes user bin directories when HOME is undefined on Linux", () => {
@@ -81,6 +99,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
   it("includes env-configured bin roots when HOME is set on Linux", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "linux",
+      pathExists: () => false,
       env: {
         HOME: "/home/testuser",
         PNPM_HOME: "/opt/pnpm",
@@ -103,35 +122,56 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("includes version manager directories on macOS when HOME is set", () => {
+  it("includes common user bin directories but skips missing version-manager fallbacks on macOS", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      pathExists: () => false,
     });
 
-    // Should include common user bin directories
+    // Stable user bin conventions remain available.
     expect(result).toContain("/Users/testuser/.local/bin");
     expect(result).toContain("/Users/testuser/.npm-global/bin");
     expect(result).toContain("/Users/testuser/bin");
 
-    // Should include version manager paths (macOS specific)
-    // Note: nvm has no stable default path, relies on user's shell config
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin"); // fnm default on macOS
-    expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
-    expect(result).toContain("/Users/testuser/.volta/bin");
-    expect(result).toContain("/Users/testuser/.asdf/shims");
-    expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
-    expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
-    expect(result).toContain("/Users/testuser/.bun/bin");
+    // Version/package-manager fallbacks should not be written unless present on disk.
+    expect(result).not.toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
+    expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
+    expect(result).not.toContain("/Users/testuser/.bun/bin");
 
     // Should also include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
     expect(result).toContain("/usr/local/bin");
   });
 
+  it("includes macOS version-manager fallback dirs that exist on disk", () => {
+    const existing = new Set([
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+      "/Users/testuser/Library/pnpm",
+    ]);
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      pathExists: (dir) => existing.has(dir),
+    });
+
+    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
+    expect(result).toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
+  });
+
   it("includes env-configured version manager dirs on macOS", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "darwin",
+      pathExists: () => false,
       env: {
         HOME: "/Users/testuser",
         FNM_DIR: "/Users/testuser/Library/Application Support/fnm",
@@ -148,10 +188,12 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/Library/pnpm");
   });
 
-  it("places version manager dirs before system dirs on macOS", () => {
+  it("places existing version manager dirs before system dirs on macOS", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      pathExists: (dir) =>
+        dir === "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
     });
 
     // fnm on macOS defaults to ~/Library/Application Support/fnm
@@ -295,18 +337,22 @@ describe("buildMinimalServicePath", () => {
     expect(result).toBe("C:\\\\Windows\\\\System32");
   });
 
-  it("includes Linux user directories when HOME is set in env", () => {
+  it("includes stable Linux user directories when HOME is set in env", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/alice" },
+      pathExists: () => false,
     });
     const parts = splitPath(result, "linux");
 
-    // Verify user directories are included
+    // Verify stable user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
-    expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
+    expect(parts).toContain("/home/alice/bin");
+
+    // Missing version-manager fallbacks are not frozen into the service PATH.
+    expect(parts).not.toContain("/home/alice/.nvm/current/bin");
+    expect(parts).not.toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
@@ -366,11 +412,12 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
       env: { HOME: "/home/alice" },
+      pathExists: () => false,
     });
     const parts = splitPath(result, "linux");
 
     expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
+    expect(parts).not.toContain("/home/alice/.nvm/current/bin");
   });
 });
 
