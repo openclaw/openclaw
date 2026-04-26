@@ -577,17 +577,31 @@ is_arch_linux() {
     return 1
 }
 
+apt_get() {
+    if is_root; then
+        env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
+    else
+        sudo env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
+    fi
+}
+
+apt_get_update() {
+    apt_get update -qq
+}
+
+apt_get_install() {
+    apt_get install -y -qq \
+        -o Dpkg::Options::=--force-confdef \
+        -o Dpkg::Options::=--force-confold \
+        "$@"
+}
+
 install_build_tools_linux() {
     require_sudo
 
     if command -v apt-get &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Updating package index" apt-get update -qq
-            run_quiet_step "Installing build tools" apt-get install -y -qq build-essential python3 make g++ cmake
-        else
-            run_quiet_step "Updating package index" sudo apt-get update -qq
-            run_quiet_step "Installing build tools" sudo apt-get install -y -qq build-essential python3 make g++ cmake
-        fi
+        run_quiet_step "Updating package index" apt_get_update
+        run_quiet_step "Installing build tools" apt_get_install build-essential python3 make g++ cmake
         return 0
     fi
 
@@ -1446,10 +1460,10 @@ install_node() {
             run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" apt_get_install nodejs
             else
                 run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
@@ -1536,13 +1550,8 @@ install_git() {
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
         if command -v apt-get &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Updating package index" apt-get update -qq
-                run_quiet_step "Installing Git" apt-get install -y -qq git
-            else
-                run_quiet_step "Updating package index" sudo apt-get update -qq
-                run_quiet_step "Installing Git" sudo apt-get install -y -qq git
-            fi
+            run_quiet_step "Updating package index" apt_get_update
+            run_quiet_step "Installing Git" apt_get_install git
         elif command -v pacman &> /dev/null || is_arch_linux; then
             if is_root; then
                 run_quiet_step "Installing Git" pacman -Sy --noconfirm git
@@ -2282,6 +2291,11 @@ main() {
     print_installer_banner
     print_gum_status
     detect_os_or_die
+
+    if [[ "$OS" == "linux" ]]; then
+        export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+        export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+    fi
 
     local detected_checkout=""
     detected_checkout="$(detect_openclaw_checkout "$PWD" || true)"
