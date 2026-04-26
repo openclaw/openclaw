@@ -821,6 +821,10 @@ Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 /tts off
 /tts on
 /tts status
+/tts chat on
+/tts chat off
+/tts chat default
+/tts latest
 /tts provider openai
 /tts limit 2000
 /tts summary off
@@ -833,9 +837,11 @@ Notes:
 - `commands.text` or native command registration must be enabled.
 - Config `messages.tts.auto` accepts `off|always|inbound|tagged`.
 - `/tts on` writes the local TTS preference to `always`; `/tts off` writes it to `off`.
+- `/tts chat on|off|default` writes a session-scoped auto-TTS override for the current chat.
 - Use config when you want `inbound` or `tagged` defaults.
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
+- `/tts latest` reads the latest assistant reply from the current session transcript and sends it as audio once. It stores only a hash of that reply on the session entry to suppress duplicate voice sends.
 - `/tts status` includes fallback visibility for the latest attempt:
   - success fallback: `Fallback: <primary> -> <used>` plus `Attempts: ...`
   - failure: `Error: ...` plus `Attempts: ...`
