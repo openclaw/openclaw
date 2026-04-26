@@ -394,9 +394,17 @@ export async function ensureFunnel(
   }
 }
 
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
+export async function enableTailscaleServe(
+  port: number,
+  tlsBackend = false,
+  exec: typeof runExec = runExec,
+) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
+  const target = tlsBackend ? `https+insecure://127.0.0.1:${port}` : `${port}`;
+  const args = tlsBackend
+    ? ["serve", "--bg", "--yes", "--https", "443", target]
+    : ["serve", "--bg", "--yes", target];
+  await execWithSudoFallback(exec, tailscaleBin, args, {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });

@@ -760,6 +760,7 @@ export async function startGatewayPostAttachRuntime(
             tailscaleMode: params.tailscaleMode,
             resetOnExit: params.resetOnExit,
             port: params.port,
+            tlsEnabled: params.tlsEnabled,
             controlUiBasePath: params.controlUiBasePath,
             logTailscale: params.logTailscale,
           }),
