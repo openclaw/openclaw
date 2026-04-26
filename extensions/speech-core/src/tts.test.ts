@@ -713,6 +713,89 @@ describe("speech-core native voice-note routing", () => {
       }
     }
   });
+  it("skips plain fallback providers when an explicit plain variant is empty", async () => {
+    const elevenSynthesize = vi.fn(async () => {
+      throw new Error("elevenlabs unavailable");
+    });
+    const plainSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+      autoSelectOrder: 1,
+    });
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([eleven, plain]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-pra-empty-plain-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "[warmly][softly]" } satisfies ReplyPayload, {
+      ttsSourceText: "[warmly][softly]",
+      ttsPlainText: "",
+    });
+
+    const result = await maybeApplyTtsToPayload({
+      payload,
+      cfg,
+      channel: "slack",
+      kind: "final",
+    });
+
+    expect(elevenSynthesize).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "[warmly][softly]" }),
+    );
+    expect(plainSynthesize).not.toHaveBeenCalled();
+    expect(result.mediaUrl).toBeUndefined();
+  });
+
+  it("applies the short-text gate to per-provider fallback variants", async () => {
+    const elevenSynthesize = vi.fn(async () => {
+      throw new Error("elevenlabs unavailable");
+    });
+    const plainSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+      autoSelectOrder: 1,
+    });
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([eleven, plain]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-pra-short-plain-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "hi" } satisfies ReplyPayload, {
+      ttsSourceText: "[warmly] hi",
+      ttsPlainText: "hi",
+    });
+
+    const result = await maybeApplyTtsToPayload({
+      payload,
+      cfg,
+      channel: "slack",
+      kind: "final",
+    });
+
+    expect(elevenSynthesize).toHaveBeenCalledWith(expect.objectContaining({ text: "[warmly] hi" }));
+    expect(plainSynthesize).not.toHaveBeenCalled();
+    expect(result.mediaUrl).toBeUndefined();
+  });
 });
 
 describe("speech-core per-agent TTS config", () => {

@@ -34,6 +34,12 @@ describe("stripEmotionTags", () => {
 
     expect(result).toEqual({ text: "\nHello there", changed: true });
   });
+
+  test("does not leave a leading space after stripping adjacent emotion tags", () => {
+    const result = stripEmotionTags("[warmly][softly] hello there");
+
+    expect(result).toEqual({ text: "hello there", changed: true });
+  });
 });
 
 describe("sanitizeEmotionTagsForMode", () => {
@@ -67,5 +73,13 @@ describe("sanitizeEmotionTagsForMode", () => {
     });
 
     expect(result).toEqual({ text: "```ts\nconst items = [\n```", changed: false });
+  });
+
+  test("leaves text unchanged when emotion mode is unspecified", () => {
+    const result = sanitizeEmotionTagsForMode("hello [soft", undefined, {
+      allowTrailingPartialTag: true,
+    });
+
+    expect(result).toEqual({ text: "hello [soft", changed: false });
   });
 });
