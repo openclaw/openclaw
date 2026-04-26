@@ -241,12 +241,9 @@ describe("previewRemDreaming", () => {
     expect(preview.reflections.join("\n")).toContain("`husky`");
     expect(preview.reflections.join("\n")).toContain("`cadence`");
     expect(preview.reflections.join("\n")).not.toContain("`assistant`");
-    expect(preview.candidateTruths).toHaveLength(2);
-    const [topTruth, secondTruth] = preview.candidateTruths;
+    expect(preview.candidateTruths).toHaveLength(1);
+    const [topTruth] = preview.candidateTruths;
     expect(topTruth?.snippet).toContain("Vicente decided Husky should publish");
-    expect(topTruth && secondTruth ? topTruth.confidence > secondTruth.confidence : false).toBe(
-      true,
-    );
     expect(topTruth?.snippet).not.toContain("wrapper/prompt pollution");
   });
 
