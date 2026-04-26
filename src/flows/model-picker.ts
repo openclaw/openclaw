@@ -933,16 +933,14 @@ export function applyModelFallbacksFromSelection(
     scopeKeySet && !includesResolvedPrimary
       ? rawSelectedFallbacks.filter((key) => existingFallbackSet.has(key))
       : rawSelectedFallbacks;
-  const fallbacks = scopeKeySet
-    ? mergeScopedFallbackSelection({
-        existingFallbacks,
-        selectedFallbacks,
-        scopeKeySet,
-      })
-    : mergeUnscopedFallbackSelection({
-        existingFallbacks,
-        selectedFallbacks,
-      });
+  const preserveExistingFallback = scopeKeySet
+    ? (fallback: string) => !scopeKeySet.has(fallback)
+    : (fallback: string) => !isModelPickerVisibleModelRef(fallback);
+  const fallbacks = mergeFallbackSelection({
+    existingFallbacks,
+    selectedFallbacks,
+    preserveExistingFallback,
+  });
   const nextModel = {
     ...preservedModelFields,
     ...(existingPrimary != null ? { primary: existingPrimary } : {}),
@@ -973,41 +971,16 @@ export function applyModelFallbacksFromSelection(
   };
 }
 
-function mergeScopedFallbackSelection(params: {
+function mergeFallbackSelection(params: {
   existingFallbacks: string[];
   selectedFallbacks: string[];
-  scopeKeySet: Set<string>;
+  preserveExistingFallback: (fallback: string) => boolean;
 }): string[] {
   const selected = new Set(params.selectedFallbacks);
   const fallbacks: string[] = [];
   for (const fallback of params.existingFallbacks) {
-    if (!params.scopeKeySet.has(fallback)) {
+    if (params.preserveExistingFallback(fallback)) {
       fallbacks.push(fallback);
-      continue;
-    }
-    if (selected.delete(fallback)) {
-      fallbacks.push(fallback);
-    }
-  }
-  for (const fallback of params.selectedFallbacks) {
-    if (selected.has(fallback)) {
-      fallbacks.push(fallback);
-    }
-  }
-  return fallbacks;
-}
-
-function mergeUnscopedFallbackSelection(params: {
-  existingFallbacks: string[];
-  selectedFallbacks: string[];
-}): string[] {
-  const selected = new Set(params.selectedFallbacks);
-  const fallbacks: string[] = [];
-  for (const fallback of params.existingFallbacks) {
-    if (!isModelPickerVisibleModelRef(fallback)) {
-      fallbacks.push(fallback);
-      // Defensive: future callers may pass a hidden fallback in the selected list.
-      selected.delete(fallback);
       continue;
     }
     if (selected.delete(fallback)) {
