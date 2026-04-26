@@ -134,6 +134,39 @@ describe("formatBackupCreateSummary", () => {
   });
 });
 
+describe("isTarEofRaceError", () => {
+  const { isTarEofRaceError } = backupCreateInternals;
+
+  it.each([
+    "did not encounter expected EOF",
+    "encountered unexpected EOF",
+    "TAR_BAD_ARCHIVE: Unrecognized archive format",
+    "Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)",
+  ])("matches tar-specific EOF-class error: %s", (message) => {
+    expect(isTarEofRaceError(new Error(message))).toBe(true);
+  });
+
+  it("matches errors by code even when the message is empty", () => {
+    expect(isTarEofRaceError(Object.assign(new Error(""), { code: "EOF" }))).toBe(true);
+  });
+
+  it.each([
+    "EOF occurred in violation of protocol",
+    "unexpected eof while reading",
+    "ran out of EOF markers",
+    "permission denied",
+    "",
+  ])("does not match unrelated errors: %s", (message) => {
+    expect(isTarEofRaceError(new Error(message))).toBe(false);
+  });
+
+  it("rejects non-object inputs", () => {
+    expect(isTarEofRaceError(null)).toBe(false);
+    expect(isTarEofRaceError(undefined)).toBe(false);
+    expect(isTarEofRaceError("did not encounter expected EOF")).toBe(false);
+  });
+});
+
 describe("writeTarArchiveWithRetry", () => {
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
