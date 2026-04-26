@@ -77,15 +77,15 @@ const ExecSecretRefSchema = z
 
 const BUILT_IN_SECRET_SOURCES = ["env", "file", "exec"] as const;
 
+function sourceIsBuiltIn(value: unknown): value is "env" | "file" | "exec" {
+  return (
+    typeof value === "string" && (BUILT_IN_SECRET_SOURCES as readonly string[]).includes(value)
+  );
+}
+
 const PluginSecretRefSchema = z
   .object({
-    source: z
-      .string()
-      .min(1)
-      .refine(
-        (value) => !(BUILT_IN_SECRET_SOURCES as readonly string[]).includes(value),
-        'Source matches a built-in name; use the built-in SecretRef schema for "env", "file", or "exec".',
-      ),
+    source: z.string().min(1),
     provider: z
       .string()
       .regex(
@@ -96,10 +96,35 @@ const PluginSecretRefSchema = z
   })
   .strict();
 
-export const SecretRefSchema = z.union([
-  z.discriminatedUnion("source", [EnvSecretRefSchema, FileSecretRefSchema, ExecSecretRefSchema]),
-  PluginSecretRefSchema,
+const BuiltInSecretRefSchema = z.discriminatedUnion("source", [
+  EnvSecretRefSchema,
+  FileSecretRefSchema,
+  ExecSecretRefSchema,
 ]);
+
+// Route by `source` discriminator: built-in sources go through the strict
+// per-source schemas (which produce the precise error messages downstream
+// validation expects); anything else goes through the plugin schema. Using
+// superRefine instead of z.union preserves the single-arm error reporting
+// shape that validation.ts:mapZodIssueToConfigIssue depends on.
+export const SecretRefSchema: z.ZodTypeAny = z.unknown().superRefine((value, ctx) => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    ctx.addIssue({ code: "custom", message: "Secret reference must be an object." });
+    return;
+  }
+  const source = (value as { source?: unknown }).source;
+  const schema = sourceIsBuiltIn(source) ? BuiltInSecretRefSchema : PluginSecretRefSchema;
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      ctx.addIssue({
+        code: "custom",
+        message: issue.message,
+        path: issue.path as PropertyKey[],
+      });
+    }
+  }
+});
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
@@ -165,29 +190,37 @@ const SecretsExecProviderSchema = z
 
 /**
  * Plugin-owned secret-provider config. The plugin's own SecretProviderPlugin.validateConfig
- * enforces vendor-specific shape; core only validates that source is a non-empty string
- * that does not collide with the built-in names.
+ * enforces vendor-specific shape; core only validates that source is a non-empty string.
  */
-const SecretsPluginProviderSchema = z
-  .object({
-    source: z
-      .string()
-      .min(1)
-      .refine(
-        (value) => !(BUILT_IN_SECRET_SOURCES as readonly string[]).includes(value),
-        'Source matches a built-in name; use the built-in provider schema for "env", "file", or "exec".',
-      ),
-  })
-  .catchall(z.unknown());
+const SecretsPluginProviderSchema = z.object({ source: z.string().min(1) }).catchall(z.unknown());
 
-export const SecretProviderSchema = z.union([
-  z.discriminatedUnion("source", [
-    SecretsEnvProviderSchema,
-    SecretsFileProviderSchema,
-    SecretsExecProviderSchema,
-  ]),
-  SecretsPluginProviderSchema,
+const BuiltInSecretProviderSchema = z.discriminatedUnion("source", [
+  SecretsEnvProviderSchema,
+  SecretsFileProviderSchema,
+  SecretsExecProviderSchema,
 ]);
+
+// Route by `source` discriminator (see SecretRefSchema for rationale).
+export const SecretProviderSchema: z.ZodTypeAny = z.unknown().superRefine((value, ctx) => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    ctx.addIssue({ code: "custom", message: "Secret provider config must be an object." });
+    return;
+  }
+  const source = (value as { source?: unknown }).source;
+  const schema = sourceIsBuiltIn(source)
+    ? BuiltInSecretProviderSchema
+    : SecretsPluginProviderSchema;
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      ctx.addIssue({
+        code: "custom",
+        message: issue.message,
+        path: issue.path as PropertyKey[],
+      });
+    }
+  }
+});
 
 export const SecretsConfigSchema = z
   .object({

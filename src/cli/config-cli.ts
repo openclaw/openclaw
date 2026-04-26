@@ -780,7 +780,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     const issueMessage = issue?.message ?? "Invalid provider config.";
     throw new Error(`Provider builder config invalid at ${issuePath}: ${issueMessage}`);
   }
-  return validated.data;
+  return validated.data as SecretProviderConfig;
 }
 
 function parseSecretRefFromUnknown(value: unknown, label: string): SecretRef {

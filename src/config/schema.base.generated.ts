@@ -961,141 +961,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           providers: {
             type: "object",
             properties: {},
-            additionalProperties: {
-              oneOf: [
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "env",
-                    },
-                    allowlist: {
-                      maxItems: 256,
-                      type: "array",
-                      items: {
-                        type: "string",
-                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                      },
-                    },
-                  },
-                  required: ["source"],
-                  additionalProperties: false,
-                },
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "file",
-                    },
-                    path: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                    mode: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "singleValue",
-                        },
-                        {
-                          type: "string",
-                          const: "json",
-                        },
-                      ],
-                    },
-                    timeoutMs: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 120000,
-                    },
-                    maxBytes: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 20971520,
-                    },
-                    allowInsecurePath: {
-                      type: "boolean",
-                    },
-                  },
-                  required: ["source", "path"],
-                  additionalProperties: false,
-                },
-                {
-                  type: "object",
-                  properties: {
-                    source: {
-                      type: "string",
-                      const: "exec",
-                    },
-                    command: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                    args: {
-                      maxItems: 128,
-                      type: "array",
-                      items: {
-                        type: "string",
-                        maxLength: 1024,
-                      },
-                    },
-                    timeoutMs: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 120000,
-                    },
-                    noOutputTimeoutMs: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 120000,
-                    },
-                    maxOutputBytes: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 20971520,
-                    },
-                    jsonOnly: {
-                      type: "boolean",
-                    },
-                    env: {
-                      type: "object",
-                      propertyNames: {
-                        type: "string",
-                      },
-                      additionalProperties: {
-                        type: "string",
-                      },
-                    },
-                    passEnv: {
-                      maxItems: 128,
-                      type: "array",
-                      items: {
-                        type: "string",
-                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                      },
-                    },
-                    trustedDirs: {
-                      maxItems: 64,
-                      type: "array",
-                      items: {
-                        type: "string",
-                        minLength: 1,
-                      },
-                    },
-                    allowInsecurePath: {
-                      type: "boolean",
-                    },
-                    allowSymlinkCommand: {
-                      type: "boolean",
-                    },
-                  },
-                  required: ["source", "command"],
-                  additionalProperties: false,
-                },
-              ],
-            },
+            additionalProperties: {},
           },
           defaults: {
             type: "object",
@@ -1548,65 +1414,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     {
                       type: "string",
                     },
-                    {
-                      oneOf: [
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "env",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "file",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "exec",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                      ],
-                    },
+                    {},
                   ],
                   title: "Model Provider API Key",
                   description:
@@ -1708,65 +1516,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                       },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
+                      {},
                     ],
                   },
                   title: "Model Provider Headers",
@@ -1792,65 +1542,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                       },
                       title: "Model Provider Request Headers",
@@ -1888,65 +1580,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                               title: "Model Provider Request Bearer Token",
                               description:
@@ -1977,65 +1611,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                               title: "Model Provider Request Auth Header Value",
                               description:
@@ -2076,65 +1652,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS CA",
                                   description:
@@ -2145,65 +1663,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Cert",
                                   description:
@@ -2214,65 +1674,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Key",
                                   description:
@@ -2283,65 +1685,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Passphrase",
                                   description:
@@ -2394,65 +1738,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS CA",
                                   description:
@@ -2463,65 +1749,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Cert",
                                   description:
@@ -2532,65 +1760,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Key",
                                   description:
@@ -2601,65 +1771,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                   title: "Model Provider Request Proxy TLS Passphrase",
                                   description:
@@ -2700,65 +1812,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                           title: "Model Provider Request TLS CA",
                           description:
@@ -2769,65 +1823,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                           title: "Model Provider Request TLS Cert",
                           description:
@@ -2838,65 +1834,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                           title: "Model Provider Request TLS Key",
                           description:
@@ -2907,65 +1845,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                           title: "Model Provider Request TLS Passphrase",
                           description: "Optional passphrase used to decrypt request.tls.key.",
@@ -4428,65 +3308,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                         title: "Remote Embedding API Key",
                         description:
@@ -5979,65 +4801,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                       },
                       certificateData: {
@@ -6045,65 +4809,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                       },
                       knownHostsData: {
@@ -6111,65 +4817,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                       },
                     },
@@ -6489,65 +5137,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                         headers: {
@@ -6965,65 +5555,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                               },
@@ -7106,65 +5638,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                         },
@@ -7743,65 +6217,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                         certificateData: {
@@ -7809,65 +6225,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                         knownHostsData: {
@@ -7875,65 +6233,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                       },
@@ -8610,65 +6910,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       {
                         type: "string",
                       },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
+                      {},
                     ],
                   },
                   openaiCodex: {
@@ -8828,65 +7070,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           {
                             type: "string",
                           },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
+                          {},
                         ],
                       },
                       baseUrl: {
@@ -9086,65 +7270,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                         },
@@ -9173,65 +7299,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                               },
@@ -9254,65 +7322,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 prefix: {
@@ -9341,65 +7351,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     cert: {
@@ -9407,65 +7359,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     key: {
@@ -9473,65 +7367,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     passphrase: {
@@ -9539,65 +7375,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     serverName: {
@@ -9632,65 +7410,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     cert: {
@@ -9698,65 +7418,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     key: {
@@ -9764,65 +7426,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     passphrase: {
@@ -9830,65 +7434,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     serverName: {
@@ -9914,65 +7460,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                             },
                             cert: {
@@ -9980,65 +7468,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                             },
                             key: {
@@ -10046,65 +7476,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                             },
                             passphrase: {
@@ -10112,65 +7484,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 {
                                   type: "string",
                                 },
-                                {
-                                  oneOf: [
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "env",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "file",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                    {
-                                      type: "object",
-                                      properties: {
-                                        source: {
-                                          type: "string",
-                                          const: "exec",
-                                        },
-                                        provider: {
-                                          type: "string",
-                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                        },
-                                        id: {
-                                          type: "string",
-                                        },
-                                      },
-                                      required: ["source", "provider", "id"],
-                                      additionalProperties: false,
-                                    },
-                                  ],
-                                },
+                                {},
                               ],
                             },
                             serverName: {
@@ -10403,65 +7717,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                       },
@@ -10490,65 +7746,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                             },
@@ -10571,65 +7769,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                               prefix: {
@@ -10658,65 +7798,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -10724,65 +7806,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -10790,65 +7814,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -10856,65 +7822,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -10949,65 +7857,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -11015,65 +7865,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -11081,65 +7873,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -11147,65 +7881,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -11231,65 +7907,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           cert: {
@@ -11297,65 +7915,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           key: {
@@ -11363,65 +7923,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           passphrase: {
@@ -11429,65 +7931,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           serverName: {
@@ -11685,65 +8129,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                             },
@@ -11772,65 +8158,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                   },
@@ -11853,65 +8181,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     prefix: {
@@ -11940,65 +8210,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -12006,65 +8218,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -12072,65 +8226,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -12138,65 +8234,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -12231,65 +8269,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -12297,65 +8277,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -12363,65 +8285,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -12429,65 +8293,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -12513,65 +8319,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 cert: {
@@ -12579,65 +8327,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 key: {
@@ -12645,65 +8335,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 passphrase: {
@@ -12711,65 +8343,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 serverName: {
@@ -12994,65 +8568,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                         title: "Audio Request Headers",
@@ -13090,65 +8606,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                                 title: "Audio Request Bearer Token",
                                 description:
@@ -13180,65 +8638,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                                 title: "Audio Request Auth Header Value",
                                 description:
@@ -13279,65 +8679,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -13345,65 +8687,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -13411,65 +8695,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -13477,65 +8703,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -13579,65 +8747,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -13645,65 +8755,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -13711,65 +8763,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -13777,65 +8771,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -13867,65 +8803,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           cert: {
@@ -13933,65 +8811,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           key: {
@@ -13999,65 +8819,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           passphrase: {
@@ -14065,65 +8827,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           serverName: {
@@ -14327,65 +9031,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                             },
@@ -14414,65 +9060,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                   },
@@ -14495,65 +9083,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     prefix: {
@@ -14582,65 +9112,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -14648,65 +9120,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -14714,65 +9128,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -14780,65 +9136,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -14873,65 +9171,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -14939,65 +9179,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -15005,65 +9187,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -15071,65 +9195,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -15155,65 +9221,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 cert: {
@@ -15221,65 +9229,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 key: {
@@ -15287,65 +9237,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 passphrase: {
@@ -15353,65 +9245,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 serverName: {
@@ -15639,65 +9473,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                             },
-                            {
-                              oneOf: [
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "env",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "file",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                                {
-                                  type: "object",
-                                  properties: {
-                                    source: {
-                                      type: "string",
-                                      const: "exec",
-                                    },
-                                    provider: {
-                                      type: "string",
-                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                    },
-                                    id: {
-                                      type: "string",
-                                    },
-                                  },
-                                  required: ["source", "provider", "id"],
-                                  additionalProperties: false,
-                                },
-                              ],
-                            },
+                            {},
                           ],
                         },
                       },
@@ -15726,65 +9502,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                             },
@@ -15807,65 +9525,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                               prefix: {
@@ -15894,65 +9554,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -15960,65 +9562,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -16026,65 +9570,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -16092,65 +9578,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -16185,65 +9613,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   cert: {
@@ -16251,65 +9621,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   key: {
@@ -16317,65 +9629,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   passphrase: {
@@ -16383,65 +9637,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                       {
                                         type: "string",
                                       },
-                                      {
-                                        oneOf: [
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "env",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "file",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                          {
-                                            type: "object",
-                                            properties: {
-                                              source: {
-                                                type: "string",
-                                                const: "exec",
-                                              },
-                                              provider: {
-                                                type: "string",
-                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                              },
-                                              id: {
-                                                type: "string",
-                                              },
-                                            },
-                                            required: ["source", "provider", "id"],
-                                            additionalProperties: false,
-                                          },
-                                        ],
-                                      },
+                                      {},
                                     ],
                                   },
                                   serverName: {
@@ -16467,65 +9663,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           cert: {
@@ -16533,65 +9671,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           key: {
@@ -16599,65 +9679,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           passphrase: {
@@ -16665,65 +9687,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                           serverName: {
@@ -16921,65 +9885,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   {
                                     type: "string",
                                   },
-                                  {
-                                    oneOf: [
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "env",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "file",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                      {
-                                        type: "object",
-                                        properties: {
-                                          source: {
-                                            type: "string",
-                                            const: "exec",
-                                          },
-                                          provider: {
-                                            type: "string",
-                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                          },
-                                          id: {
-                                            type: "string",
-                                          },
-                                        },
-                                        required: ["source", "provider", "id"],
-                                        additionalProperties: false,
-                                      },
-                                    ],
-                                  },
+                                  {},
                                 ],
                               },
                             },
@@ -17008,65 +9914,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                   },
@@ -17089,65 +9937,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                         {
                                           type: "string",
                                         },
-                                        {
-                                          oneOf: [
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "env",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "file",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                            {
-                                              type: "object",
-                                              properties: {
-                                                source: {
-                                                  type: "string",
-                                                  const: "exec",
-                                                },
-                                                provider: {
-                                                  type: "string",
-                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                },
-                                                id: {
-                                                  type: "string",
-                                                },
-                                              },
-                                              required: ["source", "provider", "id"],
-                                              additionalProperties: false,
-                                            },
-                                          ],
-                                        },
+                                        {},
                                       ],
                                     },
                                     prefix: {
@@ -17176,65 +9966,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -17242,65 +9974,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -17308,65 +9982,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -17374,65 +9990,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -17467,65 +10025,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         cert: {
@@ -17533,65 +10033,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         key: {
@@ -17599,65 +10041,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         passphrase: {
@@ -17665,65 +10049,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                             {
                                               type: "string",
                                             },
-                                            {
-                                              oneOf: [
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "env",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "file",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                                {
-                                                  type: "object",
-                                                  properties: {
-                                                    source: {
-                                                      type: "string",
-                                                      const: "exec",
-                                                    },
-                                                    provider: {
-                                                      type: "string",
-                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                                    },
-                                                    id: {
-                                                      type: "string",
-                                                    },
-                                                  },
-                                                  required: ["source", "provider", "id"],
-                                                  additionalProperties: false,
-                                                },
-                                              ],
-                                            },
+                                            {},
                                           ],
                                         },
                                         serverName: {
@@ -17749,65 +10075,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 cert: {
@@ -17815,65 +10083,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 key: {
@@ -17881,65 +10091,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 passphrase: {
@@ -17947,65 +10099,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                     {
                                       type: "string",
                                     },
-                                    {
-                                      oneOf: [
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "env",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "file",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                        {
-                                          type: "object",
-                                          properties: {
-                                            source: {
-                                              type: "string",
-                                              const: "exec",
-                                            },
-                                            provider: {
-                                              type: "string",
-                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                            },
-                                            id: {
-                                              type: "string",
-                                            },
-                                          },
-                                          required: ["source", "provider", "id"],
-                                          additionalProperties: false,
-                                        },
-                                      ],
-                                    },
+                                    {},
                                   ],
                                 },
                                 serverName: {
@@ -19802,65 +11896,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                               },
-                              {
-                                oneOf: [
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "env",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "file",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                  {
-                                    type: "object",
-                                    properties: {
-                                      source: {
-                                        type: "string",
-                                        const: "exec",
-                                      },
-                                      provider: {
-                                        type: "string",
-                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                      },
-                                      id: {
-                                        type: "string",
-                                      },
-                                    },
-                                    required: ["source", "provider", "id"],
-                                    additionalProperties: false,
-                                  },
-                                ],
-                              },
+                              {},
                             ],
                           },
                         },
@@ -19952,65 +11988,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         {
                           type: "string",
                         },
-                        {
-                          oneOf: [
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "env",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "file",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                            {
-                              type: "object",
-                              properties: {
-                                source: {
-                                  type: "string",
-                                  const: "exec",
-                                },
-                                provider: {
-                                  type: "string",
-                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                },
-                                id: {
-                                  type: "string",
-                                },
-                              },
-                              required: ["source", "provider", "id"],
-                              additionalProperties: false,
-                            },
-                          ],
-                        },
+                        {},
                       ],
                       title: "TTS Provider API Key",
                       description:
@@ -21121,65 +13099,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               {
                 type: "string",
               },
-              {
-                oneOf: [
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "env",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "file",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "exec",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                ],
-              },
+              {},
             ],
             title: "Cron Webhook Bearer Token",
             description:
@@ -22171,65 +14091,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     {
                       type: "string",
                     },
-                    {
-                      oneOf: [
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "env",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "file",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "exec",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                      ],
-                    },
+                    {},
                   ],
                   title: "Talk Provider API Key",
                   description: "Provider API key for Talk mode.",
@@ -22442,65 +14304,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                   },
-                  {
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "env",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "file",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "exec",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
+                  {},
                 ],
                 title: "Gateway Token",
                 description:
@@ -22511,65 +14315,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                   },
-                  {
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "env",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "file",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "exec",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
+                  {},
                 ],
                 title: "Gateway Password",
                 description: "Required for Tailscale funnel.",
@@ -22786,65 +14532,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                   },
-                  {
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "env",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "file",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "exec",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
+                  {},
                 ],
                 title: "Remote Gateway Token",
                 description:
@@ -22855,65 +14543,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                   },
-                  {
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "env",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "file",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          source: {
-                            type: "string",
-                            const: "exec",
-                          },
-                          provider: {
-                            type: "string",
-                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                          },
-                          id: {
-                            type: "string",
-                          },
-                        },
-                        required: ["source", "provider", "id"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
+                  {},
                 ],
                 title: "Remote Gateway Password",
                 description:
@@ -23963,65 +15593,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     {
                       type: "string",
                     },
-                    {
-                      oneOf: [
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "env",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "file",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "exec",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                      ],
-                    },
+                    {},
                   ],
                 },
                 env: {
