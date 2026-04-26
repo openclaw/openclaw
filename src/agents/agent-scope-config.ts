@@ -188,12 +188,21 @@ export function resolveAgentDir(
   return path.join(root, "agents", id, "agent");
 }
 
+const WORKSPACE_DIR_BASENAME_RE = /^workspace(?:-[\w.-]+)?$/;
+
 /**
- * Suggest a peer-level workspace path for a NEW agent, used as the wizard's
- * `Workspace directory` initial value. Matches the documented `~/.openclaw/
- * workspace-<agentId>` convention from docs/concepts/multi-agent.md and avoids
- * the nested `<main>/<agentId>` footgun where main's recursive workspace
- * operations leak into other agents' folders (#71889).
+ * Suggest a default workspace path for a NEW agent, used as the wizard's
+ * `Workspace directory` initial value.
+ *
+ * When the configured base looks like a concrete workspace directory (basename
+ * `workspace` or `workspace-<suffix>`, matching the documented default and the
+ * `OPENCLAW_PROFILE` form), apply the documented peer-level pattern from
+ * docs/concepts/multi-agent.md (`~/.openclaw/workspace-<agentId>`) so the
+ * recursive-leak / `rm -rf workspace` footgun from #71889 is avoided.
+ *
+ * When the base is a shared parent directory (basename does not look like a
+ * workspace), preserve the historic nested layout `<base>/<id>` from #59789 so
+ * operators who configured a shared agent root keep that contract.
  *
  * Existing per-agent overrides and runtime resolution via
  * `resolveAgentWorkspaceDir` are intentionally unchanged.
@@ -208,7 +217,9 @@ export function suggestPeerAgentWorkspaceDir(
   const baseWorkspace = fallback
     ? resolveUserPath(fallback, env)
     : resolveDefaultAgentWorkspaceDir(env);
-  const dir = path.dirname(baseWorkspace);
   const base = path.basename(baseWorkspace);
-  return stripNullBytes(path.join(dir, `${base}-${id}`));
+  if (WORKSPACE_DIR_BASENAME_RE.test(base)) {
+    return stripNullBytes(path.join(path.dirname(baseWorkspace), `${base}-${id}`));
+  }
+  return stripNullBytes(path.join(baseWorkspace, id));
 }
