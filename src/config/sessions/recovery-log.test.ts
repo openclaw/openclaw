@@ -11,6 +11,7 @@ import {
 import {
   clearSessionStoreCacheForTest,
   recordSessionMetaFromInbound,
+  updateLastRoute,
 } from "./store.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({
@@ -121,6 +122,75 @@ describe("session recovery log", () => {
           nativeChannelId: "dm-1",
         },
       });
+    }
+  });
+
+  it("records routing resolution as an append-only recovery event", async () => {
+    const storePath = await createStorePath();
+    const entry = await updateLastRoute({
+      storePath,
+      sessionKey: "Agent:Main:Discord:DM:User-1",
+      channel: "discord",
+      to: "user-1",
+      accountId: "default",
+      threadId: "thread-1",
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "user-1",
+        To: "bot-1",
+        MessageSid: "message-1",
+      },
+    });
+
+    const events = await readSessionRecoveryEventsForTest(storePath);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      version: 1,
+      eventType: "routing.resolved",
+      sessionKey: "agent:main:discord:dm:user-1",
+      sessionId: entry.sessionId,
+      source: {
+        kind: "routing",
+        provider: "discord",
+        surface: "discord",
+        channel: "discord",
+        chatType: "direct",
+      },
+      details: {
+        accountId: "default",
+        to: "user-1",
+        threadId: "thread-1",
+        deliveryContext: {
+          channel: "discord",
+          to: "user-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+        inbound: {
+          from: "user-1",
+          to: "bot-1",
+          messageSid: "message-1",
+        },
+      },
+    });
+  });
+
+  it("does not fail route updates when recovery event append fails", async () => {
+    const storePath = await createStorePath();
+    const appendSpy = vi.spyOn(fs, "appendFile").mockRejectedValueOnce(new Error("disk full"));
+    try {
+      await expect(
+        updateLastRoute({
+          storePath,
+          sessionKey: "agent:main:webchat:dm:user-1",
+          channel: "webchat",
+          to: "user-1",
+        }),
+      ).resolves.toMatchObject({ sessionId: expect.any(String), lastTo: "user-1" });
+    } finally {
+      appendSpy.mockRestore();
     }
   });
 

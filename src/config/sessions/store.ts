@@ -695,6 +695,14 @@ function sessionRecoveryDetailsFromInbound(ctx: MsgContext) {
   };
 }
 
+async function appendSessionRecoveryEventSafe(
+  params: Parameters<typeof appendSessionRecoveryEvent>[0],
+): Promise<void> {
+  await appendSessionRecoveryEvent(params).catch((err) => {
+    log.warn(`Failed to append session recovery event: ${String(err)}`);
+  });
+}
+
 async function appendInboundSessionRecoveryEvent(params: {
   storePath: string;
   eventType: "inbound.received" | "session.meta.recorded";
@@ -702,15 +710,42 @@ async function appendInboundSessionRecoveryEvent(params: {
   sessionId: string;
   ctx: MsgContext;
 }): Promise<void> {
-  await appendSessionRecoveryEvent({
+  await appendSessionRecoveryEventSafe({
     storePath: params.storePath,
     eventType: params.eventType,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     source: sessionRecoverySourceFromInbound(params.ctx),
     details: sessionRecoveryDetailsFromInbound(params.ctx),
-  }).catch((err) => {
-    log.warn(`Failed to append session recovery event: ${String(err)}`);
+  });
+}
+
+async function appendRoutingResolvedRecoveryEvent(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+  ctx?: MsgContext;
+}): Promise<void> {
+  const { entry, ctx } = params;
+  await appendSessionRecoveryEventSafe({
+    storePath: params.storePath,
+    eventType: "routing.resolved",
+    sessionKey: params.sessionKey,
+    sessionId: entry.sessionId,
+    source: {
+      kind: "routing",
+      provider: ctx?.Provider,
+      surface: ctx?.Surface,
+      channel: entry.lastChannel,
+      chatType: ctx?.ChatType,
+    },
+    details: {
+      accountId: entry.lastAccountId,
+      to: entry.lastTo,
+      threadId: entry.lastThreadId,
+      deliveryContext: entry.deliveryContext,
+      inbound: ctx ? sessionRecoveryDetailsFromInbound(ctx) : undefined,
+    },
   });
 }
 
@@ -791,7 +826,7 @@ export async function updateLastRoute(params: {
   groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
-  return await withSessionStoreLock(storePath, async () => {
+  const result = await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
@@ -859,4 +894,11 @@ export async function updateLastRoute(params: {
       next,
     });
   });
+  await appendRoutingResolvedRecoveryEvent({
+    storePath,
+    sessionKey: normalizeStoreSessionKey(sessionKey),
+    entry: result,
+    ctx,
+  });
+  return result;
 }
