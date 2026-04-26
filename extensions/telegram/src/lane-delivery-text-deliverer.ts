@@ -50,6 +50,7 @@ export type DraftLaneState = {
   stream: TelegramDraftStream | undefined;
   lastPartialText: string;
   hasStreamedMessage: boolean;
+  hasProgressPreview?: boolean;
 };
 
 export type ArchivedPreview = {
@@ -78,10 +79,12 @@ type CreateLaneTextDelivererParams = {
   activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle>;
   retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
+  finalizeAnswerMessagePreviewsInPlace: boolean;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
   sendPayload: (payload: ReplyPayload) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
+  clearDraftLane: (lane: DraftLaneState) => Promise<void>;
   editPreview: (params: {
     laneName: LaneName;
     messageId: number;
@@ -202,6 +205,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       !hasPreviewButtons &&
       typeof lane.stream?.materialize === "function"
     );
+  };
+  const canEditFinalViaPreview = (laneName: LaneName, lane: DraftLaneState, canEdit: boolean) => {
+    if (!canEdit) {
+      return false;
+    }
+    if (laneName !== "answer" || params.finalizeAnswerMessagePreviewsInPlace) {
+      return true;
+    }
+    return isDraftPreviewLane(lane) || lane.hasStreamedMessage || !lane.hasProgressPreview;
   };
 
   const tryMaterializeDraftPreviewForFinal = async (args: {
@@ -523,7 +535,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return archivedResult;
         }
       }
-      if (canEditViaPreview && params.activePreviewLifecycleByLane[laneName] === "transient") {
+      if (
+        canEditFinalViaPreview(laneName, lane, canEditViaPreview) &&
+        params.activePreviewLifecycleByLane[laneName] === "transient"
+      ) {
         await params.flushDraftLane(lane);
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
@@ -584,7 +599,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
         );
       }
-      await params.stopDraftLane(lane);
+      if (
+        laneName === "answer" &&
+        lane.hasProgressPreview &&
+        !lane.hasStreamedMessage &&
+        !params.finalizeAnswerMessagePreviewsInPlace
+      ) {
+        await params.clearDraftLane(lane);
+      } else {
+        await params.stopDraftLane(lane);
+      }
       const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
       return delivered ? result("sent") : result("skipped");
     }

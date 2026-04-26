@@ -16,7 +16,9 @@ function createHarness(params?: {
   answerMessageIdAfterStop?: number;
   answerStream?: DraftLaneState["stream"];
   answerHasStreamedMessage?: boolean;
+  answerHasProgressPreview?: boolean;
   answerLastPartialText?: string;
+  finalizeAnswerMessagePreviewsInPlace?: boolean;
 }) {
   const answer =
     params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId });
@@ -26,6 +28,7 @@ function createHarness(params?: {
       stream: answer,
       lastPartialText: params?.answerLastPartialText ?? "",
       hasStreamedMessage: params?.answerHasStreamedMessage ?? false,
+      hasProgressPreview: params?.answerHasProgressPreview ?? false,
     },
     reasoning: {
       stream: reasoning as DraftLaneState["stream"],
@@ -45,6 +48,9 @@ function createHarness(params?: {
     }
     await lane.stream?.stop();
   });
+  const clearDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
+    await lane.stream?.clear();
+  });
   const editPreview = vi.fn().mockResolvedValue(undefined);
   const deletePreviewMessage = vi.fn().mockResolvedValue(undefined);
   const log = vi.fn();
@@ -63,10 +69,12 @@ function createHarness(params?: {
     activePreviewLifecycleByLane: { ...activePreviewLifecycleByLane },
     retainPreviewOnCleanupByLane: { ...retainPreviewOnCleanupByLane },
     draftMaxChars: params?.draftMaxChars ?? 4_096,
+    finalizeAnswerMessagePreviewsInPlace: params?.finalizeAnswerMessagePreviewsInPlace ?? true,
     applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
     flushDraftLane,
     stopDraftLane,
+    clearDraftLane,
     editPreview,
     deletePreviewMessage,
     log,
@@ -83,6 +91,7 @@ function createHarness(params?: {
     sendPayload,
     flushDraftLane,
     stopDraftLane,
+    clearDraftLane,
     editPreview,
     deletePreviewMessage,
     log,
@@ -166,6 +175,25 @@ describe("createLaneTextDeliverer", () => {
     );
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends answer finals separately when message previews are temporary", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerHasProgressPreview: true,
+      finalizeAnswerMessagePreviewsInPlace: false,
+    });
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result.kind).toBe("sent");
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.stopDraftLane).not.toHaveBeenCalled();
+    expect(harness.flushDraftLane).not.toHaveBeenCalled();
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: HELLO_FINAL }),
+    );
   });
 
   it("primes stop-created previews with final text before editing", async () => {

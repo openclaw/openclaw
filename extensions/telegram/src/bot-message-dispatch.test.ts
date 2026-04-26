@@ -740,6 +740,48 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("sends final answers as fresh messages after tool-only previews", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const bot = createBot();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({ replies: [expect.objectContaining({ text: "Done" })] }),
+    );
+    expect(draftStream.clear).toHaveBeenCalled();
+  });
+
+  it("filters generic Telegram item progress titles", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ title: "Command" });
+      await replyOptions?.onItemEvent?.({ title: "Tool" });
+      await replyOptions?.onItemEvent?.({ title: "Reasoning" });
+      await replyOptions?.onItemEvent?.({ title: "Reading config" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• `Reading config`");
+    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Command"));
+    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Tool"));
+    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Reasoning"));
+  });
+
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
