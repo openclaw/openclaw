@@ -237,6 +237,23 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
+# Bundle the Claude Code CLI as a supported provider backend. OpenClaw
+# spawns `claude -p ...` per turn whenever agents.defaults.model.primary
+# is set to claude-cli/<model> (see extensions/anthropic/cli-backend.ts).
+RUN npm install -g @anthropic-ai/claude-code \
+ && which claude \
+ && claude --version
+
+# Persist Claude Code OAuth state inside /home/node/.openclaw, the only
+# directory that the s3-sync sidecar mirrors to MinIO. CLAUDE_CONFIG_DIR
+# cannot be used here — it is wiped by openclaw before spawning claude
+# (CLAUDE_CLI_CLEAR_ENV in extensions/anthropic/cli-shared.ts) — so route
+# ~/.claude through a symlink whose target lives on the emptyDir mount.
+# Symlink lives in the runtime container's rootfs (recreated from this
+# image on every pod start); target dir is created/restored by setup-init.
+RUN ln -sfn /home/node/.openclaw/.claude /home/node/.claude \
+ && chown -h node:node /home/node/.claude
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
