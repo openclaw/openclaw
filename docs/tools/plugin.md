@@ -90,6 +90,28 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
 and the [Plugin SDK Overview](/plugins/sdk-overview).
 
+## Package Entrypoints
+
+Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
+Each entry must stay inside the package directory and resolve to a readable
+runtime file, or to a TypeScript source file with an inferred built JavaScript
+peer such as `src/index.ts` to `dist/index.js`.
+
+Use `openclaw.runtimeExtensions` when published runtime files do not live at the
+same paths as the source entries. When present, `runtimeExtensions` must contain
+exactly one entry for every `extensions` entry. Mismatched lists fail install and
+plugin discovery rather than silently falling back to source paths.
+
+```json
+{
+  "name": "@acme/openclaw-plugin",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  }
+}
+```
+
 ## Official plugins
 
 ### Installable (npm)
