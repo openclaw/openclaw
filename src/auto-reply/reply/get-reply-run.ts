@@ -280,7 +280,7 @@ export async function runPreparedReply(
       rootPersonality = content;
     }
   } catch (err: unknown) {
-    if (err.code !== "ENOENT") {
+    if (err && typeof err === "object" && "code" in err && err.code !== "ENOENT") {
       console.error("Failed to read root personality file:", err);
     }
   }
