@@ -631,6 +631,11 @@ Notes:
 - For OpenAI-compatible Completions proxies that need vendor-specific fields,
   set `agents.defaults.models["provider/model"].params.extra_body` (or
   `extraBody`) to merge extra JSON into the outbound request body.
+- For vLLM chat-template controls, set
+  `agents.defaults.models["provider/model"].params.chat_template_kwargs`.
+  OpenClaw automatically sends `enable_thinking: false` and
+  `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session
+  thinking level is off.
 - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
 - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
 
