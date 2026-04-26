@@ -10,6 +10,7 @@ import {
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
   handleCompactionEnd,
+  handleCompactionStart,
   reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -19,6 +20,7 @@ function createCompactionContext(params: {
   sessionKey: string;
   agentId?: string;
   initialCount: number;
+  info?: (message: string, meta?: Record<string, unknown>) => void;
 }): EmbeddedPiSubscribeContext {
   let compactionCount = params.initialCount;
   return {
@@ -37,6 +39,7 @@ function createCompactionContext(params: {
     } as never,
     log: {
       debug: vi.fn(),
+      info: params.info,
       warn: vi.fn(),
     },
     ensureCompactionPromise: vi.fn(),
@@ -100,6 +103,62 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
 
     expect(nextCount).toBe(3);
     expect(await readCompactionCount(storePath, sessionKey)).toBe(3);
+  });
+});
+
+describe("compaction lifecycle logging", () => {
+  it("logs lifecycle events at info level for gateway watch visibility", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      compactionCount: 0,
+    });
+    const info = vi.fn();
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      info,
+    });
+
+    handleCompactionStart(ctx, {
+      type: "compaction_start",
+      reason: "threshold",
+    } as never);
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { kept: 12 },
+      willRetry: false,
+      aborted: false,
+    } as never);
+
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run auto-compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "threshold",
+        runId: "run-test",
+        consoleMessage: "embedded run auto-compaction start: runId=run-test reason=threshold",
+      }),
+    );
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run auto-compaction complete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "threshold",
+        runId: "run-test",
+        completed: true,
+        compactionCount: 1,
+        consoleMessage:
+          "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      }),
+    );
   });
 });
 
