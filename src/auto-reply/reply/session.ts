@@ -25,9 +25,12 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
+  buildSessionHistoryMetadata,
   DEFAULT_RESET_TRIGGERS,
+  DEFAULT_SESSION_HISTORY_LIMIT,
   type GroupKeyResolution,
   type SessionEntry,
+  type SessionHistoryItem,
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -74,79 +77,6 @@ let sessionArchiveRuntimePromise: Promise<
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
-}
-
-function stripThreadIdFromDeliveryContext(
-  context: SessionEntry["deliveryContext"],
-): SessionEntry["deliveryContext"] {
-  if (!context || context.threadId == null || context.threadId === "") {
-    return context;
-  }
-  const { threadId: _threadId, ...rest } = context;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
-  if (!origin || origin.threadId == null || origin.threadId === "") {
-    return origin;
-  }
-  const { threadId: _threadId, ...rest } = origin;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function resolveExplicitSessionEndReason(
-  matchedResetTriggerLower?: string,
-): PluginHookSessionEndReason {
-  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
-}
-
-function resolveSessionDefaultAccountId(params: {
-  cfg: OpenClawConfig;
-  channelRaw?: string;
-  accountIdRaw?: string;
-  persistedLastAccountId?: string;
-}): string | undefined {
-  const explicit = normalizeOptionalString(params.accountIdRaw);
-  if (explicit) {
-    return explicit;
-  }
-  const persisted = normalizeOptionalString(params.persistedLastAccountId);
-  if (persisted) {
-    return persisted;
-  }
-  const channel = normalizeOptionalLowercaseString(params.channelRaw);
-  if (!channel) {
-    return undefined;
-  }
-  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
-  const configuredDefault = channels?.[channel]?.defaultAccount;
-  return normalizeOptionalString(configuredDefault);
-}
-
-function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-  now: number;
-}): PluginHookSessionEndReason | undefined {
-  if (!params.entry || !params.freshness) {
-    return undefined;
-  }
-  const staleDaily =
-    params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
-  const staleIdle =
-    params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
-  if (staleIdle) {
-    return "idle";
-  }
-  if (staleDaily) {
-    return "daily";
-  }
-  return undefined;
-}
-
-function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
-  const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
-  return Boolean(provider && getCliSessionBinding(entry, provider));
 }
 
 export type SessionInitResult = {
@@ -275,6 +205,10 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const historyLimit =
+    typeof sessionCfg?.historyLimit === "number" && Number.isFinite(sessionCfg.historyLimit)
+      ? Math.max(0, Math.floor(sessionCfg.historyLimit))
+      : DEFAULT_SESSION_HISTORY_LIMIT;
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
@@ -746,7 +680,18 @@ export async function initSessionState(params: {
     maintenanceConfig,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
+  let evictedFromHistory: SessionHistoryItem[] = [];
   if (isNewSession) {
+    if (previousSessionEntry?.sessionId && historyLimit > 0) {
+      const historyCarrier: SessionEntry = {
+        ...previousSessionEntry,
+        sessionHistory: [...(previousSessionEntry.sessionHistory ?? [])],
+      };
+      evictedFromHistory = pushSessionHistory(historyCarrier, historyLimit);
+      sessionEntry.sessionHistory = historyCarrier.sessionHistory;
+    } else if (historyLimit === 0) {
+      sessionEntry.sessionHistory = [];
+    }
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
@@ -790,7 +735,7 @@ export async function initSessionState(params: {
     sessionFile?: string;
     transcriptArchived?: boolean;
   } = {};
-  if (previousSessionEntry?.sessionId) {
+  if (historyLimit === 0 && previousSessionEntry?.sessionId) {
     const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
       await loadSessionArchiveRuntime();
     const archivedTranscripts = archiveSessionTranscriptsDetailed({
@@ -827,6 +772,15 @@ export async function initSessionState(params: {
       onWarn: (message) => log.warn(message),
     }).catch((error) => {
       log.warn(`browser tab cleanup failed: ${String(error)}`);
+    });
+  }
+  for (const evicted of evictedFromHistory) {
+    archiveSessionTranscripts({
+      sessionId: evicted.sessionId,
+      storePath,
+      sessionFile: evicted.sessionFile,
+      agentId,
+      reason: "reset",
     });
   }
 
