@@ -7,8 +7,10 @@ import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
+  PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
@@ -66,6 +68,8 @@ export type CapturedPluginRegistration = {
   toolMetadata: PluginToolMetadataRegistration[];
   controlUiDescriptors: PluginControlUiDescriptor[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
+  agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
+  sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   tools: AnyAgentTool[];
 };
 
@@ -95,6 +99,8 @@ export function createCapturedPluginRegistration(params?: {
   const toolMetadata: PluginToolMetadataRegistration[] = [];
   const controlUiDescriptors: PluginControlUiDescriptor[] = [];
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
+  const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
+  const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -126,6 +132,8 @@ export function createCapturedPluginRegistration(params?: {
     toolMetadata,
     controlUiDescriptors,
     runtimeLifecycles,
+    agentEventSubscriptions,
+    sessionSchedulerJobs,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -233,6 +241,18 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerRuntimeLifecycle(lifecycle: PluginRuntimeLifecycleRegistration) {
           runtimeLifecycles.push(lifecycle);
+        },
+        registerAgentEventSubscription(subscription: PluginAgentEventSubscriptionRegistration) {
+          agentEventSubscriptions.push(subscription);
+        },
+        registerSessionSchedulerJob(job: PluginSessionSchedulerJobRegistration) {
+          sessionSchedulerJobs.push(job);
+          return {
+            id: job.id,
+            pluginId: "captured-plugin-registration",
+            sessionKey: job.sessionKey,
+            kind: job.kind,
+          };
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

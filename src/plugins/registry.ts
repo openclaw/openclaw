@@ -46,11 +46,19 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import {
+  clearPluginRunContext,
+  getPluginRunContext,
+  registerPluginSessionSchedulerJob,
+  setPluginRunContext,
+} from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
   normalizePluginHostHookId,
+  type PluginAgentEventSubscriptionRegistration,
   type PluginControlUiDescriptor,
   type PluginRuntimeLifecycleRegistration,
+  type PluginSessionSchedulerJobRegistration,
   type PluginSessionExtensionRegistration,
   type PluginToolMetadataRegistration,
   type PluginTrustedToolPolicyRegistration,
@@ -1490,6 +1498,57 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerAgentEventSubscription = (
+    record: PluginRecord,
+    subscription: PluginAgentEventSubscriptionRegistration,
+  ) => {
+    const id = normalizePluginHostHookId(subscription.id);
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent event subscription registration missing id",
+      });
+      return;
+    }
+    (registry.agentEventSubscriptions ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      subscription: { ...subscription, id },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerSessionSchedulerJob = (
+    record: PluginRecord,
+    job: PluginSessionSchedulerJobRegistration,
+  ) => {
+    const handle = registerPluginSessionSchedulerJob({
+      pluginId: record.id,
+      pluginName: record.name,
+      job,
+    });
+    if (!handle) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session scheduler job registration requires id, sessionKey, and kind",
+      });
+      return undefined;
+    }
+    (registry.sessionSchedulerJobs ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    return handle;
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
@@ -1762,6 +1821,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
+              registerAgentEventSubscription: (subscription) =>
+                registerAgentEventSubscription(record, subscription),
+              setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
+              getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
+              clearRunContext: (params) =>
+                clearPluginRunContext({
+                  pluginId: record.id,
+                  runId: params.runId,
+                  namespace: params.namespace,
+                }),
+              registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
@@ -1995,6 +2065,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerToolMetadata,
     registerControlUiDescriptor,
     registerRuntimeLifecycle,
+    registerAgentEventSubscription,
+    registerSessionSchedulerJob,
     registerHook,
     registerTypedHook,
   };

@@ -23,6 +23,25 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
     id: "workflow-cleanup",
     description: "Generic cleanup hook for plugin-owned workflow state",
   });
+  api.registerAgentEventSubscription({
+    id: "workflow-events",
+    description: "Generic sanitized agent-event subscription for workflow plugins",
+    streams: ["lifecycle", "tool"],
+    handle(event, ctx) {
+      if (event.stream === "tool") {
+        ctx.setRunContext("lastToolEvent", {
+          runId: event.runId,
+          seen: true,
+        });
+      }
+    },
+  });
+  api.registerSessionSchedulerJob({
+    id: "workflow-nudge",
+    sessionKey: "agent:main:main",
+    kind: "nudge",
+    description: "Generic session-owned scheduler cleanup fixture",
+  });
   api.registerCommand({
     name: "host-hook-fixture",
     description: "Exercise host-hook command continuation",

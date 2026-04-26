@@ -31,6 +31,8 @@ type ToolCatalogEntry = {
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
+  risk?: "low" | "medium" | "high";
+  tags?: string[];
   defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
 };
 
@@ -127,6 +129,8 @@ function buildPluginGroups(params: {
       source: "plugin",
       pluginId,
       optional: meta?.optional,
+      risk: pluginToolMetadata.get(tool.name)?.risk,
+      tags: pluginToolMetadata.get(tool.name)?.tags,
       defaultProfiles: [],
     });
     groups.set(groupId, existing);

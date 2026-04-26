@@ -11,8 +11,10 @@ import type {
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
+  PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
@@ -280,6 +282,22 @@ export type PluginRuntimeLifecycleRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginAgentEventSubscriptionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  subscription: PluginAgentEventSubscriptionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginSessionSchedulerJobRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  job: PluginSessionSchedulerJobRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -381,6 +399,8 @@ export type PluginRegistry = {
   toolMetadata?: PluginToolMetadataRegistryRegistration[];
   controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
   runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
+  agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
+  sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };

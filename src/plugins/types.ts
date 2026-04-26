@@ -100,11 +100,17 @@ import type {
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
+  PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
+  PluginJsonValue,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
   PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
@@ -192,6 +198,7 @@ export type {
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
 export type {
+  PluginAgentEventSubscriptionRegistration,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
   PluginControlUiDescriptor,
@@ -201,7 +208,11 @@ export type {
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
   PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
   PluginToolMetadataRegistration,
@@ -2234,6 +2245,20 @@ export type OpenClawPluginApi = {
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
   /** Register cleanup hooks for plugin-owned host state and background work. */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
+  /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
+  registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
+  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+  setRunContext: (patch: PluginRunContextPatch) => boolean;
+  /** Read namespaced plugin data for a run. */
+  getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
+    params: PluginRunContextGetParams,
+  ) => T | undefined;
+  /** Clear one namespace or all namespaces this plugin owns for a run. */
+  clearRunContext: (params: { runId: string; namespace?: string }) => void;
+  /** Register a plugin-owned session job so reset/delete/disable can clean it deterministically. */
+  registerSessionSchedulerJob: (
+    job: PluginSessionSchedulerJobRegistration,
+  ) => PluginSessionSchedulerJobHandle | undefined;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

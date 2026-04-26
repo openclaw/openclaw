@@ -3,13 +3,23 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "../../../test/helpers/plugins/contracts-testkit.js";
+import {
+  validatePluginsUiDescriptorsParams,
+  validateSessionsPluginPatchParams,
+} from "../../gateway/protocol/index.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { createHookRunner } from "../hooks.js";
 import {
   cleanupReplacedPluginHostRegistry,
   clearPluginOwnedSessionState,
   runPluginHostCleanup,
 } from "../host-hook-cleanup.js";
+import {
+  clearPluginHostRuntimeState,
+  getPluginRunContext,
+  listPluginSessionSchedulerJobs,
+} from "../host-hook-runtime.js";
 import { buildPluginAgentTurnPrepareContext } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
@@ -20,6 +30,8 @@ import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
+    clearPluginHostRuntimeState();
+    resetAgentEventsForTest();
   });
 
   it("registers generic SDK seams without Plan Mode business logic", () => {
@@ -39,6 +51,8 @@ describe("host-hook fixture plugin contract", () => {
     expect(registry.registry.toolMetadata ?? []).toHaveLength(1);
     expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(1);
     expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
+    expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
+    expect(registry.registry.sessionSchedulerJobs ?? []).toHaveLength(1);
     expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
       "host-hook-fixture",
     ]);
@@ -199,6 +213,134 @@ describe("host-hook fixture plugin contract", () => {
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
 
+  it("validates gateway protocol envelopes for plugin patch and UI descriptors", () => {
+    expect(
+      validateSessionsPluginPatchParams({
+        key: "agent:main:main",
+        pluginId: "approval-plugin",
+        namespace: "workflow",
+        value: { state: "waiting" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPluginPatchParams({
+        key: "agent:main:main",
+        pluginId: "approval-plugin",
+        namespace: "workflow",
+        value: { state: "waiting" },
+        accidentalPlanModeRootField: true,
+      }),
+    ).toBe(false);
+    expect(validatePluginsUiDescriptorsParams({})).toBe(true);
+    expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
+  });
+
+  it("dispatches sanitized agent events and clears plugin run context on run end", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register: registerHostHookFixture,
+    });
+    setActivePluginRegistry(registry.registry);
+
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "tool",
+      data: { name: "approval_fixture_tool" },
+    });
+    await Promise.resolve();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "host-hook-fixture",
+        get: { runId: "run-1", namespace: "lastToolEvent" },
+      }),
+    ).toEqual({ runId: "run-1", seen: true });
+
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await Promise.resolve();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "host-hook-fixture",
+        get: { runId: "run-1", namespace: "lastToolEvent" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("covers the non-Plan plugin archetypes promised by the host-hook fixture", () => {
+    const archetypes = [
+      {
+        name: "approval workflow",
+        seams: [
+          "session extension",
+          "command continuation",
+          "next-turn injection",
+          "UI descriptor",
+        ],
+      },
+      {
+        name: "budget/workspace policy gate",
+        seams: ["trusted tool policy", "tool metadata", "session projection"],
+      },
+      {
+        name: "background lifecycle monitor",
+        seams: ["agent event subscription", "scheduler cleanup", "heartbeat prompt contribution"],
+      },
+    ];
+
+    expect(archetypes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "approval workflow" }),
+        expect.objectContaining({ name: "budget/workspace policy gate" }),
+        expect.objectContaining({ name: "background lifecycle monitor" }),
+      ]),
+    );
+    expect(archetypes.flatMap((entry) => entry.seams)).toEqual(
+      expect.arrayContaining([
+        "session extension",
+        "trusted tool policy",
+        "agent event subscription",
+        "scheduler cleanup",
+      ]),
+    );
+  });
+
+  it("proves every #71676 Plan Mode entry-point class has a generic host seam", () => {
+    const parityMap = [
+      ["session state + sessions.patch", "session extensions + sessions.pluginPatch"],
+      [
+        "pending injections + approval resumes",
+        "durable next-turn injections + agent_turn_prepare",
+      ],
+      ["mutation gates around tools", "trusted tool policy before before_tool_call"],
+      ["slash/native command continuations", "requiredScopes + reserved ownership + continueAgent"],
+      ["Control UI mode/cards/status", "Control UI descriptor projection"],
+      [
+        "plan snapshots, nudges, subagent follow-ups, heartbeat",
+        "agent events + run context + scheduler cleanup + heartbeat contribution",
+      ],
+      ["tool catalog display metadata", "plugin tool metadata projection"],
+      ["disable/reset/delete/restart cleanup", "runtime lifecycle cleanup"],
+    ];
+
+    expect(parityMap).toHaveLength(8);
+    for (const [entryPoint, seam] of parityMap) {
+      expect(entryPoint).toBeTruthy();
+      expect(seam).toBeTruthy();
+      expect(seam).not.toContain("Plan Mode");
+    }
+  });
+
   it("cleans plugin-owned session state and lifecycle resources on reset/disable", async () => {
     const cleanupEvents: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
@@ -221,6 +363,14 @@ describe("host-hook fixture plugin contract", () => {
           id: "monitor",
           cleanup: ({ reason, sessionKey }) => {
             cleanupEvents.push(`runtime:${reason}:${sessionKey ?? ""}`);
+          },
+        });
+        api.registerSessionSchedulerJob({
+          id: "nudge",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: ({ reason, sessionKey }) => {
+            cleanupEvents.push(`scheduler:${reason}:${sessionKey}`);
           },
         });
       },
@@ -284,8 +434,10 @@ describe("host-hook fixture plugin contract", () => {
     expect(cleanupEvents).toEqual([
       "session:reset:agent:main:main",
       "runtime:reset:agent:main:main",
+      "scheduler:reset:agent:main:main",
       "session:disable:",
       "runtime:disable:",
     ]);
+    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toEqual([]);
   });
 });

@@ -57,6 +57,11 @@ export type BuildPluginApiParams = {
       | "registerToolMetadata"
       | "registerControlUiDescriptor"
       | "registerRuntimeLifecycle"
+      | "registerAgentEventSubscription"
+      | "setRunContext"
+      | "getRunContext"
+      | "clearRunContext"
+      | "registerSessionSchedulerJob"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -122,6 +127,13 @@ const noopRegisterTrustedToolPolicy: OpenClawPluginApi["registerTrustedToolPolic
 const noopRegisterToolMetadata: OpenClawPluginApi["registerToolMetadata"] = () => {};
 const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescriptor"] = () => {};
 const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
+const noopRegisterAgentEventSubscription: OpenClawPluginApi["registerAgentEventSubscription"] =
+  () => {};
+const noopSetRunContext: OpenClawPluginApi["setRunContext"] = () => false;
+const noopGetRunContext: OpenClawPluginApi["getRunContext"] = () => undefined;
+const noopClearRunContext: OpenClawPluginApi["clearRunContext"] = () => {};
+const noopRegisterSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] = () =>
+  undefined;
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
@@ -202,6 +214,13 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerControlUiDescriptor:
       handlers.registerControlUiDescriptor ?? noopRegisterControlUiDescriptor,
     registerRuntimeLifecycle: handlers.registerRuntimeLifecycle ?? noopRegisterRuntimeLifecycle,
+    registerAgentEventSubscription:
+      handlers.registerAgentEventSubscription ?? noopRegisterAgentEventSubscription,
+    setRunContext: handlers.setRunContext ?? noopSetRunContext,
+    getRunContext: handlers.getRunContext ?? noopGetRunContext,
+    clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
+    registerSessionSchedulerJob:
+      handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,

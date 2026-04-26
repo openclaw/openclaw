@@ -38,6 +38,8 @@ function createStubPluginRegistry(): PluginRegistry {
     toolMetadata: [],
     controlUiDescriptors: [],
     runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

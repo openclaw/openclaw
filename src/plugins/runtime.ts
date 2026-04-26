@@ -1,4 +1,6 @@
+import { onAgentEvent } from "../infra/agent-events.js";
 import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
+import { dispatchPluginAgentEventSubscriptions } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -39,6 +41,19 @@ const state: RegistryState = (() => {
   }
   return registryState;
 })();
+
+let pluginAgentEventUnsubscribe: (() => void) | undefined;
+
+function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
+  pluginAgentEventUnsubscribe?.();
+  pluginAgentEventUnsubscribe = undefined;
+  if (!registry || (registry.agentEventSubscriptions ?? []).length === 0) {
+    return;
+  }
+  pluginAgentEventUnsubscribe = onAgentEvent((event) => {
+    dispatchPluginAgentEventSubscriptions({ registry: state.activeRegistry, event });
+  });
+}
 
 export function recordImportedPluginId(pluginId: string): void {
   state.importedPluginIds.add(pluginId);
@@ -88,6 +103,7 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  syncPluginAgentEventBridge(registry);
   void cleanupReplacedPluginHostRegistry({
     previousRegistry,
     nextRegistry: registry,
@@ -244,4 +260,5 @@ export function resetPluginRuntimeStateForTest(): void {
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
+  syncPluginAgentEventBridge(null);
 }

@@ -56,6 +56,7 @@ import {
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
   validateSessionsPatchParams,
+  validateSessionsPluginPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
@@ -1350,6 +1351,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
   },
   "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (
+      !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
+    ) {
+      return;
+    }
     const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;

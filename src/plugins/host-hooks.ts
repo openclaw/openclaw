@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
+import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
@@ -115,6 +116,53 @@ export type PluginRuntimeLifecycleRegistration = {
     sessionKey?: string;
     runId?: string;
   }) => void | Promise<void>;
+};
+
+export type PluginAgentEventSubscriptionRegistration = {
+  id: string;
+  description?: string;
+  streams?: AgentEventStream[];
+  handle: (
+    event: AgentEventPayload,
+    ctx: {
+      getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
+        namespace: string,
+      ) => T | undefined;
+      setRunContext: (namespace: string, value: PluginJsonValue) => void;
+      clearRunContext: (namespace?: string) => void;
+    },
+  ) => void | Promise<void>;
+};
+
+export type PluginRunContextPatch = {
+  runId: string;
+  namespace: string;
+  value?: PluginJsonValue;
+  unset?: boolean;
+};
+
+export type PluginRunContextGetParams = {
+  runId: string;
+  namespace: string;
+};
+
+export type PluginSessionSchedulerJobRegistration = {
+  id: string;
+  sessionKey: string;
+  kind: string;
+  description?: string;
+  cleanup?: (ctx: {
+    reason: PluginHostCleanupReason;
+    sessionKey: string;
+    jobId: string;
+  }) => void | Promise<void>;
+};
+
+export type PluginSessionSchedulerJobHandle = {
+  id: string;
+  pluginId: string;
+  sessionKey: string;
+  kind: string;
 };
 
 export type PluginAgentTurnPrepareEvent = {

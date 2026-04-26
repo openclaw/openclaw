@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { cleanupPluginSessionSchedulerJobs, clearPluginRunContext } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
 
@@ -95,6 +96,15 @@ export async function runPluginHostCleanup(params: {
       });
     }
   }
+  const schedulerFailures = await cleanupPluginSessionSchedulerJobs({
+    pluginId: params.pluginId,
+    reason: params.reason,
+    sessionKey: params.sessionKey,
+  });
+  for (const failure of schedulerFailures) {
+    failures.push(failure);
+  }
+  clearPluginRunContext({ pluginId: params.pluginId, runId: params.runId });
   return { cleanupCount, failures };
 }
 
@@ -104,6 +114,12 @@ function collectHostHookPluginIds(registry: PluginRegistry): Set<string> {
     ids.add(registration.pluginId);
   }
   for (const registration of registry.runtimeLifecycles ?? []) {
+    ids.add(registration.pluginId);
+  }
+  for (const registration of registry.agentEventSubscriptions ?? []) {
+    ids.add(registration.pluginId);
+  }
+  for (const registration of registry.sessionSchedulerJobs ?? []) {
     ids.add(registration.pluginId);
   }
   return ids;

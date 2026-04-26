@@ -39,6 +39,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     toolMetadata: [],
     controlUiDescriptors: [],
     runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

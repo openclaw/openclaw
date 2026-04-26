@@ -149,6 +149,8 @@ export function createPluginLoadResult(
     toolMetadata: [],
     controlUiDescriptors: [],
     runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
     gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
