@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Providers/plugins: keep onboarding and auth-choice setup lists on cold manifest/install metadata and add Provider Index install metadata for not-yet-installed provider plugins. Thanks @vincentkoc.
 - Providers/plugins: keep provider setup guidance and configure auth imports on cold manifest metadata, with a regression guard against static provider-runtime imports on setup/configure list paths. Thanks @vincentkoc.
 - CLI/capabilities: keep capability command registration from importing the models auth runtime until `model auth login` actually runs. Thanks @vincentkoc.
+- CLI/configure: keep web-search configure prompts on cold plugin registry metadata until the user chooses managed search setup. Thanks @vincentkoc.
 - Plugins/chat commands: refresh the persisted plugin registry after `/plugins enable` and `/plugins disable`, matching the CLI mutation path. Thanks @vincentkoc.
 - Plugins/compat: mark `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY` as a deprecated break-glass switch and point operators at registry repair instead. Thanks @vincentkoc.
 - Plugins/registry: ignore stale persisted registry reads when plugin policy no longer matches current config, and stamp generated registry files with a do-not-edit warning. Thanks @vincentkoc.
