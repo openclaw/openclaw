@@ -176,7 +176,7 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "claude-cli" },
+            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},

@@ -264,7 +264,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           },
         },
@@ -336,7 +336,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           },
         },

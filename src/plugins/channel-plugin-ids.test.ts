@@ -252,8 +252,8 @@ function createStartupConfig(params: {
   enabledPluginIds?: string[];
   providerIds?: string[];
   modelId?: string;
-  embeddedHarnessRuntime?: string;
-  agentEmbeddedHarnessRuntimes?: string[];
+  agentRuntimeId?: string;
+  agentRuntimeIds?: string[];
   channelIds?: string[];
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
@@ -316,10 +316,10 @@ function createStartupConfig(params: {
           agents: {
             defaults: {
               model: { primary: params.modelId },
-              ...(params.embeddedHarnessRuntime
+              ...(params.agentRuntimeId
                 ? {
-                    embeddedHarness: {
-                      runtime: params.embeddedHarnessRuntime,
+                    agentRuntime: {
+                      id: params.agentRuntimeId,
                       fallback: "none",
                     },
                   }
@@ -328,32 +328,32 @@ function createStartupConfig(params: {
                 [params.modelId]: {},
               },
             },
-            ...(params.agentEmbeddedHarnessRuntimes?.length
+            ...(params.agentRuntimeIds?.length
               ? {
-                  list: params.agentEmbeddedHarnessRuntimes.map((runtime, index) => ({
+                  list: params.agentRuntimeIds.map((runtime, index) => ({
                     id: `agent-${index + 1}`,
-                    embeddedHarness: { runtime },
+                    agentRuntime: { id: runtime },
                   })),
                 }
               : {}),
           },
         }
-      : params.embeddedHarnessRuntime || params.agentEmbeddedHarnessRuntimes?.length
+      : params.agentRuntimeId || params.agentRuntimeIds?.length
         ? {
             agents: {
-              defaults: params.embeddedHarnessRuntime
+              defaults: params.agentRuntimeId
                 ? {
-                    embeddedHarness: {
-                      runtime: params.embeddedHarnessRuntime,
+                    agentRuntime: {
+                      id: params.agentRuntimeId,
                       fallback: "none",
                     },
                   }
                 : {},
-              ...(params.agentEmbeddedHarnessRuntimes?.length
+              ...(params.agentRuntimeIds?.length
                 ? {
-                    list: params.agentEmbeddedHarnessRuntimes.map((runtime, index) => ({
+                    list: params.agentRuntimeIds.map((runtime, index) => ({
                       id: `agent-${index + 1}`,
-                      embeddedHarness: { runtime },
+                      agentRuntime: { id: runtime },
                     })),
                   }
                 : {}),
@@ -645,7 +645,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("includes required agent harness owner plugins when the default runtime is forced", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
-        embeddedHarnessRuntime: "codex",
+        agentRuntimeId: "codex",
         enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex"],
@@ -655,7 +655,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("includes required agent harness owner plugins when an agent override forces the runtime", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
-        agentEmbeddedHarnessRuntimes: ["codex"],
+        agentRuntimeIds: ["codex"],
         enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex"],
@@ -677,8 +677,8 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: {
         agents: {
           defaults: {
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },

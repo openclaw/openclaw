@@ -212,7 +212,7 @@ OpenClaw scans for plugins in this order (first match wins):
   runtime
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
   `codex/*` model refs
 
 ## Troubleshooting runtime hooks

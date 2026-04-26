@@ -28,7 +28,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toEqual([expect.stringContaining("Codex plugin is enabled")]);
     expect(warnings[0]).toContain("agents.defaults.model");
     expect(warnings[0]).toContain('runtime "pi"');
-    expect(warnings[0]).toContain('embeddedHarness.runtime: "codex"');
+    expect(warnings[0]).toContain('agentRuntime.id: "codex"');
   });
 
   it("does not warn when the native Codex runtime is selected", () => {
@@ -38,8 +38,8 @@ describe("collectCodexRouteWarnings", () => {
         agents: {
           defaults: {
             model: "openai-codex/gpt-5.5",
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
             },
           },
         },

@@ -289,8 +289,8 @@ describe("applyPluginAutoEnable core", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },
@@ -316,13 +316,13 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
-  it("auto-enables an opt-in plugin when an embedded agent harness runtime is configured", () => {
+  it("auto-enables an opt-in plugin when an agent runtime is configured", () => {
     const result = applyPluginAutoEnable({
       config: {
         agents: {
           defaults: {
-            embeddedHarness: {
-              runtime: "codex",
+            agentRuntime: {
+              id: "codex",
               fallback: "none",
             },
           },

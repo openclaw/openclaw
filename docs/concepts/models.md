@@ -13,7 +13,7 @@ Quick provider overview + examples: [/concepts/model-providers](/concepts/model-
 Model refs choose a provider and model. They do not usually choose the
 low-level agent runtime. For example, `openai/gpt-5.5` can run through the
 normal OpenAI provider path or through the Codex app-server runtime, depending
-on `agents.defaults.embeddedHarness.runtime`. See
+on `agents.defaults.agentRuntime.id`. See
 [/concepts/agent-runtimes](/concepts/agent-runtimes).
 
 ## How model selection works

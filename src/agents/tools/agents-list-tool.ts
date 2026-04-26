@@ -5,6 +5,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
 import {
   listAgentEntries,
   resolveAgentConfig,
@@ -21,8 +22,8 @@ type AgentListEntry = {
   name?: string;
   configured: boolean;
   model?: string;
-  embeddedHarness?: {
-    runtime: string;
+  agentRuntime?: {
+    id: string;
     fallback?: "pi" | "none";
     source: "env" | "agent" | "defaults" | "implicit";
   };
@@ -32,39 +33,41 @@ function normalizeRuntimeValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 }
 
-function resolveAgentEmbeddedHarnessMetadata(
+function resolveAgentRuntimeMetadata(
   cfg: ReturnType<typeof loadConfig>,
   agentId: string,
-): AgentListEntry["embeddedHarness"] {
+): NonNullable<AgentListEntry["agentRuntime"]> {
   const envRuntime = normalizeRuntimeValue(process.env.OPENCLAW_AGENT_RUNTIME);
   if (envRuntime) {
     return {
-      runtime: envRuntime,
+      id: envRuntime,
       source: "env",
     };
   }
 
   const agentEntry = listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
-  const agentRuntime = normalizeRuntimeValue(agentEntry?.embeddedHarness?.runtime);
+  const agentPolicy = resolveAgentRuntimePolicy(agentEntry);
+  const agentRuntime = normalizeRuntimeValue(agentPolicy?.id);
   if (agentRuntime) {
     return {
-      runtime: agentRuntime,
-      fallback: agentEntry?.embeddedHarness?.fallback,
+      id: agentRuntime,
+      fallback: agentPolicy?.fallback,
       source: "agent",
     };
   }
 
-  const defaultsRuntime = normalizeRuntimeValue(cfg.agents?.defaults?.embeddedHarness?.runtime);
+  const defaultsPolicy = resolveAgentRuntimePolicy(cfg.agents?.defaults);
+  const defaultsRuntime = normalizeRuntimeValue(defaultsPolicy?.id);
   if (defaultsRuntime) {
     return {
-      runtime: defaultsRuntime,
-      fallback: cfg.agents?.defaults?.embeddedHarness?.fallback,
+      id: defaultsRuntime,
+      fallback: defaultsPolicy?.fallback,
       source: "defaults",
     };
   }
 
   return {
-    runtime: "pi",
+    id: "pi",
     source: "implicit",
   };
 }
@@ -136,13 +139,16 @@ export function createAgentsListTool(opts?: {
         .filter((id) => id !== requesterAgentId)
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = [requesterAgentId, ...rest];
-      const agents: AgentListEntry[] = ordered.map((id) => ({
-        id,
-        name: configuredNameMap.get(id),
-        configured: configuredIds.includes(id),
-        model: resolveAgentEffectiveModelPrimary(cfg, id),
-        embeddedHarness: resolveAgentEmbeddedHarnessMetadata(cfg, id),
-      }));
+      const agents: AgentListEntry[] = ordered.map((id) => {
+        const agentRuntime = resolveAgentRuntimeMetadata(cfg, id);
+        return {
+          id,
+          name: configuredNameMap.get(id),
+          configured: configuredIds.includes(id),
+          model: resolveAgentEffectiveModelPrimary(cfg, id),
+          agentRuntime,
+        };
+      });
 
       return jsonResult({
         requester: requesterAgentId,
