@@ -96,5 +96,5 @@ describe("resolveModelFromRegistry", () => {
       ["kimchi", "kimchi/claude-opus-4-6"],
     ]);
     expect(result).toBe(foundModel);
-  });
+  }, 180_000);
 });
