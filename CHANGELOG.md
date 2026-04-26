@@ -119,6 +119,7 @@ Docs: https://docs.openclaw.ai
 - Browser automation: keep stable tab ids and labels attached when Chromium replaces the raw target after form submissions or other action-triggered navigations, and return the replacement `targetId` from `/act` when the match is provable. Fixes #46137.
 - QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs directly for owner-authorized senders instead of returning `cronParams` and relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937) Thanks @GaosCode.
 - Agents/ACP: hide `sessions_spawn` ACP runtime options unless an ACP backend is loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled `acpx`. Thanks @vincentkoc.
+- Agents/Codex: keep ACP prompt/skill routing hidden unless an ACP runtime backend is available, and warn in doctor when enabled Codex plugin configs still route `openai-codex/*` models through PI. Thanks @vincentkoc.
 - Media delivery: avoid sending generated image attachments twice when the assistant reply already includes explicit `MEDIA:` lines for the same turn, and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
 - Codex harness: ignore retryable app-server error notifications after Codex recovers, and preserve the real nested error message for terminal app-server failures instead of replacing it with a generic failure. Thanks @pashpashpash.
 - Agents/Codex: prepare native Codex sub-agent session metadata without a

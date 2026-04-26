@@ -42,6 +42,8 @@ Enabling the OpenAI plugin, or selecting an `openai-codex/*` model, does not
 enable the bundled Codex app-server plugin. OpenClaw enables that plugin only
 when you explicitly select the native Codex harness with
 `embeddedHarness.runtime: "codex"` or use a legacy `codex/*` model ref.
+If the bundled `codex` plugin is enabled but `openai-codex/*` still resolves
+through PI, `openclaw doctor` warns and leaves the route unchanged.
 </Note>
 
 ## OpenClaw feature coverage

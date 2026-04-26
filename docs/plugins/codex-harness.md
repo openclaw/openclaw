@@ -53,6 +53,11 @@ want native app-server execution. Legacy `codex/*` model refs still auto-select
 the harness for compatibility, but runtime-backed legacy provider prefixes are
 not shown as normal model/provider choices.
 
+If the `codex` plugin is enabled but the primary model is still
+`openai-codex/*`, `openclaw doctor` warns instead of changing the route. That is
+intentional: `openai-codex/*` remains the PI Codex OAuth/subscription path, and
+native app-server execution stays an explicit runtime choice.
+
 ## Pick the right model prefix
 
 OpenAI-family routes are prefix-specific. Use `openai-codex/*` when you want

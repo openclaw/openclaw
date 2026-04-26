@@ -249,7 +249,7 @@ doctor prints platform-specific fix guidance. On macOS with a Homebrew Node, the
 fix is usually `brew postinstall ca-certificates`. With `--deep`, the probe runs
 even if the gateway is healthy.
 
-### 2c) Codex OAuth provider overrides
+### 2e) Codex OAuth provider overrides
 
 If you previously added legacy OpenAI transport settings under
 `models.providers.openai-codex`, they can shadow the built-in Codex OAuth
@@ -258,6 +258,16 @@ those old transport settings alongside Codex OAuth so you can remove or rewrite
 the stale transport override and get the built-in routing/fallback behavior
 back. Custom proxies and header-only overrides are still supported and do not
 trigger this warning.
+
+### 2f) Codex plugin route warnings
+
+When the bundled Codex plugin is enabled, doctor also checks whether
+`openai-codex/*` primary model refs still resolve through the default PI runner.
+That combination is valid when you want Codex OAuth/subscription auth through
+PI, but it is easy to confuse with the native Codex app-server harness. Doctor
+warns and points to the explicit app-server shape:
+`openai/*` plus `embeddedHarness.runtime: "codex"` or
+`OPENCLAW_AGENT_RUNTIME=codex`.
 
 ### 3) Legacy state migrations (disk layout)
 
