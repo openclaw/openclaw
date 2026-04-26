@@ -1,3 +1,4 @@
+import { clearChatAvatarUrl, setChatAvatarUrl } from "../app-chat.ts";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { loadLocalAssistantIdentity, saveLocalAssistantIdentity } from "../storage.ts";
@@ -69,7 +70,7 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarSource = avatar;
     state.assistantAvatarStatus = "data";
     state.assistantAvatarReason = null;
-    state.chatAvatarUrl = null;
+    setChatAvatarUrl(state, avatar);
     state.chatAvatarSource = avatar;
     state.chatAvatarStatus = "data";
     state.chatAvatarReason = null;
@@ -78,7 +79,7 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarSource = null;
     state.assistantAvatarStatus = null;
     state.assistantAvatarReason = null;
-    state.chatAvatarUrl = null;
+    clearChatAvatarUrl(state);
     state.chatAvatarSource = null;
     state.chatAvatarStatus = null;
     state.chatAvatarReason = null;

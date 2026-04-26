@@ -1,12 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import {
-  clearChatAvatarUrl,
-  refreshChat,
-  refreshChatAvatar,
-  setChatAvatarUrl,
-} from "./app-chat.ts";
+import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -1045,19 +1040,11 @@ export function renderApp(state: AppViewState) {
             assistantAvatarUploadError: state.assistantAvatarUploadError,
             onAssistantAvatarOverrideChange: (dataUrl) => {
               setAssistantAvatarOverride(state, dataUrl);
-              setChatAvatarUrl(state, dataUrl);
-              state.chatAvatarSource = dataUrl;
-              state.chatAvatarStatus = "data";
-              state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
               requestHostUpdate?.();
             },
             onAssistantAvatarClearOverride: () => {
               setAssistantAvatarOverride(state, null);
-              clearChatAvatarUrl(state);
-              state.chatAvatarSource = null;
-              state.chatAvatarStatus = null;
-              state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
               void state
                 .loadAssistantIdentity()

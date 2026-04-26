@@ -18,8 +18,8 @@ import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -559,8 +559,8 @@ type SessionDefaultsSnapshot = {
 
 const chatAvatarObjectUrls = new WeakMap<object, string>();
 
-type ChatAvatarUrlState = {
-  chatAvatarUrl: string | null;
+export type ChatAvatarUrlState = {
+  chatAvatarUrl?: string | null;
 };
 
 function beginChatAvatarRequest(host: ChatHost): number {
