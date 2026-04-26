@@ -172,9 +172,11 @@ function sortUnique(values: readonly string[] | undefined): readonly string[] {
 }
 
 function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
+  const providers = record.providers ?? [];
+  const cliBackends = record.cliBackends ?? [];
   return Boolean(
-    record.providers.length > 0 ||
-    record.cliBackends.length > 0 ||
+    providers.length > 0 ||
+    cliBackends.length > 0 ||
     record.contracts?.speechProviders?.length ||
     record.contracts?.mediaUnderstandingProviders?.length ||
     record.contracts?.documentExtractors?.length ||
@@ -190,8 +192,9 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
 }
 
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
+  const channels = record.channels ?? [];
   return {
-    sidecar: record.channels.length === 0 && !hasRuntimeContractSurface(record),
+    sidecar: channels.length === 0 && !hasRuntimeContractSurface(record),
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -479,7 +482,8 @@ function buildInstalledPluginIndex(
   const { candidates, registry } = resolveRegistry(params);
   const candidateByRootDir = buildCandidateLookup(candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
+  const registryDiagnostics = registry.diagnostics ?? [];
+  const diagnostics: PluginDiagnostic[] = [...registryDiagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const installRecords = normalizeInstallRecordMap(params.installRecords);
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
