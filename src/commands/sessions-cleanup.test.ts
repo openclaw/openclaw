@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -287,5 +288,81 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.allAgents).toBe(true);
     expect(Array.isArray(payload.stores)).toBe(true);
     expect((payload.stores as unknown[]).length).toBe(2);
+  });
+
+  describe("stale sessionFile fallback", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("does not prune entry with stale sessionFile when sessionId transcript exists", async () => {
+      const stalePath = "/stale/old-name.jsonl";
+      const fallbackPath = "/resolved/sessions/stale-id.jsonl";
+      mocks.resolveSessionFilePath.mockImplementation(
+        (_sessionId: string, entry?: { sessionFile?: string }) =>
+          entry?.sessionFile ? stalePath : fallbackPath,
+      );
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p) === fallbackPath);
+      mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+      mocks.loadSessionStore.mockReturnValue({
+        staleEntry: {
+          sessionId: "stale-id",
+          sessionFile: "old-name.jsonl",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand({ json: true, dryRun: true, fixMissing: true }, runtime);
+
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.missing).toBe(0);
+      expect(payload.beforeCount).toBe(1);
+      expect(payload.afterCount).toBe(1);
+    });
+
+    it("prunes entry with stale sessionFile when sessionId transcript is also missing", async () => {
+      mocks.resolveSessionFilePath.mockImplementation(
+        (sessionId: string, entry?: { sessionFile?: string }) =>
+          entry?.sessionFile ? `/stale/${sessionId}.jsonl` : `/also-missing/${sessionId}.jsonl`,
+      );
+      mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+      mocks.loadSessionStore.mockReturnValue({
+        gone: {
+          sessionId: "gone-id",
+          sessionFile: "old-name.jsonl",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand({ json: true, dryRun: true, fixMissing: true }, runtime);
+
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.missing).toBe(1);
+      expect(payload.afterCount).toBe(0);
+    });
+
+    it("keeps entry when sessionFile path is valid and file exists", async () => {
+      const validPath = "/resolved/sessions/valid-id.jsonl";
+      mocks.resolveSessionFilePath.mockImplementation(() => validPath);
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p) === validPath);
+      mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+      mocks.loadSessionStore.mockReturnValue({
+        valid: {
+          sessionId: "valid-id",
+          sessionFile: "valid-id.jsonl",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand({ json: true, dryRun: true, fixMissing: true }, runtime);
+
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.missing).toBe(0);
+      expect(payload.beforeCount).toBe(1);
+      expect(payload.afterCount).toBe(1);
+    });
   });
 });
