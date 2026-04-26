@@ -128,7 +128,9 @@ first exposes the small number of missing seams.
 ## Current Patch Evidence
 
 The following PR #71676 areas show where the host currently needs generic
-hooks. Paths are repo-root relative.
+hooks. Paths are repo-root relative as they appear in the #71676 branch/diff;
+some are intentionally absent from current `main` because #71676 is the parity
+oracle, not code to cherry-pick.
 
 | Behavior                                          | PR #71676 core touch points                                                                                                                            | Missing generic seam                                                  |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |

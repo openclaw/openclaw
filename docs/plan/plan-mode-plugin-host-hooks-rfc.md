@@ -238,7 +238,10 @@ things:
 ## Evidence From PR 71676
 
 PR #71676 touches a broad surface because it implements Plan Mode directly in
-host code. That breadth is the evidence for the missing seams.
+host code. That breadth is the evidence for the missing seams. Paths in this
+table are repo-root relative as they appear in the #71676 branch/diff; some are
+intentionally absent from current `main` because #71676 is the parity oracle,
+not code to cherry-pick.
 
 | Behavior in PR #71676                                        | Representative host files                                                                                                                                                        | What this proves                                                                                            |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
