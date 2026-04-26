@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -24,6 +25,7 @@ import {
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -94,6 +96,18 @@ export type ExecApprovalFollowupResultDeps = {
   sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
   logWarn?: typeof logWarn;
 };
+
+type LiveExecApprovalState =
+  | {
+      ok: true;
+      pending: boolean;
+      request?: unknown;
+    }
+  | {
+      ok: false;
+      pending?: undefined;
+      error: string;
+    };
 
 export type DefaultExecApprovalRequestArgs = {
   warnings: string[];
@@ -213,17 +227,122 @@ export function resolveExecHostApprovalContext(params: {
 export async function resolveApprovalDecisionOrUndefined(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
+  sessionKey?: string;
   onFailure: () => void;
 }): Promise<string | null | undefined> {
+  const carriedState = describeCarriedApprovalState(params.preResolvedDecision);
+  const liveBefore = await resolveLiveExecApprovalState(params.approvalId);
+  if (params.preResolvedDecision !== undefined && liveBefore.ok && liveBefore.pending) {
+    emitApprovalCarryMismatch({
+      approvalId: params.approvalId,
+      sessionKey: params.sessionKey,
+      phase: "before_decision_use",
+      carriedState,
+      liveState: describeLiveApprovalState(liveBefore),
+    });
+  } else if (!liveBefore.ok) {
+    emitApprovalCarryMismatch({
+      approvalId: params.approvalId,
+      sessionKey: params.sessionKey,
+      phase: "before_decision_use",
+      severity: "info",
+      carriedState,
+      liveState: "unknown",
+      error: liveBefore.error,
+    });
+  }
   try {
-    return await resolveRegisteredExecApprovalDecision({
+    const decision = await resolveRegisteredExecApprovalDecision({
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
     });
+    const liveAfter = await resolveLiveExecApprovalState(params.approvalId);
+    if (liveAfter.ok && liveAfter.pending && decision !== undefined) {
+      emitApprovalCarryMismatch({
+        approvalId: params.approvalId,
+        sessionKey: params.sessionKey,
+        phase: "after_decision_resolve",
+        carriedState: `decision:${decision ?? "null"}`,
+        liveState: describeLiveApprovalState(liveAfter),
+      });
+    }
+    return decision;
   } catch {
     params.onFailure();
     return undefined;
   }
+}
+
+async function resolveLiveExecApprovalState(approvalId: string): Promise<LiveExecApprovalState> {
+  try {
+    const requests = await callGatewayTool<unknown[]>(
+      "exec.approval.list",
+      { timeoutMs: 3_000 },
+      {},
+      { expectFinal: false },
+    );
+    const list = Array.isArray(requests) ? requests : [];
+    const request = list.find(
+      (entry) =>
+        Boolean(entry) &&
+        typeof entry === "object" &&
+        (entry as { id?: unknown }).id === approvalId,
+    );
+    return {
+      ok: true,
+      pending: Boolean(request),
+      request,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatErrorMessage(err),
+    };
+  }
+}
+
+function emitApprovalCarryMismatch(params: {
+  approvalId: string;
+  sessionKey?: string;
+  phase: string;
+  severity?: "info" | "warn" | "error";
+  carriedState: string;
+  liveState: string;
+  error?: string;
+}): void {
+  emitContinuityDiagnostic({
+    type: "diag.approval.carry_mismatch",
+    severity: params.severity ?? "warn",
+    runId: params.approvalId,
+    sessionKey: params.sessionKey,
+    phase: params.phase,
+    correlation: {
+      approvalKind: "exec",
+      approvalId: params.approvalId,
+    },
+    details: {
+      carriedState: params.carriedState,
+      liveState: params.liveState,
+      error: params.error,
+    },
+  });
+}
+
+function describeCarriedApprovalState(decision: string | null | undefined): string {
+  if (decision === undefined) {
+    return "wait-for-live-decision";
+  }
+  if (decision === null) {
+    return "resolved:null";
+  }
+  return `resolved:${decision}`;
+}
+
+function describeLiveApprovalState(live: LiveExecApprovalState): string {
+  if (!live.ok) {
+    return "unknown";
+  }
+  return live.pending ? "pending" : "not-pending";
 }
 
 export function resolveExecApprovalUnavailableState(params: {

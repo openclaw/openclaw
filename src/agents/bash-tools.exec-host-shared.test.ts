@@ -1,6 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(),
+  emitContinuityDiagnostic: vi.fn(),
+  resolveRegisteredExecApprovalDecision: vi.fn(),
   resolveExecApprovals: vi.fn(() => ({
     defaults: {
       security: "allowlist",
@@ -19,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("../infra/continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: mocks.emitContinuityDiagnostic,
+}));
+
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
@@ -27,12 +34,25 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>();
+  return {
+    ...mod,
+    resolveRegisteredExecApprovalDecision: mocks.resolveRegisteredExecApprovalDecision,
+  };
+});
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: mocks.callGatewayTool,
+}));
+
 let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
 let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
 let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
 let resolveExecApprovalUnavailableState: typeof import("./bash-tools.exec-host-shared.js").resolveExecApprovalUnavailableState;
 let buildExecApprovalPendingToolResult: typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalPendingToolResult;
+let resolveApprovalDecisionOrUndefined: typeof import("./bash-tools.exec-host-shared.js").resolveApprovalDecisionOrUndefined;
 
 beforeAll(async () => {
   ({
@@ -42,7 +62,16 @@ beforeAll(async () => {
     resolveExecHostApprovalContext,
     resolveExecApprovalUnavailableState,
     buildExecApprovalPendingToolResult,
+    resolveApprovalDecisionOrUndefined,
   } = await import("./bash-tools.exec-host-shared.js"));
+});
+
+beforeEach(() => {
+  mocks.callGatewayTool.mockReset();
+  mocks.callGatewayTool.mockResolvedValue([]);
+  mocks.emitContinuityDiagnostic.mockReset();
+  mocks.resolveRegisteredExecApprovalDecision.mockReset();
+  mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
 });
 
 describe("sendExecApprovalFollowupResult", () => {
@@ -201,6 +230,79 @@ describe("resolveExecHostApprovalContext", () => {
     });
 
     expect(result.askFallback).toBe("allowlist");
+  });
+});
+
+describe("resolveApprovalDecisionOrUndefined", () => {
+  it("emits an exec approval carry-mismatch diagnostic when a carried decision still has live pending state", async () => {
+    mocks.callGatewayTool.mockResolvedValue([{ id: "approval-1" }]);
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue("allow-once");
+    const onFailure = vi.fn();
+
+    await expect(
+      resolveApprovalDecisionOrUndefined({
+        approvalId: "approval-1",
+        preResolvedDecision: "allow-once",
+        sessionKey: "agent:main:discord:direct:alice",
+        onFailure,
+      }),
+    ).resolves.toBe("allow-once");
+
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.list",
+      { timeoutMs: 3_000 },
+      {},
+      { expectFinal: false },
+    );
+    expect(mocks.emitContinuityDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.approval.carry_mismatch",
+        severity: "warn",
+        runId: "approval-1",
+        sessionKey: "agent:main:discord:direct:alice",
+        phase: "before_decision_use",
+        correlation: {
+          approvalKind: "exec",
+          approvalId: "approval-1",
+        },
+        details: expect.objectContaining({
+          carriedState: "resolved:allow-once",
+          liveState: "pending",
+        }),
+      }),
+    );
+  });
+
+  it("emits an info diagnostic when live approval lookup fails but still resolves the registered decision", async () => {
+    mocks.callGatewayTool.mockRejectedValue(new Error("gateway offline"));
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
+    const onFailure = vi.fn();
+
+    await expect(
+      resolveApprovalDecisionOrUndefined({
+        approvalId: "approval-2",
+        preResolvedDecision: undefined,
+        sessionKey: "session-main",
+        onFailure,
+      }),
+    ).resolves.toBeNull();
+
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(mocks.emitContinuityDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.approval.carry_mismatch",
+        severity: "info",
+        runId: "approval-2",
+        sessionKey: "session-main",
+        phase: "before_decision_use",
+        details: expect.objectContaining({
+          carriedState: "wait-for-live-decision",
+          liveState: "unknown",
+          error: "gateway offline",
+        }),
+      }),
+    );
   });
 });
 
