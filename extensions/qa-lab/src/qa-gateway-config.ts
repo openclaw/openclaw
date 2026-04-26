@@ -29,6 +29,14 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
 }
 
+function resolveQaGatewayModelRef(
+  value: string | undefined,
+  providerMode: QaProviderMode,
+  options?: { alternate?: true },
+) {
+  return value?.trim() || defaultQaModelForMode(providerMode, options);
+}
+
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
   gatewayPort: number;
@@ -53,9 +61,10 @@ export function buildQaGatewayConfig(params: {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
-  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const primaryModel = resolveQaGatewayModelRef(params.primaryModel, providerMode);
+  const alternateModel = resolveQaGatewayModelRef(params.alternateModel, providerMode, {
+    alternate: true,
+  });
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((provider): provider is string => Boolean(provider));
@@ -116,6 +125,9 @@ export function buildQaGatewayConfig(params: {
   return {
     plugins: {
       allow: allowedPlugins,
+      slots: {
+        memory: "memory-core",
+      },
       entries: {
         acpx: {
           enabled: true,

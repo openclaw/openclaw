@@ -109,6 +109,14 @@ function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
   return parseQaSuiteBooleanEnv(env.CI) === true;
 }
 
+function resolveQaSuiteModelRef(
+  value: string | undefined,
+  providerMode: QaProviderMode,
+  alternate = false,
+) {
+  return value?.trim() || defaultQaModelForMode(providerMode, alternate);
+}
+
 function resolveQaSuiteTransportReadyTimeoutMs(
   explicitTimeoutMs?: number,
   env: NodeJS.ProcessEnv = process.env,
@@ -383,8 +391,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const transportId = normalizeQaTransportId(params?.transportId);
-  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
+  const primaryModel = resolveQaSuiteModelRef(params?.primaryModel, providerMode);
+  const alternateModel = resolveQaSuiteModelRef(params?.alternateModel, providerMode, true);
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
@@ -847,6 +855,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
 export const qaSuiteProgressTesting = {
   parseQaSuiteBooleanEnv,
+  resolveQaSuiteModelRef,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,

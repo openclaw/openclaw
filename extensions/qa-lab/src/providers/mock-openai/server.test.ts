@@ -929,6 +929,78 @@ describe("qa mock openai server", () => {
     ]);
   });
 
+  it("keeps threaded memory planning when runtime context follows the user prompt", async () => {
+    const server = await startMockServer();
+    const threadPrompt =
+      "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
+    const runtimeContext = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored.",
+      "",
+      'Conversation info (untrusted metadata): {"chat_id":"thread:qa-room/thread-123","is_group_chat":true}',
+    ].join("\n");
+
+    const search = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(threadPrompt), makeUserInput(runtimeContext)],
+      }),
+    });
+    expect(search.status).toBe(200);
+    expect(await search.text()).toContain('"name":"memory_search"');
+
+    const searchDebug = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(searchDebug.status).toBe(200);
+    expect(await searchDebug.json()).toMatchObject({
+      prompt: runtimeContext,
+      allInputText: expect.stringContaining("Thread memory check"),
+      plannedToolName: "memory_search",
+    });
+
+    const get = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(threadPrompt),
+          makeUserInput(runtimeContext),
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [{ path: "MEMORY.md", startLine: 1, endLine: 1 }],
+            }),
+          },
+        ],
+      }),
+    });
+    expect(get.status).toBe(200);
+    expect(await get.text()).toContain('"name":"memory_get"');
+
+    const final = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(threadPrompt),
+        makeUserInput(runtimeContext),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            text: "Thread-hidden codename: ORBIT-22.",
+          }),
+        },
+      ],
+    });
+    expect(JSON.stringify(final.output)).toContain("ORBIT-22");
+  });
+
   it("supports advanced QA memory and subagent recovery prompts", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

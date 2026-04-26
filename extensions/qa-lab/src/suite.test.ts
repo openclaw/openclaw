@@ -23,6 +23,18 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
   });
 
+  it("normalizes blank suite model refs to provider defaults", () => {
+    expect(qaSuiteProgressTesting.resolveQaSuiteModelRef("", "mock-openai")).toBe(
+      "mock-openai/gpt-5.5",
+    );
+    expect(qaSuiteProgressTesting.resolveQaSuiteModelRef("   ", "mock-openai", true)).toBe(
+      "mock-openai/gpt-5.5-alt",
+    );
+    expect(qaSuiteProgressTesting.resolveQaSuiteModelRef(" openai/gpt-5.5 ", "mock-openai")).toBe(
+      "openai/gpt-5.5",
+    );
+  });
+
   it("defaults progress logging from CI when no override is set", () => {
     expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "true" })).toBe(true);
     expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "false" })).toBe(false);

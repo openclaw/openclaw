@@ -59,6 +59,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
+    expect(cfg.plugins?.slots?.memory).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toEqual({
       enabled: true,
       config: {
@@ -78,6 +79,27 @@ describe("buildQaGatewayConfig", () => {
       pollTimeoutMs: 250,
     });
     expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+  });
+
+  it("normalizes blank model refs to provider defaults", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: "   ",
+      alternateModel: "",
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.agents?.defaults?.models?.["mock-openai/gpt-5.5"]?.params).toBeDefined();
+    expect(cfg.agents?.defaults?.models?.["mock-openai/gpt-5.5-alt"]?.params).toBeDefined();
+    expect(cfg.models?.providers?.["mock-openai"]?.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt"]),
+    );
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
