@@ -62,6 +62,8 @@ export type AppendSessionRecoveryEventParams = {
 };
 
 export const SESSION_RECOVERY_LOG_FILE = "recovery-events.jsonl";
+export const SESSION_RECOVERY_REDACTED_VALUE = "[redacted]";
+export const SESSION_RECOVERY_MAX_STRING_LENGTH = 4096;
 
 export function resolveSessionRecoveryLogPath(storePath: string): string {
   const trimmed = storePath.trim();
@@ -71,14 +73,82 @@ export function resolveSessionRecoveryLogPath(storePath: string): string {
   return path.join(path.dirname(path.resolve(trimmed)), SESSION_RECOVERY_LOG_FILE);
 }
 
+function isSensitiveRecoveryKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (
+    normalized === "token" ||
+    normalized.endsWith("token") ||
+    normalized.includes("tokenvalue")
+  ) {
+    return true;
+  }
+  return [
+    "apikey",
+    "authorization",
+    "bearer",
+    "cookie",
+    "password",
+    "passwd",
+    "secret",
+  ].some((needle) => normalized.includes(needle));
+}
+
+function truncateRecoveryString(value: string): string {
+  if (value.length <= SESSION_RECOVERY_MAX_STRING_LENGTH) {
+    return value;
+  }
+  return `${value.slice(0, SESSION_RECOVERY_MAX_STRING_LENGTH)}…[truncated]`;
+}
+
+function sanitizeRecoveryValue(
+  value: unknown,
+  key: string | undefined,
+  seen: WeakSet<object>,
+): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (key && isSensitiveRecoveryKey(key)) {
+    return SESSION_RECOVERY_REDACTED_VALUE;
+  }
+  if (typeof value === "string") {
+    return truncateRecoveryString(value);
+  }
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => sanitizeRecoveryValue(entry, undefined, seen))
+      .filter((entry) => entry !== undefined);
+  }
+  if (typeof value !== "object") {
+    return undefined;
+  }
+  if (seen.has(value)) {
+    return "[circular]";
+  }
+  seen.add(value);
+  const clean = Object.fromEntries(
+    Object.entries(value)
+      .map(([entryKey, entryValue]) => [
+        entryKey,
+        sanitizeRecoveryValue(entryValue, entryKey, seen),
+      ])
+      .filter(([, entryValue]) => entryValue !== undefined),
+  );
+  seen.delete(value);
+  return Object.keys(clean).length > 0 ? clean : undefined;
+}
+
 function cleanRecord<T extends Record<string, unknown>>(record: T | undefined): T | undefined {
   if (!record) {
     return undefined;
   }
-  const clean = Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined),
-  ) as T;
-  return Object.keys(clean).length > 0 ? clean : undefined;
+  return sanitizeRecoveryValue(record, undefined, new WeakSet()) as T | undefined;
 }
 
 export function buildSessionRecoveryEvent(

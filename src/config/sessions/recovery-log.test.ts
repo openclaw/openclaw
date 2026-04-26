@@ -4,7 +4,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
+  SESSION_RECOVERY_MAX_STRING_LENGTH,
+  SESSION_RECOVERY_REDACTED_VALUE,
   appendSessionRecoveryEvent,
+  buildSessionRecoveryEvent,
   readSessionRecoveryEventsForTest,
   resolveSessionRecoveryLogPath,
 } from "./recovery-log.js";
@@ -69,6 +72,41 @@ describe("session recovery log", () => {
         details: { messageSid: "msg-1" },
       },
     ]);
+  });
+
+  it("sanitizes recovery details before events are serialized", () => {
+    const longBody = "x".repeat(SESSION_RECOVERY_MAX_STRING_LENGTH + 10);
+    const event = buildSessionRecoveryEvent({
+      eventId: "event-redaction",
+      eventType: "outbound.sent",
+      timestamp: 123,
+      sessionKey: "agent:main:discord:dm:user-1",
+      details: {
+        contextTokens: 1234,
+        accessToken: "secret-token",
+        headers: {
+          authorization: "Bearer secret",
+          cookie: "session=secret",
+        },
+        nested: [{ apiKey: "secret-key" }, { body: longBody }],
+      },
+    });
+
+    expect(event.details).toMatchObject({
+      contextTokens: 1234,
+      accessToken: SESSION_RECOVERY_REDACTED_VALUE,
+      headers: {
+        authorization: SESSION_RECOVERY_REDACTED_VALUE,
+        cookie: SESSION_RECOVERY_REDACTED_VALUE,
+      },
+      nested: [
+        { apiKey: SESSION_RECOVERY_REDACTED_VALUE },
+        { body: expect.stringContaining("…[truncated]") },
+      ],
+    });
+    expect((event.details?.nested as Array<{ body?: string }>)[1]?.body?.length).toBeGreaterThan(
+      SESSION_RECOVERY_MAX_STRING_LENGTH,
+    );
   });
 
   it("records inbound session metadata as an append-only recovery event", async () => {
