@@ -446,8 +446,12 @@ function collectNonUnionLeafIssues(record: UnknownIssueRecord): UnknownIssueReco
     }
     for (const rawIssue of errGroup) {
       const issue = toIssueRecord(rawIssue);
-      if (!issue) continue;
-      if (isRouteTypeMismatchIssue(issue)) continue;
+      if (!issue) {
+        continue;
+      }
+      if (isRouteTypeMismatchIssue(issue)) {
+        continue;
+      }
       if (typeof issue.code === "string" && issue.code === "invalid_union") {
         leaves.push(...collectNonUnionLeafIssues(issue));
         continue;
