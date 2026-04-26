@@ -117,6 +117,11 @@ import { processMessage } from "./process-message.js";
 type WebInboundMsg = Parameters<typeof processMessage>[0]["msg"];
 type TestRoute = Parameters<typeof processMessage>[0]["route"];
 
+const flushMicrotasks = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 function makeAudioMsg(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
   return {
     id: "msg-1",
@@ -172,11 +177,32 @@ function makeParams(msgOverrides: Partial<WebInboundMsg> = {}) {
   };
 }
 
+function makeAckReactionHandle() {
+  return {
+    ackReactionPromise: Promise.resolve(true),
+    ackReactionValue: "👀",
+    remove: vi.fn(async () => undefined),
+  };
+}
+
+function makeRemoveAckAfterReplyParams() {
+  return {
+    ...makeParams(),
+    cfg: {
+      tools: { media: { audio: { enabled: true } } },
+      channels: { whatsapp: {} },
+      commands: { useAccessGroups: false },
+      messages: { removeAckAfterReply: true },
+    } as never,
+    preflightAudioTranscript: "pre-computed transcript from caller",
+  };
+}
+
 describe("processMessage audio preflight transcription", () => {
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
     maybeSendAckReactionMock.mockReset();
-    maybeSendAckReactionMock.mockResolvedValue(undefined);
+    maybeSendAckReactionMock.mockResolvedValue(null);
     shouldComputeCommandResult = false;
     shouldComputeCommandBodies = [];
     vi.mocked(dispatchWhatsAppBufferedReply).mockClear();
@@ -317,9 +343,57 @@ describe("processMessage audio preflight transcription", () => {
       ...makeParams(),
       preflightAudioTranscript: "pre-computed transcript from caller",
       ackAlreadySent: true,
+      ackReaction: makeAckReactionHandle(),
     });
 
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
+  });
+
+  it("removes caller-provided ack after a successful visible reply", async () => {
+    const ackReaction = makeAckReactionHandle();
+
+    await processMessage({
+      ...makeRemoveAckAfterReplyParams(),
+      ackReaction,
+    });
+    await flushMicrotasks();
+
+    expect(ackReaction.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes internally sent ack after a successful visible reply", async () => {
+    const ackReaction = makeAckReactionHandle();
+    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
+
+    await processMessage(makeRemoveAckAfterReplyParams());
+    await flushMicrotasks();
+
+    expect(maybeSendAckReactionMock).toHaveBeenCalledTimes(1);
+    expect(ackReaction.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ack when no visible reply was delivered", async () => {
+    const ackReaction = makeAckReactionHandle();
+    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
+    vi.mocked(dispatchWhatsAppBufferedReply).mockResolvedValueOnce(false);
+
+    await processMessage(makeRemoveAckAfterReplyParams());
+    await flushMicrotasks();
+
+    expect(ackReaction.remove).not.toHaveBeenCalled();
+  });
+
+  it("keeps ack when the ack send failed", async () => {
+    const ackReaction = {
+      ...makeAckReactionHandle(),
+      ackReactionPromise: Promise.resolve(false),
+    };
+    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
+
+    await processMessage(makeRemoveAckAfterReplyParams());
+    await flushMicrotasks();
+
+    expect(ackReaction.remove).not.toHaveBeenCalled();
   });
 
   it("skips internal STT when preflightAudioTranscript is null (failed preflight sentinel)", async () => {

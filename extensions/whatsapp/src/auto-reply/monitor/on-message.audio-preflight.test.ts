@@ -5,6 +5,11 @@ const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 const processMessageMock = vi.fn();
 const maybeBroadcastMessageMock = vi.fn();
+const ackReactionHandle = {
+  ackReactionPromise: Promise.resolve(true),
+  ackReactionValue: "👀",
+  remove: vi.fn(async () => undefined),
+};
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -113,6 +118,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockImplementation(async () => {
       events.push("ack");
+      return ackReactionHandle;
     });
     transcribeFirstAudioMock.mockReset();
     transcribeFirstAudioMock.mockImplementation(async () => {
@@ -158,12 +164,12 @@ describe("createWebOnMessageHandler audio preflight", () => {
       expect.objectContaining({
         preflightAudioTranscript: "transcribed voice note",
         ackAlreadySent: true,
+        ackReaction: ackReactionHandle,
       }),
     );
   });
 
   it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {
-
     const handler = createWebOnMessageHandler({
       cfg: {
         channels: {
@@ -206,9 +212,14 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
   it("preserves per-agent ack checks for group broadcast voice notes", async () => {
     maybeBroadcastMessageMock.mockImplementation(
-      async (params: { ackAlreadySent?: boolean; preflightAudioTranscript?: string | null }) => {
+      async (params: {
+        ackAlreadySent?: boolean;
+        ackReaction?: unknown;
+        preflightAudioTranscript?: string | null;
+      }) => {
         expect(params.preflightAudioTranscript).toBe("transcribed voice note");
         expect(params.ackAlreadySent).toBeUndefined();
+        expect(params.ackReaction).toBeUndefined();
         return true;
       },
     );

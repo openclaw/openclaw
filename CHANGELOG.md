@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
   `openclaw node start` command, and show an actionable browser-control error
   when the local control service is missing. Fixes #66637.
 - Gateway/update: fail package updates when the restarted managed gateway reports the wrong version, avoiding false-success mixed-version restarts after macOS LaunchAgent updates. Fixes #71835. Thanks @abhinas90 and @jsompis.
+- WhatsApp: remove ack reactions after a visible reply when `messages.removeAckAfterReply` is enabled, matching other reaction-capable channels. Fixes #26183. Thanks @MrUnforsaken.
 - Providers/Z.AI: map OpenClaw thinking controls to Z.AI's `thinking` payload and add opt-in preserved thinking replay via `params.preserveThinking`, so GLM 5.x can keep prior `reasoning_content` when requested. Fixes #58680. Thanks @xuanmingguo.
 - Channels/status: keep read-only channel lists on manifest and package metadata by default, loading setup runtime only for explicit fallback callers. Thanks @shakkernerd.
 - Plugins/onboarding: defer onboarding install-record index writes until the guarded config commit so setup failures cannot leave the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.

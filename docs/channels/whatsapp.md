@@ -151,6 +151,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
+- When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
 ## Plugin hooks and privacy
 

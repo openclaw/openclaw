@@ -1,3 +1,4 @@
+import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -42,6 +43,7 @@ export function createWebOnMessageHandler(params: {
       suppressGroupHistoryClear?: boolean;
       preflightAudioTranscript?: string | null;
       ackAlreadySent?: boolean;
+      ackReaction?: AckReactionHandle | null;
     },
   ) => {
     const processParams: Parameters<typeof processMessage>[0] = {
@@ -73,6 +75,9 @@ export function createWebOnMessageHandler(params: {
     }
     if (opts?.ackAlreadySent === true) {
       processParams.ackAlreadySent = true;
+    }
+    if (opts?.ackReaction !== undefined) {
+      processParams.ackReaction = opts.ackReaction;
     }
     return processMessage(processParams);
   };
@@ -186,8 +191,9 @@ export function createWebOnMessageHandler(params: {
       msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
     const canRunEarlyDmPreflight = msg.chatType === "group" || msg.accessControlPassed === true;
     let ackAlreadySent = false;
+    let ackReaction: AckReactionHandle | null = null;
     if (canRunEarlyDmPreflight && hasAudioBody && msg.mediaPath) {
-      await maybeSendAckReaction({
+      ackReaction = await maybeSendAckReaction({
         cfg: params.cfg,
         msg,
         agentId: route.agentId,
@@ -198,7 +204,7 @@ export function createWebOnMessageHandler(params: {
         info: params.replyLogger.info.bind(params.replyLogger),
         warn: params.replyLogger.warn.bind(params.replyLogger),
       });
-      ackAlreadySent = true;
+      ackAlreadySent = ackReaction !== null;
       try {
         const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
         // transcribeFirstAudio returns undefined on failure/disabled; store null so
@@ -232,6 +238,7 @@ export function createWebOnMessageHandler(params: {
         // preflight ack attempt on the base route must not suppress downstream
         // per-agent checks during broadcast fan-out.
         ...(ackAlreadySent && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
+        ...(ackReaction && msg.chatType !== "group" ? { ackReaction } : {}),
         processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {
@@ -241,6 +248,7 @@ export function createWebOnMessageHandler(params: {
     await processForRoute(msg, route, groupHistoryKey, {
       ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
       ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
+      ...(ackReaction ? { ackReaction } : {}),
     });
   };
 }

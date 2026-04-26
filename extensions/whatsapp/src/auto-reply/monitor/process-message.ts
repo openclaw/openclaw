@@ -1,4 +1,9 @@
 import {
+  logAckFailure,
+  removeAckReactionHandleAfterReply,
+  type AckReactionHandle,
+} from "openclaw/plugin-sdk/channel-feedback";
+import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
   fireAndForgetBoundedHook,
@@ -192,6 +197,7 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
+  ackReaction?: AckReactionHandle | null;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -318,8 +324,9 @@ export async function processMessage(params: {
   // Send ack reaction immediately upon message receipt (post-gating). Callers
   // that do preflight work before processMessage can send it first and set
   // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
-  if (params.ackAlreadySent !== true) {
-    await maybeSendAckReaction({
+  let ackReaction = params.ackReaction ?? null;
+  if (!ackReaction && params.ackAlreadySent !== true) {
+    ackReaction = await maybeSendAckReaction({
       cfg: params.cfg,
       msg: params.msg,
       agentId: params.route.agentId,
@@ -463,7 +470,7 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
-  return dispatchWhatsAppBufferedReply({
+  const didSendReply = await dispatchWhatsAppBufferedReply({
     cfg: params.cfg,
     connectionId: params.connectionId,
     context: ctxPayload,
@@ -485,6 +492,19 @@ export async function processMessage(params: {
     route: params.route,
     shouldClearGroupHistory,
   });
+  removeAckReactionHandleAfterReply({
+    removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
+    ackReaction,
+    onError: (err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "whatsapp",
+        target: `${params.msg.chatId ?? conversationId}/${params.msg.id ?? "unknown"}`,
+        error: err,
+      });
+    },
+  });
+  return didSendReply;
 }
 
 export const __testing = {
