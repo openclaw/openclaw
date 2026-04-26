@@ -163,12 +163,20 @@ final class LiveActivityManager {
         }
 
         self.activityStartDate = .now
+        let normalizedInitialState = OpenClawActivityAttributes.ContentState(
+            statusText: initialState.statusText,
+            isIdle: initialState.isIdle,
+            isDisconnected: initialState.isDisconnected,
+            isConnecting: initialState.isConnecting,
+            isWorking: initialState.isWorking,
+            taskDescription: initialState.taskDescription,
+            startedAt: self.activityStartDate)
         let attributes = OpenClawActivityAttributes(agentName: agentName, sessionKey: sessionKey)
 
         do {
             let activity = try Activity.request(
                 attributes: attributes,
-                content: ActivityContent(state: initialState, staleDate: nil),
+                content: ActivityContent(state: normalizedInitialState, staleDate: nil),
                 pushType: nil)
             self.currentActivity = activity
             self.lastConnectionState = nextConnectionState
