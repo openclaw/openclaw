@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 - CLI/configure: keep web-search configure prompts on cold plugin registry metadata until the user chooses managed search setup. Thanks @vincentkoc.
 - Plugins/chat commands: refresh the persisted plugin registry after `/plugins enable` and `/plugins disable`, matching the CLI mutation path. Thanks @vincentkoc.
 - Plugins/compat: mark `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY` as a deprecated break-glass switch and point operators at registry repair instead. Thanks @vincentkoc.
+- Plugins/compat: expand the central compatibility registry with dated owners, replacements, and removal targets for legacy SDK, manifest, setup, registry-migration, and agent-runtime surfaces. Thanks @vincentkoc.
 - Plugins/registry: ignore stale persisted registry reads when plugin policy no longer matches current config, and stamp generated registry files with a do-not-edit warning. Thanks @vincentkoc.
 - Diagnostics/OTEL: surface provider request identifiers as bounded hashes on model-call diagnostics and span events, without exporting raw request IDs or metric labels. Thanks @Lidang-Jiang and @vincentkoc.
 - Plugins/diagnostics: add metadata-only `model_call_started` and `model_call_ended` hooks for provider/model call telemetry without exposing prompts, responses, headers, request bodies, or raw provider request IDs. Thanks @vincentkoc.

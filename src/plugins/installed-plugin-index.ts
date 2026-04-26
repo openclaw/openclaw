@@ -223,6 +223,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
   }
+  if (record.activation?.onAgentHarnesses?.length) {
+    codes.push("activation-agent-harness-hint");
+  }
   if (record.activation?.onChannels?.length) {
     codes.push("activation-channel-hint");
   }

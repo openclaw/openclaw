@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   getPluginCompatRecord,
@@ -23,6 +24,7 @@ describe("plugin compatibility registry", () => {
     for (const record of listDeprecatedPluginCompatRecords()) {
       expect(record.deprecated, record.code).toMatch(datePattern);
       expect(record.warningStarts, record.code).toMatch(datePattern);
+      expect(record.removeAfter, record.code).toMatch(datePattern);
       expect(record.replacement, record.code).toBeTruthy();
       expect(record.docsPath, record.code).toMatch(/^\//u);
     }
@@ -35,6 +37,9 @@ describe("plugin compatibility registry", () => {
       expect(record.surfaces.length, record.code).toBeGreaterThan(0);
       expect(record.diagnostics.length, record.code).toBeGreaterThan(0);
       expect(record.tests.length, record.code).toBeGreaterThan(0);
+      for (const testPath of record.tests) {
+        expect(fs.existsSync(testPath), `${record.code}: ${testPath}`).toBe(true);
+      }
     }
   });
 });

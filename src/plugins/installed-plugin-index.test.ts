@@ -127,6 +127,7 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
       "demo-chat": ["DEMO_CHAT_TOKEN"],
     },
     activation: {
+      onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
       onChannels: ["demo-chat"],
     },
@@ -205,6 +206,7 @@ describe("installed plugin index", () => {
             },
           },
           compat: [
+            "activation-agent-harness-hint",
             "activation-channel-hint",
             "activation-provider-hint",
             "channel-env-vars",

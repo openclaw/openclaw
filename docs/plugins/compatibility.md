@@ -71,7 +71,9 @@ The migration sequence is:
 7. Remove only with explicit breaking-release approval.
 
 Deprecated records must include a warning start date, replacement, docs link,
-and target removal date when known.
+and target removal date. Do not add a deprecated compatibility path with an
+open-ended removal window unless maintainers explicitly decide it is permanent
+compatibility and mark it `active` instead.
 
 ## Current compatibility areas
 
@@ -79,15 +81,27 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `activate(api)` plugin entrypoints while plugins migrate to
+  `register(api)`
+- legacy SDK aliases such as `openclaw/plugin-sdk/channel-runtime`,
+  `openclaw/plugin-sdk/command-auth` status builders, and the
+  `ClawdbotConfig` type alias
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
 - activation hints that are being replaced by manifest contribution ownership
+- `setup-api` runtime fallback while setup descriptors move to cold
+  `setup.requiresRuntime: false` metadata
+- provider `discovery` hooks while provider catalog hooks move to
+  `catalog.run(...)`
+- channel `showConfigured` / `showInSetup` metadata while channel packages move
+  to `openclaw.channel.exposure`
 - legacy runtime-policy config keys while doctor migrates operators to
   `agentRuntime`
 - generated bundled channel config metadata fallback while registry-first
   `channelConfigs` metadata lands
-- the persisted plugin registry disable env while repair flows migrate operators
-  to `openclaw plugins registry --refresh` and `openclaw doctor --fix`
+- persisted plugin registry disable and install-migration env flags while
+  repair flows migrate operators to `openclaw plugins registry --refresh` and
+  `openclaw doctor --fix`
 
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
