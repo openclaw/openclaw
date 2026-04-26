@@ -468,7 +468,7 @@ restore_snapshot() {
 
 sync_guest_clock() {
   local host_now
-  host_now="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  host_now="@$(date -u '+%s')"
   guest_exec date -u -s "$host_now" >/dev/null
   guest_exec hwclock --systohc >/dev/null 2>&1 || true
   guest_exec timedatectl set-ntp true >/dev/null 2>&1 || true
