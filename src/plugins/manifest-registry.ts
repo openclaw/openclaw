@@ -68,7 +68,7 @@ function resolvePluginSourcePath(sourcePath: string): string {
   return sourcePath;
 }
 
-type PluginManifestContractListKey =
+export type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
