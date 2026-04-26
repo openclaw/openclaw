@@ -158,6 +158,67 @@ describe("skills-remote", () => {
     }
   });
 
+  it("uses system.which object-map responses when refreshing remote node bins", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `memo-${randomUUID()}`;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      const invokeCalls: string[] = [];
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ bins: { [bin]: "/opt/homebrew/bin/memo" } }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCalls).toEqual(["system.which"]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears stale bins when a connected node probe times out", async () => {
     await resetSkillsRefreshForTest();
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
