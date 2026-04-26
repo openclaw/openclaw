@@ -16,6 +16,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
+import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
@@ -232,10 +233,6 @@ export async function runBeforeToolCallHook(args: {
   }
 
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_tool_call")) {
-    return { blocked: false, params: args.params };
-  }
-
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
     const toolContext = {
@@ -247,10 +244,30 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
-    const hookResult = await hookRunner.runBeforeToolCall(
+    const trustedPolicyResult = await runTrustedToolPolicies(
       {
         toolName,
         params: normalizedParams,
+        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      },
+      toolContext,
+    );
+    if (trustedPolicyResult?.block) {
+      return {
+        blocked: true,
+        reason: trustedPolicyResult.blockReason || "Tool call blocked by trusted plugin policy",
+      };
+    }
+    const policyAdjustedParams: Record<string, unknown> =
+      trustedPolicyResult?.params ?? normalizedParams;
+    if (!hookRunner?.hasHooks("before_tool_call")) {
+      return { blocked: false, params: policyAdjustedParams };
+    }
+    const hookResult = await hookRunner.runBeforeToolCall(
+      {
+        toolName,
+        params: policyAdjustedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },

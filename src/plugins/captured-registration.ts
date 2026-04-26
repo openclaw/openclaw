@@ -6,6 +6,13 @@ import type {
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type {
+  PluginControlUiDescriptor,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionExtensionRegistration,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -54,6 +61,11 @@ export type CapturedPluginRegistration = {
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
+  sessionExtensions: PluginSessionExtensionRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
+  toolMetadata: PluginToolMetadataRegistration[];
+  controlUiDescriptors: PluginControlUiDescriptor[];
+  runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
   tools: AnyAgentTool[];
 };
 
@@ -78,6 +90,11 @@ export function createCapturedPluginRegistration(params?: {
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
+  const sessionExtensions: PluginSessionExtensionRegistration[] = [];
+  const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
+  const toolMetadata: PluginToolMetadataRegistration[] = [];
+  const controlUiDescriptors: PluginControlUiDescriptor[] = [];
+  const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -104,6 +121,11 @@ export function createCapturedPluginRegistration(params?: {
     webFetchProviders,
     webSearchProviders,
     memoryEmbeddingProviders,
+    sessionExtensions,
+    trustedToolPolicies,
+    toolMetadata,
+    controlUiDescriptors,
+    runtimeLifecycles,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -196,6 +218,21 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
           memoryEmbeddingProviders.push(adapter);
+        },
+        registerSessionExtension(extension: PluginSessionExtensionRegistration) {
+          sessionExtensions.push(extension);
+        },
+        registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
+          trustedToolPolicies.push(policy);
+        },
+        registerToolMetadata(metadata: PluginToolMetadataRegistration) {
+          toolMetadata.push(metadata);
+        },
+        registerControlUiDescriptor(descriptor: PluginControlUiDescriptor) {
+          controlUiDescriptors.push(descriptor);
+        },
+        registerRuntimeLifecycle(lifecycle: PluginRuntimeLifecycleRegistration) {
+          runtimeLifecycles.push(lifecycle);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

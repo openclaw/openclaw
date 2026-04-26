@@ -12,6 +12,7 @@ import {
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -92,6 +93,12 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      entry.metadata.toolName,
+      entry.metadata,
+    ]),
+  );
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
@@ -107,9 +114,14 @@ function buildPluginGroups(params: {
       } as ToolCatalogGroup);
     existing.tools.push({
       id: tool.name,
-      label: normalizeOptionalString(tool.label) ?? tool.name,
+      label:
+        normalizeOptionalString(pluginToolMetadata.get(tool.name)?.displayName) ??
+        normalizeOptionalString(tool.label) ??
+        tool.name,
       description: summarizeToolDescriptionText({
-        rawDescription: typeof tool.description === "string" ? tool.description : undefined,
+        rawDescription:
+          pluginToolMetadata.get(tool.name)?.description ??
+          (typeof tool.description === "string" ? tool.description : undefined),
         displaySummary: tool.displaySummary,
       }),
       source: "plugin",

@@ -46,6 +46,15 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import {
+  normalizePluginHostHookId,
+  type PluginControlUiDescriptor,
+  type PluginRuntimeLifecycleRegistration,
+  type PluginSessionExtensionRegistration,
+  type PluginToolMetadataRegistration,
+  type PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -71,6 +80,7 @@ import type {
   PluginCliBackendRegistration,
   PluginCliRegistration,
   PluginCommandRegistration,
+  PluginControlUiDescriptorRegistryRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
@@ -82,9 +92,13 @@ import type {
   PluginRegistry,
   PluginRegistryParams,
   PluginReloadRegistration,
+  PluginRuntimeLifecycleRegistryRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginToolMetadataRegistryRegistration,
+  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -153,13 +167,18 @@ export type {
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
+  PluginControlUiDescriptorRegistryRegistration,
+  PluginRuntimeLifecycleRegistryRegistration,
   PluginRecord,
   PluginRegistry,
   PluginRegistryParams,
   PluginReloadRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
+  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginToolMetadataRegistryRegistration,
+  PluginTrustedToolPolicyRegistryRegistration,
   PluginToolRegistration,
   PluginSpeechProviderRegistration,
   PluginRealtimeTranscriptionProviderRegistration,
@@ -1251,6 +1270,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const allowReservedCommandNames = command.ownership === "reserved";
+    if (allowReservedCommandNames && record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `only bundled plugins can claim reserved command ownership: ${name}`,
+      });
+      return;
+    }
 
     // For snapshot (non-activating) loads, record the command locally without touching the
     // global plugin command registry so running gateway commands stay intact.
@@ -1259,7 +1288,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // snapshot registries are isolated and never write to the global command table. Conflicts
     // will surface when the plugin is loaded via the normal activation path at gateway startup.
     if (!registryParams.activateGlobalSideEffects) {
-      const validationError = validatePluginCommandDefinition(command);
+      const validationError = validatePluginCommandDefinition(command, {
+        allowReservedCommandNames,
+      });
       if (validationError) {
         pushDiagnostic({
           level: "error",
@@ -1273,6 +1304,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       const result = registerPluginCommand(record.id, command, {
         pluginName: record.name,
         pluginRoot: record.rootDir,
+        allowReservedCommandNames,
       });
       if (!result.ok) {
         pushDiagnostic({
@@ -1290,6 +1322,169 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       command,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerSessionExtension = (
+    record: PluginRecord,
+    extension: PluginSessionExtensionRegistration,
+  ) => {
+    const namespace = normalizePluginHostHookId(extension.namespace);
+    if (!namespace) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session extension registration missing namespace",
+      });
+      return;
+    }
+    const existing = (registry.sessionExtensions ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.extension.namespace === namespace,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session extension already registered: ${namespace}`,
+      });
+      return;
+    }
+    (registry.sessionExtensions ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      extension: {
+        ...extension,
+        namespace,
+        description: extension.description.trim(),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerTrustedToolPolicy = (
+    record: PluginRecord,
+    policy: PluginTrustedToolPolicyRegistration,
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register trusted tool policies",
+      });
+      return;
+    }
+    const id = normalizePluginHostHookId(policy.id);
+    if (!id || typeof policy.evaluate !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "trusted tool policy registration requires id and evaluate()",
+      });
+      return;
+    }
+    const existing = (registry.trustedToolPolicies ?? []).find((entry) => entry.policy.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `trusted tool policy already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    (registry.trustedToolPolicies ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      policy: {
+        ...policy,
+        id,
+        description: policy.description.trim(),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
+    const toolName = normalizePluginHostHookId(metadata.toolName);
+    if (!toolName) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "tool metadata registration missing toolName",
+      });
+      return;
+    }
+    (registry.toolMetadata ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      metadata: { ...metadata, toolName },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerControlUiDescriptor = (
+    record: PluginRecord,
+    descriptor: PluginControlUiDescriptor,
+  ) => {
+    const id = normalizePluginHostHookId(descriptor.id);
+    if (!id || !descriptor.label.trim()) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "control UI descriptor registration requires id and label",
+      });
+      return;
+    }
+    const existing = (registry.controlUiDescriptors ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor already registered: ${id}`,
+      });
+      return;
+    }
+    (registry.controlUiDescriptors ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      descriptor: { ...descriptor, id, label: descriptor.label.trim() },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerRuntimeLifecycle = (
+    record: PluginRecord,
+    lifecycle: PluginRuntimeLifecycleRegistration,
+  ) => {
+    const id = normalizePluginHostHookId(lifecycle.id);
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "runtime lifecycle registration missing id",
+      });
+      return;
+    }
+    (registry.runtimeLifecycles ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      lifecycle: { ...lifecycle, id },
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1313,7 +1508,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      if (hookName === "before_prompt_build") {
+      if (hookName !== "before_agent_start") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -1322,17 +1517,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         });
         return;
       }
-      if (hookName === "before_agent_start") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        effectiveHandler = constrainLegacyPromptInjectionHook(
-          handler as PluginHookHandlerMap["before_agent_start"],
-        ) as PluginHookHandlerMap[K];
-      }
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+      });
+      effectiveHandler = constrainLegacyPromptInjectionHook(
+        handler as PluginHookHandlerMap["before_agent_start"],
+      ) as PluginHookHandlerMap[K];
     }
     if (isConversationHookName(hookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
@@ -1557,6 +1750,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerAgentToolResultMiddleware: (handler, options) => {
                 registerAgentToolResultMiddleware(record, handler, options);
               },
+              registerSessionExtension: (extension) => registerSessionExtension(record, extension),
+              enqueueNextTurnInjection: (injection) =>
+                enqueuePluginNextTurnInjection({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  injection,
+                }),
+              registerTrustedToolPolicy: (policy) => registerTrustedToolPolicy(record, policy),
+              registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
+              registerControlUiDescriptor: (descriptor) =>
+                registerControlUiDescriptor(record, descriptor),
+              registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
@@ -1785,6 +1990,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerSecurityAuditCollector,
     registerService,
     registerCommand,
+    registerSessionExtension,
+    registerTrustedToolPolicy,
+    registerToolMetadata,
+    registerControlUiDescriptor,
+    registerRuntimeLifecycle,
     registerHook,
     registerTypedHook,
   };

@@ -11,6 +11,13 @@ import type {
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
+  PluginControlUiDescriptor,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionExtensionRegistration,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
+import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
@@ -233,6 +240,46 @@ export type PluginCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionExtensionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  extension: PluginSessionExtensionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginTrustedToolPolicyRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: PluginTrustedToolPolicyRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginToolMetadataRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  metadata: PluginToolMetadataRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginControlUiDescriptorRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  descriptor: PluginControlUiDescriptor;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginRuntimeLifecycleRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  lifecycle: PluginRuntimeLifecycleRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -329,6 +376,11 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
+  sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
+  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
+  toolMetadata?: PluginToolMetadataRegistryRegistration[];
+  controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
+  runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };

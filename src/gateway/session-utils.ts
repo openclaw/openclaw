@@ -51,6 +51,8 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import type { PluginJsonValue, PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -248,6 +250,32 @@ function resolveLatestCompactionCheckpoint(
   return checkpoints.reduce((latest, checkpoint) =>
     !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
   );
+}
+
+function projectPluginSessionExtensionsSync(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+}): PluginSessionExtensionProjection[] | undefined {
+  const registry = getActivePluginRegistry();
+  const extensions = registry?.sessionExtensions ?? [];
+  if (extensions.length === 0 || !params.entry.pluginExtensions) {
+    return undefined;
+  }
+  const projections: PluginSessionExtensionProjection[] = [];
+  for (const registration of extensions) {
+    const value = params.entry.pluginExtensions[registration.pluginId]?.[
+      registration.extension.namespace
+    ] as PluginJsonValue | undefined;
+    if (value === undefined || registration.extension.project) {
+      continue;
+    }
+    projections.push({
+      pluginId: registration.pluginId,
+      namespace: registration.extension.namespace,
+      value: structuredClone(value),
+    });
+  }
+  return projections.length > 0 ? projections : undefined;
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -1463,6 +1491,9 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    pluginExtensions: entry
+      ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
+      : undefined,
   };
 }
 

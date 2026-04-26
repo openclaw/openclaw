@@ -1,3 +1,4 @@
+import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -79,6 +80,7 @@ export function setActivePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
   workspaceDir?: string,
 ) {
+  const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
@@ -86,6 +88,10 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  void cleanupReplacedPluginHostRegistry({
+    previousRegistry,
+    nextRegistry: registry,
+  });
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
