@@ -782,6 +782,25 @@ describe("uninstallPlugin", () => {
     });
     await expect(fs.access(outsideDir)).resolves.toBeUndefined();
   });
+
+  it("deletes tracked managed install paths even when they are not the default target", async () => {
+    const extensionsDir = path.join(tempDir, "extensions");
+    const managedDir = path.join(extensionsDir, "archive-installs", "my-plugin");
+    await fs.mkdir(managedDir, { recursive: true });
+    await fs.writeFile(path.join(managedDir, "index.js"), "// plugin");
+
+    const result = await uninstallPlugin({
+      config: createSingleNpmInstallConfig(managedDir),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    await expect(fs.access(managedDir)).rejects.toThrow();
+  });
 });
 
 describe("resolveUninstallDirectoryTarget", () => {
@@ -813,5 +832,23 @@ describe("resolveUninstallDirectoryTarget", () => {
     });
 
     expect(target).toBe(resolvePluginInstallDir("my-plugin", extensionsDir));
+  });
+
+  it("uses configured installPath when it stays inside the managed extensions dir", () => {
+    const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const installPath = path.join(extensionsDir, "archive-installs", "my-plugin");
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "my-plugin",
+        hasInstall: true,
+        installRecord: {
+          source: "archive",
+          sourcePath: "/tmp/my-plugin.zip",
+          installPath,
+        },
+        extensionsDir,
+      }),
+    ).toBe(installPath);
   });
 });

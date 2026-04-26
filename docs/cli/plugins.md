@@ -261,12 +261,9 @@ openclaw plugins uninstall <id> --keep-files
 
 `uninstall` removes plugin records from `plugins.entries`, the persisted plugin
 index, the plugin allowlist, and linked `plugins.load.paths` entries when
-applicable.
+applicable. Unless `--keep-files` is set, uninstall also removes the tracked
+managed install directory when it is inside OpenClaw's plugin extensions root.
 For active memory plugins, the memory slot resets to `memory-core`.
-
-By default, uninstall also removes the plugin install directory under the active
-state-dir plugin root. Use
-`--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
 
