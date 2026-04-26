@@ -12,10 +12,14 @@ type ResolveProviderInstallCatalogEntry =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntry;
 type EnsureOnboardingPluginInstalled =
   typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled;
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolvePluginSetupProvider = vi.hoisted(() =>
-  vi.fn<() => ProviderPlugin | undefined>(() => undefined),
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
 );
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
@@ -28,7 +32,9 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   runProviderModelSelectedHook,
 }));
 
-const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));

@@ -14,6 +14,10 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 
@@ -23,8 +27,12 @@ const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
-const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
-const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );
