@@ -95,6 +95,7 @@ export function createWindowsOutputDecoder(params?: {
   const utf8Decoder =
     platform === "win32" && legacyDecoder ? new TextDecoder("utf-8", { fatal: true }) : null;
   let useLegacyDecoder = false;
+  let pendingUtf8Bytes = Buffer.alloc(0);
 
   return {
     decode(chunk) {
@@ -105,11 +106,16 @@ export function createWindowsOutputDecoder(params?: {
       if (useLegacyDecoder) {
         return legacyDecoder.decode(buffer, { stream: true });
       }
+      const replayBuffer =
+        pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
       try {
-        return utf8Decoder.decode(buffer, { stream: true });
+        const decoded = utf8Decoder.decode(buffer, { stream: true });
+        pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
+        return decoded;
       } catch {
         useLegacyDecoder = true;
-        return legacyDecoder.decode(buffer, { stream: true });
+        pendingUtf8Bytes = Buffer.alloc(0);
+        return legacyDecoder.decode(replayBuffer, { stream: true });
       }
     },
     flush() {
@@ -120,12 +126,57 @@ export function createWindowsOutputDecoder(params?: {
         return legacyDecoder.decode();
       }
       try {
-        return utf8Decoder.decode();
+        const decoded = utf8Decoder.decode();
+        pendingUtf8Bytes = Buffer.alloc(0);
+        return decoded;
       } catch {
-        return "";
+        useLegacyDecoder = true;
+        const replayBuffer = pendingUtf8Bytes;
+        pendingUtf8Bytes = Buffer.alloc(0);
+        return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
       }
     },
   };
+}
+
+function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
+  let index = buffer.length - 1;
+  let continuationBytes = 0;
+  while (
+    index >= 0 &&
+    buffer[index] !== undefined &&
+    buffer[index] >= 0x80 &&
+    buffer[index] <= 0xbf &&
+    continuationBytes < 3
+  ) {
+    continuationBytes += 1;
+    index -= 1;
+  }
+  if (index < 0) {
+    return buffer;
+  }
+
+  const leadByte = buffer[index];
+  const sequenceLength = getUtf8SequenceLength(leadByte);
+  if (sequenceLength <= 1) {
+    return Buffer.alloc(0);
+  }
+
+  const availableBytes = continuationBytes + 1;
+  return availableBytes < sequenceLength ? buffer.subarray(index) : Buffer.alloc(0);
+}
+
+function getUtf8SequenceLength(byte: number): number {
+  if (byte >= 0xc2 && byte <= 0xdf) {
+    return 2;
+  }
+  if (byte >= 0xe0 && byte <= 0xef) {
+    return 3;
+  }
+  if (byte >= 0xf0 && byte <= 0xf4) {
+    return 4;
+  }
+  return 1;
 }
 
 function decodeStrictUtf8(buffer: Buffer): string | null {

@@ -48,6 +48,17 @@ describe("windows output encoding", () => {
     expect(decoder.flush()).toBe("");
   });
 
+  it("replays buffered UTF-8 lead bytes when split GBK output falls back to the console code page", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "win32",
+      windowsEncoding: "gbk",
+    });
+
+    expect(decoder.decode(Buffer.from([0xc4]))).toBe("");
+    expect(decoder.decode(Buffer.from([0xe3]))).toBe("你");
+    expect(decoder.flush()).toBe("");
+  });
+
   it("keeps split valid UTF-8 output on the UTF-8 path for streaming decode", () => {
     const decoder = createWindowsOutputDecoder({
       platform: "win32",
