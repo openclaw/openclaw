@@ -65,6 +65,9 @@ Docs: https://docs.openclaw.ai
 - Feishu: keep synthetic card-action and bot-menu ids out of platform reply
   targets, using the real card callback message id when Feishu provides one and
   plain-sending otherwise. Fixes #71673. Thanks @eddy1068.
+- Plugins/QQ Bot: prefer an installed QQ Bot plugin that declares it replaces
+  the bundled `qqbot` channel, preventing duplicate `qqbot_channel_api` and
+  `qqbot_remind` tool registration noise. Fixes #63102.
 - QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
   directly for owner-authorized senders instead of returning `cronParams` and
   relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)

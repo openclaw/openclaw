@@ -508,6 +508,11 @@ runtime loads. Read-only channel setup/status discovery can use this metadata
 directly for configured external channels when no setup entry is available, or
 when `setup.requiresRuntime: false` declares setup runtime unnecessary.
 
+`channelConfigs` is plugin manifest metadata, not a new top-level user config
+section. Users still configure channel instances under `channels.<channel-id>`.
+OpenClaw reads manifest metadata to decide which plugin owns that configured
+channel before plugin runtime code executes.
+
 For a channel plugin, `configSchema` and `channelConfigs` describe different
 paths:
 
@@ -553,6 +558,43 @@ Each channel entry can include:
 | `label`       | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready. |
 | `description` | `string`                 | Short channel description for inspect and catalog surfaces.                               |
 | `preferOver`  | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.    |
+
+### Replacing another channel plugin
+
+Use `preferOver` when your plugin is the preferred owner for a channel id that
+another plugin can also provide. Common cases are a renamed plugin id, a
+standalone plugin that supersedes a bundled plugin, or a maintained fork that
+keeps the same channel id for config compatibility.
+
+```json
+{
+  "id": "acme-chat",
+  "channels": ["chat"],
+  "channelConfigs": {
+    "chat": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "webhookUrl": { "type": "string" }
+        }
+      },
+      "preferOver": ["chat"]
+    }
+  }
+}
+```
+
+When `channels.chat` is configured, OpenClaw considers both the channel id and
+the preferred plugin id. If the lower-priority plugin was only selected because
+it is bundled or enabled by default, OpenClaw disables it in the effective
+runtime config so one plugin owns the channel and its tools. Explicit user
+selection still wins: if the user explicitly enables both plugins, OpenClaw
+preserves that choice and reports duplicate channel/tool diagnostics instead of
+silently changing the requested plugin set.
+
+Keep `preferOver` scoped to plugin ids that can really provide the same channel.
+It is not a general priority field and it does not rename user config keys.
 
 ## modelSupport reference
 

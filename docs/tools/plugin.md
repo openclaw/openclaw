@@ -232,6 +232,40 @@ do not run in live chat traffic, check these first:
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.
 
+### Duplicate channel or tool ownership
+
+Symptoms:
+
+- `channel already registered: <channel-id> (<plugin-id>)`
+- `channel setup already registered: <channel-id> (<plugin-id>)`
+- `plugin tool name conflict (<plugin-id>): <tool-name>`
+
+These mean more than one enabled plugin is trying to own the same channel,
+setup flow, or tool name. The most common cause is an external channel plugin
+installed beside a bundled plugin that now provides the same channel id.
+
+Debug steps:
+
+- Run `openclaw plugins list --enabled --verbose` to see every enabled plugin
+  and origin.
+- Run `openclaw plugins inspect <id> --json` for each suspected plugin and
+  compare `channels`, `channelConfigs`, `tools`, and diagnostics.
+- Run `openclaw plugins registry --refresh` after installing or removing
+  plugin packages so persisted metadata reflects the current install.
+- Restart the Gateway after install, registry, or config changes.
+
+Fix options:
+
+- If one plugin intentionally replaces another for the same channel id, the
+  preferred plugin should declare `channelConfigs.<channel-id>.preferOver` with
+  the lower-priority plugin id. See [/plugins/manifest#replacing-another-channel-plugin](/plugins/manifest#replacing-another-channel-plugin).
+- If the duplicate is accidental, disable one side with
+  `plugins.entries.<plugin-id>.enabled: false` or remove the stale plugin
+  install.
+- If you explicitly enabled both plugins, OpenClaw keeps that request and
+  reports the conflict. Pick one owner for the channel or rename plugin-owned
+  tools so the runtime surface is unambiguous.
+
 ## Plugin slots (exclusive categories)
 
 Some categories are exclusive (only one active at a time):
