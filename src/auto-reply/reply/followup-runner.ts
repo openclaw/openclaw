@@ -25,6 +25,7 @@ import {
   loadSessionStore,
   resolveSessionStoreEntry,
   type SessionEntry,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -375,6 +376,18 @@ export function createFollowupRunner(params: {
                   }
                   if (activeSessionEntry) {
                     clearCliSession(activeSessionEntry, cliExecutionProvider);
+                    activeSessionEntry.updatedAt = Date.now();
+                    if (sessionKey && sessionStore) {
+                      sessionStore[sessionKey] = activeSessionEntry;
+                    }
+                    if (storePath && sessionKey) {
+                      await updateSessionStore(storePath, (store) => {
+                        const entry = store[sessionKey] ?? activeSessionEntry;
+                        clearCliSession(entry, cliExecutionProvider);
+                        entry.updatedAt = Date.now();
+                        store[sessionKey] = entry;
+                      });
+                    }
                   }
                   cliResult = await runCliAgent({
                     ...cliParams,

@@ -306,12 +306,11 @@ export async function buildProbeTargets(params: {
       runtimeProfileIds.length > 0
         ? runtimeProfileIds
         : listProfilesForProvider(store, providerKey);
-    const explicitOrder = (() => {
-      return (
-        findNormalizedProviderValue(store.order, profileProviderKey) ??
-        findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey)
-      );
-    })();
+    const explicitOrder =
+      findNormalizedProviderValue(store.order, providerKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, providerKey) ??
+      findNormalizedProviderValue(store.order, profileProviderKey) ??
+      findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey);
     const allowedProfiles =
       explicitOrder && explicitOrder.length > 0
         ? new Set(resolveAuthProfileOrder({ cfg, store, provider: profileProviderKey }))

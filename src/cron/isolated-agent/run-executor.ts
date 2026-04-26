@@ -97,6 +97,7 @@ export function createCronPromptExecutor(params: {
   agentPayload: AgentTurnPayload;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
+  persistSessionEntry?: PersistCronSessionEntry;
   abortSignal?: AbortSignal;
   abortReason: () => string;
   onExecutionStarted?: () => void;
@@ -193,6 +194,8 @@ export function createCronPromptExecutor(params: {
               throw err;
             }
             clearCliSession(params.cronSession.sessionEntry, cliExecutionProvider);
+            params.cronSession.sessionEntry.updatedAt = Date.now();
+            await params.persistSessionEntry?.();
             result = await runCliAgent({
               ...cliParams,
               cliSessionId: undefined,
@@ -369,6 +372,7 @@ export async function executeCronRun(params: {
     agentPayload: params.agentPayload,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
+    persistSessionEntry: params.persistSessionEntry,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
