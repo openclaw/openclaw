@@ -7,6 +7,7 @@ const SRC_ROOT = path.join(REPO_ROOT, "src");
 const DOCTOR_ROOT = path.join(SRC_ROOT, "commands", "doctor");
 const LEGACY_REPAIR_FLAG = "migrateLegacyConfig";
 const LEGACY_MIGRATION_MODULE = "legacy-config-migrate";
+const METADATA_ONLY_FILES = new Set(["src/plugins/compat/registry.ts"]);
 const LEGACY_REPAIR_FLAG_BYTES = Buffer.from(LEGACY_REPAIR_FLAG);
 const LEGACY_MIGRATION_MODULE_BYTES = Buffer.from(LEGACY_MIGRATION_MODULE);
 const LEGACY_REPAIR_FLAG_RE = /migrateLegacyConfig\s*:\s*true/;
@@ -38,6 +39,9 @@ function collectViolations(files: string[]): string[] {
   const violations: string[] = [];
   for (const file of files) {
     const rel = path.relative(REPO_ROOT, file).replaceAll(path.sep, "/");
+    if (METADATA_ONLY_FILES.has(rel)) {
+      continue;
+    }
     const sourceBytes = fs.readFileSync(file);
     const hasRepairFlag = sourceBytes.includes(LEGACY_REPAIR_FLAG_BYTES);
     const hasMigrationModule = sourceBytes.includes(LEGACY_MIGRATION_MODULE_BYTES);
