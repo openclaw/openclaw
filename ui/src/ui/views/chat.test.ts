@@ -746,3 +746,176 @@ describe("chat session controls", () => {
     expect(thinkingSelect?.title).toBe("Default (adaptive)");
   });
 });
+
+// Issue #72157: rapid Enter presses while a request is already in flight must
+// not produce duplicate sends. The send button is disabled via
+// connected && !sending && stream === null, but the keyboard path used to only
+// guard on `connected`, so a fast-typing user could fire onSend twice.
+describe("chat Enter-to-send guard (#72157)", () => {
+  function pressEnter(container: HTMLElement) {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea, "expected chat textarea to be rendered").toBeTruthy();
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea?.dispatchEvent(event);
+    return event;
+  }
+
+  it("calls onSend exactly once on a single Enter when idle", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: true,
+      sending: false,
+      stream: null,
+      draft: "hello",
+      onSend,
+    });
+    pressEnter(container);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onSend when a request is already sending", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: true,
+      sending: true,
+      stream: null,
+      draft: "hello",
+      onSend,
+    });
+    const event = pressEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+    // The handler must also not preventDefault when it short-circuits, so the
+    // textarea stays usable for the user (e.g. they can still type a newline).
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("does not call onSend while an assistant stream is still arriving", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: true,
+      sending: false,
+      stream: "partial assistant reply...",
+      streamStartedAt: Date.now(),
+      draft: "hello",
+      onSend,
+    });
+    pressEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not call onSend when disconnected even if not sending", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: false,
+      sending: false,
+      stream: null,
+      draft: "hello",
+      onSend,
+    });
+    pressEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("collapses two rapid Enter presses to a single onSend (the #72157 repro)", () => {
+    // Simulate the buggy keyboard repeat: first Enter triggers onSend; in the
+    // real app the parent then flips `sending` to true on the next render
+    // pass. We model that here by re-rendering with sending=true after the
+    // first press, which is exactly what the fix relies on.
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: true,
+      sending: false,
+      stream: null,
+      draft: "hello",
+      onSend,
+    });
+    pressEnter(container);
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    // Second render: app has flipped to sending=true (request in flight).
+    render(
+      renderChat({
+        sessionKey: "main",
+        onSessionKeyChange: () => undefined,
+        thinkingLevel: null,
+        showThinking: false,
+        showToolCalls: true,
+        loading: false,
+        sending: true,
+        compactionStatus: null,
+        fallbackStatus: null,
+        messages: [],
+        sideResult: null,
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        assistantAvatarUrl: null,
+        draft: "hello",
+        queue: [],
+        realtimeTalkActive: false,
+        realtimeTalkStatus: "idle",
+        realtimeTalkDetail: null,
+        realtimeTalkTranscript: null,
+        connected: true,
+        canSend: true,
+        disabledReason: null,
+        error: null,
+        sessions: null,
+        focusMode: false,
+        sidebarOpen: false,
+        sidebarContent: null,
+        sidebarError: null,
+        splitRatio: 0.6,
+        canvasHostUrl: null,
+        embedSandboxMode: "scripts",
+        allowExternalEmbedUrls: false,
+        assistantName: "Val",
+        assistantAvatar: null,
+        userName: null,
+        userAvatar: null,
+        localMediaPreviewRoots: [],
+        assistantAttachmentAuthToken: null,
+        autoExpandToolCalls: false,
+        attachments: [],
+        onAttachmentsChange: () => undefined,
+        showNewMessages: false,
+        onScrollToBottom: () => undefined,
+        onRefresh: () => undefined,
+        onToggleFocusMode: () => undefined,
+        getDraft: () => "",
+        onDraftChange: () => undefined,
+        onRequestUpdate: () => undefined,
+        onSend,
+        onCompact: () => undefined,
+        onToggleRealtimeTalk: () => undefined,
+        onAbort: () => undefined,
+        onQueueRemove: () => undefined,
+        onQueueSteer: () => undefined,
+        onDismissSideResult: () => undefined,
+        onNewSession: () => undefined,
+        onClearHistory: () => undefined,
+        agentsList: null,
+        currentAgentId: "main",
+        onAgentChange: () => undefined,
+        onNavigateToAgent: () => undefined,
+        onSessionSelect: () => undefined,
+        onOpenSidebar: () => undefined,
+        onCloseSidebar: () => undefined,
+        onSplitRatioChange: () => undefined,
+        onChatScroll: () => undefined,
+        basePath: "",
+      }),
+      container,
+    );
+    pressEnter(container);
+    // Still only the original 1 call — the second Enter was suppressed by
+    // the new isBusy guard.
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});

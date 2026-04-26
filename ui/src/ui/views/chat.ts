@@ -1008,6 +1008,13 @@ export function renderChat(props: ChatProps) {
       if (!props.connected) {
         return;
       }
+      // Guard against duplicate sends when Enter is pressed rapidly while a
+      // request is already in flight. The send button uses the same
+      // disabled=connected||sending||stream contract via isBusy; mirror it
+      // here so the keyboard path cannot bypass it (issue #72157).
+      if (isBusy) {
+        return;
+      }
       e.preventDefault();
       if (canCompose) {
         if (props.draft.trim()) {
