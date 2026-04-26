@@ -30,16 +30,19 @@ extension MacNodeRuntime {
             cwd: resolvedCwd,
             env: [:]).first
 
-        let (argv, argvChanged) = if let resolvedPath = resolution?.resolvedPath,
-           let firstResolved = ExecCommandResolution.resolve(
-               command: [command.first!],
-               cwd: resolvedCwd,
-               env: [:])?.resolvedPath,
-           resolvedPath == firstResolved
+        let (argv, argvChanged): ([String], Bool)
+        if let resolvedPath = resolution?.resolvedPath,
+            let firstResolved = ExecCommandResolution.resolve(
+                command: [command.first!],
+                cwd: resolvedCwd,
+                env: [:])?.resolvedPath,
+            resolvedPath == firstResolved
         {
-            ([resolvedPath] + command.dropFirst(), true)
+            argv = [resolvedPath] + command.dropFirst()
+            argvChanged = true
         } else {
-            (command, false)
+            argv = command
+            argvChanged = false
         }
 
         let rawCommandString = argvChanged
