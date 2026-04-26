@@ -926,6 +926,46 @@ describe("skill-workshop", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("creates SKILL.md when skill directory exists but SKILL.md does not (realpath guard)", async () => {
+    const workspaceDir = await makeTempDir();
+    await fs.mkdir(path.join(workspaceDir, "skills", "new-skill-dir"), { recursive: true });
+    const proposal = createProposal(workspaceDir, {
+      skillName: "new-skill-dir",
+      change: {
+        kind: "create",
+        description: "New skill",
+        body: "## Workflow\n\n- First line.\n",
+      },
+    });
+    const result = await applyProposalToWorkspace({
+      proposal,
+      maxSkillBytes: 40_000,
+      openClawConfig: {},
+    });
+    expect(result.created).toBe(true);
+    const text = await fs.readFile(result.skillPath, "utf8");
+    expect(text).toContain("First line.");
+  });
+
+  it("writes first support file under an existing skill directory (realpath guard)", async () => {
+    const workspaceDir = await makeTempDir();
+    await fs.mkdir(path.join(workspaceDir, "skills", "with-refs"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "skills", "with-refs", "SKILL.md"),
+      "---\nname: with-refs\ndescription: Has refs.\n---\n\n## Workflow\n\n- x\n",
+    );
+    const { writeSupportFile } = await import("./src/skills.js");
+    const filePath = await writeSupportFile({
+      workspaceDir,
+      skillName: "with-refs",
+      relativePath: "references/first-note.md",
+      content: "note body",
+      maxBytes: 10_000,
+    });
+    expect(filePath).toContain("references");
+    await expect(fs.readFile(filePath, "utf8")).resolves.toContain("note body");
+  });
+
   it("throws on replace apply when oldText no longer exists", async () => {
     const workspaceDir = await makeTempDir();
     await fs.mkdir(path.join(workspaceDir, "skills", "patch-me"), { recursive: true });

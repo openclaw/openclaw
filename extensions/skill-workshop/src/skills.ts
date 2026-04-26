@@ -16,6 +16,30 @@ const VALID_SKILL_NAME = /^[a-z0-9][a-z0-9_-]{1,79}$/;
 const VALID_SECTION = /^[A-Za-z0-9][A-Za-z0-9 _./:-]{0,80}$/;
 const SUPPORT_DIRS = new Set(["references", "templates", "scripts", "assets"]);
 
+/**
+ * `isPathInsideWithRealpath` needs a path that exists on disk. Walk up from `candidatePath`
+ * until an existing path is found (stopping at `baseDir`), so first writes to new files still
+ * validate symlink containment against the skill root.
+ */
+function resolveExistingPathForRealpathCheck(baseDir: string, candidatePath: string): string {
+  const base = path.resolve(baseDir);
+  let cur = path.resolve(candidatePath);
+  if (!isPathInside(base, cur)) {
+    throw new Error("path escapes base directory");
+  }
+  while (!fs.existsSync(cur)) {
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      return base;
+    }
+    if (!isPathInside(base, parent)) {
+      throw new Error("path escapes base directory");
+    }
+    cur = parent;
+  }
+  return cur;
+}
+
 export function normalizeSkillName(value: string): string {
   return value
     .trim()
@@ -47,9 +71,6 @@ function skillDir(workspaceDir: string, skillName: string): string {
   const ws = path.resolve(workspaceDir);
   const root = path.resolve(ws, "skills");
   const dir = path.resolve(root, safeName);
-  if (!isPathInside(ws, root)) {
-    throw new Error("workspace skills root escapes workspace");
-  }
   if (!isPathInside(root, dir)) {
     throw new Error("skill path escapes workspace skills directory");
   }
@@ -71,7 +92,8 @@ function skillPath(workspaceDir: string, skillName: string): string {
     throw new Error("SKILL.md path escapes skill directory");
   }
   if (fs.existsSync(dir)) {
-    if (!isPathInsideWithRealpath(dir, file, { requireRealpath: true })) {
+    const realpathCandidate = resolveExistingPathForRealpathCheck(dir, file);
+    if (!isPathInsideWithRealpath(dir, realpathCandidate, { requireRealpath: true })) {
       throw new Error("SKILL.md path escapes skill directory after symlink resolution");
     }
   }
@@ -248,7 +270,8 @@ export async function writeSupportFile(params: {
     throw new Error("support file path escapes skill directory");
   }
   if (fs.existsSync(root)) {
-    if (!isPathInsideWithRealpath(root, target, { requireRealpath: true })) {
+    const realpathCandidate = resolveExistingPathForRealpathCheck(root, target);
+    if (!isPathInsideWithRealpath(root, realpathCandidate, { requireRealpath: true })) {
       throw new Error("support file path escapes skill directory after symlink resolution");
     }
   }

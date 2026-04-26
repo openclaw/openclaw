@@ -799,6 +799,19 @@ export function buildSyntheticWorkspaceSkillEntryForPreview(params: {
   };
 }
 
+/** Match workspace skill load semantics: one entry per `skill.name` (last wins). */
+function mergeSkillEntryByNameForPreview(
+  entries: readonly SkillEntry[],
+  incoming: SkillEntry,
+): SkillEntry[] {
+  const byName = new Map<string, SkillEntry>();
+  for (const entry of entries) {
+    byName.set(entry.skill.name, entry);
+  }
+  byName.set(incoming.skill.name, incoming);
+  return Array.from(byName.values()).sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
+}
+
 /**
  * Simulate adding or replacing one skill entry for prompt-budget preflight.
  * `withinLimits` is false when prompt limits would drop an eligible skill from the catalog block.
@@ -823,7 +836,7 @@ export function previewSkillsPromptImpact(params: {
   });
   const merged =
     params.simulationMode === "propose"
-      ? [...baseEntries, params.syntheticEntry]
+      ? mergeSkillEntryByNameForPreview(baseEntries, params.syntheticEntry)
       : [
           ...baseEntries.filter((e) => e.skill.name !== params.syntheticEntry.skill.name),
           params.syntheticEntry,
