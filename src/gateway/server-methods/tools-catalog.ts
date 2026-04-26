@@ -97,9 +97,13 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
+  // Key metadata by `${pluginId} ${toolName}` so we only project metadata that
+  // was registered BY the tool's owning plugin. Without this scoping, plugin-X
+  // could override the catalog label/description/risk/tags for another plugin's
+  // tool by registering metadata with the same toolName.
   const pluginToolMetadata = new Map(
     (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      entry.metadata.toolName,
+      `${entry.pluginId} ${entry.metadata.toolName}`,
       entry.metadata,
     ]),
   );
@@ -116,23 +120,26 @@ function buildPluginGroups(params: {
         pluginId,
         tools: [],
       } as ToolCatalogGroup);
+    const ownedMetadata = meta?.pluginId
+      ? pluginToolMetadata.get(`${meta.pluginId} ${tool.name}`)
+      : undefined;
     existing.tools.push({
       id: tool.name,
       label:
-        normalizeOptionalString(pluginToolMetadata.get(tool.name)?.displayName) ??
+        normalizeOptionalString(ownedMetadata?.displayName) ??
         normalizeOptionalString(tool.label) ??
         tool.name,
       description: summarizeToolDescriptionText({
         rawDescription:
-          pluginToolMetadata.get(tool.name)?.description ??
+          ownedMetadata?.description ??
           (typeof tool.description === "string" ? tool.description : undefined),
         displaySummary: tool.displaySummary,
       }),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
-      risk: pluginToolMetadata.get(tool.name)?.risk,
-      tags: pluginToolMetadata.get(tool.name)?.tags,
+      risk: ownedMetadata?.risk,
+      tags: ownedMetadata?.tags,
       defaultProfiles: [],
     });
     groups.set(groupId, existing);

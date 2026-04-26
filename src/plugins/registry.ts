@@ -14,7 +14,7 @@ import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
-import type { OperatorScope } from "../gateway/operator-scopes.js";
+import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -1516,8 +1516,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    // Uniqueness is scoped to (pluginId + toolName): different plugins may each
+    // register metadata under the same toolName for their own tools, but a given
+    // plugin may not register the same toolName twice. At projection time
+    // (tools-effective-inventory.ts, tools-catalog.ts) the metadata is matched
+    // back to the tool's owning pluginId so plugin-X cannot decorate plugin-Y's
+    // tool (or a core tool) by registering metadata with the same name.
     const existing = (registry.toolMetadata ?? []).find(
-      (entry) => entry.metadata.toolName === toolName,
+      (entry) => entry.pluginId === record.id && entry.metadata.toolName === toolName,
     );
     if (existing) {
       pushDiagnostic({
@@ -1586,6 +1592,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           "control UI descriptor registration requires id, surface, label, and valid optional fields",
       });
       return;
+    }
+    // Validate each requiredScope against the known OperatorScope set so untyped
+    // (JS) plugins cannot project arbitrary strings to clients as if they were
+    // valid operator scopes.
+    if (requiredScopes !== undefined) {
+      const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
+      if (unknownScope !== undefined) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor requiredScopes contains unknown operator scope: ${unknownScope}`,
+        });
+        return;
+      }
     }
     if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
       pushDiagnostic({

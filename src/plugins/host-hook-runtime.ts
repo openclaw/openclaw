@@ -76,13 +76,19 @@ export function setPluginRunContext(params: {
   if (!runId || !namespace) {
     return false;
   }
-  if (params.patch.unset || params.patch.value === undefined) {
+  // Only an explicit `unset: true` deletes the run-context entry — silently
+  // treating an accidentally-omitted `value` as a clear is surprising and
+  // diverges from the stricter `sessions.pluginPatch` semantics.
+  if (params.patch.unset === true) {
     clearPluginRunContext({
       pluginId: params.pluginId,
       runId,
       namespace,
     });
     return true;
+  }
+  if (params.patch.value === undefined) {
+    return false;
   }
   if (!isPluginJsonValue(params.patch.value)) {
     return false;
@@ -118,6 +124,19 @@ export function clearPluginRunContext(params: {
   runId?: string;
   namespace?: string;
 }): void {
+  // Normalize namespace through the same trim() used by set/get so callers that
+  // pass whitespace or differently-formatted strings hit the same Map keys and
+  // don't leave orphan entries behind.
+  const normalizedNamespace =
+    params.namespace !== undefined ? normalizeNamespace(params.namespace) : undefined;
+  // An empty-after-trim namespace is treated as "no namespace filter" rather
+  // than as a literal-empty-string deletion: that matches the set/get rule that
+  // empty namespaces are not addressable, and it avoids silently no-op-ing the
+  // delete (which would otherwise look like a successful clear).
+  const namespaceFilter =
+    normalizedNamespace !== undefined && normalizedNamespace !== ""
+      ? normalizedNamespace
+      : undefined;
   const state = getPluginHostRuntimeState();
   const runIds = params.runId ? [params.runId] : [...state.runContextByRunId.keys()];
   for (const runId of runIds) {
@@ -131,8 +150,8 @@ export function clearPluginRunContext(params: {
       if (!namespaces) {
         continue;
       }
-      if (params.namespace) {
-        namespaces.delete(params.namespace);
+      if (namespaceFilter !== undefined) {
+        namespaces.delete(namespaceFilter);
       } else {
         namespaces.clear();
       }

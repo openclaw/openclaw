@@ -242,9 +242,13 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
+  // Key metadata by `${pluginId} ${toolName}` so we only project metadata that
+  // was registered BY the tool's owning plugin. Without this, plugin-X could
+  // spoof/override the displayName/risk/tags of plugin-Y's (or a core) tool just
+  // by registering metadata with the same toolName.
   const pluginToolMetadata = new Map(
     (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      entry.metadata.toolName,
+      `${entry.pluginId} ${entry.metadata.toolName}`,
       entry.metadata,
     ]),
   );
@@ -253,7 +257,9 @@ export function resolveEffectiveToolInventory(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
-        const metadata = pluginToolMetadata.get(tool.name);
+        const metadata = source.pluginId
+          ? pluginToolMetadata.get(`${source.pluginId} ${tool.name}`)
+          : undefined;
         return Object.assign(
           {
             id: tool.name,

@@ -227,7 +227,10 @@ export async function enqueuePluginNextTurnInjection(params: {
       return;
     }
     const injections = { ...entry.pluginNextTurnInjections };
-    const existing = [...(injections[params.pluginId] ?? [])].filter(
+    // Guard against malformed/hand-edited persisted state — a non-array value
+    // here would crash the spread/filter and break the whole session's enqueue.
+    const rawExisting = injections[params.pluginId];
+    const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
       (candidate) => !isExpired(candidate, now),
     );
     const duplicate = record.idempotencyKey
@@ -259,6 +262,16 @@ export async function drainPluginNextTurnInjections(params: {
   if (!loaded.entry) {
     return [];
   }
+  // Avoid the locked re-save in updateSessionStore when there is nothing queued.
+  // Drain runs once per prompt build; the common case is no injections, so a
+  // pre-flight read keeps prompt-build off the session-store write path.
+  // (Concurrently-enqueued injections during this gap land on the next turn.)
+  if (
+    !loaded.entry.pluginNextTurnInjections ||
+    Object.keys(loaded.entry.pluginNextTurnInjections).length === 0
+  ) {
+    return [];
+  }
   const now = params.now ?? Date.now();
   return await updateSessionStore(loaded.storePath, (store) => {
     const entry = store[loaded.storeKey];
@@ -273,6 +286,11 @@ export async function drainPluginNextTurnInjections(params: {
     const drained: PluginNextTurnInjectionRecord[] = [];
     for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
       if (!activePluginIds.has(pluginId)) {
+        continue;
+      }
+      // Guard against malformed/hand-edited persisted state — a non-array value
+      // here would crash .filter and break prompt-building for the session.
+      if (!Array.isArray(entries)) {
         continue;
       }
       const liveEntries = entries.filter((candidate) => !isExpired(candidate, now));

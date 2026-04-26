@@ -6,7 +6,6 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
-import { isPluginJsonValue } from "./host-hook-json.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareResult,
