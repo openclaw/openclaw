@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   buildCopilotDynamicHeaders,
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createHtmlEntityToolCallArgumentDecodingWrapper,
   createPayloadPatchStreamWrapper,
   defaultToolStreamExtraParams,
@@ -263,5 +264,48 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+/**
+ * DeepSeek V4: the thinking wrapper's onPayload pass must set `reasoning_content` on
+ * every assistant row that carries `tool_calls` (single forward scan). Structural check
+ * only (no wall-clock) so CI is deterministic. Refs #71915.
+ */
+describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  it("adds empty reasoning_content to V4 tool-call assistant messages for a large message list", () => {
+    const toolTurns = 2000;
+    const messages: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < toolTurns; i++) {
+      messages.push({ role: "user", content: "x" });
+      messages.push({
+        role: "assistant",
+        tool_calls: [
+          { id: `call_${i}`, type: "function", function: { name: "t", arguments: "{}" } },
+        ],
+      });
+    }
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = { messages };
+      void options?.onPayload?.(payload as never, model as never);
+      return createFakeStream({ events: [], resultMessage: {} }) as never;
+    };
+    const wrap = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+      shouldPatchModel: (model) =>
+        (model as { provider?: string }).provider === "deepseek" &&
+        (model as { id?: string }).id === "deepseek-v4-flash",
+    });
+    expect(wrap).toBeDefined();
+    void wrap!({ provider: "deepseek", id: "deepseek-v4-flash" } as never, {} as never, {});
+
+    const toolAssistants = messages.filter(
+      (m) => m.role === "assistant" && Array.isArray(m.tool_calls),
+    );
+    expect(toolAssistants).toHaveLength(toolTurns);
+    for (const m of toolAssistants) {
+      expect(m).toHaveProperty("reasoning_content", "");
+    }
   });
 });
