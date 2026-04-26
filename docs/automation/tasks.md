@@ -115,12 +115,23 @@ stateDiagram-v2
 
 Transitions happen automatically — when the associated agent run ends, the task status updates to match.
 
+Agent run completion is authoritative for active task records. A successful
+detached run finalizes as `succeeded`, ordinary run errors finalize as
+`failed`, and timeout or abort outcomes finalize as `timed_out`. If an operator
+already cancelled the task, or the runtime already recorded a stronger terminal
+state such as `failed`, `timed_out`, or `lost`, a later success signal does not
+downgrade that terminal status.
+
 `lost` is runtime-aware:
 
 - ACP tasks: backing ACP child session metadata disappeared.
 - Subagent tasks: backing child session disappeared from the target agent store.
 - Cron tasks: the cron runtime no longer tracks the job as active.
-- CLI tasks: isolated child-session tasks use the child session; chat-backed CLI tasks use the live run context instead, so lingering channel/group/direct session rows do not keep them alive.
+- CLI tasks: isolated child-session tasks use the child session; chat-backed
+  CLI tasks use the live run context instead, so lingering
+  channel/group/direct session rows do not keep them alive. Gateway-backed
+  `openclaw agent` runs also finalize from their run result, so completed runs
+  do not sit active until the sweeper marks them `lost`.
 
 ## Delivery and notifications
 
