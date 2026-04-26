@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
@@ -6,7 +7,11 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import {
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../../plugins/jiti-loader-cache.js";
+import type { loadOpenClawPlugins as loadOpenClawPluginsType } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -16,6 +21,40 @@ import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const LOADER_MODULE_CANDIDATES = [
+  new URL("../../plugins/loader.js", import.meta.url),
+  new URL("../../plugins/loader.ts", import.meta.url),
+] as const;
+const jitiLoaders: PluginJitiLoaderCache = new Map();
+
+type PluginLoaderModule = {
+  loadOpenClawPlugins: typeof loadOpenClawPluginsType;
+};
+
+let pluginLoaderModule: PluginLoaderModule | undefined;
+
+function loadPluginLoaderModule(): PluginLoaderModule {
+  if (pluginLoaderModule) {
+    return pluginLoaderModule;
+  }
+  for (const candidate of LOADER_MODULE_CANDIDATES) {
+    const modulePath = fileURLToPath(candidate);
+    try {
+      const jiti = getCachedPluginJitiLoader({
+        cache: jitiLoaders,
+        modulePath,
+        importerUrl: import.meta.url,
+        preferBuiltDist: true,
+        jitiFilename: import.meta.url,
+      });
+      pluginLoaderModule = jiti(modulePath) as PluginLoaderModule;
+      return pluginLoaderModule;
+    } catch {
+      // Try built/runtime source candidates in order.
+    }
+  }
+  throw new Error("Could not load plugin runtime loader for channel setup fallback.");
+}
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
@@ -641,7 +680,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
             ] as const,
         ),
       );
-      const registry = loadOpenClawPlugins({
+      const registry = loadPluginLoaderModule().loadOpenClawPlugins({
         config: cfg,
         activationSourceConfig: options.activationSourceConfig ?? cfg,
         env,
