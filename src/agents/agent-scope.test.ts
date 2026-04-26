@@ -518,27 +518,32 @@ describe("resolveAgentConfig", () => {
 });
 
 describe("suggestPeerAgentWorkspaceDir (#71889)", () => {
-  it("returns peer-level path next to defaults.workspace when basename looks like a workspace", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: "/Users/me/.openclaw/workspace" } },
-    };
-    const suggested = suggestPeerAgentWorkspaceDir(cfg, "testbug");
-    expect(suggested).toBe(path.join("/Users/me/.openclaw", "workspace-testbug"));
-  });
-
-  it("applies peer suffix to OPENCLAW_PROFILE workspace-<profile> bases", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: "/Users/me/.openclaw/workspace-prod" } },
-    };
-    const suggested = suggestPeerAgentWorkspaceDir(cfg, "ops");
-    expect(suggested).toBe(path.join("/Users/me/.openclaw", "workspace-prod-ops"));
-  });
-
-  it("derives peer-level path from the default workspace location when no fallback", () => {
+  it("returns peer-level path when defaults.workspace matches the documented default", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
     vi.stubEnv("OPENCLAW_HOME", home);
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: path.join(home, ".openclaw", "workspace") } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "testbug");
+    expect(suggested).toBe(path.join(path.resolve(home), ".openclaw", "workspace-testbug"));
+  });
+
+  it("applies peer suffix to OPENCLAW_PROFILE workspace-<profile> defaults", () => {
+    const home = path.join(path.sep, "srv", "openclaw-home");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_PROFILE", "prod");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: path.join(home, ".openclaw", "workspace-prod") } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "ops");
+    expect(suggested).toBe(path.join(path.resolve(home), ".openclaw", "workspace-prod-ops"));
+  });
+
+  it("defers to runtime stateDir resolution when defaults.workspace is unset", () => {
+    const stateDir = path.join(path.sep, "var", "openclaw-prod");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const suggested = suggestPeerAgentWorkspaceDir({}, "alex");
-    expect(suggested).toBe(path.join(path.resolve(home), ".openclaw", "workspace-alex"));
+    expect(suggested).toBe(path.join(stateDir, "workspace-alex"));
   });
 
   it("preserves the historic shared-base nested layout from #59789", () => {
@@ -549,12 +554,30 @@ describe("suggestPeerAgentWorkspaceDir (#71889)", () => {
     expect(suggested).toBe(path.resolve("/srv/agents/ops"));
   });
 
-  it("normalizes agent ids before suffixing", () => {
+  it("preserves nesting for shared roots whose basename happens to be `workspace`", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: "/Users/me/.openclaw/workspace" } },
+      agents: { defaults: { workspace: "/srv/workspace" } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "ops");
+    expect(suggested).toBe(path.resolve("/srv/workspace/ops"));
+  });
+
+  it("preserves nesting for shared roots whose basename happens to be `workspace-prod`", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: "/srv/workspace-prod" } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "ops");
+    expect(suggested).toBe(path.resolve("/srv/workspace-prod/ops"));
+  });
+
+  it("normalizes agent ids before suffixing", () => {
+    const home = path.join(path.sep, "srv", "openclaw-home");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: path.join(home, ".openclaw", "workspace") } },
     };
     const suggested = suggestPeerAgentWorkspaceDir(cfg, "Test Bug");
-    expect(suggested).toBe(path.join("/Users/me/.openclaw", "workspace-test-bug"));
+    expect(suggested).toBe(path.join(path.resolve(home), ".openclaw", "workspace-test-bug"));
   });
 });
 

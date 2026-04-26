@@ -188,24 +188,24 @@ export function resolveAgentDir(
   return path.join(root, "agents", id, "agent");
 }
 
-const WORKSPACE_DIR_BASENAME_RE = /^workspace(?:-[\w.-]+)?$/;
-
 /**
  * Suggest a default workspace path for a NEW agent, used as the wizard's
  * `Workspace directory` initial value.
  *
- * When the configured base looks like a concrete workspace directory (basename
- * `workspace` or `workspace-<suffix>`, matching the documented default and the
- * `OPENCLAW_PROFILE` form), apply the documented peer-level pattern from
- * docs/concepts/multi-agent.md (`~/.openclaw/workspace-<agentId>`) so the
- * recursive-leak / `rm -rf workspace` footgun from #71889 is avoided.
+ * Only overrides the runtime-resolved default in the narrow post-setup
+ * scenario where `agents.defaults.workspace` exactly matches the documented
+ * `~/.openclaw/workspace[-<profile>]` location (the value `setup.ts` writes on
+ * first run). In that case the suggestion follows the documented peer-level
+ * pattern from docs/concepts/multi-agent.md (`~/.openclaw/workspace-<agentId>`)
+ * to avoid the recursive-leak / `rm -rf workspace` footgun from #71889.
  *
- * When the base is a shared parent directory (basename does not look like a
- * workspace), preserve the historic nested layout `<base>/<id>` from #59789 so
- * operators who configured a shared agent root keep that contract.
+ * For every other shape, including unset `defaults.workspace`, custom shared
+ * roots, and `OPENCLAW_STATE_DIR`-isolated multi-gateway setups, defers to
+ * `resolveAgentWorkspaceDir` so the contracts from #59789 (shared-base nesting)
+ * and per-instance state-dir isolation are preserved.
  *
- * Existing per-agent overrides and runtime resolution via
- * `resolveAgentWorkspaceDir` are intentionally unchanged.
+ * Existing per-agent overrides and runtime resolution itself are intentionally
+ * unchanged.
  */
 export function suggestPeerAgentWorkspaceDir(
   cfg: OpenClawConfig,
@@ -213,13 +213,17 @@ export function suggestPeerAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const id = normalizeAgentId(agentId);
+  const runtimeDefault = resolveAgentWorkspaceDir(cfg, id, env);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  const baseWorkspace = fallback
-    ? resolveUserPath(fallback, env)
-    : resolveDefaultAgentWorkspaceDir(env);
-  const base = path.basename(baseWorkspace);
-  if (WORKSPACE_DIR_BASENAME_RE.test(base)) {
-    return stripNullBytes(path.join(path.dirname(baseWorkspace), `${base}-${id}`));
+  if (!fallback) {
+    return runtimeDefault;
   }
-  return stripNullBytes(path.join(baseWorkspace, id));
+  const fallbackResolved = path.resolve(resolveUserPath(fallback, env));
+  const documentedDefault = path.resolve(resolveDefaultAgentWorkspaceDir(env));
+  if (fallbackResolved !== documentedDefault) {
+    return runtimeDefault;
+  }
+  return stripNullBytes(
+    path.join(path.dirname(fallbackResolved), `${path.basename(fallbackResolved)}-${id}`),
+  );
 }
