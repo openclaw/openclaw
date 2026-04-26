@@ -23,6 +23,7 @@ export function registerAcpCli(program: Command) {
     .option("--reset-session", "Reset the session key before first use", false)
     .option("--no-prefix-cwd", "Do not prefix prompts with the working directory", false)
     .option("--provenance <mode>", "ACP provenance mode: off, meta, or meta+receipt")
+    .option("--skip-device-identity", "Skip device identity (use token-only auth)", false)
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .addHelpText(
       "after",
@@ -46,6 +47,7 @@ export function registerAcpCli(program: Command) {
           prefixCwd: !opts.noPrefixCwd,
           provenanceMode,
           verbose: Boolean(opts.verbose),
+          noDeviceIdentity: Boolean(opts.skipDeviceIdentity),
         });
       } catch (err) {
         defaultRuntime.error(String(err));
