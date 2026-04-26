@@ -20337,6 +20337,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
+          historyLimit: {
+            type: "integer",
+            minimum: 0,
+            maximum: 9007199254740991,
+          },
           parentForkMaxTokens: {
             type: "integer",
             minimum: 0,
