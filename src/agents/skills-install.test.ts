@@ -187,6 +187,31 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
+  it("runs npm node installs with an OpenClaw-managed user prefix", async () => {
+    await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
+      await writeInstallableSkill(workspaceDir, "node-prefix-skill");
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "node-prefix-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      const npmPrefix = path.join(stateDir, "tools", "node", "npm");
+      const call = runCommandWithTimeoutMock.mock.calls.at(-1);
+      expect(call?.[0]).toEqual(["npm", "install", "-g", "--ignore-scripts", "example-package"]);
+      const options = call?.[1] as { env?: NodeJS.ProcessEnv };
+      expect(options.env).toMatchObject({
+        NPM_CONFIG_PREFIX: npmPrefix,
+        npm_config_prefix: npmPrefix,
+      });
+      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(path.join(npmPrefix, "bin"));
+      const stat = await fs.stat(npmPrefix);
+      expect(stat.isDirectory()).toBe(true);
+    });
+  });
+
   it("blocks install when skill scan fails", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");

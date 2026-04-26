@@ -111,6 +111,11 @@ Docs: https://docs.openclaw.ai
 - Installer: warn when multiple npm global roots contain OpenClaw installs, showing active Node/npm/openclaw plus each install path and version so stale version-manager installs are visible. Fixes #40839. Thanks @zhixianio.
 - Cron/tasks: recover completed cron task ledger records from durable run logs and job state before marking them `lost`, reducing false `backing session missing` audit errors for isolated cron runs and keeping offline CLI audit from treating its empty local cron active-job set as authoritative. Fixes #71963.
 - Docker: copy patched dependency files into runtime images so downstream `pnpm install` layers keep working. Fixes #69224. Thanks @gucasbrg.
+- Package: include patched dependency files in the published npm package so downstream installs can resolve `patchedDependencies`. (#69224) Thanks @gucasbrg and @vincentkoc.
+- Plugins/channels: treat malformed bundled channel plugin loaders that return `undefined` as unavailable instead of crashing config and help paths. Fixes #69044. Thanks @frankhli843 and @vincentkoc.
+- Scripts/watch: show corrupted dependency package-config recovery guidance when `gateway:watch` fails during watcher startup, without double-logging unrelated import failures. (#58780) Thanks @roytong9 and @vincentkoc.
+- Signal: read signal-cli RPC, health checks, and SSE events through Node's HTTP client so Node 24/25 fetch regressions do not break Signal sends or inbound events. Fixes #51716 and #53040. Thanks @Barukimang, @minupla, and @vincentkoc.
+- Skills/Docker: run npm-backed skill dependency installs with an OpenClaw-managed user prefix so non-root Docker images do not write to `/usr/local`. Fixes #59601. Thanks @chanjarster and @vincentkoc.
 - Agents/runtime: submit heartbeat, cron, and exec wakeups as transient runtime context instead of visible user prompts, keeping synthetic system work out of chat transcripts. Fixes #66496 and #66814. Thanks @jeades and @mandomaker.
 - Telegram: include native quote excerpts automatically for threaded replies and reply tags when the original Telegram text is available, without adding another config knob. Fixes #6975. Thanks @rex05ai.
 - Node/Linux: make `openclaw node install` enable and restart the `openclaw-node` systemd unit instead of the gateway unit on node-only VMs. Fixes #68287. Thanks @dlebee-agent.

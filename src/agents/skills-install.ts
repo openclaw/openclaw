@@ -9,7 +9,7 @@ import {
   type SkillInstallSpecMetadata,
 } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.types.js";
@@ -105,6 +105,28 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
     default:
       return ["npm", "install", "-g", "--ignore-scripts", packageName];
   }
+}
+
+function prependPathEntry(entry: string, currentPath = process.env.PATH): string {
+  if (!currentPath) {
+    return entry;
+  }
+  return `${entry}${path.delimiter}${currentPath}`;
+}
+
+function buildNodeInstallEnv(prefs: SkillsInstallPreferences): NodeJS.ProcessEnv {
+  if (prefs.nodeManager !== "npm") {
+    return {};
+  }
+
+  const prefix = path.join(resolveConfigDir(process.env), "tools", "node", "npm");
+  fs.mkdirSync(prefix, { recursive: true });
+  const binDir = path.join(prefix, "bin");
+  return {
+    NPM_CONFIG_PREFIX: prefix,
+    npm_config_prefix: prefix,
+    PATH: prependPathEntry(binDir),
+  };
 }
 
 // Strict allowlist patterns to prevent option injection and malicious package names.
@@ -524,6 +546,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const envOverrides: NodeJS.ProcessEnv = {};
+  if (spec.kind === "node") {
+    Object.assign(envOverrides, buildNodeInstallEnv(prefs));
+  }
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
