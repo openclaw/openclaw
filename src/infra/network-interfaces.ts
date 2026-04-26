@@ -7,6 +7,10 @@ type ExternalNetworkInterfaceAddress = {
   address: string;
   family: NetworkInterfaceFamily;
 };
+export type NetworkInterfacesInspection = {
+  snapshot: NetworkInterfacesSnapshot | undefined;
+  error?: unknown;
+};
 
 function normalizeNetworkInterfaceFamily(
   family: string | number | undefined,
@@ -29,10 +33,16 @@ export function readNetworkInterfaces(
 export function safeNetworkInterfaces(
   networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
 ): NetworkInterfacesSnapshot | undefined {
+  return inspectNetworkInterfaces(networkInterfaces).snapshot;
+}
+
+export function inspectNetworkInterfaces(
+  networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
+): NetworkInterfacesInspection {
   try {
-    return readNetworkInterfaces(networkInterfaces);
-  } catch {
-    return undefined;
+    return { snapshot: readNetworkInterfaces(networkInterfaces) };
+  } catch (error) {
+    return { snapshot: undefined, error };
   }
 }
 

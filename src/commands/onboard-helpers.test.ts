@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
     killed: false,
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
+  listTailnetAddressesFromSnapshot: vi.fn(() => ({ ipv4: [] as string[], ipv6: [] as string[] })),
   probeGateway: vi.fn(),
 }));
 
@@ -36,6 +37,7 @@ vi.mock("../process/exec.js", () => ({
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
+  listTailnetAddressesFromSnapshot: mocks.listTailnetAddressesFromSnapshot,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -226,7 +228,7 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("uses tailnet IP for tailnet bind", () => {
-    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
+    mocks.listTailnetAddressesFromSnapshot.mockReturnValueOnce({ ipv4: ["100.64.0.9"], ipv6: [] });
     const links = resolveControlUiLinks({
       port: 18789,
       bind: "tailnet",
@@ -236,7 +238,7 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("keeps loopback for auto even when tailnet is present", () => {
-    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
+    mocks.listTailnetAddressesFromSnapshot.mockReturnValueOnce({ ipv4: ["100.64.0.9"], ipv6: [] });
     const links = resolveControlUiLinks({
       port: 18789,
       bind: "auto",
@@ -246,7 +248,7 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("falls back to loopback for tailnet bind when interface discovery throws", () => {
-    mocks.pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+    vi.spyOn(os, "networkInterfaces").mockImplementationOnce(() => {
       throw new Error("uv_interface_addresses failed");
     });
 
@@ -260,9 +262,13 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("falls back to loopback for LAN bind when interface discovery throws", () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementationOnce(() => {
+    // Mock twice: once for inspectBestEffortPrimaryTailnetIPv4, once for pickBestEffortPrimaryLanIPv4
+    const throwFn = () => {
       throw new Error("uv_interface_addresses failed");
-    });
+    };
+    vi.spyOn(os, "networkInterfaces")
+      .mockImplementationOnce(throwFn)
+      .mockImplementationOnce(throwFn);
 
     const links = resolveControlUiLinks({
       port: 18789,

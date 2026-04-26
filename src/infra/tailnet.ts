@@ -1,5 +1,9 @@
 import { isIpInCidr } from "../shared/net/ip.js";
-import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
+import {
+  type NetworkInterfacesSnapshot,
+  listExternalInterfaceAddresses,
+  safeNetworkInterfaces,
+} from "./network-interfaces.js";
 
 type TailnetAddresses = {
   ipv4: string[];
@@ -22,10 +26,16 @@ function isTailnetIPv6(address: string): boolean {
 }
 
 export function listTailnetAddresses(): TailnetAddresses {
+  return listTailnetAddressesFromSnapshot(safeNetworkInterfaces());
+}
+
+export function listTailnetAddressesFromSnapshot(
+  snapshot: NetworkInterfacesSnapshot | undefined,
+): TailnetAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 
-  for (const { address, family } of listExternalInterfaceAddresses(readNetworkInterfaces())) {
+  for (const { address, family } of listExternalInterfaceAddresses(snapshot)) {
     if (family === "IPv4" && isTailnetIPv4(address)) {
       ipv4.push(address);
     }

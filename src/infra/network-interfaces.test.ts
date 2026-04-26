@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
+  inspectNetworkInterfaces,
   listExternalInterfaceAddresses,
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -13,6 +14,15 @@ describe("network-interfaces", () => {
         throw new Error("uv_interface_addresses failed");
       }),
     ).toBeUndefined();
+  });
+
+  it("preserves interface discovery errors for status surfaces", () => {
+    const error = new Error("uv_interface_addresses failed");
+    expect(
+      inspectNetworkInterfaces(() => {
+        throw error;
+      }),
+    ).toEqual({ snapshot: undefined, error });
   });
 
   it.each([

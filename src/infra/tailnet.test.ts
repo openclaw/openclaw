@@ -55,11 +55,13 @@ describe("tailnet helpers", () => {
     expect(pickPrimaryTailnetIPv6()).toBe("fd7a:115c:a1e0::9");
   });
 
-  it("throws when interface discovery fails", () => {
+  it("returns empty addresses when interface discovery fails", () => {
     vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
       throw new Error("uv_interface_addresses failed");
     });
 
-    expect(() => listTailnetAddresses()).toThrow("uv_interface_addresses failed");
+    expect(listTailnetAddresses()).toEqual({ ipv4: [], ipv6: [] });
+    expect(pickPrimaryTailnetIPv4()).toBeUndefined();
+    expect(pickPrimaryTailnetIPv6()).toBeUndefined();
   });
 });
