@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const JS_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
-
 export function collectRuntimeDependencySpecs(packageJson = {}) {
   return new Map(
     [
@@ -115,7 +114,7 @@ function walkJavaScriptFiles(rootDir) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (fullPath.split(path.sep).includes("extensions")) {
+        if (entry.name === "node_modules") {
           continue;
         }
         queue.push(fullPath);
@@ -147,6 +146,14 @@ function extractModuleSpecifiers(source) {
   return specifiers;
 }
 
+function isPluginOwnedDistImporter(relativePath, source, pluginIds) {
+  return pluginIds.some(
+    (pluginId) =>
+      relativePath.startsWith(`extensions/${pluginId}/`) ||
+      source.includes(`//#region extensions/${pluginId}/`),
+  );
+}
+
 export function collectRootDistBundledRuntimeMirrors(params) {
   const distDir = params.distDir;
   const bundledSpecs = params.bundledRuntimeDependencySpecs;
@@ -161,6 +168,9 @@ export function collectRootDistBundledRuntimeMirrors(params) {
         continue;
       }
       const bundledSpec = bundledSpecs.get(dependencyName);
+      if (isPluginOwnedDistImporter(relativePath, source, bundledSpec.pluginIds)) {
+        continue;
+      }
       const existing = mirrors.get(dependencyName);
       if (existing) {
         existing.importers.add(relativePath);
@@ -178,8 +188,8 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 }
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
   const errors = [];
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
@@ -189,25 +199,17 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
     }
   }
 
-  for (const [dependencyName, mirror] of params.requiredRootMirrors) {
-    const rootSpec = rootRuntimeDeps.get(dependencyName);
-    const importers = [...mirror.importers].toSorted((left, right) => left.localeCompare(right));
-    const importerLabel = importers.join(", ");
-    const pluginLabel = mirror.pluginIds
-      .toSorted((left, right) => left.localeCompare(right))
-      .join(", ");
-    if (typeof rootSpec !== "string" || rootSpec.length === 0) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; mirror '${dependencyName}: ${mirror.spec}' in root package.json (declared by ${pluginLabel}).`,
-      );
+  for (const [dependencyName, record] of params.requiredRootMirrors) {
+    if (declaredRootRuntimeDeps.has(dependencyName)) {
       continue;
     }
-    if (rootSpec !== mirror.spec) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; root package.json has '${rootSpec}' but plugin manifest declares '${mirror.spec}' (${pluginLabel}).`,
-      );
-    }
+    const importerList = Array.from(record.importers)
+      .toSorted((left, right) => left.localeCompare(right))
+      .join(", ");
+    errors.push(
+      `installed package root is missing mirrored bundled runtime dependency '${dependencyName}' for dist importers: ${importerList}. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/${record.pluginIds[0]}/.`,
+    );
   }
 
-  return errors;
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }

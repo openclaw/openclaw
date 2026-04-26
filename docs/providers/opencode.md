@@ -6,8 +6,6 @@ read_when:
 title: "OpenCode"
 ---
 
-# OpenCode
-
 OpenCode exposes two hosted catalogs in OpenClaw:
 
 | Catalog | Prefix            | Runtime provider |
@@ -68,7 +66,7 @@ as one OpenCode setup.
       </Step>
       <Step title="Set a Go model as the default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.5"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -90,23 +88,23 @@ as one OpenCode setup.
 }
 ```
 
-## Catalogs
+## Built-in catalogs
 
 ### Zen
 
 | Property         | Value                                                                   |
 | ---------------- | ----------------------------------------------------------------------- |
 | Runtime provider | `opencode`                                                              |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.4`, `opencode/gemini-3-pro` |
+| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3-pro` |
 
 ### Go
 
 | Property         | Value                                                                    |
 | ---------------- | ------------------------------------------------------------------------ |
 | Runtime provider | `opencode-go`                                                            |
-| Example models   | `opencode-go/kimi-k2.5`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
+| Example models   | `opencode-go/kimi-k2.6`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="API key aliases">

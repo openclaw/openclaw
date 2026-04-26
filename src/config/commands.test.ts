@@ -8,6 +8,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
@@ -53,6 +54,17 @@ beforeEach(() => {
           commands: {
             nativeCommandsAutoEnabled: false,
             nativeSkillsAutoEnabled: false,
+          },
+        },
+      },
+      {
+        pluginId: "demo-channel",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "demo-channel" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
           },
         },
       },
@@ -104,6 +116,15 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -117,6 +138,15 @@ describe("resolveNativeCommandsEnabled", () => {
     expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
       false,
     );
+  });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -183,5 +213,19 @@ describe("isCommandFlagEnabled", () => {
         "bash",
       ),
     ).toBe(false);
+  });
+});
+
+describe("deprecated commands compatibility", () => {
+  it("ignores legacy modelsWrite during validation", () => {
+    const result = validateConfigObjectWithPlugins({
+      commands: { text: true, modelsWrite: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.commands).toMatchObject({ text: true });
+      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
+    }
   });
 });

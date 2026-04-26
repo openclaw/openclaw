@@ -1,8 +1,11 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
+import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
+import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type {
   ChannelOutboundTargetMode,
@@ -23,6 +26,9 @@ export type ChannelOutboundContext = {
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;
   replyToId?: string | null;
+  replyToIdSource?: "explicit" | "implicit";
+  replyToMode?: ReplyToMode;
+  formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   accountId?: string | null;
   identity?: OutboundIdentity;
@@ -33,6 +39,18 @@ export type ChannelOutboundContext = {
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
+};
+
+export type ChannelPresentationCapabilities = {
+  supported?: boolean;
+  buttons?: boolean;
+  selects?: boolean;
+  context?: boolean;
+  divider?: boolean;
+};
+
+export type ChannelDeliveryCapabilities = {
+  pin?: boolean;
 };
 
 export type ChannelOutboundPayloadHint =
@@ -50,9 +68,13 @@ export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
+export type ChannelOutboundChunkContext = {
+  formatting?: OutboundDeliveryFormattingOptions;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
-  chunker?: ((text: string, limit: number) => string[]) | null;
+  chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
@@ -78,6 +100,25 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  afterDeliverPayload?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    payload: ReplyPayload;
+    results: readonly OutboundDeliveryResult[];
+  }) => Promise<void> | void;
+  presentationCapabilities?: ChannelPresentationCapabilities;
+  deliveryCapabilities?: ChannelDeliveryCapabilities;
+  renderPresentation?: (params: {
+    payload: ReplyPayload;
+    presentation: MessagePresentation;
+    ctx: ChannelOutboundPayloadContext;
+  }) => Promise<ReplyPayload | null> | ReplyPayload | null;
+  pinDeliveredMessage?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    messageId: string;
+    pin: ReplyPayloadDeliveryPin;
+  }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
    */
@@ -89,6 +130,7 @@ export type ChannelOutboundAdapter = {
     kind: "tool" | "block" | "final";
     text?: string;
   }) => boolean;
+  preferFinalAssistantVisibleText?: boolean;
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;
     targetKey: string;

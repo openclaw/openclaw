@@ -105,6 +105,16 @@ describe("status-all format", () => {
       resolveStatusDashboardUrl({
         cfg: {
           gateway: {
+            bind: "loopback",
+            tls: { enabled: true },
+          },
+        },
+      }),
+    ).toBe("https://127.0.0.1:18789/");
+    expect(
+      resolveStatusDashboardUrl({
+        cfg: {
+          gateway: {
             controlUi: { enabled: false },
           },
         },

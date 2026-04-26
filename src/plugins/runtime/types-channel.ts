@@ -3,7 +3,7 @@
  *
  * This surface exposes generic core helpers only. Plugin-owned behavior stays
  * inside the owning plugin package instead of hanging off core runtime slots
- * like `channel.discord` or `channel.slack`.
+ * keyed by plugin id.
  */
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
@@ -60,6 +60,7 @@ export type PluginRuntimeChannelContextRegistry = {
       abortSignal?: AbortSignal;
     },
   ) => { dispose: () => void };
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
   get: <T = unknown>(params: PluginRuntimeChannelContextKey) => T | undefined;
   watch: (params: {
     channelId?: string;

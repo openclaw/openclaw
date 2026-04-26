@@ -11,18 +11,9 @@ export type EmbeddingProvider = {
   embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId =
-  | "openai"
-  | "local"
-  | "gemini"
-  | "voyage"
-  | "mistral"
-  | "lmstudio"
-  | "ollama"
-  | "bedrock";
-
-export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
-export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+export type EmbeddingProviderId = string;
+export type EmbeddingProviderRequest = string;
+export type EmbeddingProviderFallback = string;
 
 export type GeminiTaskType =
   | "RETRIEVAL_QUERY"
@@ -36,17 +27,25 @@ export type GeminiTaskType =
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
-  provider: EmbeddingProviderRequest;
+  provider?: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: EmbeddingProviderFallback;
+  fallback?: EmbeddingProviderFallback;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    /**
+     * Context size passed to node-llama-cpp `createEmbeddingContext`.
+     * Default: 4096, chosen to cover typical memory-search chunks (128–512 tokens)
+     * while keeping non-weight VRAM bounded.
+     * Set `"auto"` to let node-llama-cpp use the model's trained maximum — not
+     * recommended for 8B+ models (e.g. Qwen3-Embedding-8B: up to 40 960 tokens → ~32 GB VRAM).
+     */
+    contextSize?: number | "auto";
   };
   /** Provider-specific output vector dimensions for supported embedding families. */
   outputDimensionality?: number;

@@ -10,14 +10,14 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
-  vi.fn((): { ref: unknown } => ({ ref: undefined })),
+  vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
 );
 const hasConfiguredSecretInputMock = vi.hoisted(() =>
   vi.fn((value: unknown): boolean => {
     if (typeof value === "string" && value.trim()) {
       return true;
     }
-    return resolveSecretInputRefMock(value as never)?.ref != null;
+    return resolveSecretInputRefMock(value)?.ref != null;
   }),
 );
 const resolveGatewayAuthMock = vi.hoisted(() =>
@@ -404,6 +404,51 @@ describe("runDaemonInstall", () => {
           }),
         }),
       );
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("does not reuse stale service control env during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-manual",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-doctor-manual/openclaw.json",
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+        PATH: "/tmp/doctor-bin:/usr/bin",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        OPENAI_API_KEY: "service-openai-key",
+      },
+    } as never);
+
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENAI_API_KEY: "service-openai-key",
+          }),
+        }),
+      );
+      const [firstArg] =
+        (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ??
+        [];
+      const env = firstArg?.env as Record<string, string | undefined>;
+      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.PATH).not.toContain("/tmp/doctor-bin");
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     } finally {
       if (previous === undefined) {

@@ -11,6 +11,21 @@ import {
   logHookPackRestartHint,
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+
+function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0 || allow.includes(pluginId)) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      allow: [...allow, pluginId].toSorted(),
+    },
+  };
+}
 
 export async function persistPluginInstall(params: {
   config: OpenClawConfig;
@@ -20,7 +35,10 @@ export async function persistPluginInstall(params: {
   successMessage?: string;
   warningMessage?: string;
 }): Promise<OpenClawConfig> {
-  let next = enablePluginInConfig(params.config, params.pluginId).config;
+  let next = enablePluginInConfig(
+    addInstalledPluginToAllowlist(params.config, params.pluginId),
+    params.pluginId,
+  ).config;
   next = recordPluginInstall(next, {
     pluginId: params.pluginId,
     ...params.install,
@@ -30,6 +48,13 @@ export async function persistPluginInstall(params: {
   await replaceConfigFile({
     nextConfig: next,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+  });
+  await refreshPluginRegistryAfterConfigMutation({
+    config: next,
+    reason: "source-changed",
+    logger: {
+      warn: (message) => defaultRuntime.log(theme.warn(message)),
+    },
   });
   logSlotWarnings(slotResult.warnings);
   if (params.warningMessage) {

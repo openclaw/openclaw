@@ -18,13 +18,12 @@ const {
 } = vi.hoisted(() => ({
   bodyLocator: {
     waitFor: vi.fn(async () => undefined),
-    innerText: vi.fn(async () => "hello from body"),
+    textContent: vi.fn(async () => "hello from body"),
   },
   browserClose: vi.fn(async () => undefined),
   contextClose: vi.fn(async () => undefined),
   contextNewPage: vi.fn(),
   goto: vi.fn(async () => undefined),
-  innerText: vi.fn(async () => "hello from body"),
   launch: vi.fn(),
   locatorFill: vi.fn(async () => undefined),
   locatorPress: vi.fn(async () => undefined),
@@ -44,6 +43,7 @@ vi.mock("playwright-core", () => ({
 
 import {
   closeAllQaWebSessions,
+  closeQaWebSessions,
   qaWebEvaluate,
   qaWebOpenPage,
   qaWebSnapshot,
@@ -53,6 +53,7 @@ import {
 
 beforeEach(async () => {
   const page = {
+    on: vi.fn(),
     goto,
     title: pageTitle,
     url: pageUrl,
@@ -113,5 +114,20 @@ describe("qa web runtime", () => {
     expect(evaluated).toBe("ok");
     expect(contextClose).toHaveBeenCalledTimes(1);
     expect(browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("can close only selected page sessions", async () => {
+    const first = await qaWebOpenPage({ url: "http://127.0.0.1:3000/one" });
+    const second = await qaWebOpenPage({ url: "http://127.0.0.1:3000/two" });
+
+    await closeQaWebSessions([first.pageId]);
+
+    await expect(qaWebSnapshot({ pageId: first.pageId })).rejects.toThrow(
+      `unknown web session: ${first.pageId}`,
+    );
+    await expect(qaWebSnapshot({ pageId: second.pageId })).resolves.toMatchObject({
+      text: "hello from body",
+    });
+    await closeAllQaWebSessions();
   });
 });

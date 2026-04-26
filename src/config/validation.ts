@@ -9,6 +9,7 @@ import {
 } from "../plugins/config-state.js";
 import {
   collectRelevantDoctorPluginIds,
+  collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
@@ -18,6 +19,7 @@ import {
 } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { collectLegacySecretRefEnvMarkerCandidates } from "../secrets/legacy-secretref-env-marker.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -49,6 +51,18 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+    return raw;
+  }
+  const commands = { ...raw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...raw,
+    commands,
+  };
+}
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
@@ -441,7 +455,35 @@ function mergeUnsupportedMutableSecretRefIssues(
 }
 
 export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
-  return collectUnsupportedMutableSecretRefIssues(raw);
+  return [
+    ...collectUnsupportedMutableSecretRefIssues(raw),
+    ...collectLegacySecretRefEnvMarkerIssues(raw),
+  ];
+}
+
+function formatLegacySecretRefEnvMarkerMessage(candidate: {
+  value: string;
+  ref: { id: string; provider: string } | null;
+}): string {
+  const replacement = candidate.ref
+    ? JSON.stringify({ source: "env", provider: candidate.ref.provider, id: candidate.ref.id })
+    : '{"source":"env","provider":"default","id":"ENV_VAR"}';
+  return [
+    `${JSON.stringify(candidate.value)} is a legacy SecretRef marker and is not valid openclaw.json config.`,
+    `Use a structured SecretRef object instead, for example ${replacement}.`,
+    'Run "openclaw doctor --fix" to migrate valid secretref-env:<ENV_VAR> markers.',
+    `See ${SECRETREF_POLICY_DOC_URL}.`,
+  ].join(" ");
+}
+
+function collectLegacySecretRefEnvMarkerIssues(raw: unknown): ConfigValidationIssue[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+  return collectLegacySecretRefEnvMarkerCandidates(raw as OpenClawConfig).map((candidate) => ({
+    path: candidate.path,
+    message: formatLegacySecretRefEnvMarkerMessage(candidate),
+  }));
 }
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
@@ -571,12 +613,26 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
+  opts?: {
+    touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
+  const doctorPluginIds = opts?.touchedPaths
+    ? collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: normalizedRaw,
+        touchedPaths: opts.touchedPaths,
+      })
+    : collectRelevantDoctorPluginIds(normalizedRaw);
+  const extraLegacyRules = listPluginDoctorLegacyConfigRules({
+    pluginIds: doctorPluginIds,
+  });
   const legacyIssues = findLegacyConfigIssues(
-    raw,
-    raw,
-    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+    normalizedRaw,
+    normalizedRaw,
+    extraLegacyRules,
+    opts?.touchedPaths,
   );
   if (legacyIssues.length > 0) {
     return {
@@ -587,7 +643,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
@@ -652,21 +708,29 @@ type ValidateConfigWithPluginsResult =
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
@@ -674,6 +738,14 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const config = base.config;
+  if (opts.pluginValidation === "skip") {
+    return {
+      ok: true,
+      config,
+      warnings: [],
+    };
+  }
+
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =

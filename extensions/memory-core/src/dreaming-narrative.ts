@@ -27,6 +27,8 @@ type SubagentSurface = {
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
+    lane?: string;
+    lightContext?: boolean;
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
@@ -84,8 +86,10 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-const NARRATIVE_TIMEOUT_MS = 60_000;
-const NARRATIVE_DELETE_SETTLE_TIMEOUT_MS = 120_000;
+// Narrative generation is best-effort. Keep the timeout short so a stalled
+// diary subagent does not leave the parent dreaming cron job "running" for
+// minutes after the reports have already been written.
+const NARRATIVE_TIMEOUT_MS = 15_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -151,6 +155,8 @@ async function startNarrativeRunOrFallback(params: {
       sessionKey: params.sessionKey,
       message: params.message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      lane: `dreaming-narrative:${params.sessionKey}`,
+      lightContext: true,
       deliver: false,
     });
     return run.runId;
@@ -177,7 +183,10 @@ async function startNarrativeRunOrFallback(params: {
   }
 }
 
-function buildNarrativeSessionKey(params: {
+/**
+ * Build the deterministic subagent session key used for dream narratives.
+ */
+export function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
   nowMs: number;
@@ -852,8 +861,6 @@ export async function generateAndAppendDreamNarrative(params: {
   });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
-  let waitStatus: string | null = null;
-
   try {
     runId = await startNarrativeRunOrFallback({
       subagent: params.subagent,
@@ -873,7 +880,6 @@ export async function generateAndAppendDreamNarrative(params: {
       runId,
       timeoutMs: NARRATIVE_TIMEOUT_MS,
     });
-    waitStatus = result.status;
 
     if (result.status !== "ok") {
       params.logger.warn(
@@ -911,30 +917,15 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    if (runId && waitStatus === "timeout") {
+    // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
+    if (params.subagent) {
       try {
-        const settle = await params.subagent.waitForRun({
-          runId,
-          timeoutMs: NARRATIVE_DELETE_SETTLE_TIMEOUT_MS,
-        });
-        if (settle.status !== "ok" && settle.status !== "error") {
-          params.logger.warn(
-            `memory-core: narrative cleanup wait ended with status=${settle.status} for ${params.data.phase} phase.`,
-          );
-        }
-      } catch (cleanupWaitErr) {
+        await params.subagent.deleteSession({ sessionKey });
+      } catch (cleanupErr) {
         params.logger.warn(
-          `memory-core: narrative cleanup wait failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupWaitErr)}`,
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
         );
       }
-    }
-
-    try {
-      await params.subagent.deleteSession({ sessionKey });
-    } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {

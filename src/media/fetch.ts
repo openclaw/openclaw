@@ -1,6 +1,10 @@
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
-import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withStrictGuardedFetchMode,
+  withTrustedExplicitProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -42,8 +46,14 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
+  /**
+   * Allow an operator-configured explicit proxy to resolve target DNS after
+   * hostname-policy checks instead of forcing local pinned-DNS first.
+   */
+  trustExplicitProxyDns?: boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -104,8 +114,10 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    dispatcherPolicy,
     dispatcherAttempts,
     shouldRetryFetchError,
+    trustExplicitProxyDns,
   } = options;
   const sourceUrl = redactMediaUrl(url);
 
@@ -115,10 +127,12 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
-      : [{ dispatcherPolicy: undefined, lookupFn }];
+      : [{ dispatcherPolicy, lookupFn }];
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
-      withStrictGuardedFetchMode({
+      (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
+        ? withTrustedExplicitProxyGuardedFetchMode
+        : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
         init: requestInit,

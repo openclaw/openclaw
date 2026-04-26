@@ -1,15 +1,13 @@
 ---
-title: "Web Search"
-sidebarTitle: "Web Search"
 summary: "web_search, x_search, and web_fetch -- search the web, search X posts, or fetch page content"
+title: "Web search"
+sidebarTitle: "Web Search"
 read_when:
   - You want to enable or configure web_search
   - You want to enable or configure x_search
   - You need to choose a search provider
   - You want to understand auto-detection and provider fallback
 ---
-
-# Web Search
 
 The `web_search` tool searches the web using your configured provider and
 returns results. Results are cached by query for 15 minutes (configurable).
@@ -116,6 +114,10 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ## Auto-detection
 
+## Native OpenAI web search
+
+Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatically when OpenClaw web search is enabled and no managed provider is pinned. This is provider-owned behavior in the bundled OpenAI plugin and only applies to native OpenAI API traffic, not OpenAI-compatible proxy base URLs or Azure routes. Set `tools.web.search.provider` to another provider such as `brave` to keep the managed `web_search` tool for OpenAI models, or set `tools.web.search.enabled: false` to disable both managed search and native OpenAI search.
+
 ## Native Codex web search
 
 Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
@@ -181,9 +183,14 @@ If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
 
 <Note>
-  All provider key fields support SecretRef objects. In auto-detect mode,
-  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
-  stay inactive.
+  All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
+  under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
+  bundled Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily providers
+  whether the provider is picked explicitly via `tools.web.search.provider` or
+  selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
+  selected provider key -- non-selected SecretRefs stay inactive, so you can
+  keep multiple providers configured without paying resolution cost for the
+  ones you are not using.
 </Note>
 
 ## Config
@@ -220,7 +227,7 @@ When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:
 
 - the Moonshot API region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`)
-- the default Kimi web-search model (defaults to `kimi-k2.5`)
+- the default Kimi web-search model (defaults to `kimi-k2.6`)
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
 same `XAI_API_KEY` fallback as Grok web search.

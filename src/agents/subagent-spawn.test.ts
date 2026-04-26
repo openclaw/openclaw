@@ -161,6 +161,15 @@ describe("spawnSubagentDirect seam flow", () => {
       operations.indexOf("gateway:sessions.patch"),
     );
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: childSessionKey,
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
@@ -189,16 +198,13 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterOrigin: expect.objectContaining({
-          channel: "discord",
-          accountId: "acct-1",
-          to: "user-1",
-          threadId: undefined,
-        }),
-      }),
-    );
+    const registerInput = hoisted.registerSubagentRunMock.mock.calls[0]?.[0];
+    expect(registerInput?.requesterOrigin).toMatchObject({
+      channel: "discord",
+      accountId: "acct-1",
+      to: "user-1",
+    });
+    expect(registerInput?.requesterOrigin).not.toHaveProperty("threadId");
   });
 
   it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {

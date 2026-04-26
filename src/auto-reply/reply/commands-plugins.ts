@@ -7,6 +7,7 @@ import {
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   validateConfigObjectWithPlugins,
@@ -473,11 +474,23 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
   await writeConfigFile(validated.config);
+  let registryWarning: string | undefined;
+  await refreshPluginRegistryAfterConfigMutation({
+    config: validated.config,
+    reason: "policy-changed",
+    logger: {
+      warn: (message) => {
+        registryWarning = message;
+      },
+    },
+  });
 
   return {
     shouldContinue: false,
     reply: {
-      text: `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.`,
+      text:
+        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.` +
+        (registryWarning ? `\n${registryWarning}` : ""),
     },
   };
 };

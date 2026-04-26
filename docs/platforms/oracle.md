@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on Oracle Cloud
   - Looking for low-cost VPS hosting for OpenClaw
   - Want 24/7 OpenClaw on a small server
-title: "Oracle Cloud (Platform)"
+title: "Oracle Cloud (platform)"
 ---
 
 # OpenClaw on Oracle Cloud (OCI)
@@ -296,7 +296,7 @@ openclaw backup create
 
 ---
 
-## See Also
+## Related
 
 - [Gateway remote access](/gateway/remote) — other remote access patterns
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs

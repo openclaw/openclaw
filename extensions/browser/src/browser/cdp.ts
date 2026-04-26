@@ -3,8 +3,10 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchJson,
+  isDirectCdpWebSocketEndpoint,
   isLoopbackHost,
   isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -27,10 +29,16 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
+    // `cdpPort` is always truthy: either the explicit cdp.port (truthy
+    // string), or the "443"/"80" default from the ternary. The guard is
+    // defensive against future parser edge cases.
+    /* c8 ignore next 3 */
     if (cdpPort) {
       ws.port = cdpPort;
     }
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";
@@ -50,11 +58,13 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 export async function captureScreenshotPng(opts: {
   wsUrl: string;
   fullPage?: boolean;
+  timeoutMs?: number;
 }): Promise<Buffer> {
   return await captureScreenshot({
     wsUrl: opts.wsUrl,
     fullPage: opts.fullPage,
     format: "png",
+    timeoutMs: opts.timeoutMs,
   });
 }
 
@@ -63,107 +73,111 @@ export async function captureScreenshot(opts: {
   fullPage?: boolean;
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
+  timeoutMs?: number;
 }): Promise<Buffer> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Page.enable");
+  return await withCdpSocket(
+    opts.wsUrl,
+    async (send) => {
+      await send("Page.enable");
 
-    // For full-page captures, temporarily expand the viewport to the content
-    // size so the entire page is within the viewport bounds.  We save the
-    // current viewport state and restore it after capture so pre-existing
-    // device emulation (mobile width, DPR, touch) is not lost.
-    let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
-    if (opts.fullPage) {
-      const metrics = (await send("Page.getLayoutMetrics")) as {
-        cssContentSize?: { width?: number; height?: number };
-        contentSize?: { width?: number; height?: number };
-      };
-      const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const contentWidth = size?.width ?? 0;
-      const contentHeight = size?.height ?? 0;
-      if (contentWidth > 0 && contentHeight > 0) {
-        const vpResult = (await send("Runtime.evaluate", {
-          expression:
-            "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
-          returnByValue: true,
-        })) as {
-          result?: {
-            value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
-          };
+      // For full-page captures, temporarily expand the viewport to the content
+      // size so the entire page is within the viewport bounds.  We save the
+      // current viewport state and restore it after capture so pre-existing
+      // device emulation (mobile width, DPR, touch) is not lost.
+      let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
+      if (opts.fullPage) {
+        const metrics = (await send("Page.getLayoutMetrics")) as {
+          cssContentSize?: { width?: number; height?: number };
+          contentSize?: { width?: number; height?: number };
         };
-        const v = vpResult?.result?.value;
-        const currentW = v?.w ?? 0;
-        const currentH = v?.h ?? 0;
-        savedVp = {
-          w: currentW,
-          h: currentH,
-          dpr: v?.dpr ?? 1,
-          sw: v?.sw ?? currentW,
-          sh: v?.sh ?? currentH,
-        };
-        // mobile: false is the safe default — CDP provides no way to query
-        // the active mobile flag, and inferring from navigator.maxTouchPoints
-        // would false-positive on touch-enabled desktops.
-        await send("Emulation.setDeviceMetricsOverride", {
-          width: Math.ceil(Math.max(currentW, contentWidth)),
-          height: Math.ceil(Math.max(currentH, contentHeight)),
-          deviceScaleFactor: savedVp.dpr,
-          mobile: false,
-          screenWidth: savedVp.sw,
-          screenHeight: savedVp.sh,
-        });
-      }
-    }
-
-    const format = opts.format ?? "png";
-    const quality =
-      format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
-
-    try {
-      // Chromium bug 40760789 (cross-origin textures missing with
-      // fromSurface: true + captureBeyondViewport: true) was fixed around
-      // Chrome 130. Chrome 146+ managed/headful browsers now reject
-      // fromSurface: false, so we omit it and keep captureBeyondViewport: true.
-      const result = (await send("Page.captureScreenshot", {
-        format,
-        ...(quality !== undefined ? { quality } : {}),
-        captureBeyondViewport: true,
-      })) as { data?: string };
-
-      const base64 = result?.data;
-      if (!base64) {
-        throw new Error("Screenshot failed: missing data");
-      }
-      return Buffer.from(base64, "base64");
-    } finally {
-      if (savedVp) {
-        // Clear the temporary viewport expansion first.  If the tab had
-        // prior device emulation the clear will change the viewport back to
-        // the browser's natural dimensions — detect that and re-apply the
-        // saved emulation so the tab's original state is preserved.
-        await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
-        try {
-          const postResult = (await send("Runtime.evaluate", {
+        const size = metrics?.cssContentSize ?? metrics?.contentSize;
+        const contentWidth = size?.width ?? 0;
+        const contentHeight = size?.height ?? 0;
+        if (contentWidth > 0 && contentHeight > 0) {
+          const vpResult = (await send("Runtime.evaluate", {
             expression:
-              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
+              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
             returnByValue: true,
-          })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
-          const p = postResult?.result?.value;
-          if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
-            await send("Emulation.setDeviceMetricsOverride", {
-              width: savedVp.w,
-              height: savedVp.h,
-              deviceScaleFactor: savedVp.dpr,
-              mobile: false,
-              screenWidth: savedVp.sw,
-              screenHeight: savedVp.sh,
-            });
-          }
-        } catch {
-          // Best-effort restoration; ignore failures in the cleanup path.
+          })) as {
+            result?: {
+              value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
+            };
+          };
+          const v = vpResult?.result?.value;
+          const currentW = v?.w ?? 0;
+          const currentH = v?.h ?? 0;
+          savedVp = {
+            w: currentW,
+            h: currentH,
+            dpr: v?.dpr ?? 1,
+            sw: v?.sw ?? currentW,
+            sh: v?.sh ?? currentH,
+          };
+          // mobile: false is the safe default — CDP provides no way to query
+          // the active mobile flag, and inferring from navigator.maxTouchPoints
+          // would false-positive on touch-enabled desktops.
+          await send("Emulation.setDeviceMetricsOverride", {
+            width: Math.ceil(Math.max(currentW, contentWidth)),
+            height: Math.ceil(Math.max(currentH, contentHeight)),
+            deviceScaleFactor: savedVp.dpr,
+            mobile: false,
+            screenWidth: savedVp.sw,
+            screenHeight: savedVp.sh,
+          });
         }
       }
-    }
-  });
+
+      const format = opts.format ?? "png";
+      const quality =
+        format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
+
+      try {
+        // Chrome 146+ managed/headful browsers reject fromSurface: false.
+        // For ordinary viewport captures, keep CDP's captureBeyondViewport
+        // default (false), matching Playwright's Chromium path.
+        const result = (await send("Page.captureScreenshot", {
+          format,
+          ...(quality !== undefined ? { quality } : {}),
+          ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
+        })) as { data?: string };
+
+        const base64 = result?.data;
+        if (!base64) {
+          throw new Error("Screenshot failed: missing data");
+        }
+        return Buffer.from(base64, "base64");
+      } finally {
+        if (savedVp) {
+          // Clear the temporary viewport expansion first.  If the tab had
+          // prior device emulation the clear will change the viewport back to
+          // the browser's natural dimensions — detect that and re-apply the
+          // saved emulation so the tab's original state is preserved.
+          await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+          try {
+            const postResult = (await send("Runtime.evaluate", {
+              expression:
+                "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
+              returnByValue: true,
+            })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
+            const p = postResult?.result?.value;
+            if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
+              await send("Emulation.setDeviceMetricsOverride", {
+                width: savedVp.w,
+                height: savedVp.h,
+                deviceScaleFactor: savedVp.dpr,
+                mobile: false,
+                screenWidth: savedVp.sw,
+                screenHeight: savedVp.sh,
+              });
+            }
+          } catch {
+            // Best-effort restoration; ignore failures in the cleanup path.
+          }
+        }
+      }
+    },
+    { commandTimeoutMs: opts.timeoutMs },
+  );
 }
 
 export async function createTargetViaCdp(opts: {
@@ -177,36 +191,71 @@ export async function createTargetViaCdp(opts: {
   });
 
   let wsUrl: string;
-  if (isWebSocketUrl(opts.cdpUrl)) {
-    // Direct WebSocket URL — skip /json/version discovery.
+  if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
+    // Handshake-ready direct WebSocket URL — skip /json/version discovery.
     await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
-    // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
-    const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-      appendCdpPath(opts.cdpUrl, "/json/version"),
-      1500,
-      undefined,
-      opts.ssrfPolicy,
-    );
+    // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
+    // /json/version discovery first. For bare ws/wss URLs, fall back to
+    // using the URL itself as a direct WS endpoint when discovery is
+    // unavailable — some providers (e.g. Browserless/Browserbase) expose
+    // a direct WebSocket root without a /json/version route.
+    const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
+      : opts.cdpUrl;
+    let version: { webSocketDebuggerUrl?: string } | null = null;
+    try {
+      version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+        appendCdpPath(discoveryUrl, "/json/version"),
+        1500,
+        undefined,
+        opts.ssrfPolicy,
+      );
+    } catch (err) {
+      // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
+      if (!isWebSocketUrl(opts.cdpUrl)) {
+        throw err;
+      }
+      // For bare ws/wss URLs, fall through: /json/version is unavailable
+      // so we attempt to use opts.cdpUrl as a direct WS endpoint below.
+    }
     const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
-    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
-    if (!wsUrl) {
+    if (wsUrlRaw) {
+      wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
+    } else if (isWebSocketUrl(opts.cdpUrl)) {
+      // /json/version unavailable or returned no WebSocket URL. Treat the
+      // original URL as a direct WebSocket endpoint.
+      wsUrl = opts.cdpUrl;
+    } else {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
-    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
-  return await withCdpSocket(wsUrl, async (send) => {
-    const created = (await send("Target.createTarget", { url: opts.url })) as {
-      targetId?: string;
-    };
-    const targetId = created?.targetId?.trim() ?? "";
-    if (!targetId) {
-      throw new Error("CDP Target.createTarget returned no targetId");
+  const candidateWsUrls =
+    isWebSocketUrl(opts.cdpUrl) && wsUrl !== opts.cdpUrl ? [wsUrl, opts.cdpUrl] : [wsUrl];
+  let lastError: unknown;
+  for (const candidateWsUrl of candidateWsUrls) {
+    try {
+      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      return await withCdpSocket(candidateWsUrl, async (send) => {
+        const created = (await send("Target.createTarget", { url: opts.url })) as {
+          targetId?: string;
+        };
+        const targetId = created?.targetId?.trim() ?? "";
+        if (!targetId) {
+          throw new Error("CDP Target.createTarget returned no targetId");
+        }
+        return { targetId };
+      });
+    } catch (err) {
+      lastError = err;
     }
-    return { targetId };
-  });
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("CDP Target.createTarget failed");
 }
 
 export type CdpRemoteObject = {
@@ -266,6 +315,9 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
+export const AX_REF_PREFIX = "ax";
+export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
+
 export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
@@ -314,11 +366,17 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
   while (stack.length && out.length < limit) {
     const popped = stack.pop();
+    // `stack.pop()` only returns undefined on an empty stack, but the
+    // while guard already asserts `stack.length > 0`. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!popped) {
       break;
     }
     const { id, depth } = popped;
     const n = byId.get(id);
+    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
+    // so byId.get(id) is always defined here. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!n) {
       continue;
     }
@@ -326,7 +384,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const name = axValue(n.name);
     const value = axValue(n.value);
     const description = axValue(n.description);
-    const ref = `ax${out.length + 1}`;
+    const ref = `${AX_REF_PREFIX}${out.length + 1}`;
     out.push({
       ref,
       role: role || "unknown",
@@ -340,6 +398,9 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const children = (n.childIds ?? []).filter((c) => byId.has(c));
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
+      // `children` is a string[] from an array filter over RawAXNode.childIds,
+      // so `child` is always a defined string here. Dead defensive guard.
+      /* c8 ignore next 3 */
       if (child) {
         stack.push({ id: child, depth: depth + 1 });
       }

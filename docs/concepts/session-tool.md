@@ -4,10 +4,8 @@ read_when:
   - You want to understand what session tools the agent has
   - You want to configure cross-session access or sub-agent spawning
   - You want to inspect status or control spawned sub-agents
-title: "Session Tools"
+title: "Session tools"
 ---
-
-# Session Tools
 
 OpenClaw gives agents tools to work across sessions, inspect status, and
 orchestrate sub-agents.
@@ -16,7 +14,7 @@ orchestrate sub-agents.
 
 | Tool               | What it does                                                                |
 | ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, recency)                         |
+| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
 | `sessions_history` | Read the transcript of a specific session                                   |
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
@@ -26,9 +24,14 @@ orchestrate sub-agents.
 
 ## Listing and reading sessions
 
-`sessions_list` returns sessions with their key, kind, channel, model, token
-counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
-`node`) or recency (`activeMinutes`).
+`sessions_list` returns sessions with their key, agentId, kind, channel, model,
+token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
+`node`), exact `label`, exact `agentId`, search text, or recency
+(`activeMinutes`). When you need mailbox-style triage, it can also ask for a
+visibility-scoped derived title, a last-message preview snippet, or bounded
+recent messages on each row. Derived titles and previews are produced only for
+sessions the caller can already see under the configured session tool
+visibility policy, so unrelated sessions stay hidden.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
@@ -95,8 +98,9 @@ sub-agents. It supports:
 
 ## Spawning sub-agents
 
-`sessions_spawn` creates an isolated session for a background task. It is always
-non-blocking -- it returns immediately with a `runId` and `childSessionKey`.
+`sessions_spawn` creates an isolated session for a background task by default.
+It is always non-blocking -- it returns immediately with a `runId` and
+`childSessionKey`.
 
 Key options:
 
@@ -104,6 +108,8 @@ Key options:
 - `model` and `thinking` overrides for the child session.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
+- `context: "fork"` for native sub-agents when the child needs the current
+  requester transcript; omit it or use `context: "isolated"` for a clean child.
 
 Default leaf sub-agents do not get session tools. When
 `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive
@@ -139,3 +145,8 @@ config.
 - [ACP Agents](/tools/acp-agents) -- external harness spawning
 - [Multi-agent](/concepts/multi-agent) -- multi-agent architecture
 - [Gateway Configuration](/gateway/configuration) -- session tool config knobs
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
