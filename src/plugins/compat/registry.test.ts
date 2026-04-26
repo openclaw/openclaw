@@ -90,6 +90,31 @@ const knownDeprecatedSurfaceMarkers = [
     file: "src/plugin-sdk/test-utils.ts",
     marker: "Deprecated compatibility alias",
   },
+  {
+    code: "plugin-install-config-ledger",
+    file: "src/config/plugin-install-config-migration.ts",
+    marker: "stripShippedPluginInstallConfigRecords",
+  },
+  {
+    code: "bundled-plugin-load-path-aliases",
+    file: "src/commands/doctor/shared/bundled-plugin-load-paths.ts",
+    marker: "plugins.load.paths",
+  },
+  {
+    code: "plugin-owned-web-search-config",
+    file: "src/commands/doctor/shared/legacy-web-search-migrate.ts",
+    marker: "tools.web.search",
+  },
+  {
+    code: "plugin-owned-web-fetch-config",
+    file: "src/commands/doctor/shared/legacy-web-fetch-migrate.ts",
+    marker: "tools.web.fetch.firecrawl",
+  },
+  {
+    code: "plugin-owned-x-search-config",
+    file: "src/commands/doctor/shared/legacy-x-search-migrate.ts",
+    marker: "tools.web.x_search",
+  },
 ] as const;
 
 function parseDate(date: string): Date {
