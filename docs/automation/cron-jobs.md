@@ -84,7 +84,7 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
-**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). Those system events do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
 For isolated jobs, “fresh session” means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
@@ -432,6 +432,18 @@ openclaw doctor
   queued summary path, so nothing is posted back to chat.
 - If the agent should message the user itself, check that the job has a usable
   route (`channel: "last"` with a previous chat, or an explicit channel/target).
+
+### Cron or heartbeat appears to prevent `/new`-style rollover
+
+- Daily and idle reset freshness is not based on `updatedAt`; see
+  [Session management](/concepts/session#session-lifecycle).
+- Cron wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may
+  update the session row for routing/status, but they do not extend
+  `sessionStartedAt` or `lastInteractionAt`.
+- For legacy rows created before those fields existed, OpenClaw can recover
+  `sessionStartedAt` from the transcript JSONL session header when the file is
+  still available. Legacy idle rows without `lastInteractionAt` use that
+  recovered start time as their idle baseline.
 
 ### Timezone gotchas
 

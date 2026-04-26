@@ -159,6 +159,11 @@ Docs: https://docs.openclaw.ai
 - Image understanding: resolve configured image models such as local LM Studio
   vision entries before reporting `Unknown model` when the discovery registry
   has not registered that provider. Fixes #66486. Thanks @zhanggpcsu.
+- Sessions: separate reset freshness from session-store `updatedAt`, so
+  heartbeat, cron, exec, and gateway bookkeeping no longer prevent configured
+  daily/idle resets from rolling long-running channel sessions. Fixes #68315,
+  #63732, #63820, and #69083. Thanks @maxatv, @longhairedsi, @bradfreels,
+  and @akessel56.
 - CLI/agents: keep `agents bind`, `agents unbind`, and `agents bindings` on
   setup-safe channel metadata paths so they do not preload bundled plugin
   runtimes or stage runtime dependencies. Fixes #71743.

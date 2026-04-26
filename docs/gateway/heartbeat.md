@@ -263,8 +263,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - If the resolved heartbeat target supports typing, OpenClaw shows typing while
   the heartbeat run is active. This uses the same target the heartbeat would
   send chat output to, and it is disabled by `typingMode: "never"`.
-- Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
-  is restored so idle expiry behaves normally.
+- Heartbeat-only replies do **not** keep the session alive. Heartbeat metadata
+  may update the session row, but idle expiry uses `lastInteractionAt` from the
+  last real user/channel message, and daily expiry uses `sessionStartedAt`.
 - Control UI and WebChat history hide heartbeat prompts and OK-only
   acknowledgments. The underlying session transcript can still contain those
   turns for audit/replay.
