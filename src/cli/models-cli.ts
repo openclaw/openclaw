@@ -282,7 +282,7 @@ export function registerModelsCli(program: Command) {
   });
 
   const auth = models.command("auth").description("Manage model auth profiles");
-  auth.option("--agent <id>", "Agent id for auth order get/set/clear");
+  auth.option("--agent <id>", "Agent id for auth commands");
   auth.action(() => {
     auth.help();
   });
@@ -303,7 +303,8 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
@@ -311,6 +312,7 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+            agent,
           },
           defaultRuntime,
         );

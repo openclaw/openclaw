@@ -154,6 +154,8 @@ provider you choose.
 
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
+Use `openclaw models auth --agent <id> login --provider <id>` to write the
+auth profile to a specific agent store.
 
 Examples:
 

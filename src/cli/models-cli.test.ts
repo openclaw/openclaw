@@ -134,6 +134,23 @@ describe("models cli", () => {
     );
   });
 
+  it("passes parent --agent to models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "--agent",
+      "poe",
+      "login",
+      "--provider",
+      "openai-codex",
+    ]);
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "poe", provider: "openai-codex" }),
+      expect.any(Object),
+    );
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();

@@ -43,7 +43,7 @@ import {
   pickAuthMethod,
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
-import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -103,12 +103,15 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
 
 async function resolveModelsAuthContext(params?: {
   requestedProvider?: string;
+  rawAgentId?: string | null;
 }): Promise<ResolvedModelsAuthContext> {
   const config = await loadValidConfigOrThrow();
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const agentDir = resolveAgentDir(config, defaultAgentId);
+  const agentId =
+    resolveKnownAgentId({ cfg: config, rawAgentId: params?.rawAgentId }) ??
+    resolveDefaultAgentId(config);
+  const agentDir = resolveAgentDir(config, agentId);
   const workspaceDir =
-    resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
@@ -536,6 +539,7 @@ type LoginOptions = {
   method?: string;
   setDefault?: boolean;
   yes?: boolean;
+  agent?: string;
 };
 
 /**
@@ -588,6 +592,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
 
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     requestedProvider: opts.provider,
+    rawAgentId: opts.agent,
   });
   const prompter = createClackPrompter();
   const authProviders = listProvidersWithAuthMethods(providers);
