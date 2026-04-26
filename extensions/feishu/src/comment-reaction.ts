@@ -69,7 +69,12 @@ async function requestCommentTypingReactionWithClient(params: {
         reaction_type: COMMENT_TYPING_REACTION_TYPE,
       },
       timeout: COMMENT_REACTION_TIMEOUT_MS,
-    }));
+    })) as {
+      code?: number;
+      msg?: string;
+      log_id?: string;
+      error?: { log_id?: string };
+    };
     if (response.code === 0) {
       return true;
     }

@@ -36,10 +36,6 @@ const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 function loadLegacyUsageDateParamsCache(): Set<string> {
   const raw = getSafeLocalStorage()?.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
   if (!raw) {
@@ -272,12 +268,10 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
 export async function loadSessionLogs(state: UsageState, sessionKey: string) {
   await runOptionalUsageDetailRequest(state, "usageSessionLogsLoading", async (client) => {
     state.usageSessionLogs = null;
-    const payload = asRecord(
-      await client.request("sessions.usage.logs", {
-        key: sessionKey,
-        limit: 1000,
-      }),
-    );
+    const payload = (await client.request("sessions.usage.logs", {
+      key: sessionKey,
+      limit: 1000,
+    })) as { logs?: unknown } | null;
     const logs = payload?.logs;
     state.usageSessionLogs = Array.isArray(logs) ? (logs as SessionLogEntry[]) : null;
   });

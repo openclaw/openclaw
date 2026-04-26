@@ -116,7 +116,7 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   }
   if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
     try {
-      const parsed = JSON5.parse(trimmed);
+      const parsed = JSON5.parse(trimmed) as unknown;
       if (typeof parsed === "string" && parsed.trim()) {
         return parsed;
       }
