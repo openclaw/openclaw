@@ -115,7 +115,7 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
-    let rowContext = buildRowContext(useProviderCatalogFastPath);
+    let rowContext = buildRowContext(useManifestCatalogFastPath || useProviderCatalogFastPath);
     const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
