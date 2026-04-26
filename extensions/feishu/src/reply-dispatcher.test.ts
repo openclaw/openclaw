@@ -5,6 +5,7 @@ type StreamingSessionStub = {
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  getMessageId: ReturnType<typeof vi.fn>;
   isActive: ReturnType<typeof vi.fn>;
 };
 
@@ -19,6 +20,9 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
+const runMessageSentMock = vi.hoisted(() => vi.fn(async () => {}));
+const triggerInternalHookMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
 function mergeStreamingText(
@@ -65,6 +69,55 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: getGlobalHookRunnerMock,
+}));
+vi.mock("openclaw/plugin-sdk/hook-runtime", () => ({
+  buildCanonicalSentMessageHookContext: (params: Record<string, unknown>) => ({
+    ...params,
+    conversationId: params.conversationId ?? params.to,
+  }),
+  createInternalHookEvent: (
+    type: string,
+    action: string,
+    sessionKey: string,
+    context: Record<string, unknown>,
+  ) => ({
+    type,
+    action,
+    sessionKey,
+    context,
+  }),
+  fireAndForgetHook: (task: Promise<unknown>) => {
+    void task;
+  },
+  toInternalMessageSentContext: (canonical: Record<string, unknown>) => ({
+    to: canonical.to,
+    content: canonical.content,
+    success: canonical.success,
+    error: canonical.error,
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    messageId: canonical.messageId,
+    isGroup: canonical.isGroup,
+    groupId: canonical.groupId,
+  }),
+  toPluginMessageContext: (canonical: Record<string, unknown>) => ({
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    messageId: canonical.messageId,
+  }),
+  toPluginMessageSentEvent: (canonical: Record<string, unknown>) => ({
+    to: canonical.to,
+    content: canonical.content,
+    success: canonical.success,
+    error: canonical.error,
+    messageId: canonical.messageId,
+  }),
+  triggerInternalHook: triggerInternalHookMock,
+}));
 vi.mock("./streaming-card.js", () => {
   return {
     mergeStreamingText,
@@ -77,6 +130,7 @@ vi.mock("./streaming-card.js", () => {
       close = vi.fn(async () => {
         this.active = false;
       });
+      getMessageId = vi.fn(() => "om_stream");
       isActive = vi.fn(() => this.active);
 
       constructor() {
@@ -98,8 +152,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     vi.clearAllMocks();
     clearFeishuStreamingStartBackoffForTests();
     streamingInstances.length = 0;
-    sendMediaFeishuMock.mockResolvedValue(undefined);
-    sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+      runMessageSent: runMessageSentMock,
+    });
+    triggerInternalHookMock.mockResolvedValue(undefined);
+    runMessageSentMock.mockResolvedValue(undefined);
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "om_text", chatId: "oc_chat" });
+    sendMediaFeishuMock.mockResolvedValue({ messageId: "om_media", chatId: "oc_chat" });
+    sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "om_card", chatId: "oc_chat" });
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -178,6 +239,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       result,
       options: createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0],
     };
+  }
+
+  function enableMessageSentHooks() {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "message_sent"),
+      runMessageSent: runMessageSentMock,
+    });
   }
 
   it("skips typing indicator when account typingIndicator is disabled", async () => {
@@ -269,6 +337,76 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("emits message_sent and internal message:sent for normal text replies", async () => {
+    enableMessageSentHooks();
+    const { options } = createDispatcherHarness({
+      accountId: "main",
+      sessionKeyForInternalHooks: "agent:main:feishu:oc_chat",
+      mirrorIsGroup: true,
+      mirrorGroupId: "oc_chat",
+    });
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(runMessageSentMock).toHaveBeenCalledTimes(1);
+    expect(runMessageSentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "oc_chat",
+        content: "plain text",
+        success: true,
+        messageId: "om_text",
+      }),
+      expect.objectContaining({
+        channelId: "feishu",
+        accountId: "main",
+        conversationId: "oc_chat",
+        messageId: "om_text",
+      }),
+    );
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "agent:main:feishu:oc_chat",
+        context: expect.objectContaining({
+          to: "oc_chat",
+          content: "plain text",
+          success: true,
+          channelId: "feishu",
+          accountId: "main",
+          conversationId: "oc_chat",
+          messageId: "om_text",
+          isGroup: true,
+          groupId: "oc_chat",
+        }),
+      }),
+    );
+  });
+
+  it("emits message:sent with failure details when Feishu delivery fails", async () => {
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("Feishu send failed"));
+    const { options } = createDispatcherHarness({
+      sessionKeyForInternalHooks: "agent:main:feishu:oc_chat",
+    });
+
+    await expect(options.deliver({ text: "plain text" }, { kind: "final" })).rejects.toThrow(
+      "Feishu send failed",
+    );
+
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:feishu:oc_chat",
+        context: expect.objectContaining({
+          content: "plain text",
+          success: false,
+          error: "Feishu send failed",
+        }),
+      }),
+    );
+  });
+
   it("suppresses internal block payload delivery", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "internal reasoning chunk" }, { kind: "block" });
@@ -314,6 +452,73 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("emits internal message:sent after streaming card replies close", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      sessionKeyForInternalHooks: "agent:main:feishu:oc_chat",
+    });
+
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "agent:main:feishu:oc_chat",
+        context: expect.objectContaining({
+          to: "oc_chat",
+          content: "```ts\nconst x = 1\n```",
+          success: true,
+          channelId: "feishu",
+          messageId: "om_stream",
+        }),
+      }),
+    );
+  });
+
+  it("emits streaming success instead of failure when media send fails after streaming text", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      sessionKeyForInternalHooks: "agent:main:feishu:oc_chat",
+    });
+
+    await expect(
+      options.deliver(
+        { text: "```ts\nconst x = 1\n```", mediaUrl: "https://example.com/a.png" },
+        { kind: "final" },
+      ),
+    ).rejects.toThrow("media failed");
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "agent:main:feishu:oc_chat",
+        context: expect.objectContaining({
+          content: "```ts\nconst x = 1\n```",
+          success: true,
+          messageId: "om_stream",
+        }),
+      }),
+    );
+    expect(triggerInternalHookMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          success: false,
+        }),
+      }),
+    );
   });
 
   it("closes streaming with block text when final reply is missing", async () => {
