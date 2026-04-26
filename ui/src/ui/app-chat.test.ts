@@ -104,6 +104,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
     updateComplete: Promise.resolve(),
+    querySelector: vi.fn().mockReturnValue(null),
     ...overrides,
   };
   return host as ChatHost;
