@@ -84,7 +84,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /runtime-module-mocks/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
   },
   {
     code: "vitest-mock-api",

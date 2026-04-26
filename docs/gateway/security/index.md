@@ -999,7 +999,7 @@ Logs and transcripts can leak sensitive info even when access controls are corre
 
 Recommendations:
 
-- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you don’t need long retention.

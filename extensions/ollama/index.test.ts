@@ -528,6 +528,32 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
   });
 
+  it("keeps native Ollama thinking off by default while exposing an opt-in toggle", () => {
+    const provider = registerProvider();
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "ollama",
+        modelId: "llama3.2:latest",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "ollama",
+        modelId: "gemma4:31b",
+        reasoning: true,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low", label: "on" }],
+      defaultLevel: "off",
+    });
+  });
+
   it("wraps native Ollama payloads with top-level think=true when thinking is enabled", () => {
     const { baseStreamFn, payloadSeen } = captureWrappedOllamaPayload("low");
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
