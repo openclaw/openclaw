@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
@@ -57,7 +57,7 @@ export type SecurityAuditOptions = {
   /** Time limit for deep gateway probe. */
   deepTimeoutMs?: number;
   /** Dependency injection for tests. */
-  plugins?: ReturnType<typeof listChannelPlugins>;
+  plugins?: ChannelPlugin[];
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
   /** Dependency injection for tests (Docker label checks). */
@@ -88,20 +88,19 @@ export type AuditExecutionContext = {
   execIcacls?: ExecFn;
   execDockerRawFn?: ExecDockerRawFn;
   probeGatewayFn?: ProbeGatewayFn;
-  plugins?: ReturnType<typeof listChannelPlugins>;
+  plugins?: ChannelPlugin[];
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: { token?: string; password?: string };
   workspaceDir?: string;
 };
 
-let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
+let readOnlyChannelPluginsModulePromise:
+  | Promise<typeof import("../channels/plugins/read-only.js")>
+  | undefined;
 let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
   | undefined;
 let pluginMetadataRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
@@ -122,9 +121,9 @@ let gatewayProbeDepsPromise:
     }>
   | undefined;
 
-async function loadChannelPlugins() {
-  channelPluginsModulePromise ??= import("../channels/plugins/index.js");
-  return await channelPluginsModulePromise;
+async function loadReadOnlyChannelPlugins() {
+  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
+  return await readOnlyChannelPluginsModulePromise;
 }
 
 async function loadAuditNonDeepModule() {
@@ -135,11 +134,6 @@ async function loadAuditNonDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
-}
-
-async function loadPluginRegistryLoaderModule() {
-  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
-  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadPluginMetadataRegistryLoaderModule() {
@@ -1050,16 +1044,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
   if (shouldAuditChannelSecurity) {
-    if (context.plugins === undefined) {
-      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
-        scope: "configured-channels",
-        config: cfg,
+    const channelPlugins =
+      context.plugins ??
+      (await loadReadOnlyChannelPlugins()).listReadOnlyChannelPluginsForConfig(cfg, {
         activationSourceConfig: context.sourceConfig,
         workspaceDir: context.workspaceDir,
         env,
+        stateDir,
+        includePersistedAuthState: true,
+        includeSetupRuntimeFallback: false,
       });
-    }
-    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(
       ...(await collectChannelSecurityFindings({
