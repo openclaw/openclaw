@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
+import {
+  detectChangedLanes,
+  isLiveDockerPackageScriptOnlyChange,
+} from "../../scripts/changed-lanes.mjs";
 import {
   CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
   createChangedCheckChildEnv,
@@ -283,6 +286,140 @@ describe("scripts/changed-lanes", () => {
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
       }),
     });
+  });
+
+  it("routes live Docker package script-only changes through the focused gate", () => {
+    const before = `${JSON.stringify(
+      {
+        name: "fixture",
+        scripts: {
+          "test:docker:all": "node scripts/test-docker-all.mjs",
+        },
+        dependencies: {
+          leftpad: "1.0.0",
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    const after = `${JSON.stringify(
+      {
+        name: "fixture",
+        scripts: {
+          "test:docker:all": "node scripts/test-docker-all.mjs",
+          "test:docker:live-acp-bind:droid":
+            "OPENCLAW_LIVE_ACP_BIND_AGENT=droid bash scripts/test-live-acp-bind-docker.sh",
+        },
+        dependencies: {
+          leftpad: "1.0.0",
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+    expect(isLiveDockerPackageScriptOnlyChange(before, after)).toBe(true);
+
+    const result = detectChangedLanes(["package.json"], {
+      packageJsonChangeKind: "liveDockerTooling",
+    });
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      liveDockerTooling: true,
+      releaseMetadata: false,
+      all: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.commands.map((command) => command.name)).toContain("live Docker scheduler dry run");
+  });
+
+  it("classifies live Docker package script changes from the git diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-live-docker-package-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "fixture",
+          scripts: {
+            "test:docker:all": "node scripts/test-docker-all.mjs",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "fixture",
+          scripts: {
+            "test:docker:all": "node scripts/test-docker-all.mjs",
+            "test:docker:live-acp-bind:droid":
+              "OPENCLAW_LIVE_ACP_BIND_AGENT=droid bash scripts/test-live-acp-bind-docker.sh",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["package.json"],
+      lanes: {
+        liveDockerTooling: true,
+        releaseMetadata: false,
+        all: false,
+      },
+    });
+  });
+
+  it("keeps non-script package changes off the live Docker focused gate", () => {
+    const before = `${JSON.stringify(
+      { name: "fixture", scripts: {}, dependencies: { leftpad: "1.0.0" } },
+      null,
+      2,
+    )}\n`;
+    const after = `${JSON.stringify(
+      {
+        name: "fixture",
+        scripts: {
+          "test:docker:live-acp-bind:droid":
+            "OPENCLAW_LIVE_ACP_BIND_AGENT=droid bash scripts/test-live-acp-bind-docker.sh",
+        },
+        dependencies: { leftpad: "1.0.1" },
+      },
+      null,
+      2,
+    )}\n`;
+
+    expect(isLiveDockerPackageScriptOnlyChange(before, after)).toBe(false);
   });
 
   it("keeps release metadata commits off the full changed gate", () => {
