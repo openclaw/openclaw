@@ -5,9 +5,10 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -250,10 +251,9 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   env?: NodeJS.ProcessEnv;
 }): string[] {
   const ids = new Set<string>(collectConfiguredPluginEntryIds(params.config));
-  const registry = loadPluginManifestRegistry({
+  const registry = loadSetupManifestRegistry({
     workspaceDir: params.workspaceDir,
     env: params.env,
-    cache: true,
   });
   for (const plugin of registry.plugins) {
     const paths = plugin.configContracts?.compatibilityMigrationPaths;
@@ -378,17 +378,16 @@ function matchesProvider(provider: ProviderPlugin, providerId: string): boolean 
 
 function loadSetupManifestRegistry(params?: { workspaceDir?: string; env?: NodeJS.ProcessEnv }) {
   const env = params?.env ?? process.env;
-  const discovery = discoverOpenClawPlugins({
+  const index = loadPluginRegistrySnapshot({
     workspaceDir: params?.workspaceDir,
     env,
     cache: true,
   });
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryForInstalledIndex({
+    index,
     workspaceDir: params?.workspaceDir,
     env,
-    cache: true,
-    candidates: discovery.candidates,
-    diagnostics: discovery.diagnostics,
+    includeDisabled: true,
   });
 }
 
