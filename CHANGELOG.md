@@ -74,6 +74,10 @@ Docs: https://docs.openclaw.ai
 - Logging: redact configured secret patterns at console and file-log sink exits
   so credentials that reach the logger are masked before terminal display or
   JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.
+- Gateway/services: refuse process and service mutations from an older OpenClaw
+  binary when the config was last written by a newer version, preventing
+  split-brain installs from stopping or rewriting newer gateway services. Fixes
+  #57079.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
 - macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
   start browser-capable CLI node services through the restored

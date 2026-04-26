@@ -5,6 +5,7 @@ import {
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
+import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -69,6 +70,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
+  const futureBlock = resolveFutureConfigActionBlock({
+    action: "install or rewrite the gateway service",
+    snapshot: configSnapshot,
+  });
+  if (futureBlock) {
+    fail(`Gateway install blocked: ${futureBlock.message}`, futureBlock.hints);
+    return;
+  }
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
