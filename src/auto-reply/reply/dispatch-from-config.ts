@@ -1227,7 +1227,8 @@ export async function dispatchReplyFromConfig(
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
               spokenText: accumulatedBlockTtsText,
             };
-            const result = await routeReplyToOriginating(ttsOnlyPayload);
+            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {
               queuedFinal = result.ok || queuedFinal;
               if (result.ok) {
@@ -1239,7 +1240,7 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
-              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
           }

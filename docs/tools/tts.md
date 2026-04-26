@@ -797,6 +797,9 @@ When enabled, OpenClaw:
 - skips very short replies (< 10 chars).
 - summarizes long replies when enabled using `agents.defaults.model.primary` (or `summaryModel`).
 - attaches the generated audio to the reply.
+- in `mode: "final"`, still sends audio-only TTS for streamed final replies
+  after the text stream completes; the generated media goes through the same
+  channel media normalization as normal reply attachments.
 
 If the reply exceeds `maxLength` and summary is off (or no API key for the
 summary model), audio

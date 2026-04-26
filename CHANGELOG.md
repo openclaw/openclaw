@@ -71,6 +71,9 @@ Docs: https://docs.openclaw.ai
 - TTS: keep explicit `provider=...` directive keys scoped to that provider and
   warn on unsupported keys instead of letting another speech provider consume
   overlapping keys. Fixes #60131.
+- TTS/Feishu: normalize final-mode streamed TTS-only audio before delivery so
+  generated voice-note files use the same safe media path and native voice
+  routing as normal final replies. Fixes #71920.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
