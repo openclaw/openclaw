@@ -63,7 +63,7 @@ describe("OpenClaw provider index", () => {
     const index = normalizeOpenClawProviderIndex({
       version: 1,
       providers: {
-        __proto__: {
+        ["__proto__"]: {
           id: "__proto__",
           name: "Bad",
           plugin: { id: "bad" },
