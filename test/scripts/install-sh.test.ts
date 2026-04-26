@@ -93,6 +93,7 @@ describe("install.sh", () => {
         ].join("\n"),
         {
           HOME: home,
+          NVM_DIR: join(tmp, "stale-nvm"),
           PATH: `${systemBin}:/usr/bin:/bin`,
           TERM: "dumb",
         },

@@ -1415,6 +1415,9 @@ ensure_default_node_active_shell() {
 
 load_nvm_for_node_detection() {
     local nvm_dir="${NVM_DIR:-}"
+    if [[ -n "$nvm_dir" && ! -s "$nvm_dir/nvm.sh" ]]; then
+        nvm_dir=""
+    fi
     if [[ -z "$nvm_dir" && -s "$HOME/.nvm/nvm.sh" ]]; then
         nvm_dir="$HOME/.nvm"
     fi
