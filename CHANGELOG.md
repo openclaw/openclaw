@@ -254,6 +254,7 @@ Docs: https://docs.openclaw.ai
 - Codex: consume unauthorized bound conversation inbound claims before they can fall through to other claim handlers or enqueue Codex turns. (#71702) Thanks @vincentkoc.
 - Codex media understanding: require approval-checked app-server image turns while explicitly declining tool, file, permission, and elicitation approval requests for the bounded image worker. (#71703) Thanks @vincentkoc.
 - Agents/Claude CLI: allow large live `stream-json` JSONL lines up to the existing per-turn raw limit, preventing large Telegram, WebChat, MCP, and image turns from aborting on the old stdout buffer cap. Fixes #71793, #71080, and #70766. (#71897) Thanks @chacher86, @shivamgrover21, and @tpjordan.
+- Agents/Claude CLI: unwrap nested Claude result envelopes in CLI JSON output so delegated agent responses surface as final text instead of raw result JSON. (#66819) Thanks @mraleko.
 
 ## 2026.4.24
 
