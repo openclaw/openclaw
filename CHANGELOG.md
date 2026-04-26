@@ -79,6 +79,7 @@ Docs: https://docs.openclaw.ai
   binary when the config was last written by a newer version, preventing
   split-brain installs from stopping or rewriting newer gateway services. Fixes
   #57079.
+- Gateway: reserve `/healthz` and `/readyz` ahead of plugin, canvas, and Control UI HTTP stages so liveness/readiness probes still answer when a later route handler stalls. Fixes #69674. Thanks @Xike-Creek.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
 - macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
   start browser-capable CLI node services through the restored
