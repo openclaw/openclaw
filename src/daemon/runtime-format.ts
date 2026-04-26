@@ -20,10 +20,14 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   if (runtime.subState) {
     details.push(`sub ${runtime.subState}`);
   }
-  if (runtime.lastExitStatus !== undefined) {
+  // Suppress stale exit details when the service is currently running —
+  // systemd retains the previous exit info even after a successful restart,
+  // which misleads users into thinking the active service has a problem.
+  const isRunning = runtime.status === "running";
+  if (runtime.lastExitStatus !== undefined && !isRunning) {
     details.push(`last exit ${runtime.lastExitStatus}`);
   }
-  if (runtime.lastExitReason) {
+  if (runtime.lastExitReason && !isRunning) {
     details.push(`reason ${runtime.lastExitReason}`);
   }
   if (runtime.lastRunResult) {
