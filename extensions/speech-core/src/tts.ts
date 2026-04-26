@@ -51,6 +51,7 @@ import {
   type SpeechVoiceOption,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
+  type TtsConfigResolutionContext,
 } from "../api.js";
 
 export type {
@@ -409,8 +410,11 @@ export function getResolvedSpeechProviderConfig(
   return resolveLazyProviderConfig(config, canonical, cfg);
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
-  const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, agentId);
+export function resolveTtsConfig(
+  cfg: OpenClawConfig,
+  contextOrAgentId?: string | TtsConfigResolutionContext,
+): ResolvedTtsConfig {
+  const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const auto = resolveConfiguredTtsAutoMode(raw);
@@ -470,11 +474,17 @@ function resolveEffectiveTtsAutoState(params: {
   cfg: OpenClawConfig;
   sessionAuto?: string;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 }): {
   autoMode: TtsAutoMode;
   prefsPath: string;
 } {
-  const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, params.agentId);
+  const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.channelId,
+    accountId: params.accountId,
+  });
   const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
   const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
   if (sessionAuto) {
@@ -654,11 +664,17 @@ export function resolveExplicitTtsOverrides(params: {
   modelId?: string;
   voiceId?: string;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 }): TtsDirectiveOverrides {
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
   const voiceId = params.voiceId?.trim();
-  const config = resolveTtsConfig(params.cfg, params.agentId);
+  const config = resolveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.channelId,
+    accountId: params.accountId,
+  });
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const selectedProvider =
     canonicalizeSpeechProviderId(providerInput, params.cfg) ??
@@ -991,6 +1007,8 @@ function resolveTtsRequestSetup(params: {
   providerOverride?: TtsProvider;
   disableFallback?: boolean;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -1000,7 +1018,11 @@ function resolveTtsRequestSetup(params: {
   | {
       error: string;
     } {
-  const config = resolveTtsConfig(params.cfg, params.agentId);
+  const config = resolveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.channelId,
+    accountId: params.accountId,
+  });
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   if (params.text.length > config.maxTextLength) {
     return {
@@ -1027,6 +1049,7 @@ export async function textToSpeech(params: {
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;
+  accountId?: string;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -1077,6 +1100,7 @@ export async function synthesizeSpeech(params: {
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;
+  accountId?: string;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -1085,6 +1109,8 @@ export async function synthesizeSpeech(params: {
     providerOverride: params.overrides?.provider,
     disableFallback: params.disableFallback,
     agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -1365,6 +1391,7 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
   agentId?: string;
+  accountId?: string;
 }): Promise<ReplyPayload> {
   if (params.payload.isCompactionNotice) {
     return params.payload;
@@ -1373,11 +1400,17 @@ export async function maybeApplyTtsToPayload(params: {
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
   });
   if (autoMode === "off") {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg, params.agentId);
+  const config = resolveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
+  });
   const activeProvider = getTtsProvider(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
@@ -1486,6 +1519,7 @@ export async function maybeApplyTtsToPayload(params: {
     channel: params.channel,
     overrides: directives.overrides,
     agentId: params.agentId,
+    accountId: params.accountId,
   });
 
   if (result.success && result.audioPath) {

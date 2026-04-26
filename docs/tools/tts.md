@@ -403,8 +403,41 @@ Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 
 1. `messages.tts`
 2. active `agents.list[].tts`
-3. local `/tts` preferences for this host
-4. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+3. channel override, when the channel supports `channels.<channel>.tts`
+4. account override, when the channel passes `channels.<channel>.accounts.<id>.tts`
+5. local `/tts` preferences for this host
+6. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+
+Channel and account overrides use the same shape as `messages.tts` and
+deep-merge over the earlier layers, so shared provider credentials can stay in
+`messages.tts` while a channel or bot account changes only voice, model, persona,
+or auto mode:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      providers: {
+        openai: { apiKey: "${OPENAI_API_KEY}", model: "gpt-4o-mini-tts" },
+      },
+    },
+  },
+  channels: {
+    feishu: {
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ## Personas
 

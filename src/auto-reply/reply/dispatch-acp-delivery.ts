@@ -91,6 +91,7 @@ async function maybeApplyAcpTts(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   channel?: string;
+  accountId?: string;
   kind: ReplyDispatchKind;
   inboundAudio: boolean;
   ttsAuto?: TtsAutoMode;
@@ -103,6 +104,8 @@ async function maybeApplyAcpTts(params: {
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
   });
   if (!ttsStatus) {
     return params.payload;
@@ -110,7 +113,14 @@ async function maybeApplyAcpTts(params: {
   if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
     return params.payload;
   }
-  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg, params.agentId) === "final") {
+  if (
+    params.kind !== "final" &&
+    resolveConfiguredTtsMode(params.cfg, {
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    }) === "final"
+  ) {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -122,6 +132,7 @@ async function maybeApplyAcpTts(params: {
     inboundAudio: params.inboundAudio,
     ttsAuto: params.ttsAuto,
     agentId: params.agentId,
+    accountId: params.accountId,
   });
 }
 
@@ -175,6 +186,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
 }): AcpDispatchDeliveryCoordinator {
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
+  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId =
+    explicitAccountId ??
+    normalizeOptionalString(
+      (
+        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
+    );
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -184,6 +206,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       cfg: params.cfg,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
+      channelId: params.ttsChannel,
+      accountId: resolvedAccountId,
     })
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
@@ -200,18 +224,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
-  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const resolvedAccountId =
-    explicitAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
-    );
-
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
       return;
@@ -336,6 +348,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       channel: params.ttsChannel,
+      accountId: resolvedAccountId,
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,

@@ -119,6 +119,7 @@ async function buildTtsAudioReply(params: {
   text: string;
   cfg: Parameters<typeof textToSpeech>[0]["cfg"];
   channel: string;
+  accountId?: string;
   prefsPath: string;
   agentId?: string;
 }): Promise<{ reply: ReplyPayload; provider?: string; hash?: string } | { error: string }> {
@@ -127,6 +128,7 @@ async function buildTtsAudioReply(params: {
     text: params.text,
     cfg: params.cfg,
     channel: params.channel,
+    accountId: params.accountId,
     prefsPath: params.prefsPath,
     agentId: params.agentId,
   });
@@ -185,7 +187,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg, params.agentId);
+  const accountId = params.ctx?.AccountId;
+  const config = resolveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.command.channel,
+    accountId,
+  });
   const prefsPath = resolveTtsPrefsPath(config);
   const action = parsed.action;
   const args = parsed.args;
@@ -268,6 +275,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       text: latestText,
       cfg: params.cfg,
       channel: params.command.channel,
+      accountId,
       prefsPath,
       agentId: params.agentId,
     });
@@ -301,6 +309,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       text: args,
       cfg: params.cfg,
       channel: params.command.channel,
+      accountId,
       prefsPath,
       agentId: params.agentId,
     });

@@ -2,12 +2,22 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+export type TtsConfigResolutionContext = {
+  agentId?: string;
+  channelId?: string;
+  accountId?: string;
+};
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -41,14 +51,97 @@ function resolveAgentTtsOverride(
   return agent?.tts;
 }
 
-export function resolveEffectiveTtsConfig(cfg: OpenClawConfig, agentId?: string): TtsConfig {
-  const base = cfg.messages?.tts ?? {};
-  const override = resolveAgentTtsOverride(cfg, agentId);
-  return deepMergeDefined(base, override ?? {}) as TtsConfig;
+function resolveTtsConfigContext(
+  contextOrAgentId?: string | TtsConfigResolutionContext,
+): TtsConfigResolutionContext {
+  return typeof contextOrAgentId === "string"
+    ? { agentId: contextOrAgentId }
+    : (contextOrAgentId ?? {});
 }
 
-export function resolveConfiguredTtsMode(cfg: OpenClawConfig, agentId?: string): TtsMode {
-  return resolveEffectiveTtsConfig(cfg, agentId).mode ?? "final";
+function resolveRecordEntry<T>(
+  entries: Record<string, T> | undefined,
+  id: string | undefined,
+  normalize: (value: string) => string,
+): T | undefined {
+  const normalizedId = normalizeOptionalString(id);
+  if (!entries || !normalizedId) {
+    return undefined;
+  }
+  if (Object.hasOwn(entries, normalizedId)) {
+    return entries[normalizedId];
+  }
+  const normalized = normalize(normalizedId);
+  const key = Object.keys(entries).find((candidate) => normalize(candidate) === normalized);
+  return key ? entries[key] : undefined;
+}
+
+function asTtsConfig(value: unknown): TtsConfig | undefined {
+  return isPlainObject(value) ? (value as TtsConfig) : undefined;
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return isPlainObject(value) ? value : undefined;
+}
+
+function resolveChannelConfig(
+  cfg: OpenClawConfig,
+  channelId: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!isPlainObject(cfg.channels)) {
+    return undefined;
+  }
+  const normalizedChannelId = normalizeOptionalString(channelId);
+  if (!normalizedChannelId) {
+    return undefined;
+  }
+  return asObjectRecord(
+    resolveRecordEntry(
+      cfg.channels as Record<string, unknown>,
+      normalizedChannelId,
+      normalizeLowercaseStringOrEmpty,
+    ),
+  );
+}
+
+function resolveChannelTtsOverride(
+  cfg: OpenClawConfig,
+  context: TtsConfigResolutionContext,
+): TtsConfig | undefined {
+  return asTtsConfig(resolveChannelConfig(cfg, context.channelId)?.tts);
+}
+
+function resolveAccountTtsOverride(
+  cfg: OpenClawConfig,
+  context: TtsConfigResolutionContext,
+): TtsConfig | undefined {
+  const channelConfig = resolveChannelConfig(cfg, context.channelId);
+  const accounts = isPlainObject(channelConfig?.accounts) ? channelConfig.accounts : undefined;
+  const accountConfig = resolveRecordEntry(accounts, context.accountId, normalizeAccountId);
+  return asTtsConfig(asObjectRecord(accountConfig)?.tts);
+}
+
+export function resolveEffectiveTtsConfig(
+  cfg: OpenClawConfig,
+  contextOrAgentId?: string | TtsConfigResolutionContext,
+): TtsConfig {
+  const context = resolveTtsConfigContext(contextOrAgentId);
+  const base = cfg.messages?.tts ?? {};
+  const agentOverride = resolveAgentTtsOverride(cfg, context.agentId);
+  const channelOverride = resolveChannelTtsOverride(cfg, context);
+  const accountOverride = resolveAccountTtsOverride(cfg, context);
+  let merged: unknown = base;
+  for (const override of [agentOverride, channelOverride, accountOverride]) {
+    merged = deepMergeDefined(merged, override ?? {});
+  }
+  return merged as TtsConfig;
+}
+
+export function resolveConfiguredTtsMode(
+  cfg: OpenClawConfig,
+  contextOrAgentId?: string | TtsConfigResolutionContext,
+): TtsMode {
+  return resolveEffectiveTtsConfig(cfg, contextOrAgentId).mode ?? "final";
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
@@ -87,13 +180,15 @@ export function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
   ttsAuto?: string;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 }): boolean {
   const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
   if (sessionAuto) {
     return sessionAuto !== "off";
   }
 
-  const raw = resolveEffectiveTtsConfig(params.cfg, params.agentId);
+  const raw = resolveEffectiveTtsConfig(params.cfg, params);
   const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
   if (prefsAuto) {
     return prefsAuto !== "off";
@@ -110,9 +205,11 @@ export function shouldCleanTtsDirectiveText(params: {
   cfg: OpenClawConfig;
   ttsAuto?: string;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 }): boolean {
   if (!shouldAttemptTtsPayload(params)) {
     return false;
   }
-  return resolveEffectiveTtsConfig(params.cfg, params.agentId).modelOverrides?.enabled !== false;
+  return resolveEffectiveTtsConfig(params.cfg, params).modelOverrides?.enabled !== false;
 }
