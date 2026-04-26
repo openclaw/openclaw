@@ -933,6 +933,9 @@ the Server-side compaction accordion below.
 
     This applies to the built-in Pi harness path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured by OpenAI's default agent route or provider/model runtime policy.
 
+    Related OpenAI docs:
+    - [Compaction](https://developers.openai.com/api/docs/guides/compaction)
+
     <Tabs>
       <Tab title="Enable explicitly">
         Useful for compatible endpoints like Azure OpenAI Responses:
