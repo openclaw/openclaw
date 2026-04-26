@@ -9,6 +9,7 @@ import {
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -20,10 +21,7 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginCommands } from "../../../plugins/command-registry-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  extractModelCompat,
-  resolveToolCallArgumentsEncoding,
-} from "../../../plugins/provider-model-compat.js";
+import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
@@ -75,11 +73,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
-  isCloudCodeAssistFormatError,
-} from "../../pi-embedded-helpers.js";
+import { isCloudCodeAssistFormatError } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import {
@@ -117,7 +111,6 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -162,7 +155,6 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
@@ -198,6 +190,7 @@ export {
   normalizeMessagesForLlmBoundary,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt-prompt.js";
+import { applyAttemptStreamWrappers } from "./attempt-stream-wrappers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   collectAttemptExplicitToolAllowlistSources,
@@ -228,13 +221,11 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
-  createYieldAbortedResponse,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
   buildEmbeddedSubscriptionParams,
   cleanupEmbeddedAttemptResources,
@@ -245,13 +236,8 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
 } from "./attempt.thread-helpers.js";
+import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import {
-  shouldRepairMalformedToolCallArguments,
-  wrapStreamFnDecodeXaiToolCallArguments,
-  wrapStreamFnRepairMalformedToolCallArguments,
-} from "./attempt.tool-call-argument-repair.js";
-import {
-  sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -1248,156 +1234,27 @@ export async function runEmbeddedAttempt(
           system: systemPromptText,
           note: "after session create",
         });
-        activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Anthropic Claude endpoints can reject replayed `thinking` blocks
-      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
-      // call, including tool continuations. Wrap the stream function so every
-      // outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      // Mistral (and other strict providers) reject tool call IDs that don't match their
-      // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
-      // historical messages at attempt start, but the agent loop's internal tool call →
-      // tool result cycles bypass that path. Wrap streamFn so every outbound request
-      // sees sanitized tool call IDs.
       const isOpenAIResponsesApi =
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses";
-
-      if (
-        transcriptPolicy.sanitizeToolCallIds &&
-        transcriptPolicy.toolCallIdMode &&
-        !isOpenAIResponsesApi
-      ) {
-        const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const nextMessages = sanitizeReplayToolCallIdsForStream({
-            messages: messages as AgentMessage[],
-            mode,
-            allowedToolNames,
-            preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
-            preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
-              modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-              policy: transcriptPolicy,
-            }),
-            repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-          });
-          if (nextMessages === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: nextMessages,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      if (isOpenAIResponsesApi) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          // Strip orphaned reasoning blocks first, then fix function-call
-          // pairing — matches the call order in google.ts.
-          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      const innerStreamFn = activeSession.agent.streamFn;
-      activeSession.agent.streamFn = (model, context, options) => {
-        const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
-        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
-          return createYieldAbortedResponse(model) as unknown as Awaited<
-            ReturnType<typeof innerStreamFn>
-          >;
-        }
-        return innerStreamFn(model, context, options);
-      };
-
-      // Some models emit tool names with surrounding whitespace (e.g. " read ").
-      // pi-agent-core dispatches tool calls with exact string matching, so normalize
-      // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
-        activeSession.agent.streamFn,
-        allowedToolNames,
+      applyAttemptStreamWrappers({
+        activeSession,
+        cacheTrace,
         transcriptPolicy,
-      );
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
-        activeSession.agent.streamFn,
         allowedToolNames,
-        {
-          unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        isOpenAIResponsesApi,
+        unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        provider: params.provider,
+        model: params.model,
+        anthropicPayloadLogger,
+        shouldReturnYieldAbortedResponse: () => {
+          const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+          return yieldDetected && signal.aborted && signal.reason === "sessions_yield";
         },
-      );
-
-      if (
-        shouldRepairMalformedToolCallArguments({
-          provider: params.provider,
-          modelApi: params.model.api,
-        })
-      ) {
-        activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (resolveToolCallArgumentsEncoding(params.model) === "html-entities") {
-        activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (anthropicPayloadLogger) {
-        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
-      }
-      // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
-      // Recover the known "sensitive" stop reason here so a model refusal does not
-      // bubble out as an uncaught runner error and stall channel polling.
-      activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
-        activeSession.agent.streamFn,
-      );
+      });
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
