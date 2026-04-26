@@ -1,11 +1,56 @@
 import Foundation
 
 public enum OpenClawSystemCommand: String, Codable, Sendable {
+    case prepare = "system.run.prepare"
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
     case execApprovalsGet = "system.execApprovals.get"
     case execApprovalsSet = "system.execApprovals.set"
+}
+
+public struct OpenClawSystemRunPrepareParams: Codable, Sendable, Equatable {
+    public var command: [String]?
+    public var rawCommand: String?
+    public var cwd: String?
+    public var agentId: String?
+    public var sessionKey: String?
+
+    public init(
+        command: [String]? = nil,
+        rawCommand: String? = nil,
+        cwd: String? = nil,
+        agentId: String? = nil,
+        sessionKey: String? = nil)
+    {
+        self.command = command
+        self.rawCommand = rawCommand
+        self.cwd = cwd
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+    }
+}
+
+public struct OpenClawSystemRunApprovalPlan: Codable, Sendable, Equatable {
+    public var argv: [String]
+    public var cwd: String?
+    public var rawCommand: String?
+    public var agentId: String?
+    public var sessionKey: String?
+
+    public init(
+        argv: [String],
+        cwd: String? = nil,
+        rawCommand: String? = nil,
+        agentId: String? = nil,
+        sessionKey: String? = nil)
+    {
+        self.argv = argv
+        self.cwd = cwd
+        self.rawCommand = rawCommand
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+    }
 }
 
 public enum OpenClawNotificationPriority: String, Codable, Sendable {

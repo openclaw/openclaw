@@ -117,14 +117,16 @@ struct ExecCommandResolution {
         let resolvedPath: String? = {
             if hasPathSeparator {
                 if expanded.hasPrefix("/") {
-                    return expanded
+                    return self.canonicalizePath(expanded)
                 }
                 let base = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let root = (base?.isEmpty == false) ? base! : FileManager().currentDirectoryPath
-                return URL(fileURLWithPath: root).appendingPathComponent(expanded).path
+                return self.canonicalizePath(URL(fileURLWithPath: root).appendingPathComponent(expanded).path)
             }
             let searchPaths = self.searchPaths(from: env)
-            return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+            return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths).flatMap {
+                self.canonicalizePath($0)
+            }
         }()
         let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
         return ExecCommandResolution(
@@ -132,6 +134,11 @@ struct ExecCommandResolution {
             resolvedPath: resolvedPath,
             executableName: name,
             cwd: cwd)
+    }
+
+    private static func canonicalizePath(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        return url.resolvingSymlinksInPath().path
     }
 
     private static func resolveShellSegmentExecutable(
