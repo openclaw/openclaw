@@ -2,6 +2,7 @@ import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
+import { getGatewayModelPricingCacheMeta } from "../model-pricing-cache-state.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -20,5 +21,18 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
         ),
       );
     }
+  },
+  "diagnostics.pricing": async ({ respond }) => {
+    const meta = getGatewayModelPricingCacheMeta();
+    respond(
+      true,
+      {
+        cachedAt: meta.cachedAt || null,
+        age: meta.cachedAt ? Date.now() - meta.cachedAt : null,
+        ttlMs: meta.ttlMs,
+        size: meta.size,
+      },
+      undefined,
+    );
   },
 };
