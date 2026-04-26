@@ -122,6 +122,25 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  security?: SecurityConfig;
+};
+
+/**
+ * Top-level security posture configuration. Separate from per-check knobs
+ * inside `gateway.*`, `agents.*`, etc. — this is a declaration about the
+ * operator's trust model that the audit uses to calibrate which findings
+ * are actionable vs. expected.
+ *
+ * trustModel:
+ *   "personal-assistant" (explicit) — single trusted operator; audit findings
+ *     that flag multi-tenant-style risks (trust-model heuristic, trusted
+ *     proxies on loopback-only Control UI) are demoted from warn → info.
+ *   "multi-tenant" (default) — audit runs with full strictness. Same
+ *     behavior as omitting the field entirely; exists so the choice can be
+ *     stated explicitly in config.
+ */
+export type SecurityConfig = {
+  trustModel?: "personal-assistant" | "multi-tenant";
 };
 
 declare const openClawConfigStateBrand: unique symbol;

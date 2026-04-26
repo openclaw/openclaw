@@ -411,16 +411,20 @@ export function collectGatewayConfigFindings(
   }
 
   if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+    const personalAssistant = cfg.security?.trustModel === "personal-assistant";
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
-      severity: "warn",
-      title: "Reverse proxy headers are not trusted",
+      severity: personalAssistant ? "info" : "warn",
+      title: personalAssistant
+        ? "Reverse proxy headers not trusted (acknowledged: personal-assistant trust model)"
+        : "Reverse proxy headers are not trusted",
       detail:
         "gateway.bind is loopback and gateway.trustedProxies is empty. " +
         "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
         "so local-client checks cannot be spoofed.",
-      remediation:
-        "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+      remediation: personalAssistant
+        ? "No action required while Control UI stays local-only. If you ever front it with a reverse proxy, set gateway.trustedProxies to the proxy IPs."
+        : "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
     });
   }
 

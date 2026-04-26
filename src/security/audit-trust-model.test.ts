@@ -138,6 +138,41 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "demotes multi-user heuristic to info when security.trustModel=personal-assistant",
+        cfg: {
+          channels: {
+            telegram: {
+              groupPolicy: "allowlist",
+              groups: {
+                "-1001234567890": { enabled: true },
+              },
+            },
+            discord: {
+              groupPolicy: "allowlist",
+              guilds: {
+                "9999999999": {
+                  channels: {
+                    "7777777777": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+          security: { trustModel: "personal-assistant" },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[6].cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+          );
+          expect(finding?.severity).toBe("info");
+          expect(finding?.detail).toContain(
+            "acknowledged via security.trustModel=\"personal-assistant\"",
+          );
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
