@@ -178,7 +178,9 @@ OpenClaw scans for plugins in this order (first match wins):
 
 <Steps>
   <Step title="Config paths">
-    `plugins.load.paths` — explicit file or directory paths.
+    `plugins.load.paths` — explicit file or directory paths. Paths that point
+    back at OpenClaw's own packaged bundled plugin directories are ignored;
+    run `openclaw doctor --fix` to remove those stale aliases.
   </Step>
 
   <Step title="Workspace plugins">
