@@ -44,7 +44,7 @@ export function registerUpdateCli(program: Command) {
       "--tag <dist-tag|version|spec>",
       "Override the package target for this update (dist-tag, version, or package spec)",
     )
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .addHelpText("after", () => {
       const examples = [
@@ -109,7 +109,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
   update
     .command("wizard")
     .description("Interactive update wizard")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
