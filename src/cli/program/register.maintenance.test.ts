@@ -1,42 +1,40 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMaintenanceCommands } from "./register.maintenance.js";
 
-const doctorCommand = vi.fn();
-const dashboardCommand = vi.fn();
-const resetCommand = vi.fn();
-const uninstallCommand = vi.fn();
+const mocks = vi.hoisted(() => ({
+  doctorCommand: vi.fn(),
+  dashboardCommand: vi.fn(),
+  resetCommand: vi.fn(),
+  uninstallCommand: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { doctorCommand, dashboardCommand, resetCommand, uninstallCommand, runtime } = mocks;
 
 vi.mock("../../commands/doctor.js", () => ({
-  doctorCommand,
+  doctorCommand: mocks.doctorCommand,
 }));
 
 vi.mock("../../commands/dashboard.js", () => ({
-  dashboardCommand,
+  dashboardCommand: mocks.dashboardCommand,
 }));
 
 vi.mock("../../commands/reset.js", () => ({
-  resetCommand,
+  resetCommand: mocks.resetCommand,
 }));
 
 vi.mock("../../commands/uninstall.js", () => ({
-  uninstallCommand,
+  uninstallCommand: mocks.uninstallCommand,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-let registerMaintenanceCommands: typeof import("./register.maintenance.js").registerMaintenanceCommands;
-
-beforeAll(async () => {
-  ({ registerMaintenanceCommands } = await import("./register.maintenance.js"));
-});
 
 describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {

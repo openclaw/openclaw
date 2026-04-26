@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -32,8 +33,13 @@ export function findBundledPluginSourceInMap(params: {
 
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -50,8 +56,8 @@ export function resolveBundledPluginSources(params: {
     }
 
     const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
+      normalizeOptionalString(candidate.packageManifest?.install?.npmSpec) ||
+      normalizeOptionalString(candidate.packageName) ||
       undefined;
 
     bundled.set(pluginId, {
@@ -67,10 +73,32 @@ export function resolveBundledPluginSources(params: {
 export function findBundledPluginSource(params: {
   lookup: BundledPluginLookup;
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): BundledPluginSource | undefined {
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   return findBundledPluginSourceInMap({
     bundled,
     lookup: params.lookup,
   });
+}
+
+export function resolveBundledPluginInstallCommandHint(params: {
+  pluginId: string;
+  workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
+}): string | null {
+  const bundledSource = findBundledPluginSource({
+    lookup: { kind: "pluginId", value: params.pluginId },
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!bundledSource?.localPath) {
+    return null;
+  }
+  return `openclaw plugins install ${bundledSource.localPath}`;
 }

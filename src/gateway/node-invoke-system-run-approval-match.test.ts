@@ -123,6 +123,32 @@ describe("evaluateSystemRunApprovalMatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  test("rejects mismatched Windows-compatible env override values", () => {
+    const result = evaluateSystemRunApprovalMatch({
+      argv: ["cmd.exe", "/c", "echo ok"],
+      request: {
+        host: "node",
+        command: "cmd.exe /c echo ok",
+        systemRunBinding: buildSystemRunApprovalBinding({
+          argv: ["cmd.exe", "/c", "echo ok"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+          env: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+        }).binding,
+      },
+      binding: {
+        ...defaultBinding,
+        env: { "ProgramFiles(x86)": "D:\\malicious" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.code).toBe("APPROVAL_ENV_MISMATCH");
+  });
+
   test("rejects non-node host requests", () => {
     const result = evaluateSystemRunApprovalMatch({
       argv: ["echo", "SAFE"],

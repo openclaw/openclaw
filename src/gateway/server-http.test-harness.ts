@@ -9,7 +9,9 @@ import { withTempConfig } from "./test-temp-config.js";
 
 export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
 export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
+type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
+const responseEndPromises = new WeakMap<ServerResponse, Promise<void>>();
 export const AUTH_NONE: ResolvedGatewayAuth = {
   mode: "none",
   token: undefined,
@@ -30,6 +32,7 @@ export function createRequest(params: {
   method?: string;
   remoteAddress?: string;
   host?: string;
+  headers?: Record<string, string>;
 }): IncomingMessage {
   return createGatewayRequest({
     path: params.path,
@@ -37,6 +40,23 @@ export function createRequest(params: {
     method: params.method,
     remoteAddress: params.remoteAddress,
     host: params.host,
+    headers: params.headers,
+  });
+}
+
+export function createHookRequest(params?: {
+  authorization?: string;
+  remoteAddress?: string;
+  url?: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  return createRequest({
+    method: "POST",
+    path: params?.url ?? "/hooks/wake",
+    host: "127.0.0.1:18789",
+    authorization: params?.authorization ?? "Bearer hook-secret",
+    remoteAddress: params?.remoteAddress,
+    headers: params?.headers,
   });
 }
 
@@ -48,16 +68,23 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
+  let resolveEnd!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnd = resolve;
+  });
   const end = vi.fn((chunk?: unknown) => {
     if (typeof chunk === "string") {
       body = chunk;
+      resolveEnd();
       return;
     }
     if (chunk == null) {
       body = "";
+      resolveEnd();
       return;
     }
     body = JSON.stringify(chunk);
+    resolveEnd();
   });
   const res = {
     headersSent: false,
@@ -65,6 +92,7 @@ export function createResponse(): {
     setHeader,
     end,
   } as unknown as ServerResponse;
+  responseEndPromises.set(res, ended);
   return {
     res,
     setHeader,
@@ -79,7 +107,10 @@ export async function dispatchRequest(
   res: ServerResponse,
 ): Promise<void> {
   server.emit("request", req, res);
-  await new Promise((resolve) => setImmediate(resolve));
+  await Promise.race([
+    responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
+    new Promise((resolve) => setTimeout(resolve, 2_000)),
+  ]);
 }
 
 export async function withGatewayTempConfig(
@@ -162,10 +193,20 @@ export function createCanonicalizedChannelPluginHandler() {
   });
 }
 
-export function createHooksHandler(bindHost: string) {
+export function createHooksHandler(
+  params:
+    | string
+    | {
+        dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
+        dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
+        bindHost?: string;
+        getClientIpConfig?: HooksHandlerDeps["getClientIpConfig"];
+      },
+) {
+  const options = typeof params === "string" ? { bindHost: params } : params;
   return createHooksRequestHandler({
     getHooksConfig: () => createHooksConfig(),
-    bindHost,
+    bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {
       warn: vi.fn(),
@@ -173,8 +214,9 @@ export function createHooksHandler(bindHost: string) {
       info: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
-    dispatchWakeHook: () => {},
-    dispatchAgentHook: () => "run-1",
+    getClientIpConfig: options.getClientIpConfig,
+    dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
+    dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
   });
 }
 

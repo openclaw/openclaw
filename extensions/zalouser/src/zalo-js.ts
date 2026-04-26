@@ -3,9 +3,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/zalouser";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
-import { getZalouserRuntime } from "./runtime.js";
 import type {
   ZaloAuthStatus,
   ZaloEventMessage,
@@ -19,16 +24,16 @@ import type {
   ZcaUserInfo,
 } from "./types.js";
 import {
-  LoginQRCallbackEventType,
-  ThreadType,
-  Zalo,
+  TextStyle,
   type API,
   type Credentials,
   type GroupInfo,
   type LoginQRCallbackEvent,
   type Message,
   type User,
+  createZalo,
 } from "./zca-client.js";
+import { LoginQRCallbackEventType, ThreadType } from "./zca-constants.js";
 
 const API_LOGIN_TIMEOUT_MS = 20_000;
 const QR_LOGIN_TTL_MS = 3 * 60_000;
@@ -84,7 +89,7 @@ type StoredZaloCredentials = {
 };
 
 function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return getZalouserRuntime().state.resolveStateDir(env, os.homedir);
+  return resolvePluginStateDir(env, os.homedir);
 }
 
 function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -92,7 +97,7 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function credentialsFilename(profile: string): string {
-  const trimmed = profile.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(profile);
   if (!trimmed || trimmed === "default") {
     return "credentials.json";
   }
@@ -136,6 +141,39 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function clampTextStyles(
+  text: string,
+  styles?: ZaloSendOptions["textStyles"],
+): ZaloSendOptions["textStyles"] {
+  if (!styles || styles.length === 0) {
+    return undefined;
+  }
+  const maxLength = text.length;
+  const clamped = styles
+    .map((style) => {
+      const start = Math.max(0, Math.min(style.start, maxLength));
+      const end = Math.min(style.start + style.len, maxLength);
+      if (end <= start) {
+        return null;
+      }
+      if (style.st === TextStyle.Indent) {
+        return {
+          start,
+          len: end - start,
+          st: style.st,
+          indentSize: style.indentSize,
+        };
+      }
+      return {
+        start,
+        len: end - start,
+        st: style.st,
+      };
+    })
+    .filter((style): style is NonNullable<typeof style> => style !== null);
+  return clamped.length > 0 ? clamped : undefined;
+}
+
 function toNumberId(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(Math.trunc(value));
@@ -170,14 +208,17 @@ function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
     }
     return null;
   }
-  return info as User;
+  return info;
 }
 
 function toInteger(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
-  const parsed = Number.parseInt(String(value ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof value === "string" ? value : typeof value === "number" ? String(value) : "",
+    10,
+  );
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -210,7 +251,10 @@ function resolveInboundTimestamp(rawTs: unknown): number {
   if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
     return rawTs > 1_000_000_000_000 ? rawTs : rawTs * 1000;
   }
-  const parsed = Number.parseInt(String(rawTs ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof rawTs === "string" ? rawTs : typeof rawTs === "number" ? String(rawTs) : "",
+    10,
+  );
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return Date.now();
   }
@@ -455,13 +499,13 @@ function resolveUploadedVoiceAsset(
     if (!item || typeof item !== "object") {
       continue;
     }
-    const fileType = item.fileType?.toLowerCase();
+    const fileType = normalizeOptionalLowercaseString(item.fileType);
     const fileUrl = item.fileUrl?.trim();
     if (!fileUrl) {
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: item.fileName?.trim() || undefined };
+      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
     }
   }
   return undefined;
@@ -475,8 +519,8 @@ function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }
 
 function mapFriend(friend: User): ZcaFriend {
   return {
-    userId: String(friend.userId),
-    displayName: friend.displayName || friend.zaloName || friend.username || String(friend.userId),
+    userId: friend.userId,
+    displayName: friend.displayName || friend.zaloName || friend.username || friend.userId,
     avatar: friend.avatar || undefined,
   };
 }
@@ -487,8 +531,8 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
       ? group.totalMember
       : undefined;
   return {
-    groupId: String(groupId),
-    name: group.name?.trim() || String(groupId),
+    groupId,
+    name: group.name?.trim() || groupId,
     memberCount: totalMember,
   };
 }
@@ -584,9 +628,9 @@ async function ensureApi(
   const initPromise = (async () => {
     const stored = readCredentials(profile);
     if (!stored) {
-      throw new Error(`No saved Zalo session for profile \"${profile}\"`);
+      throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
-    const zalo = new Zalo({
+    const zalo = await createZalo({
       logging: false,
       selfListen: false,
     });
@@ -598,7 +642,7 @@ async function ensureApi(
         language: stored.language,
       }),
       timeoutMs,
-      `Timed out restoring Zalo session for profile \"${profile}\"`,
+      `Timed out restoring Zalo session for profile "${profile}"`,
     );
     apiByProfile.set(profile, api);
     touchCredentials(profile);
@@ -743,7 +787,7 @@ function extractGroupMembersFromInfo(
 }
 
 function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
-  const data = message.data as Record<string, unknown>;
+  const data = message.data;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
   const threadId = isGroup
@@ -822,8 +866,8 @@ export async function getZaloUserInfo(profileInput?: string | null): Promise<Zca
     return null;
   }
   return {
-    userId: String(user.userId),
-    displayName: user.displayName || user.zaloName || String(user.userId),
+    userId: user.userId,
+    displayName: user.displayName || user.zaloName || user.userId,
     avatar: user.avatar || undefined,
   };
 }
@@ -840,20 +884,20 @@ export async function listZaloFriendsMatching(
   query?: string | null,
 ): Promise<ZcaFriend[]> {
   const friends = await listZaloFriends(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return friends;
   }
   const scored = friends
     .map((friend) => {
-      const id = friend.userId.toLowerCase();
-      const name = friend.displayName.toLowerCase();
+      const id = normalizeLowercaseStringOrEmpty(friend.userId);
+      const name = normalizeLowercaseStringOrEmpty(friend.displayName);
       const exact = id === q || name === q;
       const includes = id.includes(q) || name.includes(q);
       return { friend, exact, includes };
     })
     .filter((entry) => entry.includes)
-    .sort((a, b) => Number(b.exact) - Number(a.exact));
+    .toSorted((a, b) => Number(b.exact) - Number(a.exact));
   return scored.map((entry) => entry.friend);
 }
 
@@ -883,13 +927,13 @@ export async function listZaloGroupsMatching(
   query?: string | null,
 ): Promise<ZaloGroup[]> {
   const groups = await listZaloGroups(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return groups;
   }
   return groups.filter((group) => {
-    const id = group.groupId.toLowerCase();
-    const name = group.name.toLowerCase();
+    const id = normalizeLowercaseStringOrEmpty(group.groupId);
+    const name = normalizeLowercaseStringOrEmpty(group.name);
     return id.includes(q) || name.includes(q);
   });
 }
@@ -924,7 +968,8 @@ export async function listZaloGroupMembers(
       continue;
     }
     currentById.set(id, {
-      displayName: member.dName?.trim() || member.zaloName?.trim() || undefined,
+      displayName:
+        normalizeOptionalString(member.dName) ?? normalizeOptionalString(member.zaloName),
       avatar: member.avatar || undefined,
     });
   }
@@ -951,7 +996,9 @@ export async function listZaloGroupMembers(
         continue;
       }
       profileMap.set(id, {
-        displayName: profileValue.displayName?.trim() || profileValue.zaloName?.trim() || undefined,
+        displayName:
+          normalizeOptionalString(profileValue.displayName) ??
+          normalizeOptionalString(profileValue.zaloName),
         avatar: profileValue.avatar || undefined,
       });
     }
@@ -985,7 +1032,7 @@ export async function resolveZaloGroupContext(
     | undefined;
   const context: ZaloGroupContext = {
     groupId: normalizedGroupId,
-    name: groupInfo?.name?.trim() || undefined,
+    name: normalizeOptionalString(groupInfo?.name),
     members: extractGroupMembersFromInfo(groupInfo),
   };
   writeCachedGroupContext(profile, context);
@@ -1010,6 +1057,7 @@ export async function sendZaloTextMessage(
     if (options.mediaUrl?.trim()) {
       const media = await loadOutboundMediaFromUrl(options.mediaUrl.trim(), {
         mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
       });
       const fileName = resolveMediaFileName({
         mediaUrl: options.mediaUrl,
@@ -1018,11 +1066,16 @@ export async function sendZaloTextMessage(
         kind: media.kind,
       });
       const payloadText = (text || options.caption || "").slice(0, 2000);
+      const textStyles = clampTextStyles(payloadText, options.textStyles);
 
       if (media.kind === "audio") {
         let textMessageId: string | undefined;
         if (payloadText) {
-          const textResponse = await api.sendMessage(payloadText, trimmedThreadId, type);
+          const textResponse = await api.sendMessage(
+            textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+            trimmedThreadId,
+            type,
+          );
           textMessageId = extractSendMessageId(textResponse);
         }
 
@@ -1055,6 +1108,7 @@ export async function sendZaloTextMessage(
       const response = await api.sendMessage(
         {
           msg: payloadText,
+          ...(textStyles ? { styles: textStyles } : {}),
           attachments: [
             {
               data: media.buffer,
@@ -1071,7 +1125,13 @@ export async function sendZaloTextMessage(
       return { ok: true, messageId: extractSendMessageId(response) };
     }
 
-    const response = await api.sendMessage(text.slice(0, 2000), trimmedThreadId, type);
+    const payloadText = text.slice(0, 2000);
+    const textStyles = clampTextStyles(payloadText, options.textStyles);
+    const response = await api.sendMessage(
+      textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+      trimmedThreadId,
+      type,
+    );
     return { ok: true, messageId: extractSendMessageId(response) };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
@@ -1248,7 +1308,7 @@ export async function startZaloQrLogin(params: {
       let capturedCredentials: Omit<StoredZaloCredentials, "createdAt" | "lastUsedAt"> | null =
         null;
       try {
-        const zalo = new Zalo({ logging: false, selfListen: false });
+        const zalo = await createZalo({ logging: false, selfListen: false });
         const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
           const current = activeQrLogins.get(profile);
           if (!current || current.id !== login.id) {
@@ -1457,7 +1517,7 @@ export async function startZaloListener(params: {
   const existing = activeListeners.get(profile);
   if (existing) {
     throw new Error(
-      `Zalo listener already running for profile \"${profile}\" (account \"${existing.accountId}\")`,
+      `Zalo listener already running for profile "${profile}" (account "${existing.accountId}")`,
     );
   }
 
@@ -1573,7 +1633,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile);
   const byName = new Map<string, ZaloGroup[]>();
   for (const group of groups) {
-    const key = group.name.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(group.name);
     if (!key) {
       continue;
     }
@@ -1590,7 +1650,7 @@ export async function resolveZaloGroupsByEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const candidates = byName.get(trimmed.toLowerCase()) ?? [];
+    const candidates = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = candidates[0];
     return match ? { input, resolved: true, id: match.groupId } : { input, resolved: false };
   });
@@ -1603,7 +1663,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile);
   const byName = new Map<string, ZcaFriend[]>();
   for (const friend of friends) {
-    const key = friend.displayName.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(friend.displayName);
     if (!key) {
       continue;
     }
@@ -1620,7 +1680,7 @@ export async function resolveZaloAllowFromEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const matches = byName.get(trimmed.toLowerCase()) ?? [];
+    const matches = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = matches[0];
     if (!match) {
       return { input, resolved: false };

@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct OpenClawChatComposer: View {
+    private static let menuThinkingLevels = ["off", "low", "medium", "high"]
+
     @Bindable var viewModel: OpenClawChatViewModel
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
@@ -27,11 +29,15 @@ struct OpenClawChatComposer: View {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                     }
+                    if self.viewModel.showsModelPicker {
+                        self.modelPicker
+                    }
                     self.thinkingPicker
                     Spacer()
                     self.refreshButton
                     self.attachmentPicker
                 }
+                .padding(.horizontal, 10)
             }
 
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
@@ -83,16 +89,43 @@ struct OpenClawChatComposer: View {
     }
 
     private var thinkingPicker: some View {
-        Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
+        Picker(
+            "Thinking",
+            selection: Binding(
+                get: { self.viewModel.thinkingLevel },
+                set: { next in self.viewModel.selectThinkingLevel(next) }))
+        {
             Text("Off").tag("off")
             Text("Low").tag("low")
             Text("Medium").tag("medium")
             Text("High").tag("high")
+            if !Self.menuThinkingLevels.contains(self.viewModel.thinkingLevel) {
+                Text(self.viewModel.thinkingLevel.capitalized).tag(self.viewModel.thinkingLevel)
+            }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
+    }
+
+    private var modelPicker: some View {
+        Picker(
+            "Model",
+            selection: Binding(
+                get: { self.viewModel.modelSelectionID },
+                set: { next in self.viewModel.selectModel(next) }))
+        {
+            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
+            ForEach(self.viewModel.modelChoices) { model in
+                Text(model.displayLabel).tag(model.selectionID)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: 240, alignment: .leading)
+        .help("Model")
     }
 
     private var sessionPicker: some View {
@@ -411,34 +444,18 @@ private struct ChatComposerTextView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerNSTextView()
-        textView.delegate = context.coordinator
-        textView.drawsBackground = false
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 4)
-        textView.focusRingType = .none
+        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
+        guard let composerTextView = textView as? ChatComposerNSTextView else {
+            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
+        }
+        composerTextView.delegate = context.coordinator
 
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
-
-        textView.string = self.text
-        textView.onSend = { [weak textView] in
-            textView?.window?.makeFirstResponder(nil)
+        composerTextView.string = self.text
+        composerTextView.onSend = { [weak composerTextView] in
+            composerTextView?.window?.makeFirstResponder(nil)
             self.onSend()
         }
-        textView.onPasteImageAttachment = self.onPasteImageAttachment
+        composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -486,6 +503,34 @@ private struct ChatComposerTextView: NSViewRepresentable {
             guard view.window?.firstResponder === view else { return }
             self.parent.text = view.string
         }
+    }
+}
+
+enum ChatComposerTextViewFactory {
+    // Internal for @testable import coverage of composer text view defaults.
+    @MainActor
+    static func makeConfiguredTextView() -> NSTextView {
+        let textView = ChatComposerNSTextView()
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.focusRingType = .none
+        textView.allowsUndo = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        return textView
     }
 }
 

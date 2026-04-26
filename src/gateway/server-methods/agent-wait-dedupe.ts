@@ -1,3 +1,4 @@
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
 export type AgentWaitTerminalSnapshot = {
@@ -23,6 +24,17 @@ function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function removeWaiter(runId: string, waiter: () => void): void {
+  const waiters = AGENT_WAITERS_BY_RUN_ID.get(runId);
+  if (!waiters) {
+    return;
+  }
+  waiters.delete(waiter);
+  if (waiters.size === 0) {
+    AGENT_WAITERS_BY_RUN_ID.delete(runId);
+  }
+}
+
 function addWaiter(runId: string, waiter: () => void): () => void {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -31,28 +43,10 @@ function addWaiter(runId: string, waiter: () => void): () => void {
   const existing = AGENT_WAITERS_BY_RUN_ID.get(normalizedRunId);
   if (existing) {
     existing.add(waiter);
-    return () => {
-      const waiters = AGENT_WAITERS_BY_RUN_ID.get(normalizedRunId);
-      if (!waiters) {
-        return;
-      }
-      waiters.delete(waiter);
-      if (waiters.size === 0) {
-        AGENT_WAITERS_BY_RUN_ID.delete(normalizedRunId);
-      }
-    };
+    return () => removeWaiter(normalizedRunId, waiter);
   }
   AGENT_WAITERS_BY_RUN_ID.set(normalizedRunId, new Set([waiter]));
-  return () => {
-    const waiters = AGENT_WAITERS_BY_RUN_ID.get(normalizedRunId);
-    if (!waiters) {
-      return;
-    }
-    waiters.delete(waiter);
-    if (waiters.size === 0) {
-      AGENT_WAITERS_BY_RUN_ID.delete(normalizedRunId);
-    }
-  };
+  return () => removeWaiter(normalizedRunId, waiter);
 }
 
 function notifyWaiters(runId: string): void {
@@ -201,8 +195,7 @@ export async function waitForTerminalGatewayDedupe(params: {
       return;
     }
 
-    const timeoutDelayMs = Math.max(1, Math.min(Math.floor(params.timeoutMs), 2_147_483_647));
-    timeoutHandle = setTimeout(() => finish(null), timeoutDelayMs);
+    timeoutHandle = setSafeTimeout(() => finish(null), params.timeoutMs);
     timeoutHandle.unref?.();
 
     onAbort = () => finish(null);

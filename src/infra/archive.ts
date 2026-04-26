@@ -8,14 +8,22 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import JSZip from "jszip";
 import * as tar from "tar";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   resolveArchiveOutputPath,
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
+import {
+  createArchiveSymlinkTraversalError,
+  mergeExtractedTreeIntoDestination,
+  prepareArchiveDestinationDir,
+  prepareArchiveOutputPath,
+  withStagedArchiveDestination,
+} from "./archive-staging.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { openFileWithinRoot, openWritableFileWithinRoot, SafeOpenError } from "./fs-safe.js";
-import { isNotFoundPathError, isPathInside } from "./path-guards.js";
+import { isNotFoundPathError } from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -37,20 +45,13 @@ export type ArchiveExtractLimits = {
   maxEntryBytes?: number;
 };
 
-export type ArchiveSecurityErrorCode =
-  | "destination-not-directory"
-  | "destination-symlink"
-  | "destination-symlink-traversal";
-
-export class ArchiveSecurityError extends Error {
-  code: ArchiveSecurityErrorCode;
-
-  constructor(code: ArchiveSecurityErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "ArchiveSecurityError";
-  }
-}
+export { ArchiveSecurityError, type ArchiveSecurityErrorCode } from "./archive-staging.js";
+export {
+  mergeExtractedTreeIntoDestination,
+  prepareArchiveDestinationDir,
+  prepareArchiveOutputPath,
+  withStagedArchiveDestination,
+} from "./archive-staging.js";
 
 /** @internal */
 export const DEFAULT_MAX_ARCHIVE_BYTES_ZIP = 256 * 1024 * 1024;
@@ -61,12 +62,55 @@ export const DEFAULT_MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
 /** @internal */
 export const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 
-const ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT = "archive size exceeds limit";
-const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds limit";
-const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
-  "archive entry extracted size exceeds limit";
-const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
-const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
+export const ARCHIVE_LIMIT_ERROR_CODE = {
+  ARCHIVE_SIZE_EXCEEDS_LIMIT: "archive-size-exceeds-limit",
+  ENTRY_COUNT_EXCEEDS_LIMIT: "archive-entry-count-exceeds-limit",
+  ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT: "archive-entry-extracted-size-exceeds-limit",
+  EXTRACTED_SIZE_EXCEEDS_LIMIT: "archive-extracted-size-exceeds-limit",
+} as const;
+
+export type ArchiveLimitErrorCode =
+  (typeof ARCHIVE_LIMIT_ERROR_CODE)[keyof typeof ARCHIVE_LIMIT_ERROR_CODE];
+
+const ARCHIVE_LIMIT_ERROR_MESSAGE = {
+  [ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT]: "archive size exceeds limit",
+  [ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT]: "archive entry count exceeds limit",
+  [ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT]:
+    "archive entry extracted size exceeds limit",
+  [ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT]: "archive extracted size exceeds limit",
+} as const satisfies Record<ArchiveLimitErrorCode, string>;
+
+export class ArchiveLimitError extends Error {
+  readonly code: ArchiveLimitErrorCode;
+
+  constructor(code: ArchiveLimitErrorCode) {
+    super(ARCHIVE_LIMIT_ERROR_MESSAGE[code]);
+    this.name = "ArchiveLimitError";
+    this.code = code;
+  }
+}
+
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP64_EOCD_SIGNATURE = 0x06064b50;
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP_EOCD_MIN_BYTES = 22;
+const ZIP_EOCD_MAX_COMMENT_BYTES = 0xffff;
+const ZIP64_ENTRY_COUNT_SENTINEL = 0xffff;
+const ZIP64_UINT32_SENTINEL = 0xffffffff;
+const ZIP_CENTRAL_FILE_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_CENTRAL_FILE_HEADER_MIN_BYTES = 46;
+const ZIP_CENTRAL_FILE_HEADER_NAME_LENGTH_OFFSET = 28;
+const ZIP_CENTRAL_FILE_HEADER_EXTRA_LENGTH_OFFSET = 30;
+const ZIP_CENTRAL_FILE_HEADER_COMMENT_LENGTH_OFFSET = 32;
+const ZIP_EOCD_TOTAL_ENTRIES_OFFSET = 10;
+const ZIP_EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET = 12;
+const ZIP_EOCD_CENTRAL_DIRECTORY_OFFSET_OFFSET = 16;
+const ZIP_EOCD_COMMENT_LENGTH_OFFSET = 20;
+const ZIP64_EOCD_LOCATOR_BYTES = 20;
+const ZIP64_EOCD_OFFSET_OFFSET = 8;
+const ZIP64_EOCD_TOTAL_ENTRIES_OFFSET = 32;
+const ZIP64_EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET = 40;
+const ZIP64_EOCD_CENTRAL_DIRECTORY_OFFSET_OFFSET = 48;
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
 const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_WRONLY |
@@ -77,7 +121,7 @@ const OPEN_WRITE_CREATE_FLAGS =
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
-  const lower = filePath.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(filePath);
   if (lower.endsWith(".zip")) {
     return "zip";
   }
@@ -87,7 +131,30 @@ export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   return null;
 }
 
-export async function resolvePackedRootDir(extractDir: string): Promise<string> {
+type ResolvePackedRootDirOptions = {
+  rootMarkers?: string[];
+};
+
+async function hasPackedRootMarker(extractDir: string, rootMarkers: string[]): Promise<boolean> {
+  for (const marker of rootMarkers) {
+    const trimmed = marker.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      await fs.stat(path.join(extractDir, trimmed));
+      return true;
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
+export async function resolvePackedRootDir(
+  extractDir: string,
+  options?: ResolvePackedRootDirOptions,
+): Promise<string> {
   const direct = path.join(extractDir, "package");
   try {
     const stat = await fs.stat(direct);
@@ -96,6 +163,13 @@ export async function resolvePackedRootDir(extractDir: string): Promise<string> 
     }
   } catch {
     // ignore
+  }
+
+  if ((options?.rootMarkers?.length ?? 0) > 0) {
+    const hasMarker = await hasPackedRootMarker(extractDir, options?.rootMarkers ?? []);
+    if (hasMarker) {
+      return extractDir;
+    }
   }
 
   const entries = await fs.readdir(extractDir, { withFileTypes: true });
@@ -158,8 +232,185 @@ function assertArchiveEntryCountWithinLimit(
   limits: ResolvedArchiveExtractLimits,
 ) {
   if (entryCount > limits.maxEntries) {
-    throw new Error(ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT);
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
   }
+}
+
+function asBufferView(buffer: Buffer | Uint8Array): Buffer {
+  if (Buffer.isBuffer(buffer)) {
+    return buffer;
+  }
+  return Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+function readSafeUInt64LE(buffer: Buffer, offset: number): number {
+  const value = buffer.readBigUInt64LE(offset);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Number(value);
+}
+
+function findZipEndOfCentralDirectory(buffer: Buffer): number {
+  if (buffer.byteLength < ZIP_EOCD_MIN_BYTES) {
+    return -1;
+  }
+  const minOffset = Math.max(
+    0,
+    buffer.byteLength - ZIP_EOCD_MIN_BYTES - ZIP_EOCD_MAX_COMMENT_BYTES,
+  );
+  for (let offset = buffer.byteLength - ZIP_EOCD_MIN_BYTES; offset >= minOffset; offset -= 1) {
+    if (buffer.readUInt32LE(offset) !== ZIP_EOCD_SIGNATURE) {
+      continue;
+    }
+    const commentLength = buffer.readUInt16LE(offset + ZIP_EOCD_COMMENT_LENGTH_OFFSET);
+    if (offset + ZIP_EOCD_MIN_BYTES + commentLength === buffer.byteLength) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+type ZipCentralDirectoryInfo = {
+  declaredEntryCount: number;
+  centralDirectoryOffset: number;
+  centralDirectorySize: number;
+  endOfCentralDirectoryOffset: number;
+};
+
+function readZip64CentralDirectoryInfo(
+  buffer: Buffer,
+  eocdOffset: number,
+): ZipCentralDirectoryInfo | null {
+  const locatorOffset = eocdOffset - ZIP64_EOCD_LOCATOR_BYTES;
+  if (locatorOffset < 0 || buffer.readUInt32LE(locatorOffset) !== ZIP64_EOCD_LOCATOR_SIGNATURE) {
+    return null;
+  }
+  const zip64EocdOffset = readSafeUInt64LE(buffer, locatorOffset + ZIP64_EOCD_OFFSET_OFFSET);
+  if (
+    zip64EocdOffset < 0 ||
+    zip64EocdOffset + ZIP64_EOCD_CENTRAL_DIRECTORY_OFFSET_OFFSET + 8 > buffer.byteLength ||
+    buffer.readUInt32LE(zip64EocdOffset) !== ZIP64_EOCD_SIGNATURE
+  ) {
+    return null;
+  }
+  return {
+    declaredEntryCount: readSafeUInt64LE(buffer, zip64EocdOffset + ZIP64_EOCD_TOTAL_ENTRIES_OFFSET),
+    centralDirectorySize: readSafeUInt64LE(
+      buffer,
+      zip64EocdOffset + ZIP64_EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET,
+    ),
+    centralDirectoryOffset: readSafeUInt64LE(
+      buffer,
+      zip64EocdOffset + ZIP64_EOCD_CENTRAL_DIRECTORY_OFFSET_OFFSET,
+    ),
+    endOfCentralDirectoryOffset: eocdOffset,
+  };
+}
+
+function readZipCentralDirectoryInfo(buffer: Buffer): ZipCentralDirectoryInfo | null {
+  const eocdOffset = findZipEndOfCentralDirectory(buffer);
+  if (eocdOffset < 0) {
+    return null;
+  }
+  const declaredEntryCount = buffer.readUInt16LE(eocdOffset + ZIP_EOCD_TOTAL_ENTRIES_OFFSET);
+  const centralDirectorySize = buffer.readUInt32LE(
+    eocdOffset + ZIP_EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET,
+  );
+  const centralDirectoryOffset = buffer.readUInt32LE(
+    eocdOffset + ZIP_EOCD_CENTRAL_DIRECTORY_OFFSET_OFFSET,
+  );
+  const usesZip64 =
+    declaredEntryCount === ZIP64_ENTRY_COUNT_SENTINEL ||
+    centralDirectorySize === ZIP64_UINT32_SENTINEL ||
+    centralDirectoryOffset === ZIP64_UINT32_SENTINEL;
+  if (usesZip64) {
+    return (
+      readZip64CentralDirectoryInfo(buffer, eocdOffset) ?? {
+        declaredEntryCount,
+        centralDirectoryOffset,
+        centralDirectorySize,
+        endOfCentralDirectoryOffset: eocdOffset,
+      }
+    );
+  }
+  return {
+    declaredEntryCount,
+    centralDirectoryOffset,
+    centralDirectorySize,
+    endOfCentralDirectoryOffset: eocdOffset,
+  };
+}
+
+function countZipCentralDirectoryHeaders(
+  buffer: Buffer,
+  info: ZipCentralDirectoryInfo,
+): number | null {
+  const start = info.centralDirectoryOffset;
+  const declaredEnd = start + info.centralDirectorySize;
+  const scanEnd = info.endOfCentralDirectoryOffset;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(declaredEnd) ||
+    !Number.isSafeInteger(scanEnd) ||
+    start < 0 ||
+    declaredEnd < start ||
+    scanEnd < start ||
+    scanEnd > buffer.byteLength
+  ) {
+    return null;
+  }
+  let offset = start;
+  let count = 0;
+  while (offset < scanEnd) {
+    if (scanEnd - offset < ZIP_CENTRAL_FILE_HEADER_MIN_BYTES) {
+      break;
+    }
+    if (buffer.readUInt32LE(offset) !== ZIP_CENTRAL_FILE_HEADER_SIGNATURE) {
+      break;
+    }
+    const nameLength = buffer.readUInt16LE(offset + ZIP_CENTRAL_FILE_HEADER_NAME_LENGTH_OFFSET);
+    const extraLength = buffer.readUInt16LE(offset + ZIP_CENTRAL_FILE_HEADER_EXTRA_LENGTH_OFFSET);
+    const commentLength = buffer.readUInt16LE(
+      offset + ZIP_CENTRAL_FILE_HEADER_COMMENT_LENGTH_OFFSET,
+    );
+    const nextOffset =
+      offset + ZIP_CENTRAL_FILE_HEADER_MIN_BYTES + nameLength + extraLength + commentLength;
+    if (nextOffset <= offset || nextOffset > scanEnd) {
+      return null;
+    }
+    count += 1;
+    offset = nextOffset;
+  }
+  return count > 0 || info.declaredEntryCount === 0 ? count : null;
+}
+
+/** @internal */
+export function readZipCentralDirectoryEntryCount(buffer: Buffer | Uint8Array): number | null {
+  const view = asBufferView(buffer);
+  const info = readZipCentralDirectoryInfo(view);
+  if (!info) {
+    return null;
+  }
+  const countedEntryCount = countZipCentralDirectoryHeaders(view, info);
+  return countedEntryCount === null
+    ? info.declaredEntryCount
+    : Math.max(info.declaredEntryCount, countedEntryCount);
+}
+
+export async function loadZipArchiveWithPreflight(
+  buffer: Buffer | Uint8Array,
+  limits?: ArchiveExtractLimits,
+): Promise<JSZip> {
+  const resolvedLimits = resolveExtractLimits(limits);
+  if (buffer.byteLength > resolvedLimits.maxArchiveBytes) {
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT);
+  }
+  const entryCount = readZipCentralDirectoryEntryCount(buffer);
+  if (entryCount !== null) {
+    assertArchiveEntryCountWithinLimit(entryCount, resolvedLimits);
+  }
+  return await JSZip.loadAsync(buffer);
 }
 
 function createByteBudgetTracker(limits: ResolvedArchiveExtractLimits): {
@@ -177,11 +428,11 @@ function createByteBudgetTracker(limits: ResolvedArchiveExtractLimits): {
     }
     entryBytes += b;
     if (entryBytes > limits.maxEntryBytes) {
-      throw new Error(ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+      throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
     }
     extractedBytes += b;
     if (extractedBytes > limits.maxExtractedBytes) {
-      throw new Error(ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+      throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT);
     }
   };
 
@@ -193,7 +444,7 @@ function createByteBudgetTracker(limits: ResolvedArchiveExtractLimits): {
     addEntrySize(size: number) {
       const s = Math.max(0, Math.floor(size));
       if (s > limits.maxEntryBytes) {
-        throw new Error(ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+        throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
       }
       // Note: tar budgets are based on the header-declared size.
       addBytes(s);
@@ -217,68 +468,8 @@ function createExtractBudgetTransform(params: {
   });
 }
 
-function symlinkTraversalError(originalPath: string): ArchiveSecurityError {
-  return new ArchiveSecurityError(
-    "destination-symlink-traversal",
-    `${ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK}: ${originalPath}`,
-  );
-}
-
-async function assertDestinationDirReady(destDir: string): Promise<string> {
-  const stat = await fs.lstat(destDir);
-  if (stat.isSymbolicLink()) {
-    throw new ArchiveSecurityError("destination-symlink", "archive destination is a symlink");
-  }
-  if (!stat.isDirectory()) {
-    throw new ArchiveSecurityError(
-      "destination-not-directory",
-      "archive destination is not a directory",
-    );
-  }
-  return await fs.realpath(destDir);
-}
-
-async function assertNoSymlinkTraversal(params: {
-  rootDir: string;
-  relPath: string;
-  originalPath: string;
-}): Promise<void> {
-  const parts = params.relPath.split("/").filter(Boolean);
-  let current = path.resolve(params.rootDir);
-  for (const part of parts) {
-    current = path.join(current, part);
-    let stat: Awaited<ReturnType<typeof fs.lstat>>;
-    try {
-      stat = await fs.lstat(current);
-    } catch (err) {
-      if (isNotFoundPathError(err)) {
-        continue;
-      }
-      throw err;
-    }
-    if (stat.isSymbolicLink()) {
-      throw symlinkTraversalError(params.originalPath);
-    }
-  }
-}
-
-async function assertResolvedInsideDestination(params: {
-  destinationRealDir: string;
-  targetPath: string;
-  originalPath: string;
-}): Promise<void> {
-  let resolved: string;
-  try {
-    resolved = await fs.realpath(params.targetPath);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      return;
-    }
-    throw err;
-  }
-  if (!isPathInside(params.destinationRealDir, resolved)) {
-    throw symlinkTraversalError(params.originalPath);
-  }
+function symlinkTraversalError(originalPath: string) {
+  return createArchiveSymlinkTraversalError(originalPath);
 }
 
 type OpenZipOutputFileResult = {
@@ -403,29 +594,7 @@ async function prepareZipOutputPath(params: {
   originalPath: string;
   isDirectory: boolean;
 }): Promise<void> {
-  await assertNoSymlinkTraversal({
-    rootDir: params.destinationDir,
-    relPath: params.relPath,
-    originalPath: params.originalPath,
-  });
-
-  if (params.isDirectory) {
-    await fs.mkdir(params.outPath, { recursive: true });
-    await assertResolvedInsideDestination({
-      destinationRealDir: params.destinationRealDir,
-      targetPath: params.outPath,
-      originalPath: params.originalPath,
-    });
-    return;
-  }
-
-  const parentDir = path.dirname(params.outPath);
-  await fs.mkdir(parentDir, { recursive: true });
-  await assertResolvedInsideDestination({
-    destinationRealDir: params.destinationRealDir,
-    targetPath: parentDir,
-    originalPath: params.originalPath,
-  });
+  await prepareArchiveOutputPath(params);
 }
 
 async function writeZipFileEntry(params: {
@@ -511,14 +680,14 @@ async function extractZip(params: {
   limits?: ArchiveExtractLimits;
 }): Promise<void> {
   const limits = resolveExtractLimits(params.limits);
-  const destinationRealDir = await assertDestinationDirReady(params.destDir);
+  const destinationRealDir = await prepareArchiveDestinationDir(params.destDir);
   const stat = await fs.stat(params.archivePath);
   if (stat.size > limits.maxArchiveBytes) {
-    throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT);
   }
 
   const buffer = await fs.readFile(params.archivePath);
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await loadZipArchiveWithPreflight(buffer, limits);
   const entries = Object.values(zip.files) as ZipEntry[];
   const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
 
@@ -588,7 +757,7 @@ function readTarEntryInfo(entry: unknown): TarEntryInfo {
   return { path: p, type: t, size: s };
 }
 
-export function createTarEntrySafetyChecker(params: {
+export function createTarEntryPreflightChecker(params: {
   rootDir: string;
   stripComponents?: number;
   limits?: ArchiveExtractLimits;
@@ -641,37 +810,54 @@ export async function extractArchive(params: {
 
   const label = kind === "zip" ? "extract zip" : "extract tar";
   if (kind === "tar") {
-    const limits = resolveExtractLimits(params.limits);
-    const stat = await fs.stat(params.archivePath);
-    if (stat.size > limits.maxArchiveBytes) {
-      throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
-    }
-
-    const checkTarEntrySafety = createTarEntrySafetyChecker({
-      rootDir: params.destDir,
-      stripComponents: params.stripComponents,
-      limits,
-    });
     await withTimeout(
-      tar.x({
-        file: params.archivePath,
-        cwd: params.destDir,
-        strip: Math.max(0, Math.floor(params.stripComponents ?? 0)),
-        gzip: params.tarGzip,
-        preservePaths: false,
-        strict: true,
-        onReadEntry(entry) {
-          try {
-            checkTarEntrySafety(readTarEntryInfo(entry));
-          } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            // Node's EventEmitter calls listeners with `this` bound to the
-            // emitter (tar.Unpack), which exposes Parser.abort().
-            const emitter = this as unknown as { abort?: (error: Error) => void };
-            emitter.abort?.(error);
-          }
-        },
-      }),
+      (async () => {
+        const limits = resolveExtractLimits(params.limits);
+        const stat = await fs.stat(params.archivePath);
+        if (stat.size > limits.maxArchiveBytes) {
+          throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT);
+        }
+
+        const destinationRealDir = await prepareArchiveDestinationDir(params.destDir);
+        await withStagedArchiveDestination({
+          destinationRealDir,
+          run: async (stagingDir) => {
+            const checkTarEntrySafety = createTarEntryPreflightChecker({
+              rootDir: destinationRealDir,
+              stripComponents: params.stripComponents,
+              limits,
+            });
+            // A canonical cwd is not enough here: tar can still follow
+            // pre-existing child symlinks in the live destination tree.
+            // Extract into a private staging dir first, then merge through
+            // the same safe-open boundary checks used by direct file writes.
+            await tar.x({
+              file: params.archivePath,
+              cwd: stagingDir,
+              strip: Math.max(0, Math.floor(params.stripComponents ?? 0)),
+              gzip: params.tarGzip,
+              preservePaths: false,
+              strict: true,
+              onReadEntry(entry) {
+                try {
+                  checkTarEntrySafety(readTarEntryInfo(entry));
+                } catch (err) {
+                  const error = err instanceof Error ? err : new Error(String(err));
+                  // Node's EventEmitter calls listeners with `this` bound to the
+                  // emitter (tar.Unpack), which exposes Parser.abort().
+                  const emitter = this as unknown as { abort?: (error: Error) => void };
+                  emitter.abort?.(error);
+                }
+              },
+            });
+            await mergeExtractedTreeIntoDestination({
+              sourceDir: stagingDir,
+              destinationDir: destinationRealDir,
+              destinationRealDir,
+            });
+          },
+        });
+      })(),
       params.timeoutMs,
       label,
     );

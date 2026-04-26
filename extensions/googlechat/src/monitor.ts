@@ -1,42 +1,37 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  createWebhookInFlightLimiter,
-  createReplyPrefixOptions,
-  registerWebhookTargetWithPluginRoute,
+  createChannelReplyPipeline,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
-} from "openclaw/plugin-sdk/googlechat";
+} from "../runtime-api.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
-import {
-  downloadGoogleChatMedia,
-  deleteGoogleChatMessage,
-  sendGoogleChatMessage,
-  updateGoogleChatMessage,
-} from "./api.js";
+import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
+import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
+import {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+  setGoogleChatWebhookEventProcessor,
+} from "./monitor-routing.js";
 import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
   WebhookTarget,
 } from "./monitor-types.js";
-import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
+import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
+export {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+} from "./monitor-routing.js";
 export { isSenderAllowed };
 
-const webhookTargets = new Map<string, WebhookTarget[]>();
-const webhookInFlightLimiter = createWebhookInFlightLimiter();
-const googleChatWebhookRequestHandler = createGoogleChatWebhookRequestHandler({
-  webhookTargets,
-  webhookInFlightLimiter,
-  processEvent: async (event, target) => {
-    await processGoogleChatEvent(event, target);
-  },
-});
+setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -44,31 +39,8 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTargetWithPluginRoute({
-    targetsByPath: webhookTargets,
-    target,
-    route: {
-      auth: "plugin",
-      match: "exact",
-      pluginId: "googlechat",
-      source: "googlechat-webhook",
-      accountId: target.account.accountId,
-      log: target.runtime.log,
-      handler: async (req, res) => {
-        const handled = await handleGoogleChatWebhookRequest(req, res);
-        if (!handled && !res.headersSent) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
-        }
-      },
-    },
-  }).unregister;
-}
-
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "app-url" || normalized === "app_url" || normalized === "app") {
     return "app-url";
   }
@@ -80,13 +52,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
     return "project-number";
   }
   return undefined;
-}
-
-export async function handleGoogleChatWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  return await googleChatWebhookRequestHandler(req, res);
 }
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
@@ -303,7 +268,7 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: config,
     agentId: route.agentId,
     channel: "googlechat",
@@ -314,7 +279,7 @@ async function processMessageWithPipeline(params: {
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       deliver: async (payload) => {
         await deliverGoogleChatReply({
           payload,
@@ -363,135 +328,6 @@ async function downloadAttachment(
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverGoogleChatReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
-  account: ResolvedGoogleChatAccount;
-  spaceId: string;
-  runtime: GoogleChatRuntimeEnv;
-  core: GoogleChatCoreRuntime;
-  config: OpenClawConfig;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  typingMessageName?: string;
-}): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let suppressCaption = false;
-    if (typingMessageName) {
-      try {
-        await deleteGoogleChatMessage({
-          account,
-          messageName: typingMessageName,
-        });
-      } catch (err) {
-        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-        const fallbackText = payload.text?.trim()
-          ? payload.text
-          : mediaList.length > 1
-            ? "Sent attachments."
-            : "Sent attachment.";
-        try {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: fallbackText,
-          });
-          suppressCaption = Boolean(payload.text?.trim());
-        } catch (updateErr) {
-          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
-        }
-      }
-    }
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first && !suppressCaption ? payload.text : undefined;
-      first = false;
-      try {
-        const loaded = await core.channel.media.fetchRemoteMedia({
-          url: mediaUrl,
-          maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-        });
-        const upload = await uploadAttachmentForReply({
-          account,
-          spaceId,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-          filename: loaded.fileName ?? "attachment",
-        });
-        if (!upload.attachmentUploadToken) {
-          throw new Error("missing attachment upload token");
-        }
-        await sendGoogleChatMessage({
-          account,
-          space: spaceId,
-          text: caption,
-          thread: payload.replyToId,
-          attachments: [
-            { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
-          ],
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat attachment send failed: ${String(err)}`);
-      }
-    }
-    return;
-  }
-
-  if (payload.text) {
-    const chunkLimit = account.config.textChunkLimit ?? 4000;
-    const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      try {
-        // Edit typing message with first chunk if available
-        if (i === 0 && typingMessageName) {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: chunk,
-          });
-        } else {
-          await sendGoogleChatMessage({
-            account,
-            space: spaceId,
-            text: chunk,
-            thread: payload.replyToId,
-          });
-        }
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
-      }
-    }
-  }
-}
-
-async function uploadAttachmentForReply(params: {
-  account: ResolvedGoogleChatAccount;
-  spaceId: string;
-  buffer: Buffer;
-  contentType?: string;
-  filename: string;
-}) {
-  const { account, spaceId, buffer, contentType, filename } = params;
-  const { uploadGoogleChatAttachment } = await import("./api.js");
-  return await uploadGoogleChatAttachment({
-    account,
-    space: spaceId,
-    filename,
-    buffer,
-    contentType,
-  });
-}
-
 export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
   const core = getGoogleChatRuntime();
   const webhookPath = resolveWebhookPath({
@@ -507,6 +343,13 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
   const audience = options.account.config.audience?.trim();
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
+
+  warnAppPrincipalMisconfiguration({
+    accountId: options.account.accountId,
+    audienceType,
+    appPrincipal: options.account.config.appPrincipal,
+    log: options.runtime.log,
+  });
 
   const unregisterTarget = registerGoogleChatWebhookTarget({
     account: options.account,

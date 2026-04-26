@@ -6,6 +6,9 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 
+const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
+const OBSERVATION_COOKIE_VALUE = "session-cookie-token";
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -20,6 +23,7 @@ describe("buildApiErrorObservationFields", () => {
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
       rawErrorHash: expect.stringMatching(/^sha256:/),
       rawErrorFingerprint: expect.stringMatching(/^sha256:/),
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       providerErrorMessagePreview: "Overloaded",
       requestIdHash: expect.stringMatching(/^sha256:/),
@@ -29,27 +33,27 @@ describe("buildApiErrorObservationFields", () => {
 
   it("forces token redaction for observation previews", () => {
     const observed = buildApiErrorObservationFields(
-      "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456",
+      `Authorization: Bearer ${OBSERVATION_BEARER_TOKEN}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
-    expect(observed.rawErrorPreview).toContain("sk-abc");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
+    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
   it("redacts observation-only header and cookie formats", () => {
     const observed = buildApiErrorObservationFields(
-      "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456 Cookie: session=abcdefghijklmnopqrstuvwxyz123456",
+      `x-api-key: ${OBSERVATION_BEARER_TOKEN} Cookie: session=${OBSERVATION_COOKIE_VALUE}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_COOKIE_VALUE);
     expect(observed.rawErrorPreview).toContain("x-api-key: ***");
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });
 
   it("does not let cookie redaction consume unrelated fields on the same line", () => {
     const observed = buildApiErrorObservationFields(
-      "Cookie: session=abcdefghijklmnopqrstuvwxyz123456 status=503 request_id=req_cookie",
+      `Cookie: session=${OBSERVATION_COOKIE_VALUE} status=503 request_id=req_cookie`,
     );
 
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
@@ -66,6 +70,7 @@ describe("buildApiErrorObservationFields", () => {
       textPreview: expect.stringContaining('"request_id":"sha256:'),
       textHash: expect.stringMatching(/^sha256:/),
       textFingerprint: expect.stringMatching(/^sha256:/),
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       providerErrorMessagePreview: "Overloaded",
       requestIdHash: expect.stringMatching(/^sha256:/),
@@ -153,6 +158,7 @@ describe("buildApiErrorObservationFields", () => {
       textHash: undefined,
       textFingerprint: undefined,
       httpCode: undefined,
+      providerRuntimeFailureKind: undefined,
       providerErrorType: undefined,
       providerErrorMessagePreview: undefined,
       requestIdHash: undefined,
@@ -172,6 +178,17 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.rawErrorPreview).not.toContain("custom-secret-abc123");
     expect(observed.rawErrorPreview).toContain("custom");
+  });
+
+  it("keeps provider-less missing-scope auth payloads out of the codex-specific scope lane", () => {
+    const observed = buildApiErrorObservationFields(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+    );
+
+    expect(observed).toMatchObject({
+      httpCode: "401",
+      providerRuntimeFailureKind: "unknown",
+    });
   });
 });
 

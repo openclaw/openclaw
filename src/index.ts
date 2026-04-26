@@ -1,93 +1,111 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { getReplyFromConfig } from "./auto-reply/reply.js";
-import { applyTemplate } from "./auto-reply/templating.js";
-import { monitorWebChannel } from "./channel-web.js";
-import { createDefaultDeps } from "./cli/deps.js";
-import { promptYesNo } from "./cli/prompt.js";
-import { waitForever } from "./cli/wait.js";
-import { loadConfig } from "./config/config.js";
-import {
-  deriveSessionKey,
-  loadSessionStore,
-  resolveSessionKey,
-  resolveStorePath,
-  saveSessionStore,
-} from "./config/sessions.js";
-import { ensureBinary } from "./infra/binaries.js";
-import { loadDotEnv } from "./infra/dotenv.js";
-import { normalizeEnv } from "./infra/env.js";
 import { formatUncaughtError } from "./infra/errors.js";
+import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
-import { ensureOpenClawCliOnPath } from "./infra/path-env.js";
 import {
-  describePortOwner,
-  ensurePortAvailable,
-  handlePortError,
-  PortInUseError,
-} from "./infra/ports.js";
-import { assertSupportedRuntime } from "./infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
-import { enableConsoleCapture } from "./logging.js";
-import { runCommandWithTimeout, runExec } from "./process/exec.js";
-import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
+  installUnhandledRejectionHandler,
+  isUncaughtExceptionHandled,
+} from "./infra/unhandled-rejections.js";
 
-loadDotEnv({ quiet: true });
-normalizeEnv();
-ensureOpenClawCliOnPath();
-
-// Capture all console output into structured logs while keeping stdout/stderr behavior.
-enableConsoleCapture();
-
-// Enforce the minimum supported runtime before doing any work.
-assertSupportedRuntime();
-
-import { buildProgram } from "./cli/program.js";
-
-const program = buildProgram();
-
-export {
-  assertWebChannel,
-  applyTemplate,
-  createDefaultDeps,
-  deriveSessionKey,
-  describePortOwner,
-  ensureBinary,
-  ensurePortAvailable,
-  getReplyFromConfig,
-  handlePortError,
-  loadConfig,
-  loadSessionStore,
-  monitorWebChannel,
-  normalizeE164,
-  PortInUseError,
-  promptYesNo,
-  resolveSessionKey,
-  resolveStorePath,
-  runCommandWithTimeout,
-  runExec,
-  saveSessionStore,
-  toWhatsappJid,
-  waitForever,
+type LegacyCliDeps = {
+  runCli: (argv: string[]) => Promise<void>;
 };
+
+type LibraryExports = typeof import("./library.js");
+
+// These bindings are populated only for library consumers. The CLI entry stays
+// on the lean path and must not read them while running as main.
+export let applyTemplate: LibraryExports["applyTemplate"];
+export let createDefaultDeps: LibraryExports["createDefaultDeps"];
+export let deriveSessionKey: LibraryExports["deriveSessionKey"];
+export let describePortOwner: LibraryExports["describePortOwner"];
+export let ensureBinary: LibraryExports["ensureBinary"];
+export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
+export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
+export let handlePortError: LibraryExports["handlePortError"];
+export let loadConfig: LibraryExports["loadConfig"];
+export let loadSessionStore: LibraryExports["loadSessionStore"];
+export let monitorWebChannel: LibraryExports["monitorWebChannel"];
+export let normalizeE164: LibraryExports["normalizeE164"];
+export let PortInUseError: LibraryExports["PortInUseError"];
+export let promptYesNo: LibraryExports["promptYesNo"];
+export let resolveSessionKey: LibraryExports["resolveSessionKey"];
+export let resolveStorePath: LibraryExports["resolveStorePath"];
+export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
+export let runExec: LibraryExports["runExec"];
+export let saveSessionStore: LibraryExports["saveSessionStore"];
+export let waitForever: LibraryExports["waitForever"];
+
+async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
+  const { runCli } = await import("./cli/run-main.js");
+  return { runCli };
+}
+
+// Legacy direct file entrypoint only. Package root exports now live in library.ts.
+export async function runLegacyCliEntry(
+  argv: string[] = process.argv,
+  deps?: LegacyCliDeps,
+): Promise<void> {
+  const { runCli } = deps ?? (await loadLegacyCliDeps());
+  await runCli(argv);
+}
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
 
+if (!isMain) {
+  ({
+    applyTemplate,
+    createDefaultDeps,
+    deriveSessionKey,
+    describePortOwner,
+    ensureBinary,
+    ensurePortAvailable,
+    getReplyFromConfig,
+    handlePortError,
+    loadConfig,
+    loadSessionStore,
+    monitorWebChannel,
+    normalizeE164,
+    PortInUseError,
+    promptYesNo,
+    resolveSessionKey,
+    resolveStorePath,
+    runCommandWithTimeout,
+    runExec,
+    saveSessionStore,
+    waitForever,
+  } = await import("./library.js"));
+}
+
 if (isMain) {
+  const { restoreTerminalState } = await import("./terminal/restore.js");
+
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isUncaughtExceptionHandled(error)) {
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+      console.error("[openclaw]", message);
+    }
+    restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
-  void program.parseAsync(process.argv).catch((err) => {
+  void runLegacyCliEntry(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+      console.error("[openclaw]", message);
+    }
+    restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 }

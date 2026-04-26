@@ -275,9 +275,21 @@ private struct ManualEntryStep: View {
 
         if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualToken = ""
         }
         if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualPassword = ""
+        }
+
+        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedInstanceId.isEmpty {
+            let trimmedBootstrapToken =
+                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
 
         self.setupStatusText = "Setup code applied."
@@ -364,7 +376,7 @@ private struct ConnectionStatusBox: View {
         gatewayController: GatewayConnectionController
     ) -> [String] {
         var lines: [String] = [
-            "gateway: \(appModel.gatewayStatusText)",
+            "gateway: \(appModel.gatewayDisplayStatusText)",
             "discovery: \(gatewayController.discoveryStatusText)",
         ]
         lines.append("server: \(appModel.gatewayServerName ?? "—")")
