@@ -18,6 +18,7 @@ import {
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
+import { nextcloudTalkMessageActions } from "./message-actions.js";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
@@ -150,6 +151,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         }),
       }),
       gateway: nextcloudTalkGatewayAdapter,
+      actions: nextcloudTalkMessageActions,
     },
     pairing: {
       text: {
