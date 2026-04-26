@@ -1573,4 +1573,99 @@ describe("resolveSubagentSpawnModelSelection", () => {
       }),
     ).toBe("xai/grok-4");
   });
+
+  describe("3-tier precedence (no subagent-specific config)", () => {
+    it("session-level modelOverride wins over agents.list[].model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+          list: [
+            {
+              id: "research",
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveSubagentSpawnModelSelection({
+          cfg,
+          agentId: "research",
+          modelOverride: "xai/grok-4",
+        }),
+      ).toBe("xai/grok-4");
+    });
+
+    it("agents.list[].model wins over agents.defaults.model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+          list: [
+            {
+              id: "research",
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveSubagentSpawnModelSelection({
+          cfg,
+          agentId: "research",
+        }),
+      ).toBe("anthropic/claude-opus-4-6");
+    });
+
+    it("all three tiers set — session override wins", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+          list: [
+            {
+              id: "research",
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveSubagentSpawnModelSelection({
+          cfg,
+          agentId: "research",
+          modelOverride: "xai/grok-4",
+        }),
+      ).toBe("xai/grok-4");
+    });
+
+    it("agents.defaults.model is used when no override and no agent-list model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+          list: [
+            {
+              id: "research",
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveSubagentSpawnModelSelection({
+          cfg,
+          agentId: "research",
+        }),
+      ).toBe("anthropic/claude-sonnet-4-6");
+    });
+  });
 });
