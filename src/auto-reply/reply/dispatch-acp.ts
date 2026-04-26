@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -343,18 +344,24 @@ export async function tryDispatchAcpReply(params: {
   }
   const canonicalSessionKey = acpResolution.sessionKey;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
-  const progressSessionKeys = Array.from(
-    new Set(
-      [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
-        .map((key) => normalizeOptionalString(key))
-        .filter((key): key is string => Boolean(key)),
-    ),
-  );
-  const markAcpProgress = () => {
-    for (const key of progressSessionKeys) {
-      markDiagnosticSessionProgress({ sessionKey: key });
-    }
-  };
+  const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
+  const progressSessionKeys = diagnosticsEnabled
+    ? Array.from(
+        new Set(
+          [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
+            .map((key) => normalizeOptionalString(key))
+            .filter((key): key is string => Boolean(key)),
+        ),
+      )
+    : [];
+  const markAcpProgress =
+    progressSessionKeys.length > 0
+      ? () => {
+          for (const key of progressSessionKeys) {
+            markDiagnosticSessionProgress({ sessionKey: key });
+          }
+        }
+      : undefined;
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
