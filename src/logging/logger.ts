@@ -455,6 +455,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   return logger;
 }
 
+// Cap the env override at 2 GiB so a malformed plist / wrapper script env
+// cannot disable the log file size cap entirely (CWE-400 disk-fill DoS).
+// Operators that need an even larger cap should configure
+// `logging.maxFileBytes` in openclaw.json instead.
+const MAX_ENV_LOG_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+
 function resolveMaxLogFileBytesFromEnv(): number | undefined {
   // Env override mirrors OPENCLAW_LOG_LEVEL: read at logger init so plist /
   // launchd / systemd unit overrides apply even when the on-disk config has
@@ -467,7 +473,7 @@ function resolveMaxLogFileBytesFromEnv(): number | undefined {
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return undefined;
   }
-  return Math.floor(parsed);
+  return Math.min(Math.floor(parsed), MAX_ENV_LOG_FILE_BYTES);
 }
 
 function resolveMaxLogFileBytes(raw: unknown): number {

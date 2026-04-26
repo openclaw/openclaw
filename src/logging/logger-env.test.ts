@@ -149,16 +149,20 @@ describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
   });
 
   it("ignores non-numeric / zero / negative / non-finite env values", () => {
-    setLoggerOverride({
-      level: "info",
-      consoleLevel: "warn",
-      consoleStyle: "compact",
-      file: testLogPath,
-      maxFileBytes: defaultMaxFileBytes,
-    });
     for (const bad of ["one-gig", "0", "-1", "Infinity", "NaN"]) {
       process.env.OPENCLAW_LOG_MAX_FILE_BYTES = bad;
-      resetLogger();
+      // setLoggerOverride MUST be inside the loop: resetLogger() clears
+      // overrideSettings, which lets canUseSilentVitestFileLogFastPath
+      // short-circuit resolveSettings() before resolveMaxLogFileBytesFromEnv()
+      // is reached. Without this re-arm the assertions pass vacuously and the
+      // env validator is never exercised. (greptile review on PR #71917)
+      setLoggerOverride({
+        level: "info",
+        consoleLevel: "warn",
+        consoleStyle: "compact",
+        file: testLogPath,
+        maxFileBytes: defaultMaxFileBytes,
+      });
       expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
     }
   });
@@ -174,5 +178,32 @@ describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
     process.env.OPENCLAW_LOG_MAX_FILE_BYTES = "1024.7";
 
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(1024);
+  });
+
+  it("clamps env override to 2 GiB to prevent disk-fill DoS via env injection (CWE-400)", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    // 1 TiB attempted; clamps to 2 GiB ceiling.
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = String(1024 * 1024 * 1024 * 1024);
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  it("respects env values at or below the 2 GiB cap", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = String(2 * 1024 * 1024 * 1024);
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(2 * 1024 * 1024 * 1024);
   });
 });

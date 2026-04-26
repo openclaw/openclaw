@@ -8,7 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Logging: honor `OPENCLAW_LOG_MAX_FILE_BYTES` env override at logger init so plist / launchd / systemd unit overrides apply even when on-disk `logging.maxFileBytes` has not finished loading by the first log write. Fixes #71800. Thanks @hclsys.
+- Logging: honor `OPENCLAW_LOG_MAX_FILE_BYTES` env override (clamped to 2 GiB) at logger init so plist / launchd / systemd unit overrides apply even when on-disk `logging.maxFileBytes` has not finished loading by the first log write. Fixes #71800. Thanks @hclsys.
 - TTS/WhatsApp: add `/tts latest` read-aloud support with duplicate suppression and `/tts chat on|off|default` session-scoped auto-TTS overrides, completing the on-demand voice-note UX for current-chat replies. Fixes #66032.
 - Plugins/tokenjuice: bump the bundled tokenjuice runtime to 0.6.3. Thanks @vincentkoc.
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices while keeping shared provider credentials and preferences in the existing TTS config surface.
