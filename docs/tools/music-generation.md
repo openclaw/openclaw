@@ -81,7 +81,7 @@ Example:
 | -------- | ---------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
 | ComfyUI  | `workflow`             | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
 | Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax  | `music-2.5+`           | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
+| MiniMax  | `music-2.6`            | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY` or MiniMax OAuth     |
 
 ### Declared capability matrix
 
@@ -176,7 +176,7 @@ Duplicate prevention: if a music task is already `queued` or `running` for the c
     defaults: {
       musicGenerationModel: {
         primary: "google/lyria-3-clip-preview",
-        fallbacks: ["minimax/music-2.5+"],
+        fallbacks: ["minimax/music-2.6"],
       },
     },
   },
@@ -207,7 +207,7 @@ entries.
   prompt, optional lyrics text, and optional reference images.
 - MiniMax uses the batch `music_generation` endpoint. The current bundled flow
   supports prompt, optional lyrics, instrumental mode, duration steering, and
-  mp3 output.
+  mp3 output through either `minimax` API-key auth or `minimax-portal` OAuth.
 - ComfyUI support is workflow-driven and depends on the configured graph plus
   node mapping for prompt/output fields.
 

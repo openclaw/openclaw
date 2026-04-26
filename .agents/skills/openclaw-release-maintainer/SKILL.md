@@ -97,6 +97,11 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 
 ## Build changelog-backed release notes
 
+- Before release branching or tagging, rewrite the target `CHANGELOG.md`
+  section from commit history, not just from existing notes: scan commits since
+  the last reachable release tag, add missed user-facing changes, dedupe
+  overlapping entries, and sort each section from most to least interesting for
+  users.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating

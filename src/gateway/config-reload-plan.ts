@@ -19,6 +19,7 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
   restartChannels: Set<ChannelKind>;
+  disposeMcpRuntimes: boolean;
   noopPaths: string[];
 };
 
@@ -34,6 +35,7 @@ type ReloadAction =
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
+  | "dispose-mcp-runtimes"
   | `restart-channel:${ChannelId}`;
 
 export type GatewayReloadPlanOptions = {
@@ -90,6 +92,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -199,6 +202,8 @@ function matchRule(path: string): ReloadRule | null {
 }
 
 function isPluginInstallTimestampPath(path: string): boolean {
+  // Legacy compatibility only: new plugin install metadata lives in the
+  // managed plugin index, but old config writes may still touch this path.
   return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
 }
 
@@ -210,6 +215,8 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   if (!isPlainObject(plugins)) {
     return {};
   }
+  // Keep legacy config install records out of gateway restart decisions while
+  // migration/doctor moves them into the managed plugin index install records.
   const installs = plugins.installs;
   return isPlainObject(installs) ? installs : {};
 }
@@ -276,6 +283,7 @@ export function buildGatewayReloadPlan(
     restartHeartbeat: false,
     restartHealthMonitor: false,
     restartChannels: new Set(),
+    disposeMcpRuntimes: false,
     noopPaths: [],
   };
 
@@ -300,6 +308,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;
+        break;
+      case "dispose-mcp-runtimes":
+        plan.disposeMcpRuntimes = true;
         break;
       default:
         break;

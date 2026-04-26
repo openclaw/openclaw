@@ -70,6 +70,7 @@ cat ~/.openclaw/openclaw.json
 - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
+- Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -172,9 +173,11 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.provider: "edge"` and `plugins.entries.voice-call.config.tts.providers.edge` → `provider: "microsoft"` and `providers.microsoft`
 - `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
 - `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
 - `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
@@ -314,6 +317,15 @@ the path, PID, whether the PID is still alive, lock age, and whether it is
 considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair`
 mode it removes stale lock files automatically; otherwise it prints a note and
 instructs you to rerun with `--fix`.
+
+### 3d) Session transcript branch repair
+
+Doctor scans agent session JSONL files for the duplicated branch shape created
+by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with
+OpenClaw internal runtime context plus an active sibling containing the same
+visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected
+file next to the original and rewrites the transcript to the active branch so
+gateway history and memory readers no longer see duplicate turns.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 
@@ -455,7 +467,7 @@ Doctor prints a summary of the workspace state for the default agent:
 - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
 - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories
   exist alongside the current workspace.
-- **Plugin status**: counts loaded/disabled/errored plugins; lists plugin IDs for any
+- **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any
   errors; reports bundle plugin capabilities.
 - **Plugin compatibility warnings**: flags plugins that have compatibility issues with
   the current runtime.

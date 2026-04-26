@@ -3,9 +3,21 @@ import path from "node:path";
 import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { MODEL_APIS, type ModelApi, type ModelCompatConfig } from "../config/types.models.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  normalizeModelCatalog,
+  type ModelCatalog,
+  type ModelCatalogAlias,
+  type ModelCatalogCost,
+  type ModelCatalogDiscovery,
+  type ModelCatalogInput,
+  type ModelCatalogModel,
+  type ModelCatalogProvider,
+  type ModelCatalogStatus,
+  type ModelCatalogSuppression,
+  type ModelCatalogTieredCost,
+} from "../model-catalog/index.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -43,71 +55,16 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalogInput = "text" | "image" | "document";
-export type PluginManifestModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-export type PluginManifestModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
-
-export type PluginManifestModelCatalogTieredCost = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  range: [number, number] | [number];
-};
-
-export type PluginManifestModelCatalogCost = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  tieredPricing?: PluginManifestModelCatalogTieredCost[];
-};
-
-export type PluginManifestModelCatalogModel = {
-  id: string;
-  name?: string;
-  api?: ModelApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  input?: PluginManifestModelCatalogInput[];
-  reasoning?: boolean;
-  contextWindow?: number;
-  contextTokens?: number;
-  maxTokens?: number;
-  cost?: PluginManifestModelCatalogCost;
-  compat?: ModelCompatConfig;
-  status?: PluginManifestModelCatalogStatus;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
-};
-
-export type PluginManifestModelCatalogProvider = {
-  baseUrl?: string;
-  api?: ModelApi;
-  headers?: Record<string, string>;
-  models: PluginManifestModelCatalogModel[];
-};
-
-export type PluginManifestModelCatalogAlias = {
-  provider: string;
-  api?: ModelApi;
-  baseUrl?: string;
-};
-
-export type PluginManifestModelCatalogSuppression = {
-  provider: string;
-  model: string;
-  reason?: string;
-};
-
-export type PluginManifestModelCatalog = {
-  providers?: Record<string, PluginManifestModelCatalogProvider>;
-  aliases?: Record<string, PluginManifestModelCatalogAlias>;
-  suppressions?: PluginManifestModelCatalogSuppression[];
-  discovery?: Record<string, PluginManifestModelCatalogDiscovery>;
-};
+export type PluginManifestModelCatalogInput = ModelCatalogInput;
+export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
+export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
+export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
+export type PluginManifestModelCatalogCost = ModelCatalogCost;
+export type PluginManifestModelCatalogModel = ModelCatalogModel;
+export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
+export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
+export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
+export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestProviderEndpoint = {
   /**
@@ -416,30 +373,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function isSafeManifestRecordKey(key: string): boolean {
-  return key !== "__proto__" && key !== "constructor" && key !== "prototype";
-}
-
-function normalizeSafeRecordKey(value: unknown): string {
-  const key = normalizeOptionalString(value) ?? "";
-  return key && isSafeManifestRecordKey(key) ? key : "";
-}
-
-function normalizeStringMap(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeSafeRecordKey(rawKey);
-    const strValue = normalizeOptionalString(rawValue) ?? "";
-    if (key && strValue) {
-      normalized[key] = strValue;
-    }
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
 const MEDIA_UNDERSTANDING_CAPABILITIES = new Set(["image", "audio", "video"]);
 
 function normalizeMediaUnderstandingCapabilityRecord(
@@ -671,350 +604,6 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   } satisfies PluginManifestModelSupport;
 
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
-}
-
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
-const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
-const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
-const MODEL_CATALOG_APIS = new Set<string>(MODEL_APIS);
-
-function normalizeModelCatalogApi(value: unknown): ModelApi | undefined {
-  const api = normalizeOptionalString(value) ?? "";
-  return MODEL_CATALOG_APIS.has(api) ? (api as ModelApi) : undefined;
-}
-
-function normalizeModelCatalogInputs(
-  value: unknown,
-): PluginManifestModelCatalogInput[] | undefined {
-  const inputs = normalizeTrimmedStringList(value).filter(
-    (input): input is PluginManifestModelCatalogInput => MODEL_CATALOG_INPUTS.has(input),
-  );
-  return inputs.length > 0 ? inputs : undefined;
-}
-
-function normalizeModelCatalogNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeModelCatalogPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function normalizeModelCatalogPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function normalizeModelCatalogTieredCost(
-  value: unknown,
-): PluginManifestModelCatalogTieredCost[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized: PluginManifestModelCatalogTieredCost[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const input = normalizeModelCatalogNumber(entry.input);
-    const output = normalizeModelCatalogNumber(entry.output);
-    const cacheRead = normalizeModelCatalogNumber(entry.cacheRead);
-    const cacheWrite = normalizeModelCatalogNumber(entry.cacheWrite);
-    if (
-      input === undefined ||
-      output === undefined ||
-      cacheRead === undefined ||
-      cacheWrite === undefined ||
-      !Array.isArray(entry.range)
-    ) {
-      continue;
-    }
-    if (entry.range.length < 1 || entry.range.length > 2) {
-      continue;
-    }
-    const rangeValues = entry.range.map((rangeValue) => normalizeModelCatalogNumber(rangeValue));
-    if (rangeValues.some((rangeValue) => rangeValue === undefined)) {
-      continue;
-    }
-    const range =
-      rangeValues.length === 1
-        ? ([rangeValues[0]] as [number])
-        : ([rangeValues[0], rangeValues[1]] as [number, number]);
-    if (!range) {
-      continue;
-    }
-    normalized.push({
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      range,
-    });
-  }
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeModelCatalogCost(value: unknown): PluginManifestModelCatalogCost | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const input = normalizeModelCatalogNumber(value.input);
-  const output = normalizeModelCatalogNumber(value.output);
-  const cacheRead = normalizeModelCatalogNumber(value.cacheRead);
-  const cacheWrite = normalizeModelCatalogNumber(value.cacheWrite);
-  const tieredPricing = normalizeModelCatalogTieredCost(value.tieredPricing);
-  const cost = {
-    ...(input !== undefined ? { input } : {}),
-    ...(output !== undefined ? { output } : {}),
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    ...(tieredPricing ? { tieredPricing } : {}),
-  } satisfies PluginManifestModelCatalogCost;
-  return Object.keys(cost).length > 0 ? cost : undefined;
-}
-
-function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const compat: Record<string, unknown> = {};
-  const booleanFields = [
-    "supportsStore",
-    "supportsPromptCacheKey",
-    "supportsDeveloperRole",
-    "supportsReasoningEffort",
-    "supportsUsageInStreaming",
-    "supportsTools",
-    "supportsStrictMode",
-    "requiresStringContent",
-    "requiresToolResultName",
-    "requiresAssistantAfterToolResult",
-    "requiresThinkingAsText",
-    "nativeWebSearchTool",
-    "requiresMistralToolIds",
-    "requiresOpenAiAnthropicToolPayload",
-  ] as const;
-  for (const field of booleanFields) {
-    if (typeof value[field] === "boolean") {
-      compat[field] = value[field];
-    }
-  }
-
-  const stringFields = ["toolSchemaProfile", "toolCallArgumentsEncoding"] as const;
-  for (const field of stringFields) {
-    const normalized = normalizeOptionalString(value[field]) ?? "";
-    if (normalized) {
-      compat[field] = normalized;
-    }
-  }
-
-  const stringListFields = [
-    "visibleReasoningDetailTypes",
-    "supportedReasoningEfforts",
-    "unsupportedToolSchemaKeywords",
-  ] as const;
-  for (const field of stringListFields) {
-    const normalized = normalizeTrimmedStringList(value[field]);
-    if (normalized.length > 0) {
-      compat[field] = normalized;
-    }
-  }
-
-  const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
-  if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
-    compat.maxTokensField = maxTokensField;
-  }
-
-  const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (
-    thinkingFormat === "openai" ||
-    thinkingFormat === "openrouter" ||
-    thinkingFormat === "deepseek" ||
-    thinkingFormat === "zai" ||
-    thinkingFormat === "qwen" ||
-    thinkingFormat === "qwen-chat-template"
-  ) {
-    compat.thinkingFormat = thinkingFormat;
-  }
-
-  return Object.keys(compat).length > 0 ? (compat as ModelCompatConfig) : undefined;
-}
-
-function normalizeModelCatalogStatus(value: unknown): PluginManifestModelCatalogStatus | undefined {
-  const status = normalizeOptionalString(value) ?? "";
-  return MODEL_CATALOG_STATUSES.has(status)
-    ? (status as PluginManifestModelCatalogStatus)
-    : undefined;
-}
-
-function normalizeModelCatalogModel(value: unknown): PluginManifestModelCatalogModel | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const id = normalizeOptionalString(value.id) ?? "";
-  if (!id) {
-    return undefined;
-  }
-  const name = normalizeOptionalString(value.name) ?? "";
-  const api = normalizeModelCatalogApi(value.api);
-  const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
-  const headers = normalizeStringMap(value.headers);
-  const input = normalizeModelCatalogInputs(value.input);
-  const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
-  const contextWindow = normalizeModelCatalogPositiveNumber(value.contextWindow);
-  const contextTokens = normalizeModelCatalogPositiveInteger(value.contextTokens);
-  const maxTokens = normalizeModelCatalogPositiveNumber(value.maxTokens);
-  const cost = normalizeModelCatalogCost(value.cost);
-  const compat = normalizeModelCatalogCompat(value.compat);
-  const status = normalizeModelCatalogStatus(value.status);
-  const statusReason = normalizeOptionalString(value.statusReason) ?? "";
-  const replaces = normalizeTrimmedStringList(value.replaces);
-  const replacedBy = normalizeOptionalString(value.replacedBy) ?? "";
-  const tags = normalizeTrimmedStringList(value.tags);
-  return {
-    id,
-    ...(name ? { name } : {}),
-    ...(api ? { api } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(headers ? { headers } : {}),
-    ...(input ? { input } : {}),
-    ...(reasoning !== undefined ? { reasoning } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(cost ? { cost } : {}),
-    ...(compat ? { compat } : {}),
-    ...(status ? { status } : {}),
-    ...(statusReason ? { statusReason } : {}),
-    ...(replaces.length > 0 ? { replaces } : {}),
-    ...(replacedBy ? { replacedBy } : {}),
-    ...(tags.length > 0 ? { tags } : {}),
-  };
-}
-
-function normalizeModelCatalogProviders(
-  value: unknown,
-  ownedProviders: ReadonlySet<string>,
-): Record<string, PluginManifestModelCatalogProvider> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const providers: Record<string, PluginManifestModelCatalogProvider> = {};
-  for (const [rawProviderId, rawProvider] of Object.entries(value)) {
-    const providerId = normalizeSafeRecordKey(rawProviderId);
-    if (!providerId || !ownedProviders.has(providerId) || !isRecord(rawProvider)) {
-      continue;
-    }
-    const models = Array.isArray(rawProvider.models)
-      ? rawProvider.models
-          .map((entry) => normalizeModelCatalogModel(entry))
-          .filter((entry): entry is PluginManifestModelCatalogModel => Boolean(entry))
-      : [];
-    if (models.length === 0) {
-      continue;
-    }
-    const baseUrl = normalizeOptionalString(rawProvider.baseUrl) ?? "";
-    const api = normalizeModelCatalogApi(rawProvider.api);
-    const headers = normalizeStringMap(rawProvider.headers);
-    providers[providerId] = {
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(api ? { api } : {}),
-      ...(headers ? { headers } : {}),
-      models,
-    };
-  }
-  return Object.keys(providers).length > 0 ? providers : undefined;
-}
-
-function normalizeModelCatalogAliases(
-  value: unknown,
-  ownedProviders: ReadonlySet<string>,
-): Record<string, PluginManifestModelCatalogAlias> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const aliases: Record<string, PluginManifestModelCatalogAlias> = {};
-  for (const [rawAlias, rawTarget] of Object.entries(value)) {
-    const alias = normalizeSafeRecordKey(rawAlias);
-    if (!alias || !isRecord(rawTarget)) {
-      continue;
-    }
-    const provider = normalizeOptionalString(rawTarget.provider) ?? "";
-    if (!provider || !ownedProviders.has(provider)) {
-      continue;
-    }
-    const api = normalizeModelCatalogApi(rawTarget.api);
-    const baseUrl = normalizeOptionalString(rawTarget.baseUrl) ?? "";
-    aliases[alias] = {
-      provider,
-      ...(api ? { api } : {}),
-      ...(baseUrl ? { baseUrl } : {}),
-    };
-  }
-  return Object.keys(aliases).length > 0 ? aliases : undefined;
-}
-
-function normalizeModelCatalogSuppressions(
-  value: unknown,
-): PluginManifestModelCatalogSuppression[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const suppressions: PluginManifestModelCatalogSuppression[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const provider = normalizeOptionalString(entry.provider) ?? "";
-    const model = normalizeOptionalString(entry.model) ?? "";
-    if (!provider || !model) {
-      continue;
-    }
-    const reason = normalizeOptionalString(entry.reason) ?? "";
-    suppressions.push({
-      provider,
-      model,
-      ...(reason ? { reason } : {}),
-    });
-  }
-  return suppressions.length > 0 ? suppressions : undefined;
-}
-
-function normalizeModelCatalogDiscovery(
-  value: unknown,
-  ownedProviders: ReadonlySet<string>,
-): Record<string, PluginManifestModelCatalogDiscovery> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const discovery: Record<string, PluginManifestModelCatalogDiscovery> = {};
-  for (const [rawProviderId, rawMode] of Object.entries(value)) {
-    const providerId = normalizeSafeRecordKey(rawProviderId);
-    const mode = normalizeOptionalString(rawMode) ?? "";
-    if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
-      discovery[providerId] = mode as PluginManifestModelCatalogDiscovery;
-    }
-  }
-  return Object.keys(discovery).length > 0 ? discovery : undefined;
-}
-
-function normalizeManifestModelCatalog(
-  value: unknown,
-  ownedProviders: ReadonlySet<string>,
-): PluginManifestModelCatalog | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const providers = normalizeModelCatalogProviders(value.providers, ownedProviders);
-  const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
-  const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
-  const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
-  const modelCatalog = {
-    ...(providers ? { providers } : {}),
-    ...(aliases ? { aliases } : {}),
-    ...(suppressions ? { suppressions } : {}),
-    ...(discovery ? { discovery } : {}),
-  } satisfies PluginManifestModelCatalog;
-  return Object.keys(modelCatalog).length > 0 ? modelCatalog : undefined;
 }
 
 function normalizeManifestProviderEndpoints(
@@ -1326,7 +915,9 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
-  const modelCatalog = normalizeManifestModelCatalog(raw.modelCatalog, new Set(providers));
+  const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
+    ownedProviders: new Set(providers),
+  });
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);

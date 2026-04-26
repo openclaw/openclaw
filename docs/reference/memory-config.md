@@ -219,6 +219,17 @@ to an existing local file. `hf:` and HTTP(S) model references can still be used
 explicitly with `provider: "local"`, but they do not make `auto` select local
 before the model is available on disk.
 
+### Inline embedding timeout
+
+| Key                                 | Type     | Default          | Description                                                              |
+| ----------------------------------- | -------- | ---------------- | ------------------------------------------------------------------------ |
+| `sync.embeddingBatchTimeoutSeconds` | `number` | provider default | Override the timeout for inline embedding batches during memory indexing |
+
+Unset uses the provider default: 600 seconds for local/self-hosted providers
+such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers.
+
+Increase this when local CPU-bound embedding batches are healthy but slow.
+
 ---
 
 ## Hybrid search config
@@ -346,6 +357,10 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically
 fastest and cheapest for large backfills.
+
+This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls inline
+embedding calls used by local/self-hosted providers and hosted providers when
+provider batch APIs are not active.
 
 ---
 

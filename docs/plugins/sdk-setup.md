@@ -554,8 +554,9 @@ openclaw plugins install <package-name>
 
 <Info>
   For npm-sourced installs, `openclaw plugins install` runs
-  `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
-  trees pure JS/TS and avoid packages that require `postinstall` builds.
+  project-local `npm install --ignore-scripts` (no lifecycle scripts), ignoring
+  inherited global npm install settings. Keep plugin dependency trees pure JS/TS
+  and avoid packages that require `postinstall` builds.
 </Info>
 
 Bundled OpenClaw-owned plugins are the only startup repair exception: when a
@@ -566,6 +567,6 @@ startup installs; keep using the explicit plugin installer.
 
 ## Related
 
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`
-- [Plugin Manifest](/plugins/manifest) -- full manifest schema reference
-- [Building Plugins](/plugins/building-plugins) -- step-by-step getting started guide
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin manifest](/plugins/manifest) — full manifest schema reference
+- [Building plugins](/plugins/building-plugins) — step-by-step getting started guide

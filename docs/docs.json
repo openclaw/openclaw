@@ -53,6 +53,14 @@
   },
   "redirects": [
     {
+      "source": "/help/gpt54-codex-agentic-parity",
+      "destination": "/help/gpt55-codex-agentic-parity"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity-maintainers",
+      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -1165,6 +1173,7 @@
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
@@ -1292,6 +1301,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-speech",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1308,6 +1318,7 @@
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
+                  "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
@@ -1426,11 +1437,12 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
-                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
-                      "gateway/logging",
                       "logging",
+                      "gateway/opentelemetry",
+                      "gateway/logging",
+                      "gateway/diagnostics",
                       "gateway/troubleshooting"
                     ]
                   },
@@ -1648,8 +1660,8 @@
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
                   "concepts/timezone",
-                  "help/gpt54-codex-agentic-parity",
-                  "help/gpt54-codex-agentic-parity-maintainers"
+                  "help/gpt55-codex-agentic-parity",
+                  "help/gpt55-codex-agentic-parity-maintainers"
                 ]
               },
               {

@@ -352,6 +352,7 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 
 function buildMissingApiKeyFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -367,6 +368,22 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
   }
   return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
+function formatForwardedExternalRunFailureText(message: string): string {
+  const sanitized = sanitizeUserFacingText(message, { errorContext: true })
+    .trim()
+    .replace(/^⚠️\s*/u, "")
+    .replace(/\s+/gu, " ");
+  if (!sanitized) {
+    return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  }
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized;
+  const suffix = /[.!?]$/u.test(detail) ? "" : ".";
+  return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
 }
 
 function buildExternalRunFailureText(message: string): string {
@@ -386,7 +403,7 @@ function buildExternalRunFailureText(message: string): string {
     }
     return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
-  return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  return formatForwardedExternalRunFailureText(normalizedMessage);
 }
 
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {

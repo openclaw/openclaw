@@ -29,8 +29,8 @@ explicitly:
 }
 ```
 
-For local embeddings with no API key, use `provider: "local"` (requires
-node-llama-cpp).
+For local embeddings with no API key, install the optional `node-llama-cpp`
+runtime package next to OpenClaw and use `provider: "local"`.
 
 ## Supported providers
 
@@ -134,6 +134,11 @@ earlier conversations. This is opt-in via
 
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
+
+**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
+inline batch timeout by default. If the host is simply slow, set
+`agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
+`openclaw memory index --force`.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

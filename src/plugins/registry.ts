@@ -7,6 +7,10 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
+import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
@@ -222,6 +226,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
+  const pluginsWithChannelRegistrationConflict = new Set<string>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -369,6 +374,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
+    if (pluginsWithChannelRegistrationConflict.has(record.id)) {
+      return;
+    }
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
@@ -670,6 +678,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
@@ -688,6 +697,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     record.channelIds.push(id);
@@ -1003,19 +1013,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
   ) => {
+    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
+      const normalized = normalizeCommandDescriptorName(raw);
+      if (!normalized) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
+        });
+      }
+      return normalized;
+    };
     const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => ({
-        name: descriptor.name.trim(),
-        description: descriptor.description.trim(),
-        hasSubcommands: descriptor.hasSubcommands,
-      }))
-      .filter((descriptor) => descriptor.name && descriptor.description);
+      .map((descriptor) => {
+        const name = normalizeCommandRoot(descriptor.name, "descriptor");
+        const description = sanitizeCommandDescriptorDescription(descriptor.description);
+        return name && description
+          ? {
+              name,
+              description,
+              hasSubcommands: descriptor.hasSubcommands,
+            }
+          : null;
+      })
+      .filter(
+        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+      );
     const commands = [
       ...(opts?.commands ?? []),
       ...descriptors.map((descriptor) => descriptor.name),
     ]
-      .map((cmd) => cmd.trim())
-      .filter(Boolean);
+      .map((cmd) => normalizeCommandRoot(cmd, "command"))
+      .filter((command): command is string => command !== null);
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -1174,6 +1204,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       service,
       source: record.source,
+      origin: record.origin,
       rootDir: record.rootDir,
     });
   };

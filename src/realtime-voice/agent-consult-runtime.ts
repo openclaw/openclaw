@@ -15,6 +15,14 @@ export {
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
 
+function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (trimmed.toLowerCase().startsWith("agent:")) {
+    return trimmed;
+  }
+  return `agent:${agentId}:${trimmed}`;
+}
+
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -63,6 +71,8 @@ export async function consultRealtimeVoiceAgent(params: {
   const result = await params.agentRuntime.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
+    agentId,
     messageProvider: params.messageProvider,
     sessionFile,
     workspaceDir,

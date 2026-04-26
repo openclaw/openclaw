@@ -1,13 +1,10 @@
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import {
-  normalizeOptionalString,
-  normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/outbound-send-deps";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 
 type DiscordSendRuntime = typeof import("./send.js");
@@ -54,31 +51,13 @@ export function resolveDiscordFormattingOptions(ctx: {
   };
 }
 
-export function createResolvedReplyToFanout(params: {
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
-}): () => string | undefined {
-  const replyToId = normalizeOptionalString(params.replyToId);
-  if (!replyToId) {
-    return () => undefined;
-  }
-  if (!params.replyToMode || !isSingleUseReplyToMode(params.replyToMode)) {
-    return () => replyToId;
-  }
-  let current: string | undefined = replyToId;
-  return () => {
-    const value = current;
-    current = undefined;
-    return value;
-  };
-}
-
 export async function createDiscordPayloadSendContext(ctx: {
   cfg: OpenClawConfig;
   to: string;
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;
+  replyToIdSource?: ReplyToResolution["source"];
   replyToMode?: ReplyToMode;
   formatting?: DiscordFormattingOptions;
   threadId?: string | number | null;
@@ -94,8 +73,9 @@ export async function createDiscordPayloadSendContext(ctx: {
   return {
     target: resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId }),
     formatting: resolveDiscordFormattingOptions(ctx),
-    resolveReplyTo: createResolvedReplyToFanout({
+    resolveReplyTo: createReplyToFanout({
       replyToId: ctx.replyToId,
+      replyToIdSource: ctx.replyToIdSource,
       replyToMode: ctx.replyToMode,
     }),
     send: resolveOutboundSendDep<DiscordSendFn>(ctx.deps, "discord") ?? runtime.sendMessageDiscord,

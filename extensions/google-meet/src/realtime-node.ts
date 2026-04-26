@@ -213,6 +213,8 @@ export async function startNodeRealtimeAudioBridge(params: {
     getHealth: () => ({
       providerConnected: bridge?.bridge.isConnected() ?? false,
       realtimeReady,
+      audioInputActive: lastInputBytes > 0,
+      audioOutputActive: lastOutputBytes > 0,
       lastInputAt,
       lastOutputAt,
       lastInputBytes,

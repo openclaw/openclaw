@@ -110,6 +110,14 @@ permissions:
 }
 ```
 
+Trusted same-process backend clients (`client.id: "gateway-client"`,
+`client.mode: "backend"`) may omit `device` on direct loopback connections when
+they authenticate with the shared gateway token/password. This path is reserved
+for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
+blocking local backend work such as subagent session updates. Remote clients,
+browser-origin clients, node clients, and explicit device-token/device-identity
+clients still use the normal pairing and scope-upgrade checks.
+
 When a device token is issued, `hello-ok` also includes:
 
 ```json
@@ -569,11 +577,13 @@ rather than the pre-handshake defaults.
   trusted shared-secret helper flows.
 - Same-host tailnet or LAN connects are still treated as remote for pairing and
   require approval.
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it only in these modes:
+- WS clients normally include `device` identity during `connect` (operator +
+  node). The only device-less operator exceptions are explicit trust paths:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
+  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
+    gateway token/password.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

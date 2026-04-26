@@ -7,6 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,7 +38,11 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolCapabilities,
@@ -51,7 +56,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -471,17 +476,20 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const { contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      warn: makeBootstrapWarn({
-        sessionLabel,
-        workspaceDir: effectiveWorkspace,
-        warn: (message) => log.warn(message),
-      }),
-    });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const { contextFiles } =
+      contextInjectionMode === "never"
+        ? { contextFiles: [] }
+        : await resolveBootstrapContextForRun({
+            workspaceDir: effectiveWorkspace,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            warn: makeBootstrapWarn({
+              sessionLabel,
+              warn: (message) => log.warn(message),
+            }),
+          });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
@@ -708,13 +716,15 @@ export async function compactEmbeddedPiSessionDirect(
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
         : "full";
-    const docsPath = await resolveOpenClawDocsPath({
+    const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const promptContributionContext: Parameters<
       AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
@@ -752,10 +762,14 @@ export async function compactEmbeddedPiSessionDirect(
             defaultAgentId,
           }),
           skillsPrompt,
-          docsPath: docsPath ?? undefined,
+          docsPath: openClawReferences.docsPath ?? undefined,
+          sourcePath: openClawReferences.sourcePath ?? undefined,
           ttsHint,
           promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
+          acpEnabled: isAcpRuntimeSpawnAvailable({
+            config: params.config,
+            sandboxed: sandboxInfo?.enabled === true,
+          }),
           runtimeInfo,
           reactionGuidance,
           messageToolHints,
@@ -810,6 +824,12 @@ export async function compactEmbeddedPiSessionDirect(
         config: params.config,
         contextWindowTokens: ctxInfo.tokens,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        missingToolResultText:
+          model.api === "openai-responses" ||
+          model.api === "azure-openai-responses" ||
+          model.api === "openai-codex-responses"
+            ? "aborted"
+            : undefined,
         allowedToolNames,
       });
       checkpointSnapshot = captureCompactionCheckpointSnapshot({
@@ -965,6 +985,11 @@ export async function compactEmbeddedPiSessionDirect(
           const limited = transcriptPolicy.repairToolUseResultPairing
             ? sanitizeToolUseResultPairing(truncated, {
                 erroredAssistantResultPolicy: "drop",
+                ...(model.api === "openai-responses" ||
+                model.api === "azure-openai-responses" ||
+                model.api === "openai-codex-responses"
+                  ? { missingToolResultText: "aborted" }
+                  : {}),
               })
             : truncated;
           if (limited.length > 0) {
@@ -1059,6 +1084,8 @@ export async function compactEmbeddedPiSessionDirect(
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
+                preserveRecentTail:
+                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =

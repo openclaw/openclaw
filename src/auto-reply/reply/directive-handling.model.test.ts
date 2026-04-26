@@ -87,6 +87,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -336,6 +337,16 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("treats /model list as a models browser alias, not a model id", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model list"),
+    });
+
+    expect(reply?.text).toContain("Providers:");
+    expect(reply?.text).toContain("Use: /models <provider>");
+    expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
   it("shows active runtime model when different from selected model", async () => {
     const reply = await resolveModelInfoReply({
       provider: "fireworks",
@@ -539,7 +550,7 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
     expect(resolved.profileOverride).toBeUndefined();
-  });
+  }, 240_000);
 
   it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({

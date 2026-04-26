@@ -14,6 +14,11 @@ import {
 import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -209,6 +214,10 @@ async function deliverSingleMatrixForHookTest(params?: { sessionKey?: string }) 
   });
 }
 
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 async function runBestEffortPartialFailureDelivery() {
   const sendMatrix = vi
     .fn()
@@ -251,6 +260,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -278,8 +288,87 @@ describe("deliverOutboundPayloads", () => {
   });
 
   afterEach(() => {
+    resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("emits bounded delivery diagnostics for successful outbound sends", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event));
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "secret delivery body" }],
+        deps: { matrix: sendMatrix },
+        session: { key: "session-1" },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const deliveryEvents = events.filter((event) => event.type.startsWith("message.delivery."));
+    expect(deliveryEvents).toEqual([
+      expect.objectContaining({
+        type: "message.delivery.started",
+        channel: "matrix",
+        deliveryKind: "text",
+        sessionKey: "session-1",
+      }),
+      expect.objectContaining({
+        type: "message.delivery.completed",
+        channel: "matrix",
+        deliveryKind: "text",
+        durationMs: expect.any(Number),
+        resultCount: 1,
+        sessionKey: "session-1",
+      }),
+    ]);
+    expect(JSON.stringify(deliveryEvents)).not.toContain("secret delivery body");
+    expect(JSON.stringify(deliveryEvents)).not.toContain("!room:example");
+  });
+
+  it("emits bounded delivery diagnostics for outbound send failures", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event));
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValue(new TypeError("secret delivery body could not send"));
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "secret delivery body" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: true,
+        session: { key: "session-1" },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const errorEvent = events.find((event) => event.type === "message.delivery.error");
+    expect(errorEvent).toEqual(
+      expect.objectContaining({
+        type: "message.delivery.error",
+        channel: "matrix",
+        deliveryKind: "text",
+        durationMs: expect.any(Number),
+        errorCategory: "TypeError",
+        sessionKey: "session-1",
+      }),
+    );
+    expect(
+      JSON.stringify(events.filter((event) => event.type.startsWith("message.delivery."))),
+    ).not.toContain("secret delivery body");
   });
 
   it("keeps requester session channel authoritative for delivery media policy", async () => {
@@ -847,6 +936,68 @@ describe("deliverOutboundPayloads", () => {
         mediaUrl: "file:///tmp/clip.mp3",
         audioAsVoice: true,
       }),
+    );
+  });
+
+  it("exposes audio-only spokenText to hooks without rendering it as media caption", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSending.mockResolvedValue({
+      content: "rewritten hidden transcript",
+    });
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-voice",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [
+        {
+          mediaUrl: "file:///tmp/clip.opus",
+          audioAsVoice: true,
+          spokenText: "original hidden transcript",
+        },
+      ],
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "original hidden transcript",
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        mediaUrl: "file:///tmp/clip.opus",
+        audioAsVoice: true,
+      }),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "rewritten hidden transcript",
+        success: true,
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
     );
   });
 

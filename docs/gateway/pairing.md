@@ -115,16 +115,45 @@ The macOS app can optionally attempt a **silent approval** when:
 
 If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
 
+## Trusted-CIDR device auto-approval
+
+WS device pairing for `role: node` remains manual by default. For private
+node networks where the Gateway already trusts the network path, operators can
+opt in with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+Security boundary:
+
+- Disabled when `gateway.nodes.pairing.autoApproveCidrs` is unset.
+- No blanket LAN or private-network auto-approve mode exists.
+- Only fresh `role: node` device pairing with no requested scopes is eligible.
+- Operator, browser, Control UI, and WebChat clients stay manual.
+- Role, scope, metadata, and public-key upgrades stay manual.
+- Same-host loopback trusted-proxy header paths are not eligible because that
+  path can be spoofed by local callers.
+
 ## Metadata-upgrade auto-approval
 
 When an already paired device reconnects with only non-sensitive metadata
 changes (for example, display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
-to trusted local CLI/helper reconnects that already proved possession of the
-shared token or password over loopback. Browser/Control UI clients and remote
-clients still use the explicit re-approval flow. Scope upgrades (read to
-write/admin) and public key changes are **not** eligible for metadata-upgrade
-auto-approval — they stay as explicit re-approval requests.
+to trusted non-browser local reconnects that already proved possession of local
+or shared credentials, including same-host native app reconnects after OS
+version metadata changes. Browser/Control UI clients and remote clients still
+use the explicit re-approval flow. Scope upgrades (read to write/admin) and
+public key changes are **not** eligible for metadata-upgrade auto-approval —
+they stay as explicit re-approval requests.
 
 ## QR pairing helpers
 

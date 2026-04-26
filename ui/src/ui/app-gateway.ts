@@ -7,6 +7,7 @@ import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
   flushChatQueueForEvent,
+  refreshChatAvatar,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -103,6 +104,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  reconcileWebPushState?: () => Promise<void> | void;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -334,11 +336,14 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
+      void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
       void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
       void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      // Re-run push reconciliation now that the gateway client is available.
+      void host.reconcileWebPushState?.();
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {

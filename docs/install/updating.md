@@ -74,6 +74,10 @@ ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
 
 If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when
 systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`.
+The repair step treats that stage as an OpenClaw-owned local package root and
+ignores user npm prefix/global settings, so global-install npm config does not
+redirect bundled plugin dependencies into `~/node_modules` or the global package
+tree.
 
 ### Bundled plugin runtime dependencies
 

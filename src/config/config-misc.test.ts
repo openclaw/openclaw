@@ -65,6 +65,45 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("crestodian.rescue", () => {
+  it("accepts documented rescue config", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: "auto",
+          ownerDmOnly: false,
+          pendingTtlMinutes: 5,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts boolean rescue enablement", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: true,
+          ownerDmOnly: true,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown rescue keys", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: true,
+          shell: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("diagnostics.otel.captureContent", () => {
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
@@ -175,7 +214,23 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
 });
 
 describe("plugins.entries.*.hooks", () => {
-  it("accepts boolean values", () => {
+  it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
         entries: {

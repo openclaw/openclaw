@@ -218,6 +218,19 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("tells agents how to request transparent OpenAI backgrounds", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-key");
+    stubImageGenerationProviders();
+
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
+
+    expect(tool.description).toContain('outputFormat="png" or "webp"');
+    expect(tool.description).toContain('background="transparent"');
+    expect(tool.description).toContain("openai.background");
+    expect(tool.description).toContain("gpt-image-1.5");
+    expect(JSON.stringify(tool.parameters)).toContain("openai/gpt-image-1.5");
+  });
+
   it("matches image-generation providers across canonical provider aliases", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
@@ -478,6 +491,67 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
 
+  it("uses configured timeoutMs for image generation and lets calls override it", async () => {
+    stubImageGenerationProviders();
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "A cat wearing sunglasses",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "A cat wearing sunglasses",
+      timeoutMs: 12_345,
+    });
+
+    expect(generateImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
+    expect(generateImage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        timeoutMs: 12_345,
+      }),
+    );
+    expect(defaultResult.details).toMatchObject({ timeoutMs: 180_000 });
+    expect(overrideResult.details).toMatchObject({ timeoutMs: 12_345 });
+  });
+
   it("forwards output hints and OpenAI provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -530,6 +604,62 @@ describe("createImageGenerateTool", () => {
       details: {
         quality: "low",
         outputFormat: "jpeg",
+      },
+    });
+  });
+
+  it("forwards transparent OpenAI background requests with a PNG output format", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/transparent.png",
+      id: "transparent.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1.5");
+    const result = await tool.execute("call-openai-transparent", {
+      prompt: "A transparent badge",
+      outputFormat: "png",
+      openai: {
+        background: "transparent",
+      },
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              imageGenerationModel: { primary: "openai/gpt-image-1.5" },
+            }),
+          }),
+        }),
+        outputFormat: "png",
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        provider: "openai",
+        model: "gpt-image-1.5",
+        outputFormat: "png",
       },
     });
   });
@@ -699,6 +829,54 @@ describe("createImageGenerateTool", () => {
     expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
       "media://inbound/reference.png",
       expect.any(Object),
+    );
+  });
+
+  it("passes web_fetch SSRF policy to remote reference images", async () => {
+    stubImageGenerationProviders();
+    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const defaultTool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await defaultTool.execute("call-edit-rfc2544-default", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+    expect(webMedia.loadWebMedia).toHaveBeenLastCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.not.objectContaining({ ssrfPolicy: expect.anything() }),
+    );
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+          tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-rfc2544", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
     );
   });
 

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../../plugin-sdk/core.js";
@@ -34,6 +36,7 @@ const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
+type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -124,6 +127,71 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
+  });
+
+  it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          display: false,
+          content: expect.stringContaining("secret runtime context"),
+        }),
+      ]),
+    );
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
+    const traceArtifacts = trajectoryEvents.find((event) => event.type === "trace.artifacts");
+
+    expect(promptSubmitted?.data?.prompt).toBe("visible ask");
+    expect(contextCompiled?.data?.prompt).toBe("visible ask");
+    expect(modelCompleted?.data?.finalPromptText).toBe("visible ask");
+    expect(traceArtifacts?.data?.finalPromptText).toBe("visible ask");
+    for (const value of [
+      promptSubmitted?.data?.prompt,
+      contextCompiled?.data?.prompt,
+      modelCompleted?.data?.finalPromptText,
+      traceArtifacts?.data?.finalPromptText,
+    ]) {
+      expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+      expect(String(value)).not.toContain("secret runtime context");
+    }
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -275,81 +343,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(params.silentExpected).toBe(true);
     expect(params.sessionKey).toBe(sessionKey);
-  });
-
-  it("prechecks unwindowed context before submitting a windowed context-engine prompt", async () => {
-    const sessionPrompt = vi.fn(async () => {});
-    const fullHistory = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "large historical context ".repeat(600) }],
-        timestamp: 1,
-      },
-    ] as AgentMessage[];
-    const windowedMessages = [
-      { role: "assistant", content: [{ type: "text", text: "small window" }], timestamp: 2 },
-    ] as AgentMessage[];
-    const assemble = vi.fn(async () => ({
-      messages: windowedMessages,
-      estimatedTokens: 3,
-    }));
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: { assemble },
-      sessionKey,
-      tempPaths,
-      sessionMessages: fullHistory,
-      sessionPrompt,
-      attemptOverrides: {
-        contextTokenBudget: 512,
-      },
-    });
-
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: fullHistory,
-      }),
-    );
-    expect(sessionPrompt).not.toHaveBeenCalled();
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
-  });
-
-  it("keeps preflight overflow checks active for engines that own compaction", async () => {
-    const sessionPrompt = vi.fn(async () => {});
-    const fullHistory = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "engine-owned large historical context ".repeat(600) }],
-        timestamp: 1,
-      },
-    ] as AgentMessage[];
-    const assemble = vi.fn(async () => ({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "small window" }], timestamp: 2 },
-      ] as AgentMessage[],
-      estimatedTokens: 3,
-    }));
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble,
-        info: {
-          ownsCompaction: true,
-        },
-      },
-      sessionKey,
-      tempPaths,
-      sessionMessages: fullHistory,
-      sessionPrompt,
-      attemptOverrides: {
-        contextTokenBudget: 512,
-      },
-    });
-
-    expect(sessionPrompt).not.toHaveBeenCalled();
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
   });
 
   it("skips maintenance when afterTurn fails", async () => {

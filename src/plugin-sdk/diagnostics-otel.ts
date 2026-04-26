@@ -2,12 +2,9 @@
 // Keep this list additive and scoped to the bundled diagnostics-otel surface.
 
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type { DiagnosticEventMetadata } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-export {
-  emitDiagnosticEvent,
-  onDiagnosticEvent,
-  onInternalDiagnosticEvent,
-} from "../infra/diagnostic-events.js";
+export { emitDiagnosticEvent, onDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -17,7 +14,6 @@ export {
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
 } from "../infra/diagnostic-trace-context.js";
-export { registerLogTransport } from "../logging/logger.js";
 export { redactSensitiveText } from "../logging/redact.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type {
