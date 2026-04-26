@@ -758,6 +758,7 @@ export function renderChat(props: ChatProps) {
     requestUpdate();
   };
   const isEmpty = chatItems.length === 0 && !props.loading;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0;
 
   const thread = html`
     <div
@@ -768,7 +769,7 @@ export function renderChat(props: ChatProps) {
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
-        ${props.loading
+        ${showLoadingSkeleton
           ? html`
               <div class="chat-loading-skeleton" aria-label="Loading chat">
                 <div class="chat-line assistant">

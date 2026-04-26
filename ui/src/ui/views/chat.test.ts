@@ -15,6 +15,7 @@ import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
+import { renderChat } from "./chat.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -220,10 +221,138 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
+function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
+  const container = document.createElement("div");
+  render(
+    renderChat({
+      sessionKey: "main",
+      onSessionKeyChange: () => undefined,
+      thinkingLevel: null,
+      showThinking: false,
+      showToolCalls: true,
+      loading: false,
+      sending: false,
+      compactionStatus: null,
+      fallbackStatus: null,
+      messages: [],
+      sideResult: null,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      assistantAvatarUrl: null,
+      draft: "",
+      queue: [],
+      realtimeTalkActive: false,
+      realtimeTalkStatus: "idle",
+      realtimeTalkDetail: null,
+      realtimeTalkTranscript: null,
+      connected: true,
+      canSend: true,
+      disabledReason: null,
+      error: null,
+      sessions: null,
+      focusMode: false,
+      sidebarOpen: false,
+      sidebarContent: null,
+      sidebarError: null,
+      splitRatio: 0.6,
+      canvasHostUrl: null,
+      embedSandboxMode: "scripts",
+      allowExternalEmbedUrls: false,
+      assistantName: "Val",
+      assistantAvatar: null,
+      userName: null,
+      userAvatar: null,
+      localMediaPreviewRoots: [],
+      assistantAttachmentAuthToken: null,
+      autoExpandToolCalls: false,
+      attachments: [],
+      onAttachmentsChange: () => undefined,
+      showNewMessages: false,
+      onScrollToBottom: () => undefined,
+      onRefresh: () => undefined,
+      onToggleFocusMode: () => undefined,
+      getDraft: () => "",
+      onDraftChange: () => undefined,
+      onRequestUpdate: () => undefined,
+      onSend: () => undefined,
+      onCompact: () => undefined,
+      onToggleRealtimeTalk: () => undefined,
+      onAbort: () => undefined,
+      onQueueRemove: () => undefined,
+      onQueueSteer: () => undefined,
+      onDismissSideResult: () => undefined,
+      onNewSession: () => undefined,
+      onClearHistory: () => undefined,
+      agentsList: null,
+      currentAgentId: "main",
+      onAgentChange: () => undefined,
+      onNavigateToAgent: () => undefined,
+      onSessionSelect: () => undefined,
+      onOpenSidebar: () => undefined,
+      onCloseSidebar: () => undefined,
+      onSplitRatioChange: () => undefined,
+      onChatScroll: () => undefined,
+      basePath: "",
+      ...overrides,
+    }),
+    container,
+  );
+  return container;
+}
+
 afterEach(() => {
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   vi.unstubAllGlobals();
+});
+
+describe("chat loading skeleton", () => {
+  it("shows the skeleton while the initial history load has no rendered content", () => {
+    const container = renderChatView({ loading: true });
+
+    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
+  it("keeps existing messages visible without the skeleton during a background reload", () => {
+    const container = renderChatView({
+      loading: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "Already loaded answer",
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.textContent).toContain("Already loaded answer");
+  });
+
+  it("keeps active stream content visible without the skeleton during a background reload", () => {
+    const container = renderChatView({
+      loading: true,
+      stream: "Partial streamed answer",
+      streamStartedAt: 1,
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.textContent).toContain("Partial streamed answer");
+  });
+
+  it("keeps the reading indicator visible without the skeleton before stream text arrives", () => {
+    const container = renderChatView({
+      loading: true,
+      stream: "",
+      streamStartedAt: 1,
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
 });
 
 describe("chat queue", () => {

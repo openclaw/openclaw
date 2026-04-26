@@ -69,6 +69,10 @@ Docs: https://docs.openclaw.ai
 - ACP: wait for the configured runtime backend to become healthy before startup
   identity reconciliation, avoiding transient acpx warnings during Gateway boot.
   Fixes #40566.
+- Control UI: hide the chat loading skeleton during background history reloads
+  when existing messages or active stream content are already visible, avoiding
+  reload flashes on high-latency local gateways. Fixes #71844. Thanks
+  @WolvenRA.
 - CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure`
   and show daemon state separately when available, so `gateway.tailscale.mode:
 "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
