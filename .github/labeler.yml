@@ -406,3 +406,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gradium/**"
+"extensions: google-vertex-express":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-vertex-express/**"
+          - "docs/providers/google-vertex-express.md"

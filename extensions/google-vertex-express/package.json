@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/google-vertex-express-plugin",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw Google Vertex AI (Express Mode) provider plugin",
+  "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.70.2"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

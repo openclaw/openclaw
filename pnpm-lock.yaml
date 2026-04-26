@@ -626,6 +626,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/google-vertex-express:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.70.2
+        version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/googlechat:
     dependencies:
       gaxios:

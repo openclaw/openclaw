@@ -1,0 +1,31 @@
+{
+  "id": "google-vertex-express",
+  "name": "Google Vertex AI (Express Mode)",
+  "enabledByDefault": true,
+  "providers": ["google-vertex-express"],
+  "providerAuthEnvVars": {
+    "google-vertex-express": ["GOOGLE_VERTEX_EXPRESS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "google-vertex-express",
+      "method": "api-key",
+      "choiceId": "google-vertex-express-api-key",
+      "choiceLabel": "Google Vertex AI (Express Mode)",
+      "choiceHint": "API key access to Gemini models via Vertex AI global endpoint",
+      "groupId": "google-vertex",
+      "groupLabel": "Google Vertex",
+      "groupHint": "Gemini API key access via Vertex AI global endpoint",
+      "optionKey": "vertexExpressApiKey",
+      "cliFlag": "--google-vertex-express-api-key",
+      "cliOption": "--google-vertex-express-api-key <key>",
+      "cliDescription": "Google Vertex AI Express Mode API key",
+      "onboardingScopes": ["text-inference"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
