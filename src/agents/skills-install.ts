@@ -107,13 +107,13 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
   }
 }
 
-function buildNodeInstallEnv(prefs: SkillsInstallPreferences): NodeJS.ProcessEnv {
+async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
   if (prefs.nodeManager !== "npm") {
     return {};
   }
 
   const prefix = path.join(resolveConfigDir(process.env), "tools", "node", "npm");
-  fs.mkdirSync(prefix, { recursive: true });
+  await fs.promises.mkdir(prefix, { recursive: true });
   return {
     NPM_CONFIG_PREFIX: prefix,
     npm_config_prefix: prefix,
@@ -538,7 +538,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const envOverrides: NodeJS.ProcessEnv = {};
   if (spec.kind === "node") {
-    Object.assign(envOverrides, buildNodeInstallEnv(prefs));
+    Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
   }
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);

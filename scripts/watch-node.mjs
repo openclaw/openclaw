@@ -119,8 +119,7 @@ const logWatcher = (message, deps) => {
   deps.process.stderr?.write?.(`[openclaw] ${message}\n`);
 };
 
-const isInvalidPackageConfigError = (err) =>
-  err?.code === "ERR_INVALID_PACKAGE_CONFIG" && String(err?.message ?? "").includes("node_modules");
+const isInvalidPackageConfigError = (err) => err?.code === "ERR_INVALID_PACKAGE_CONFIG";
 
 const extractInvalidPackageConfigPath = (err) => {
   const message = String(err?.message ?? "");
