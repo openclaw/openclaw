@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -6,7 +5,6 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -129,6 +127,10 @@ import {
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
 } from "./run/setup.js";
+import {
+  buildEmbeddedRunTerminalResult,
+  resolveEmbeddedRunStopReason,
+} from "./run/terminal-result.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -2010,93 +2012,41 @@ export async function runEmbeddedPiAgent(
             attempt,
             incompleteTurnText: null,
           });
-          const stopReason = attempt.clientToolCall
-            ? "tool_calls"
-            : attempt.yieldDetected
-              ? "end_turn"
-              : (sessionLastAssistant?.stopReason as string | undefined);
-          const terminalPayloads = emptyAssistantReplyIsSilent
-            ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsWithToolMedia;
+          const stopReason = resolveEmbeddedRunStopReason({
+            clientToolCall: attempt.clientToolCall,
+            yieldDetected: attempt.yieldDetected,
+            assistantStopReason: sessionLastAssistant?.stopReason as string | undefined,
+          });
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
           });
-          return {
-            payloads: terminalPayloads?.length ? terminalPayloads : undefined,
-            ...(attempt.diagnosticTrace
-              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
-              : {}),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              systemPromptReport: attempt.systemPromptReport,
-              finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
-              replayInvalid,
-              livenessState,
-              agentHarnessResultClassification: attempt.agentHarnessResultClassification,
-              ...(emptyAssistantReplyIsSilent
-                ? { terminalReplyKind: "silent-empty" as const }
-                : {}),
-              // Handle client tool calls (OpenResponses hosted tools)
-              // Propagate the LLM stop reason so callers (lifecycle events,
-              // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason,
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
-              executionTrace: {
-                winnerProvider: sessionLastAssistant?.provider ?? provider,
-                winnerModel: sessionLastAssistant?.model ?? model.id,
-                attempts:
-                  traceAttempts.length > 0 ||
-                  sessionLastAssistant?.provider ||
-                  sessionLastAssistant?.model
-                    ? [
-                        ...traceAttempts,
-                        {
-                          provider: sessionLastAssistant?.provider ?? provider,
-                          model: sessionLastAssistant?.model ?? model.id,
-                          result: "success",
-                          stage: "assistant",
-                        },
-                      ]
-                    : undefined,
-                fallbackUsed: traceAttempts.length > 0,
-                runner: "embedded",
-              },
-              requestShaping: {
-                ...(lastProfileId ? { authMode: "auth-profile" } : {}),
-                ...(thinkLevel ? { thinking: thinkLevel } : {}),
-                ...(params.reasoningLevel ? { reasoning: params.reasoningLevel } : {}),
-                ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
-                ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
-              },
-              toolSummary: attemptToolSummary,
-              completion: {
-                ...(stopReason ? { stopReason } : {}),
-                ...(stopReason ? { finishReason: stopReason } : {}),
-                ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
-              },
-              contextManagement:
-                autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
-            },
-            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-            messagingToolSentTexts: attempt.messagingToolSentTexts,
-            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-            messagingToolSentTargets: attempt.messagingToolSentTargets,
-            successfulCronAdds: attempt.successfulCronAdds,
-          };
+          return buildEmbeddedRunTerminalResult({
+            attempt,
+            payloadsWithToolMedia,
+            emptyAssistantReplyIsSilent,
+            durationMs: Date.now() - started,
+            agentMeta,
+            aborted,
+            finalAssistantVisibleText,
+            finalAssistantRawText,
+            replayInvalid,
+            livenessState,
+            stopReason,
+            traceAttempts,
+            winnerProvider: sessionLastAssistant?.provider ?? provider,
+            winnerModel: sessionLastAssistant?.model ?? model.id,
+            includeSuccessTraceAttempt:
+              traceAttempts.length > 0 ||
+              Boolean(sessionLastAssistant?.provider || sessionLastAssistant?.model),
+            lastProfileId,
+            thinkLevel,
+            reasoningLevel: params.reasoningLevel,
+            verboseLevel: params.verboseLevel,
+            blockReplyBreak: params.blockReplyBreak,
+            toolSummary: attemptToolSummary,
+            autoCompactionCount,
+          });
         }
       } finally {
         await contextEngine.dispose?.();
