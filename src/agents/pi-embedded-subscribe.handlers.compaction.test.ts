@@ -142,6 +142,7 @@ describe("handleCompactionEnd", () => {
       storePath,
       sessionKey,
       expected: 2,
+      timeoutMs: 3_000,
     });
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
