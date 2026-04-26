@@ -75,6 +75,49 @@ function formatCompactionReason(reason?: string): string | undefined {
   return text;
 }
 
+async function appendCompactRecoveryEvent(params: {
+  runtime: Awaited<ReturnType<typeof loadCompactRuntime>>;
+  storePath?: string;
+  eventType:
+    | "compact.requested"
+    | "compact.started"
+    | "compact.completed"
+    | "compact.failed";
+  sessionKey: string;
+  sessionId: string;
+  agentId: string;
+  source: {
+    provider?: string;
+    surface?: string;
+    channel?: string;
+    chatType?: string;
+  };
+  details?: Record<string, unknown>;
+}): Promise<void> {
+  if (!params.storePath) {
+    return;
+  }
+  await params.runtime
+    .appendSessionRecoveryEvent({
+      storePath: params.storePath,
+      eventType: params.eventType,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      source: {
+        kind: "compact",
+        provider: params.source.provider,
+        surface: params.source.surface,
+        channel: params.source.channel,
+        chatType: params.source.chatType,
+      },
+      details: params.details,
+    })
+    .catch((err) => {
+      logVerbose(`Failed to append compact recovery event: ${String(err)}`);
+    });
+}
+
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
@@ -116,45 +159,109 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
-  const result = await runtime.compactEmbeddedPiSession({
+  const sessionFile = runtime.resolveSessionFilePath(
     sessionId,
+    targetSessionEntry,
+    runtime.resolveSessionFilePathOptions({
+      agentId: sessionAgentId,
+      storePath: params.storePath,
+    }),
+  );
+  const compactRecoveryBase = {
+    runtime,
+    storePath: params.storePath,
     sessionKey: params.sessionKey,
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.command.channel,
+    sessionId,
+    agentId: sessionAgentId,
+    source: {
+      provider: params.ctx.Provider,
+      surface: params.ctx.Surface,
+      channel: params.command.channel,
+      chatType: params.ctx.ChatType,
+    },
+  };
+  const compactRecoveryDetails = {
+    trigger: "manual",
+    commandSource: params.ctx.CommandSource,
+    customInstructionsPresent: Boolean(customInstructions),
+    sessionFile,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,
     spawnedBy: targetSessionEntry.spawnedBy,
-    senderId: params.command.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
-    sessionFile: runtime.resolveSessionFilePath(
+    contextTokens: params.contextTokens ?? targetSessionEntry.contextTokens,
+  };
+  await appendCompactRecoveryEvent({
+    ...compactRecoveryBase,
+    eventType: "compact.requested",
+    details: compactRecoveryDetails,
+  });
+  await appendCompactRecoveryEvent({
+    ...compactRecoveryBase,
+    eventType: "compact.started",
+    details: compactRecoveryDetails,
+  });
+  let result: Awaited<ReturnType<typeof runtime.compactEmbeddedPiSession>>;
+  try {
+    result = await runtime.compactEmbeddedPiSession({
       sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-        storePath: params.storePath,
-      }),
-    ),
-    workspaceDir: params.workspaceDir,
-    agentDir: sessionAgentDir,
-    config: params.cfg,
-    skillsSnapshot: targetSessionEntry.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
-    agentHarnessId:
-      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
+      sessionKey: params.sessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.command.channel,
+      groupId: targetSessionEntry.groupId,
+      groupChannel: targetSessionEntry.groupChannel,
+      groupSpace: targetSessionEntry.space,
+      spawnedBy: targetSessionEntry.spawnedBy,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      sessionFile,
+      workspaceDir: params.workspaceDir,
+      agentDir: sessionAgentDir,
+      config: params.cfg,
+      skillsSnapshot: targetSessionEntry.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      agentHarnessId:
+        targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
+      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      customInstructions,
+      trigger: "manual",
+      senderIsOwner: params.command.senderIsOwner,
+      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    });
+  } catch (err) {
+    await appendCompactRecoveryEvent({
+      ...compactRecoveryBase,
+      eventType: "compact.failed",
+      details: {
+        ...compactRecoveryDetails,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    });
+    throw err;
+  }
+
+  const compactTerminalEventType =
+    result.ok || isCompactionSkipReason(result.reason) ? "compact.completed" : "compact.failed";
+  await appendCompactRecoveryEvent({
+    ...compactRecoveryBase,
+    eventType: compactTerminalEventType,
+    details: {
+      ...compactRecoveryDetails,
+      ok: result.ok,
+      compacted: result.compacted,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      tokensAfter: result.result?.tokensAfter,
+      firstKeptEntryId: result.result?.firstKeptEntryId,
     },
-    customInstructions,
-    trigger: "manual",
-    senderIsOwner: params.command.senderIsOwner,
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
   const compactLabel =

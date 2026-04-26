@@ -8,6 +8,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
+  appendSessionRecoveryEvent: vi.fn().mockResolvedValue(undefined),
   compactEmbeddedPiSession: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
@@ -20,8 +21,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
-  await import("./commands-compact.runtime.js");
+const {
+  appendSessionRecoveryEvent,
+  compactEmbeddedPiSession,
+  incrementCompactionCount,
+  resolveSessionFilePathOptions,
+} = await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
 function buildCompactParams(
@@ -151,6 +156,121 @@ describe("handleCompactCommand", () => {
         senderUsername: "alice_u",
         senderE164: "+15551234567",
         agentDir: "/tmp/openclaw-agent-compact",
+      }),
+    );
+  });
+
+  it("records compact recovery lifecycle events around manual compaction", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 1000,
+        tokensAfter: 200,
+      },
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        storePath: "/tmp/openclaw-session-store.json",
+        ctx: {
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          ChatType: "direct",
+          CommandSource: "text",
+          CommandBody: "/compact: focus on decisions",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          contextTokens: 4096,
+        },
+        contextTokens: 4096,
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(appendSessionRecoveryEvent)).toHaveBeenCalledTimes(3);
+    expect(
+      vi.mocked(appendSessionRecoveryEvent).mock.calls.map(([event]) => event.eventType),
+    ).toEqual(["compact.requested", "compact.started", "compact.completed"]);
+    expect(vi.mocked(appendSessionRecoveryEvent)).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        storePath: "/tmp/openclaw-session-store.json",
+        eventType: "compact.requested",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        agentId: "main",
+        source: expect.objectContaining({
+          kind: "compact",
+          provider: "whatsapp",
+          surface: "whatsapp",
+          channel: "whatsapp",
+          chatType: "direct",
+        }),
+        details: expect.objectContaining({
+          trigger: "manual",
+          commandSource: "text",
+          customInstructionsPresent: true,
+          sessionFile: "/tmp/session.json",
+          contextTokens: 4096,
+        }),
+      }),
+    );
+    expect(vi.mocked(appendSessionRecoveryEvent)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        eventType: "compact.completed",
+        details: expect.objectContaining({
+          ok: true,
+          compacted: true,
+          tokensBefore: 1000,
+          tokensAfter: 200,
+          firstKeptEntryId: "entry-2",
+        }),
+      }),
+    );
+  });
+
+  it("records compact failed recovery event when compaction returns a failure", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "model unavailable",
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        storePath: "/tmp/openclaw-session-store.json",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(
+      vi.mocked(appendSessionRecoveryEvent).mock.calls.map(([event]) => event.eventType),
+    ).toEqual(["compact.requested", "compact.started", "compact.failed"]);
+    expect(vi.mocked(appendSessionRecoveryEvent)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        eventType: "compact.failed",
+        details: expect.objectContaining({
+          ok: false,
+          compacted: false,
+          reason: "model unavailable",
+        }),
       }),
     );
   });
