@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCliSessionHistoryPrompt,
   loadCliSessionHistoryMessages,
   MAX_CLI_SESSION_HISTORY_FILE_BYTES,
   MAX_CLI_SESSION_HISTORY_MESSAGES,
@@ -216,5 +217,30 @@ describe("loadCliSessionHistoryMessages", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(customStoreDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildCliSessionHistoryPrompt", () => {
+  it("renders OpenClaw transcript history around the next user message", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [
+        { role: "user", content: "old ask" },
+        { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+      ],
+      prompt: "new ask",
+    });
+
+    expect(prompt).toContain("User: old ask");
+    expect(prompt).toContain("Assistant: old answer");
+    expect(prompt).toContain("<next_user_message>\nnew ask\n</next_user_message>");
+  });
+
+  it("skips reseed text when the transcript has no renderable conversation", () => {
+    expect(
+      buildCliSessionHistoryPrompt({
+        messages: [{ role: "tool", content: "ignored" }],
+        prompt: "new ask",
+      }),
+    ).toBeUndefined();
   });
 });

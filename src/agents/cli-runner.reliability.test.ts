@@ -74,6 +74,7 @@ function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
   runId?: string;
+  openClawHistoryPrompt?: string;
 }): PreparedCliRunContext {
   const backend = {
     command: "codex",
@@ -115,6 +116,9 @@ function buildPreparedContext(params?: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    ...(params?.openClawHistoryPrompt
+      ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
+      : {}),
     authEpochVersion: 2,
   };
 }
@@ -322,6 +326,56 @@ describe("runCliAgent reliability", () => {
       stopReason: "completed",
       refusal: false,
     });
+  });
+
+  it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        openClawHistoryPrompt:
+          "Continue this conversation using the OpenClaw transcript below.\n\nUser: earlier ask\n\nAssistant: earlier answer\n\n<next_user_message>\nhi\n</next_user_message>",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("Assistant: earlier answer");
+  });
+
+  it("keeps resumed CLI sessions on native resume history", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        cliSessionId: "cli-session",
+        openClawHistoryPrompt: "User: earlier ask",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).not.toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("hi");
   });
 
   it("reports CLI reply backends as streaming until the managed run finishes", async () => {
