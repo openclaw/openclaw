@@ -203,6 +203,25 @@ export function resolveGatewayDisconnectState(reason?: string): {
   };
 }
 
+export function formatStartupConversationSummary(summaryText?: string): string[] {
+  const normalized = (summaryText ?? "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  return ["startup summary from your last conversation:", ...lines.map((line) => `• ${line}`)];
+}
+
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
