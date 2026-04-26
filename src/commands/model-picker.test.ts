@@ -738,6 +738,7 @@ describe("promptModelAllowlist", () => {
       config,
       prompter,
       preferredProvider: "openai-codex",
+      loadCatalog: false,
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();

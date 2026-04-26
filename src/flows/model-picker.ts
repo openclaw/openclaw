@@ -788,6 +788,7 @@ export async function promptModelAllowlist(params: {
   allowedKeys?: string[];
   initialSelections?: string[];
   preferredProvider?: string;
+  loadCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const existingKeys = resolveConfiguredModelKeys(cfg);
@@ -839,11 +840,12 @@ export async function promptModelAllowlist(params: {
         cfg,
       })
     : undefined;
+  const loadCatalog = params.loadCatalog ?? true;
 
   const scopedFastKeys =
     allowedKeys.length > 0
       ? allowedKeys
-      : preferredProvider && hasRealSeed
+      : !loadCatalog && preferredProvider && hasRealSeed
         ? initialSeeds.filter((key) => {
             const entry = splitModelKey(key);
             return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
@@ -886,6 +888,10 @@ export async function promptModelAllowlist(params: {
       return {};
     }
     return { models: [], scopeKeys };
+  }
+
+  if (!loadCatalog) {
+    return {};
   }
 
   const allowlistProgress = params.prompter.progress("Loading available models");

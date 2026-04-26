@@ -177,6 +177,7 @@ export async function promptAuthConfig(
       initialSelections: modelAllowlist?.initialSelections,
       message: modelAllowlist?.message,
       preferredProvider,
+      loadCatalog: false,
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
