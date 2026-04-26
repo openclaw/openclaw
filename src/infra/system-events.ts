@@ -14,12 +14,54 @@ import {
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+export type SystemEventAudience = "internal" | "user-facing";
+
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  /**
+   * Where this event is intended to surface in the agent transcript /
+   * channel path.
+   *
+   *  - `"user-facing"` (default): event text is drained on the regular
+   *    reply turn and emitted into the next prompt as a plain
+   *    `System: ...` line. Visible in the agent transcript and channel
+   *    surfaces.
+   *  - `"internal"`: event text is still drained on the regular reply
+   *    turn, but the consumer at `drainFormattedSystemEvents` wraps it in
+   *    `INTERNAL_RUNTIME_CONTEXT_BEGIN`/`END` delimiters with the same
+   *    canonical header lines as `formatAgentInternalEventsForPrompt` in
+   *    `src/agents/internal-events.ts`. The model still sees the content
+   *    as runtime context, but every user-facing surface strips it via
+   *    the existing `stripInternalRuntimeContext` consumers
+   *    (`sanitize-user-facing-text.ts`, `memory-host-sdk/host/session-files.ts`,
+   *    `agents/internal-events.ts`, etc.).
+   *
+   * **Scope (important):**
+   *  - This field is the *hidden runtime context* lane only. It is not a
+   *    delivery-routing primitive: events that have a positive user
+   *    delivery contract (exec completion via `notifyOnExit`, cron
+   *    payloads, heartbeat acks) MUST NOT be migrated to `"internal"` —
+   *    those have their own heartbeat-driven delivery paths
+   *    (`buildExecEventPrompt` / `buildCronEventPrompt`) plus tactical
+   *    producer-side skips (e.g. `bd60df3e53`). Marking them internal
+   *    would suppress delivery on regular reply turns where the model is
+   *    instructed to keep wrapped content private.
+   *  - Operator-side inspection surfaces — `openclaw status`, log output,
+   *    raw queue diagnostics — that read events via `peekSystemEvents`
+   *    or `peekSystemEventEntries` continue to expose internal events
+   *    for debugging. Callers that want audience-filtered views should
+   *    iterate `peekSystemEventEntries` and branch on the field
+   *    themselves.
+   *
+   * Independent of `trusted`. Adding `audience` does not change any
+   * existing default behavior; callers that omit it keep emitting
+   * `"user-facing"` events.
+   */
+  audience?: SystemEventAudience;
 };
 
 const MAX_EVENTS = 20;
@@ -39,6 +81,7 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  audience?: SystemEventAudience;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -108,6 +151,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
+    audience: options.audience ?? "user-facing",
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -145,6 +189,7 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     (left.trusted ?? true) === (right.trusted ?? true) &&
+    (left.audience ?? "user-facing") === (right.audience ?? "user-facing") &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

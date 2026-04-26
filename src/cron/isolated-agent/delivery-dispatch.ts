@@ -407,6 +407,17 @@ async function queueCronAwarenessSystemEvent(params: {
       }),
       contextKey: params.deliveryIdempotencyKey,
       trusted: false,
+      // The isolated agent run already delivered to the user via its own
+      // channel before this awareness event is queued (gated on
+      // `delivered === true` and `shouldQueueCronAwareness` upstream). The
+      // main session does not need a fake-user `System (untrusted): ...`
+      // bubble for this — it just needs hidden runtime context so the next
+      // turn knows the cron landed. `audience: "internal"` routes the
+      // event through the existing `INTERNAL_RUNTIME_CONTEXT` wrap so
+      // user-facing surfaces (transcript, history readers, Control UI)
+      // strip it via the already-installed `stripInternalRuntimeContext`
+      // consumers.
+      audience: "internal",
     });
   } catch (err) {
     await logCronDeliveryWarn(

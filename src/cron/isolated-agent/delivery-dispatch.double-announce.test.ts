@@ -444,6 +444,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       trusted: false,
+      audience: "internal",
     });
   });
 
