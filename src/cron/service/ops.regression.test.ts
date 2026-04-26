@@ -15,8 +15,8 @@ import {
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
-import * as schedule from "../schedule.js";
 import { CommandLane } from "../../process/lanes.js";
+import * as schedule from "../schedule.js";
 import { enqueueRun, run, start } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
