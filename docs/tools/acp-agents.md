@@ -150,6 +150,10 @@ Notes:
 - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
 - On Discord, `spawnAcpSessions` is only required when OpenClaw needs to create a child thread for `--thread auto|here` — not for `--bind here`.
 - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
+- Gateway management commands stay local in bound conversations. In
+  particular, `/acp ...` commands are handled by OpenClaw even when normal
+  follow-up text routes to the bound ACP session; `/status` and `/unfocus` also
+  stay local whenever command handling is enabled for that surface.
 
 ### Thread-bound sessions
 
@@ -159,6 +163,8 @@ When thread bindings are enabled for a channel adapter, ACP sessions can be boun
 - Follow-up messages in that thread route to the bound ACP session.
 - ACP output is delivered back to the same thread.
 - Unfocus/close/archive/idle-timeout or max-age expiry removes the binding.
+- `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/unfocus` are
+  Gateway commands, not prompts to the ACP harness.
 
 Thread binding support is adapter-specific. If the active channel adapter does not support thread bindings, OpenClaw returns a clear unsupported/unavailable message.
 

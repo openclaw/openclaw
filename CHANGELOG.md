@@ -81,6 +81,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from
   being treated as empty state, preserving `paired.json` for repair instead of
   overwriting approved pairings. Fixes #71873. Thanks @iret77.
+- ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`,
+  on the Gateway path inside ACP-bound threads so they are not consumed as ACP
+  prompt text. Fixes #66298. Thanks @kindomLee.
 - ACP: wait for the configured runtime backend to become healthy before startup
   identity reconciliation, avoiding transient acpx warnings during Gateway boot.
   Fixes #40566.
