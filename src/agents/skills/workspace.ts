@@ -156,8 +156,17 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
   };
 }
 
+// Mtime-based cache: directory contents don't change between messages.
+const listChildDirectoriesCache = new Map<string, { mtimeMs: number; dirs: string[] }>();
+
 function listChildDirectories(dir: string): string[] {
   try {
+    const dirStat = fs.statSync(dir);
+    const cached = listChildDirectoriesCache.get(dir);
+    if (cached && cached.mtimeMs === dirStat.mtimeMs) {
+      return cached.dirs;
+    }
+
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const dirs: string[] = [];
     for (const entry of entries) {
@@ -178,6 +187,8 @@ function listChildDirectories(dir: string): string[] {
         }
       }
     }
+
+    listChildDirectoriesCache.set(dir, { mtimeMs: dirStat.mtimeMs, dirs });
     return dirs;
   } catch {
     return [];
