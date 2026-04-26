@@ -367,6 +367,7 @@ Docs: https://docs.openclaw.ai
 - Models/status: report fresh Claude CLI native auth instead of stale stored `anthropic:claude-cli` profile expiry when local credentials are current. Fixes #71256. (#71332) Thanks @matthiasjanke and @neeravmakwana.
 - CLI backends: compact OpenClaw transcripts after over-budget CLI turns and reseed fresh CLI sessions from the compacted transcript instead of stale external resume state. Fixes #68329. (#71916) Thanks @obviyus.
 - Telegram: keep default tool progress messages visible when answer preview streaming is disabled. (#71825) Thanks @VACInc.
+- Configure/models: clear deselected model fallbacks when updating the model picker allowlist, including provider-scoped setup flows. (#71596) Thanks @rubencu.
 
 ## 2026.4.24
 
