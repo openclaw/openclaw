@@ -15,14 +15,96 @@ describe("secrets-gcp createGcpSecretProvider", () => {
     expect(() => provider.validateConfig?.({ source: "gcp", project: "  " })).toThrow(/project/);
   });
 
-  it("validateConfig accepts a config with a non-empty project", () => {
+  it("validateConfig rejects projects that do not match the GCP grammar", () => {
     const provider = createGcpSecretProvider();
-    expect(() => provider.validateConfig?.({ source: "gcp", project: "p" })).not.toThrow();
+    // Too short (< 6 chars)
+    expect(() => provider.validateConfig?.({ source: "gcp", project: "p" })).toThrow(/grammar/);
+    // Starts with digit
+    expect(() => provider.validateConfig?.({ source: "gcp", project: "1abcdef" })).toThrow(
+      /grammar/,
+    );
+    // Contains uppercase
+    expect(() => provider.validateConfig?.({ source: "gcp", project: "MyProject1" })).toThrow(
+      /grammar/,
+    );
+    // Path-traversal attempt
+    expect(() => provider.validateConfig?.({ source: "gcp", project: "../foo" })).toThrow(
+      /grammar/,
+    );
+    // Trailing dash (must end with letter or digit)
+    expect(() => provider.validateConfig?.({ source: "gcp", project: "myproject-" })).toThrow(
+      /grammar/,
+    );
+  });
+
+  it("validateConfig accepts a project matching the GCP grammar", () => {
+    const provider = createGcpSecretProvider();
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "my-project-1" }),
+    ).not.toThrow();
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "myorg-prod-01" }),
+    ).not.toThrow();
+  });
+
+  it("validateConfig rejects malformed versionSuffix", () => {
+    const provider = createGcpSecretProvider();
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "my-project", versionSuffix: "bogus" }),
+    ).toThrow(/versionSuffix/);
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "my-project", versionSuffix: "0" }),
+    ).toThrow(/versionSuffix/);
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "my-project", versionSuffix: "-1" }),
+    ).toThrow(/versionSuffix/);
+  });
+
+  it("validateConfig accepts versionSuffix 'latest' or a positive integer", () => {
+    const provider = createGcpSecretProvider();
+    expect(() =>
+      provider.validateConfig?.({
+        source: "gcp",
+        project: "my-project",
+        versionSuffix: "latest",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      provider.validateConfig?.({ source: "gcp", project: "my-project", versionSuffix: "3" }),
+    ).not.toThrow();
   });
 
   it("validateConfig rejects wrong source", () => {
     const provider = createGcpSecretProvider();
-    expect(() => provider.validateConfig?.({ source: "env", project: "p" })).toThrow();
+    expect(() => provider.validateConfig?.({ source: "env", project: "my-project" })).toThrow(
+      /config.source must be/,
+    );
+  });
+
+  it("resolve() rejects ref ids with disallowed characters before spawning client", async () => {
+    vi.resetModules();
+    let clientCreated = false;
+    vi.doMock("@google-cloud/secret-manager", () => ({
+      SecretManagerServiceClient: class {
+        constructor() {
+          clientCreated = true;
+        }
+        async accessSecretVersion() {
+          throw new Error("should not be reached");
+        }
+      },
+    }));
+    const { createGcpSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await expect(
+      provider.resolve({
+        refs: [{ source: "gcp", provider: "myGcp", id: "../escape" }],
+        providerName: "myGcp",
+        providerConfig: { source: "gcp", project: "my-project" },
+        env: process.env,
+      }),
+    ).rejects.toThrow(/ref id .*must match/);
+    expect(clientCreated).toBe(false);
   });
 
   it("resolves a ref via the GCP SDK with default 'latest' version", async () => {
