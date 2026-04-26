@@ -147,12 +147,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         spec: "@wecom/wecom-openclaw-plugin@1.2.3",
       }),
     });
-    expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: result.cfg,
-        reason: "source-changed",
-      }),
-    );
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
   it("returns a timed out status and notes the retry path when npm install hangs", async () => {
