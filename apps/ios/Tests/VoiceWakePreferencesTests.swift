@@ -3,12 +3,17 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct VoiceWakePreferencesTests {
+    @Test func defaultTriggerWordsUseNemoNemo() {
+        #expect(VoiceWakePreferences.defaultTriggerWords == ["NemoNemo"])
+    }
+
     @Test func sanitizeTriggerWordsTrimsAndDropsEmpty() {
         #expect(VoiceWakePreferences.sanitizeTriggerWords([" openclaw ", "", " \nclaude\t"]) == ["openclaw", "claude"])
     }
 
     @Test func sanitizeTriggerWordsFallsBackToDefaultsWhenEmpty() {
         #expect(VoiceWakePreferences.sanitizeTriggerWords(["", "  "]) == VoiceWakePreferences.defaultTriggerWords)
+        #expect(VoiceWakePreferences.sanitizeTriggerWords([]) == ["NemoNemo"])
     }
 
     @Test func sanitizeTriggerWordsLimitsWordLength() {
@@ -24,7 +29,7 @@ import Testing
     }
 
     @Test func displayStringUsesSanitizedWords() {
-        #expect(VoiceWakePreferences.displayString(for: ["", " "]) == "openclaw, claude")
+        #expect(VoiceWakePreferences.displayString(for: ["", " "]) == "NemoNemo")
     }
 
     @Test func loadAndSaveTriggerWordsRoundTrip() {

@@ -6,6 +6,11 @@ import org.junit.Test
 
 class WakeWordsTest {
   @Test
+  fun defaultWakeWordsUseNemoNemo() {
+    assertEquals(listOf("NemoNemo"), SecurePrefs.defaultWakeWords)
+  }
+
+  @Test
   fun parseCommaSeparatedTrimsAndDropsEmpty() {
     assertEquals(listOf("openclaw", "claude"), WakeWords.parseCommaSeparated("  openclaw , claude, ,  "))
   }
@@ -22,6 +27,11 @@ class WakeWordsTest {
     assertEquals("x".repeat(WakeWords.maxWordLength), sanitized[1])
 
     assertEquals(defaults, WakeWords.sanitize(listOf(" ", ""), defaults))
+  }
+
+  @Test
+  fun sanitizeEmptyFallsBackToDefaultWakeWords() {
+    assertEquals(listOf("NemoNemo"), WakeWords.sanitize(emptyList(), SecurePrefs.defaultWakeWords))
   }
 
   @Test
