@@ -210,7 +210,7 @@ describe("watchForSpawnOutcome", () => {
       }),
     );
     let fires = 0;
-    let tick: (() => void) | null = null;
+    const tickRef: { current: (() => void) | null } = { current: null };
     watchForSpawnOutcome({
       sessionFile,
       parentTaskId: "T1",
@@ -218,14 +218,14 @@ describe("watchForSpawnOutcome", () => {
         fires += 1;
       },
       setIntervalFn: (h) => {
-        tick = h;
+        tickRef.current = h;
         return null;
       },
       clearIntervalFn: () => undefined,
     });
     expect(fires).toBe(1);
-    if (tick) {
-      tick();
+    if (tickRef.current !== null) {
+      tickRef.current();
     }
     expect(fires).toBe(1);
   });

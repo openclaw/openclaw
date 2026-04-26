@@ -81,20 +81,22 @@ export default definePluginEntry({
       return store;
     }
 
+    let expirySweeper: ReturnType<typeof createExpirySweeper> | null = null;
     api.registerService({
       id: "orchestrator-expiry-sweeper",
-      start: async () => {
-        const sweeper = createExpirySweeper({
+      start: () => {
+        expirySweeper = createExpirySweeper({
           store: getStore(),
           logger: {
             info: (msg) => api.logger.info?.(msg),
             error: (msg) => api.logger.error?.(msg),
           },
         });
-        sweeper.start();
-        return async () => {
-          sweeper.stop();
-        };
+        expirySweeper.start();
+      },
+      stop: () => {
+        expirySweeper?.stop();
+        expirySweeper = null;
       },
     });
 
