@@ -37,6 +37,7 @@ import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
 } from "../command/session.js";
+import type { CompletionTruthSelection, CompletionWorkerOutput } from "../completion-truth.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
@@ -159,6 +160,16 @@ import type {
   EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
+
+type EmbeddedRunAttemptCompletionTruth = {
+  completionTruth?: CompletionWorkerOutput;
+  completionTruthSelection?: CompletionTruthSelection;
+};
+
+function redactCompletionTruthForMeta(truth: CompletionWorkerOutput): CompletionWorkerOutput {
+  const { sessionId: _sessionId, toolCallId: _toolCallId, ...redacted } = truth;
+  return redacted;
+}
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -2523,6 +2534,8 @@ export async function runEmbeddedPiAgent(
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
+          const attemptCompletionTruth = attempt as typeof attempt &
+            EmbeddedRunAttemptCompletionTruth;
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
@@ -2590,6 +2603,12 @@ export async function runEmbeddedPiAgent(
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),
+                ...(attemptCompletionTruth.completionTruth
+                  ? { truth: redactCompletionTruthForMeta(attemptCompletionTruth.completionTruth) }
+                  : {}),
+                ...(attemptCompletionTruth.completionTruthSelection
+                  ? { truthSelection: attemptCompletionTruth.completionTruthSelection }
+                  : {}),
                 ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
               },
               contextManagement:

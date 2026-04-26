@@ -74,6 +74,14 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import {
+  createCompletionTruthPublicHostHook,
+  createOnToolResultForwarder,
+  createOnYieldForwarder,
+  resolveCompletionTruthFromPublicHost,
+  type CompletionTruthSelection,
+  type CompletionWorkerOutput,
+} from "../../completion-truth.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -114,7 +122,10 @@ import {
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  createOpenClawCodingToolsInternal,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -701,9 +712,12 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   ]);
 }
 
-export async function runEmbeddedAttempt(
-  params: EmbeddedRunAttemptParams,
-): Promise<EmbeddedRunAttemptResult> {
+export async function runEmbeddedAttempt(params: EmbeddedRunAttemptParams): Promise<
+  EmbeddedRunAttemptResult & {
+    completionTruth?: CompletionWorkerOutput;
+    completionTruthSelection?: CompletionTruthSelection;
+  }
+> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
@@ -850,6 +864,9 @@ export async function runEmbeddedAttempt(
     });
     const diagnosticRunStartedAt = Date.now();
     let diagnosticRunCompleted = false;
+    const completionTruthHook = createCompletionTruthPublicHostHook();
+    const forwardCompletionTruth = createOnToolResultForwarder(completionTruthHook);
+    const forwardYieldHint = createOnYieldForwarder(completionTruthHook);
     emitDiagnosticRunCompleted = (outcome, err) => {
       if (diagnosticRunCompleted) {
         return;
@@ -868,7 +885,7 @@ export async function runEmbeddedAttempt(
       params.disableTools || isRawModelRun
         ? []
         : (() => {
-            const allTools = createOpenClawCodingTools({
+            const allTools = createOpenClawCodingToolsInternal({
               agentId: sessionAgentId,
               ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
               exec: {
@@ -926,9 +943,11 @@ export async function runEmbeddedAttempt(
               forceMessageTool: params.forceMessageTool,
               authProfileStore: params.authProfileStore,
               recordToolPrepStage: (name) => corePluginToolStages.mark(name),
+              onCompletionTruth: forwardCompletionTruth,
               onYield: (message) => {
                 yieldDetected = true;
                 yieldMessage = message;
+                forwardYieldHint(message);
                 queueYieldInterruptForSession?.();
                 runAbortController.abort("sessions_yield");
                 abortSessionForYield?.();
@@ -1035,6 +1054,8 @@ export async function runEmbeddedAttempt(
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
+    let completionTruth: CompletionWorkerOutput | undefined;
+    let completionTruthSelection: CompletionTruthSelection | undefined;
     // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
@@ -3081,6 +3102,31 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
             });
             stripSessionsYieldArtifacts(activeSession);
+            try {
+              const resolvedCompletionTruth = await resolveCompletionTruthFromPublicHost({
+                hook: completionTruthHook,
+                parseRealtimeHint: (rawMessage) => ({
+                  source: "sessions_yield",
+                  status: "yielded",
+                  message: rawMessage,
+                  sessionId: params.sessionId,
+                  toolCallId: "unknown",
+                }),
+                timeoutMs: 1_000,
+                waitPolicy: { toolResultPriorityWindowMs: 100 },
+              });
+              completionTruth = resolvedCompletionTruth.output;
+              completionTruthSelection = resolvedCompletionTruth.selection;
+            } catch (err) {
+              completionTruthSelection = {
+                source: "none",
+                confidence: "none",
+                notes: [formatErrorMessage(err)],
+              };
+              log.warn(
+                `failed to resolve sessions_yield completion truth: ${formatErrorMessage(err)}`,
+              );
+            }
             if (yieldMessage) {
               await persistSessionsYieldContextMessage(activeSession, yieldMessage);
             }
@@ -3628,6 +3674,8 @@ export async function runEmbeddedAttempt(
         // truthiness predicates keep working without a `.length` check.
         clientToolCalls: completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined,
         yieldDetected: yieldDetected || undefined,
+        completionTruth,
+        completionTruthSelection,
       };
     } finally {
       if (trajectoryRecorder && !trajectoryEndRecorded) {

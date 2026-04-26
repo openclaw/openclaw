@@ -15,6 +15,22 @@ import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./runs.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
+type AttemptResultWithCompletionTruth = ReturnType<typeof makeAttemptResult> & {
+  completionTruth?: Record<string, unknown>;
+  completionTruthSelection?: Record<string, unknown>;
+};
+
+function makeAttemptResultWithCompletionTruth(
+  overrides: Parameters<typeof makeAttemptResult>[0] & {
+    completionTruth?: Record<string, unknown>;
+    completionTruthSelection?: Record<string, unknown>;
+  },
+): AttemptResultWithCompletionTruth {
+  return makeAttemptResult(
+    overrides as Parameters<typeof makeAttemptResult>[0],
+  ) as AttemptResultWithCompletionTruth;
+}
+
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
@@ -56,8 +72,90 @@ describe("sessions_yield orchestration", () => {
     expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
   });
 
-  it("clientToolCalls takes precedence over yieldDetected", async () => {
-    // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
+  it("propagates resolved completion truth into run completion meta", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResultWithCompletionTruth({
+        promptError: null,
+        yieldDetected: true,
+        completionTruth: {
+          source: "sessions_yield",
+          status: "yielded",
+          message: "Waiting for worker",
+          sessionId: "yield-truth-session",
+          toolCallId: "call-1",
+        },
+        completionTruthSelection: {
+          source: "toolResult",
+          confidence: "high",
+          notes: ["selected explicit tool result"],
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      sessionId: "yield-truth-session",
+      runId: "run-yield-completion-truth",
+    });
+
+    expect(result.meta.completion).toMatchObject({
+      stopReason: "end_turn",
+      truth: {
+        source: "sessions_yield",
+        status: "yielded",
+        message: "Waiting for worker",
+      },
+      truthSelection: {
+        source: "toolResult",
+        confidence: "high",
+      },
+    });
+    expect(result.meta.completion?.truth).not.toHaveProperty("sessionId");
+    expect(result.meta.completion?.truth).not.toHaveProperty("toolCallId");
+  });
+
+  it("propagates realtimeHint completion truth fallback into run completion meta", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResultWithCompletionTruth({
+        promptError: null,
+        yieldDetected: true,
+        completionTruth: {
+          source: "sessions_yield",
+          status: "yielded",
+          message: "fallback realtime hint",
+          sessionId: "yield-realtime-hint-session",
+          toolCallId: "unknown",
+        },
+        completionTruthSelection: {
+          source: "realtimeHint",
+          confidence: "low",
+          notes: ["selected realtime hint fallback"],
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      sessionId: "yield-realtime-hint-session",
+      runId: "run-yield-completion-truth-realtime-hint",
+    });
+
+    expect(result.meta.completion).toMatchObject({
+      stopReason: "end_turn",
+      truth: {
+        source: "sessions_yield",
+        status: "yielded",
+        message: "fallback realtime hint",
+      },
+      truthSelection: {
+        source: "realtimeHint",
+        confidence: "low",
+      },
+    });
+  });
+
+  it("clientToolCall takes precedence over yieldDetected", async () => {
+    // Edge case: both flags set (shouldn't happen, but clientToolCall wins)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         promptError: null,
