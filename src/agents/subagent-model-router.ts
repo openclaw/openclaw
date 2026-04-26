@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const execFileAsync = promisify(execFile);
 
 export type SubagentModelRouterMode = "off" | "shadow" | "pilot" | "live";
-export type SubagentModelRouterTaskType = "coding" | "research" | "vision" | "general";
+export type SubagentModelRouterTaskType = "chat" | "coding" | "research" | "visual";
 
 export type SubagentModelRouterConfig = {
   mode?: SubagentModelRouterMode;
@@ -74,14 +74,14 @@ export function classifySubagentModelRouterTask(task: string): SubagentModelRout
     return "research";
   }
   if (/\b(image|vision|screenshot|design|ui|ux)\b/i.test(task)) {
-    return "vision";
+    return "visual";
   }
-  return "general";
+  return "chat";
 }
 
 function fallbackModelForTaskType(taskType: SubagentModelRouterTaskType): string | undefined {
-  if (taskType === "coding") return "openai-codex/gpt-5.5";
-  if (taskType === "research") return "google/gemini-3-flash";
+  if (taskType === "coding") return "openai-codex/gpt-5.4";
+  if (taskType === "research") return "openrouter/qwen/qwen3-next-80b-a3b-instruct:free";
   return undefined;
 }
 
@@ -99,7 +99,7 @@ async function routeWithSharedModelRouterCli(params: {
     "--mode",
     "execute",
     "--priority",
-    "normal",
+    "medium",
     "--primary-only",
   ];
   const { stdout } = await execFileAsync(command, args, { timeout: 5_000 });
