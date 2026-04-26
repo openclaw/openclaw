@@ -1022,8 +1022,8 @@ export async function runEmbeddedPiAgent(
             defaultModel: DEFAULT_MODEL,
             currentProvider: provider,
             currentModel: modelId,
-            currentAuthProfileId: preferredProfileId,
-            currentAuthProfileIdSource: preferredProfileIdSource,
+            currentAuthProfileId: params.authProfileId,
+            currentAuthProfileIdSource: params.authProfileIdSource,
           });
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({
