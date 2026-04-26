@@ -386,6 +386,60 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain('"name":"read"');
   });
 
+  it("routes threaded memory prompts even when runtime context is appended as a user item", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
+    const runtimeContext = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored.",
+      "Conversation info (untrusted metadata):",
+      '```json\n{"chat_id":"thread:qa-room/thread-test","is_group_chat":true}\n```',
+    ].join("\n");
+    const inputWithContext = [makeUserInput(prompt), makeUserInput(runtimeContext)];
+
+    const first = await expectResponsesJson<Record<string, unknown>>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: inputWithContext,
+    });
+    expect(JSON.stringify(first)).toContain('"name":"memory_search"');
+    expect(JSON.stringify(first)).toContain("hidden thread codename ORBIT-22");
+
+    const second = await expectResponsesJson<Record<string, unknown>>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        ...inputWithContext,
+        {
+          type: "function_call_output",
+          output: JSON.stringify({ results: [{ path: "MEMORY.md", startLine: 1, endLine: 1 }] }),
+        },
+      ],
+    });
+    expect(JSON.stringify(second)).toContain('"name":"memory_get"');
+    const memoryGetCall = (second.output as Array<{ arguments?: string }>).find(
+      (item) => item.arguments,
+    );
+    expect(JSON.parse(memoryGetCall?.arguments ?? "{}")).toMatchObject({ path: "MEMORY.md" });
+
+    const third = await expectResponsesJson<Record<string, unknown>>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        ...inputWithContext,
+        { type: "function_call_output", output: "Thread-hidden codename: ORBIT-22." },
+      ],
+    });
+    expect(JSON.stringify(third)).toContain("hidden thread codename is ORBIT-22");
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    const snapshots = (await requests.json()) as Array<{ prompt?: string; allInputText?: string }>;
+    expect(snapshots.at(0)?.prompt).toBe(prompt);
+    expect(snapshots.at(0)?.allInputText).toContain(runtimeContext);
+  });
+
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

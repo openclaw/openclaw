@@ -244,6 +244,12 @@ function buildDeterministicEmbedding(text: string, dimensions = 16) {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
+function isRuntimeContextInputText(text: string) {
+  return /^OpenClaw runtime (?:context for the immediately preceding user message|event)\./i.test(
+    text.trim(),
+  );
+}
+
 function extractLastUserText(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
@@ -251,7 +257,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text) {
+    if (text && !isRuntimeContextInputText(text)) {
       return text;
     }
   }
