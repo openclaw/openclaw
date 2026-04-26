@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import type {
@@ -87,6 +88,35 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+
+  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProvider }] = await Promise.all(
+    [import("../plugins/provider-auth-choices.js"), import("../plugins/setup-registry.js")],
+  );
+  const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  if (manifestChoice) {
+    const setupProvider = resolvePluginSetupProvider({
+      provider: manifestChoice.providerId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      pluginIds: [manifestChoice.pluginId],
+    });
+    const setupMethod = setupProvider?.auth.find(
+      (method) => normalizeProviderId(method.id) === normalizeProviderId(manifestChoice.methodId),
+    );
+    const setupPolicy =
+      setupMethod?.wizard?.modelSelection ?? setupProvider?.wizard?.setup?.modelSelection;
+    return {
+      preferredProvider,
+      promptWhenAuthChoiceProvided: setupPolicy?.promptWhenAuthChoiceProvided === true,
+      allowKeepCurrent: setupPolicy?.allowKeepCurrent ?? true,
+    };
+  }
 
   const { resolvePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");

@@ -23,6 +23,8 @@ const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
+const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );
@@ -166,10 +168,17 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff,
 }));
 
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
+}));
+
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
   resolvePluginProviders: resolvePluginProvidersRuntime,
-  resolvePluginSetupProvider: vi.fn(() => undefined),
 }));
 
 vi.mock("../commands/model-picker.js", () => ({
@@ -959,5 +968,60 @@ describe("runSetupWizard", () => {
           call[0].includes("Gateway port: 18791"),
       ),
     ).toBe(true);
+  });
+
+  it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
+    promptDefaultModel.mockClear();
+    resolvePluginProvidersRuntime.mockClear();
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "openai",
+      providerId: "openai-codex",
+      methodId: "oauth",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex Browser Login",
+    });
+    resolvePluginSetupProvider.mockReturnValue({
+      id: "openai-codex",
+      label: "OpenAI Codex",
+      auth: [
+        {
+          id: "oauth",
+          label: "OpenAI Codex Browser Login",
+          kind: "oauth",
+          wizard: {
+            modelSelection: {
+              allowKeepCurrent: false,
+            },
+          },
+          run: vi.fn(async () => ({ profiles: [] })),
+        },
+      ],
+    });
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(resolvePluginSetupProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        pluginIds: ["openai"],
+      }),
+    );
+    expect(resolvePluginProvidersRuntime).not.toHaveBeenCalled();
+    expect(promptDefaultModel).toHaveBeenCalledWith(expect.objectContaining({ allowKeep: false }));
   });
 });

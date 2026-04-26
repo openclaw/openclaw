@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 - Onboarding/setup: keep first-run config reads, plugin compatibility notices, and post-model sanity checks on cold metadata paths unless the user chooses to browse all models, avoiding full plugin/runtime catalog work between prompts. Thanks @shakkernerd.
 - Onboarding/auth: run manifest-owned provider auth choices through scoped setup providers so selecting OpenAI Codex browser/device auth no longer loads every provider runtime before OAuth starts. Thanks @shakkernerd.
+- Onboarding/auth: keep the post-auth default-model policy lookup on manifest/setup metadata so the next prompt appears without loading broad provider runtime. Thanks @shakkernerd.
 - Onboarding/models: keep skip-auth and provider-scoped model picker prompts off the full global model catalog path, and cache provider catalog hook resolution so setup no longer stalls after auth on large plugin registries. Thanks @shakkernerd.
 - Gateway/Bonjour: suppress known @homebridge/ciao cancellation and network assertion failures through scoped process handlers so malformed mDNS packets or restricted VPS networking disable/restart Bonjour instead of crashing the gateway. Fixes #67578. Thanks @zenassist26-create.
 - Discord: keep late clicks on already-resolved exec approval buttons quiet when elevated mode auto-resolved the request, while still surfacing real approval submission failures. Fixes #66906. Thanks @rlerikse.
