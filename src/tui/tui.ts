@@ -301,7 +301,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
-    cwd: process.cwd(),
+    cwd: opts.cwd ?? process.cwd(),
   });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
