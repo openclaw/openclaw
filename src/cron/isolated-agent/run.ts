@@ -216,28 +216,31 @@ function buildCronDeliveryTrace(params: {
     source:
       params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
   });
-  const resolved = params.resolvedDelivery.ok
-    ? {
-        ok: true,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-      }
-    : {
-        ok: false,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to ?? null,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-        error: params.resolvedDelivery.error.message,
-      };
+  const resolved =
+    params.deliveryPlan.mode === "none"
+      ? undefined
+      : params.resolvedDelivery.ok
+        ? {
+            ok: true,
+            ...normalizeCronTraceTarget({
+              channel: params.resolvedDelivery.channel,
+              to: params.resolvedDelivery.to,
+              accountId: params.resolvedDelivery.accountId,
+              threadId: params.resolvedDelivery.threadId,
+              source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+            }),
+          }
+        : {
+            ok: false,
+            ...normalizeCronTraceTarget({
+              channel: params.resolvedDelivery.channel,
+              to: params.resolvedDelivery.to ?? null,
+              accountId: params.resolvedDelivery.accountId,
+              threadId: params.resolvedDelivery.threadId,
+              source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+            }),
+            error: params.resolvedDelivery.error.message,
+          };
   const messageToolSentTo = params.messagingToolSentTargets
     .map((target) =>
       normalizeMessagingToolTarget(
@@ -249,7 +252,7 @@ function buildCronDeliveryTrace(params: {
     .filter((target): target is CronDeliveryTraceMessageTarget => Boolean(target));
   return {
     ...(intended ? { intended } : {}),
-    resolved,
+    ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,

@@ -731,6 +731,19 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(false);
   });
+
+  it("omits resolved delivery trace when delivery.mode is none", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.delivery).not.toHaveProperty("resolved");
+  });
 });
 
 describe("runCronIsolatedAgentTurn delivery instruction", () => {
