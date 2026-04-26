@@ -327,4 +327,40 @@ describe("handleWhatsAppAction", () => {
       }),
     );
   });
+
+  it("uses configured defaultAccount for action authorization when accountId is omitted", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "work",
+          actions: { reactions: true },
+          allowFrom: ["999@s.whatsapp.net"],
+          accounts: {
+            work: {
+              allowFrom: ["123@s.whatsapp.net"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "msg1",
+        emoji: "✅",
+      },
+      cfg,
+    );
+
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "+123",
+      "msg1",
+      "✅",
+      expect.objectContaining({
+        accountId: "work",
+      }),
+    );
+  });
 });

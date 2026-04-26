@@ -1,6 +1,5 @@
-import { resolveDefaultWhatsAppAccountId, resolveWhatsAppAccount } from "./accounts.js";
+import { resolveWhatsAppAccountPolicy } from "./account-policy.js";
 import {
-  DEFAULT_ACCOUNT_ID,
   loadSessionStore,
   normalizeChannelId,
   normalizeE164,
@@ -56,17 +55,17 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const resolvedAccountId =
-    opts.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg) || DEFAULT_ACCOUNT_ID;
-  const configuredAllowFrom = (
-    resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? []
-  )
+  const policy = resolveWhatsAppAccountPolicy({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const configuredAllowFrom = policy.configuredAllowFrom
     .filter((value) => value !== "*")
     .map(normalizeE164);
   const storeAllowFrom = readChannelAllowFromStoreSync(
     "whatsapp",
     process.env,
-    resolvedAccountId,
+    policy.accountId,
   ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
