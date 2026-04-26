@@ -28,7 +28,10 @@ export type CommandRegistrationResult = {
   error?: string;
 };
 
-export function validateCommandName(name: string): string | null {
+export function validateCommandName(
+  name: string,
+  opts?: { allowReservedCommandNames?: boolean },
+): string | null {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
 
   if (!trimmed) {
@@ -75,7 +78,7 @@ export function validateCommandName(name: string): string | null {
     "usage",
   ]);
 
-  if (reservedCommands.has(trimmed)) {
+  if (!opts?.allowReservedCommandNames && reservedCommands.has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -89,6 +92,7 @@ export function validateCommandName(name: string): string | null {
  */
 export function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
+  opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
   if (typeof command.handler !== "function") {
     return "Command handler must be a function";
@@ -113,7 +117,7 @@ export function validatePluginCommandDefinition(
       return `Agent prompt guidance ${index + 1} cannot be empty`;
     }
   }
-  const nameError = validateCommandName(command.name.trim());
+  const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
   }
@@ -121,7 +125,7 @@ export function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim());
+    const aliasError = validateCommandName(alias.trim(), opts);
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
@@ -160,14 +164,14 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string },
+  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
-  const definitionError = validatePluginCommandDefinition(command);
+  const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
     return { ok: false, error: definitionError };
   }

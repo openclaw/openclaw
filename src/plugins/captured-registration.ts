@@ -6,6 +6,15 @@ import type {
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type {
+  PluginAgentEventSubscriptionRegistration,
+  PluginControlUiDescriptor,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -56,6 +65,13 @@ export type CapturedPluginRegistration = {
   webSearchProviders: WebSearchProviderPlugin[];
   migrationProviders: MigrationProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
+  sessionExtensions: PluginSessionExtensionRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
+  toolMetadata: PluginToolMetadataRegistration[];
+  controlUiDescriptors: PluginControlUiDescriptor[];
+  runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
+  agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
+  sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   tools: AnyAgentTool[];
 };
 
@@ -84,6 +100,13 @@ export function createCapturedPluginRegistration(params?: {
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
+  const sessionExtensions: PluginSessionExtensionRegistration[] = [];
+  const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
+  const toolMetadata: PluginToolMetadataRegistration[] = [];
+  const controlUiDescriptors: PluginControlUiDescriptor[] = [];
+  const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
+  const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
+  const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
@@ -114,6 +137,13 @@ export function createCapturedPluginRegistration(params?: {
     webSearchProviders,
     migrationProviders,
     memoryEmbeddingProviders,
+    sessionExtensions,
+    trustedToolPolicies,
+    toolMetadata,
+    controlUiDescriptors,
+    runtimeLifecycles,
+    agentEventSubscriptions,
+    sessionSchedulerJobs,
     tools,
     api: buildPluginApi({
       id: pluginId,
@@ -209,6 +239,33 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
           memoryEmbeddingProviders.push(adapter);
+        },
+        registerSessionExtension(extension: PluginSessionExtensionRegistration) {
+          sessionExtensions.push(extension);
+        },
+        registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
+          trustedToolPolicies.push(policy);
+        },
+        registerToolMetadata(metadata: PluginToolMetadataRegistration) {
+          toolMetadata.push(metadata);
+        },
+        registerControlUiDescriptor(descriptor: PluginControlUiDescriptor) {
+          controlUiDescriptors.push(descriptor);
+        },
+        registerRuntimeLifecycle(lifecycle: PluginRuntimeLifecycleRegistration) {
+          runtimeLifecycles.push(lifecycle);
+        },
+        registerAgentEventSubscription(subscription: PluginAgentEventSubscriptionRegistration) {
+          agentEventSubscriptions.push(subscription);
+        },
+        registerSessionSchedulerJob(job: PluginSessionSchedulerJobRegistration) {
+          sessionSchedulerJobs.push(job);
+          return {
+            id: job.id,
+            pluginId: "captured-plugin-registration",
+            sessionKey: job.sessionKey,
+            kind: job.kind,
+          };
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

@@ -41,6 +41,10 @@ import type {
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -247,6 +251,10 @@ export function createHookRunner(
       left: acc?.prependContext,
       right: next.prependContext,
     }),
+    appendContext: concatOptionalTextSegments({
+      left: acc?.appendContext,
+      right: next.appendContext,
+    }),
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,
@@ -256,6 +264,23 @@ export function createHookRunner(
       right: next.appendSystemContext,
     }),
   });
+
+  const mergeAgentTurnPrepare = <
+    TResult extends { prependContext?: string; appendContext?: string },
+  >(
+    acc: TResult | undefined,
+    next: TResult,
+  ): TResult =>
+    ({
+      prependContext: concatOptionalTextSegments({
+        left: acc?.prependContext,
+        right: next.prependContext,
+      }),
+      appendContext: concatOptionalTextSegments({
+        left: acc?.appendContext,
+        right: next.appendContext,
+      }),
+    }) as TResult;
 
   const mergeBeforeAgentFinalize = (
     acc: PluginHookBeforeAgentFinalizeResult | undefined,
@@ -584,6 +609,18 @@ export function createHookRunner(
       event,
       ctx,
       { mergeResults: mergeBeforePromptBuild },
+    );
+  }
+
+  async function runAgentTurnPrepare(
+    event: PluginAgentTurnPrepareEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginAgentTurnPrepareResult | undefined> {
+    return runModifyingHook<"agent_turn_prepare", PluginAgentTurnPrepareResult>(
+      "agent_turn_prepare",
+      event,
+      ctx,
+      { mergeResults: mergeAgentTurnPrepare },
     );
   }
 
@@ -1142,6 +1179,16 @@ export function createHookRunner(
     return runVoidHook("gateway_stop", event, ctx);
   }
 
+  async function runHeartbeatPromptContribution(
+    event: PluginHeartbeatPromptContributionEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHeartbeatPromptContributionResult | undefined> {
+    return runModifyingHook<
+      "heartbeat_prompt_contribution",
+      PluginHeartbeatPromptContributionResult
+    >("heartbeat_prompt_contribution", event, ctx, { mergeResults: mergeAgentTurnPrepare });
+  }
+
   // =========================================================================
   // Skill Install Hooks
   // =========================================================================
@@ -1198,6 +1245,7 @@ export function createHookRunner(
   return {
     // Agent hooks
     runBeforeModelResolve,
+    runAgentTurnPrepare,
     runBeforePromptBuild,
     runBeforeAgentStart,
     runBeforeAgentReply,
@@ -1235,6 +1283,7 @@ export function createHookRunner(
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    runHeartbeatPromptContribution,
     // Install hooks
     runBeforeInstall,
     // Utility

@@ -266,8 +266,8 @@ export function buildInstalledPluginIndexRecords(params: {
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    if (record.syntheticAuthRefs?.length) {
+      indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
     }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;

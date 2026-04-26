@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./pi-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -101,6 +103,7 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
     );
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("groups core, plugin, and channel tools from the effective runtime set", async () => {
@@ -188,6 +191,42 @@ describe("resolveEffectiveToolInventory", () => {
     const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
 
     expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
+  });
+
+  it("projects plugin tool metadata into the effective inventory", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "docs",
+        pluginName: "Docs",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Docs Search",
+          description: "Curated docs lookup.",
+          risk: "low",
+          tags: ["docs", "fixture"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Docs Search",
+      description: "Curated docs lookup.",
+      rawDescription: "Curated docs lookup.",
+      source: "plugin",
+      pluginId: "docs",
+      risk: "low",
+      tags: ["docs", "fixture"],
+    });
   });
 
   it("prefers displaySummary over raw description", async () => {

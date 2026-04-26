@@ -3,7 +3,10 @@ import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
 } from "../../../context-engine/types.js";
+import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import type {
+  PluginAgentTurnPrepareResult,
+  PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
@@ -22,7 +25,25 @@ import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PromptBuildHookRunner = {
-  hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
+  hasHooks: (
+    hookName:
+      | "agent_turn_prepare"
+      | "heartbeat_prompt_contribution"
+      | "before_prompt_build"
+      | "before_agent_start",
+  ) => boolean;
+  runAgentTurnPrepare?: (
+    event: {
+      prompt: string;
+      messages: unknown[];
+      queuedInjections: PluginNextTurnInjectionRecord[];
+    },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
+  runHeartbeatPromptContribution?: (
+    event: { sessionKey?: string; agentId?: string; heartbeatName?: string },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | undefined>;
   runBeforePromptBuild: (
     event: { prompt: string; messages: unknown[] },
     ctx: PluginHookAgentContext,
@@ -40,6 +61,43 @@ export async function resolvePromptBuildHookResult(params: {
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<PluginHookBeforePromptBuildResult> {
+  const queuedContext = await drainPluginNextTurnInjectionContext({
+    sessionKey: params.hookCtx.sessionKey,
+  });
+  const turnPrepareResult =
+    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
+      ? await params.hookRunner
+          .runAgentTurnPrepare(
+            {
+              prompt: params.prompt,
+              messages: params.messages,
+              queuedInjections: queuedContext.queuedInjections,
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
+            return undefined;
+          })
+      : undefined;
+  const heartbeatContribution =
+    params.hookCtx.trigger === "heartbeat" &&
+    params.hookRunner?.runHeartbeatPromptContribution &&
+    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
+      ? await params.hookRunner
+          .runHeartbeatPromptContribution(
+            {
+              sessionKey: params.hookCtx.sessionKey,
+              agentId: params.hookCtx.agentId,
+              heartbeatName: "heartbeat",
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
+            return undefined;
+          })
+      : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -75,8 +133,18 @@ export async function resolvePromptBuildHookResult(params: {
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
+      queuedContext.prependContext,
+      turnPrepareResult?.prependContext,
+      heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
+    ]),
+    appendContext: joinPresentTextSegments([
+      queuedContext.appendContext,
+      turnPrepareResult?.appendContext,
+      heartbeatContribution?.appendContext,
+      promptBuildResult?.appendContext,
+      legacyResult?.appendContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,

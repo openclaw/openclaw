@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -241,17 +242,31 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      entry.metadata.toolName,
+      entry.metadata,
+    ]),
+  );
 
   const entries = disambiguateLabels(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
+        const metadata = pluginToolMetadata.get(tool.name);
         return Object.assign(
           {
             id: tool.name,
-            label: resolveEffectiveToolLabel(tool),
-            description: summarizeToolDescription(tool),
-            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+            label:
+              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
+            description:
+              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+            rawDescription:
+              normalizeOptionalString(metadata?.description) ??
+              resolveRawToolDescription(tool) ??
+              summarizeToolDescription(tool),
+            ...(metadata?.risk ? { risk: metadata.risk } : {}),
+            ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
           source,
         ) satisfies EffectiveToolInventoryEntry;

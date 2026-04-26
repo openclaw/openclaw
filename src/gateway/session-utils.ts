@@ -50,6 +50,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -1421,6 +1422,9 @@ export function buildGatewaySessionRow(params: {
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
   const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const pluginExtensions = entry
+    ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
+    : [];
 
   return {
     key,
@@ -1484,6 +1488,7 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }
 

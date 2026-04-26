@@ -172,8 +172,13 @@ describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
     return {
       hasHooks: vi.fn(
-        (hookName: "before_prompt_build" | "before_agent_start") =>
-          hookName === "before_agent_start",
+        (
+          hookName:
+            | "agent_turn_prepare"
+            | "heartbeat_prompt_contribution"
+            | "before_prompt_build"
+            | "before_agent_start",
+        ) => hookName === "before_agent_start",
       ),
       runBeforePromptBuild: vi.fn(async () => undefined),
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
@@ -193,6 +198,7 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
       prependContext: "from-cache",
+      appendContext: undefined,
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
       appendSystemContext: undefined,
@@ -219,11 +225,13 @@ describe("resolvePromptBuildHookResult", () => {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
         prependContext: "prompt context",
+        appendContext: "prompt append context",
         prependSystemContext: "prompt prepend",
         appendSystemContext: "prompt append",
       })),
       runBeforeAgentStart: vi.fn(async () => ({
         prependContext: "legacy context",
+        appendContext: "legacy append context",
         prependSystemContext: "legacy prepend",
         appendSystemContext: "legacy append",
       })),
@@ -237,8 +245,44 @@ describe("resolvePromptBuildHookResult", () => {
     });
 
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.appendContext).toBe("prompt append context\n\nlegacy append context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+
+  it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
+      runHeartbeatPromptContribution: vi.fn(async () => ({
+        prependContext: "heartbeat prepend",
+        appendContext: "heartbeat append",
+      })),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const heartbeatResult = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).toHaveBeenCalledTimes(1);
+    expect(heartbeatResult.prependContext).toBe("heartbeat prepend");
+    expect(heartbeatResult.appendContext).toBe("heartbeat append");
+
+    hookRunner.runHeartbeatPromptContribution.mockClear();
+    const userResult = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "user", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
+    expect(userResult.prependContext).toBeUndefined();
+    expect(userResult.appendContext).toBeUndefined();
   });
 });
 
