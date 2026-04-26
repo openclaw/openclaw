@@ -1825,6 +1825,148 @@ npm_global_bin_dir() {
     return 1
 }
 
+canonicalize_dir() {
+    local dir="$1"
+    if [[ -z "$dir" || ! -d "$dir" ]]; then
+        return 1
+    fi
+    (cd "$dir" 2>/dev/null && pwd -P) || return 1
+}
+
+openclaw_package_version() {
+    local package_json="$1"
+    if [[ ! -f "$package_json" ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    local version=""
+    if command -v node >/dev/null 2>&1; then
+        version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(String(pkg.version || "unknown"));' "$package_json" 2>/dev/null || true)"
+    fi
+    if [[ -z "$version" ]]; then
+        version="$(sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1)"
+    fi
+    echo "${version:-unknown}"
+}
+
+emit_npm_root_candidate() {
+    local root="${1%/}"
+    if [[ -n "$root" && "$root" == /* ]]; then
+        echo "$root"
+    fi
+}
+
+collect_openclaw_npm_root_candidates() {
+    local root=""
+    root="$(npm root -g 2>/dev/null || true)"
+    emit_npm_root_candidate "$root"
+
+    local npm_cmd=""
+    while IFS= read -r npm_cmd; do
+        [[ -n "$npm_cmd" ]] || continue
+        root="$("$npm_cmd" root -g 2>/dev/null || true)"
+        emit_npm_root_candidate "$root"
+    done < <(type -aP npm 2>/dev/null | awk '!seen[$0]++' || true)
+
+    local extra_root=""
+    local old_ifs="$IFS"
+    IFS=":"
+    for extra_root in ${OPENCLAW_INSTALL_EXTRA_NPM_ROOTS:-}; do
+        emit_npm_root_candidate "$extra_root"
+    done
+    IFS="$old_ifs"
+
+    emit_npm_root_candidate "/opt/homebrew/lib/node_modules"
+    emit_npm_root_candidate "/usr/local/lib/node_modules"
+    emit_npm_root_candidate "/usr/lib/node_modules"
+
+    local manager_dir=""
+    local candidate=""
+    for manager_dir in "${NVM_DIR:-}" "$HOME/.nvm"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/versions/node/*/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+
+    for manager_dir in "${FNM_DIR:-}" "$HOME/.fnm" "$HOME/.local/share/fnm"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/node-versions/*/installation/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+
+    for manager_dir in "${VOLTA_HOME:-}" "$HOME/.volta"; do
+        [[ -n "$manager_dir" && -d "$manager_dir" ]] || continue
+        for candidate in "$manager_dir"/tools/image/node/*/lib/node_modules; do
+            [[ -d "$candidate" ]] && emit_npm_root_candidate "$candidate"
+        done
+    done
+}
+
+find_openclaw_global_installs() {
+    local seen="|"
+    local npm_root=""
+    while IFS= read -r npm_root; do
+        [[ -n "$npm_root" ]] || continue
+        local package_dir="${npm_root%/}/openclaw"
+        local package_json="${package_dir}/package.json"
+        [[ -f "$package_json" ]] || continue
+
+        local real_package_dir=""
+        real_package_dir="$(canonicalize_dir "$package_dir" || true)"
+        [[ -n "$real_package_dir" ]] || real_package_dir="$package_dir"
+        case "$seen" in
+            *"|${real_package_dir}|"*) continue ;;
+        esac
+        seen="${seen}${real_package_dir}|"
+
+        local version=""
+        version="$(openclaw_package_version "$package_json")"
+        printf '%s\t%s\t%s\n' "$version" "$real_package_dir" "$npm_root"
+    done < <(collect_openclaw_npm_root_candidates)
+}
+
+warn_duplicate_openclaw_global_installs() {
+    local installs=()
+    local line=""
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && installs+=("$line")
+    done < <(find_openclaw_global_installs)
+
+    if [[ "${#installs[@]}" -le 1 ]]; then
+        return 0
+    fi
+
+    ui_warn "Multiple OpenClaw global installs detected"
+    echo "  Different Node/npm environments can run different OpenClaw versions."
+
+    local active_node active_npm active_openclaw
+    active_node="$(command -v node 2>/dev/null || true)"
+    active_npm="$(command -v npm 2>/dev/null || true)"
+    active_openclaw="${OPENCLAW_BIN:-}"
+    if [[ -z "$active_openclaw" ]]; then
+        active_openclaw="$(type -P openclaw 2>/dev/null || true)"
+    fi
+    echo -e "  Active node: ${INFO}${active_node:-none}${NC}"
+    echo -e "  Active npm: ${INFO}${active_npm:-none}${NC}"
+    echo -e "  Active openclaw: ${INFO}${active_openclaw:-none}${NC}"
+    echo ""
+    echo "  Found installs:"
+
+    local install version package_dir npm_root
+    for install in "${installs[@]}"; do
+        IFS=$'\t' read -r version package_dir npm_root <<< "$install"
+        echo -e "    - ${INFO}${version:-unknown}${NC}  ${package_dir}"
+        echo -e "      npm root: ${MUTED}${npm_root}${NC}"
+    done
+
+    echo ""
+    echo "  Keep one install source, then remove stale installs with that environment's npm:"
+    echo "    npm uninstall -g openclaw"
+}
+
 refresh_shell_command_cache() {
     hash -r 2>/dev/null || true
 }
@@ -2435,6 +2577,7 @@ main() {
     ui_stage "Finalizing setup"
 
     OPENCLAW_BIN="$(resolve_openclaw_bin || true)"
+    warn_duplicate_openclaw_global_installs || true
 
     # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
     local npm_bin=""
