@@ -67,6 +67,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure`
+  and show daemon state separately when available, so `gateway.tailscale.mode:
+"off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
+  Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when
   the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables
   itself for the current Gateway process after repeated failed restarts while
@@ -98,6 +102,9 @@ Docs: https://docs.openclaw.ai
 - Agents/ACP: hide `sessions_spawn` ACP runtime options unless an ACP backend is
   loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled
   `acpx`. Thanks @vincentkoc.
+- Media delivery: avoid sending generated image attachments twice when the
+  assistant reply already includes explicit `MEDIA:` lines for the same turn,
+  and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.
@@ -108,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
 - Plugins/update: restore previous plugin index records if core update or channel setup hits a concurrent config write conflict after plugin metadata changes. Thanks @shakkernerd.
 - Plugins/onboarding: defer channel/provider plugin install records until the owning config write commits, keeping setup failures from advancing the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
+- Plugins/config: route configure and agent setup writes with pending plugin install records through the plugin index commit helper so provider onboarding metadata is not stripped by plain config writes. Thanks @shakkernerd.
 - Sessions: keep embedded runtime context out of the visible user prompt by
   sending it as a hidden next-turn custom message, and teach doctor to repair
   affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.
