@@ -128,6 +128,7 @@ describe("install.ps1 failure handling", () => {
         "function Ensure-Node { return $true }",
         "function Add-ToPath { param([string]$Path) }",
         "function Invoke-NativeCommandCapture {",
+        "  param([string]$FilePath, [string[]]$Arguments)",
         "  return @{ ExitCode = 0; Stdout = 'npm stdout'; Stderr = 'npm stderr' }",
         "}",
         "$NoOnboard = $true",
