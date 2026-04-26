@@ -154,14 +154,14 @@ Example:
 
 `openclaw.install` is package metadata, not manifest metadata.
 
-| Field                        | Type                 | What it means                                                                    |
-| ---------------------------- | -------------------- | -------------------------------------------------------------------------------- |
-| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                     |
-| `localPath`                  | `string`             | Local development or bundled install path.                                       |
-| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                |
-| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                        |
-| `expectedIntegrity`          | `string`             | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.   |
-| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
+| Field                        | Type                 | What it means                                                                     |
+| ---------------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                      |
+| `localPath`                  | `string`             | Local development or bundled install path.                                        |
+| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                 |
+| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
+| `expectedIntegrity`          | `string`             | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
+| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">

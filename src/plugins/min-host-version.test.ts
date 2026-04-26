@@ -59,6 +59,13 @@ describe("min-host-version", () => {
     expect(parseMinHostVersionRequirement(">=2026.3.22")).toEqual(MIN_HOST_REQUIREMENT);
   });
 
+  it("parses prerelease semver floors", () => {
+    expect(parseMinHostVersionRequirement(">=2026.4.25-beta.1")).toEqual({
+      raw: ">=2026.4.25-beta.1",
+      minimumLabel: "2026.4.25-beta.1",
+    });
+  });
+
   it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
     "rejects invalid floor syntax and host checks: %p",
     (minHostVersion) => {
@@ -98,6 +105,42 @@ describe("min-host-version", () => {
     "accepts equal or newer hosts: %s",
     (currentVersion) => {
       expectValidHostCheck(currentVersion, ">=2026.3.22");
+    },
+  );
+
+  it.each(["2026.4.25-beta.1", "2026.4.25-beta.10", "2026.4.25"] as const)(
+    "accepts hosts at or above a prerelease floor: %s",
+    (currentVersion) => {
+      expectHostCheckResult({
+        currentVersion,
+        minHostVersion: ">=2026.4.25-beta.1",
+        expected: {
+          ok: true,
+          requirement: {
+            raw: ">=2026.4.25-beta.1",
+            minimumLabel: "2026.4.25-beta.1",
+          },
+        },
+      });
+    },
+  );
+
+  it.each(["2026.4.24", "2026.4.25-beta.0"] as const)(
+    "rejects hosts below a prerelease floor: %s",
+    (currentVersion) => {
+      expectHostCheckResult({
+        currentVersion,
+        minHostVersion: ">=2026.4.25-beta.1",
+        expected: {
+          ok: false,
+          kind: "incompatible",
+          currentVersion,
+          requirement: {
+            raw: ">=2026.4.25-beta.1",
+            minimumLabel: "2026.4.25-beta.1",
+          },
+        },
+      });
     },
   );
 });

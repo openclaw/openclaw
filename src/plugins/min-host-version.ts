@@ -1,15 +1,14 @@
-import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { satisfies, validRange, validSemver } from "./semver.runtime.js";
 
 export const MIN_HOST_VERSION_FORMAT =
-  'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z"';
-const MIN_HOST_VERSION_RE = /^>=(\d+)\.(\d+)\.(\d+)$/;
+  'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z" or ">=x.y.z-prerelease"';
+const MIN_HOST_VERSION_RE = /^>=(\S+)$/;
 
 export type MinHostVersionRequirement = {
   raw: string;
   minimumLabel: string;
 };
-
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type MinHostVersionCheckResult =
   | { ok: true; requirement: MinHostVersionRequirement | null }
@@ -34,8 +33,8 @@ export function parseMinHostVersionRequirement(raw: unknown): MinHostVersionRequ
   if (!match) {
     return null;
   }
-  const minimumLabel = `${match[1]}.${match[2]}.${match[3]}`;
-  if (!parseSemver(minimumLabel)) {
+  const minimumLabel = match[1] ?? "";
+  if (!validSemver(minimumLabel) || !validRange(trimmed)) {
     return null;
   }
   return {
@@ -63,7 +62,7 @@ export function checkMinHostVersion(params: {
     return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
   }
   const currentVersion = normalizeOptionalString(params.currentVersion) || "unknown";
-  const currentSemver = parseSemver(currentVersion);
+  const currentSemver = validSemver(currentVersion);
   if (!currentSemver) {
     return {
       ok: false,
@@ -71,8 +70,7 @@ export function checkMinHostVersion(params: {
       requirement,
     };
   }
-  const minimumSemver = parseSemver(requirement.minimumLabel)!;
-  if (!isAtLeast(currentSemver, minimumSemver)) {
+  if (!satisfies(currentSemver, requirement.raw, { includePrerelease: true })) {
     return {
       ok: false,
       kind: "incompatible",
