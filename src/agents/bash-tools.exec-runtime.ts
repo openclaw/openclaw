@@ -12,7 +12,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { parseAgentSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { scopedExecEventWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -128,31 +128,6 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
-const EXEC_EVENT_HEARTBEAT_OVERRIDE = {
-  target: "last",
-  to: undefined,
-  accountId: undefined,
-  isolatedSession: false,
-} as const;
-
-function scopedExecEventWakeOptions(sessionKey: string) {
-  const wakeOptions = { reason: "exec-event", coalesceMs: 0 };
-  if (parseAgentSessionKey(sessionKey)) {
-    return scopedHeartbeatWakeOptions(sessionKey, {
-      ...wakeOptions,
-      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
-    });
-  }
-  if (sessionKey.trim() === "global") {
-    return {
-      ...wakeOptions,
-      sessionKey: "global",
-      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
-    };
-  }
-  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
-}
-
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
