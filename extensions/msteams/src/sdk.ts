@@ -211,13 +211,42 @@ function createManagedIdentityApp(
 
   const tokenProvider = async (scope: string | string[]): Promise<string> => {
     const credential = await getCredential();
-    const token = await credential.getToken(scope);
 
-    if (!token?.token) {
-      throw new Error("Failed to acquire token via managed identity.");
+    // When using User-Assigned Managed Identity with a federated identity
+    // credential, we must perform a token exchange:
+    // 1. Get an MI token for the federated exchange audience
+    // 2. Use it as a client_assertion to acquire a token for the Bot App ID
+    // This is necessary because the MI token's appid (the UAMI client ID)
+    // differs from the Bot App ID that the Bot Framework expects.
+    const miToken = await credential.getToken("api://AzureADTokenExchange");
+    if (!miToken?.token) {
+      throw new Error("Failed to acquire MI token for federated token exchange.");
     }
 
-    return token.token;
+    const targetScope = Array.isArray(scope) ? scope.join(" ") : scope;
+    const params = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: creds.appId,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: miToken.token,
+      scope: targetScope || "https://api.botframework.com/.default",
+    });
+
+    const url = `https://login.microsoftonline.com/${creds.tenantId}/oauth2/v2.0/token`;
+    const resp = await fetch(url, {
+      method: "POST",
+      body: params,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    const data = (await resp.json()) as { access_token?: string; error?: string; error_description?: string };
+
+    if (!data.access_token) {
+      throw new Error(
+        `Federated token exchange failed: ${data.error ?? "unknown"} - ${data.error_description ?? JSON.stringify(data)}`,
+      );
+    }
+
+    return data.access_token;
   };
 
   return new sdk.App({
