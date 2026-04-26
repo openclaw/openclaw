@@ -104,6 +104,9 @@ describe("bundled plugin load path repair", () => {
     const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([bundledPath]));
 
     expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.changes).toEqual([
+      `- plugins.load.paths: removed bundled feishu path ${bundledPath}`,
+    ]);
   });
 
   it("derives legacy paths from the bundled directory name instead of plugin id", () => {

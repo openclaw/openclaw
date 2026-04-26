@@ -153,13 +153,11 @@ export function maybeRepairBundledPluginLoadPaths(
     if (hit) {
       continue;
     }
-    const replacement = entry;
-    const replacementResolved = normalizeBundledLookupPath(resolveUserPath(replacement, env));
-    if (seen.has(replacementResolved)) {
+    if (seen.has(resolved)) {
       continue;
     }
-    seen.add(replacementResolved);
-    rewritten.push(replacement);
+    seen.add(resolved);
+    rewritten.push(entry);
   }
 
   next.plugins = {
