@@ -14,6 +14,7 @@ import {
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -527,7 +528,15 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  const outputText = extractToolResultText(sanitizedResult);
+  const rawOutputText = extractToolResultText(sanitizedResult);
+  const privacyConfig = ctx.params.config?.privacy;
+  const outputText =
+    rawOutputText &&
+    privacyConfig?.enabled &&
+    privacyConfig.pii?.enabled &&
+    privacyConfig.pii.toolOutputs !== false
+      ? redactPiiText(rawOutputText, privacyConfig)
+      : rawOutputText;
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)

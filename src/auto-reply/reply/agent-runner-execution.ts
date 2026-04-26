@@ -42,6 +42,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { redactPiiText } from "../../privacy/payload-redact.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -670,6 +671,15 @@ export async function runAgentTurnWithFallback(params: {
   replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+
+  // Privacy: optionally redact PII from inbound user messages before they
+  // reach the LLM.  Off by default (pii.userMessages is false unless set).
+  const privacyCfg = params.followupRun.run.config?.privacy;
+  const commandBody =
+    privacyCfg?.enabled && privacyCfg.pii?.enabled && privacyCfg.pii.userMessages === true
+      ? redactPiiText(params.commandBody, privacyCfg)
+      : params.commandBody;
+
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -1049,9 +1059,9 @@ export async function runAgentTurnWithFallback(params: {
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
-                  prompt: params.commandBody,
+                  prompt: commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
-                  provider: cliExecutionProvider,
+                  provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
@@ -1178,7 +1188,7 @@ export async function runAgentTurnWithFallback(params: {
                   ? { agentHarnessId: agentRuntimeOverride }
                   : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,
-                prompt: params.commandBody,
+                prompt: commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
@@ -1792,7 +1802,7 @@ export async function runAgentTurnWithFallback(params: {
     applyOpenAIGptChatReplyGuard({
       provider: fallbackProvider,
       model: fallbackModel,
-      commandBody: params.commandBody,
+      commandBody,
       isHeartbeat: params.isHeartbeat,
       payloads: runResult.payloads,
     });

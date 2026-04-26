@@ -5,6 +5,8 @@ import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { applyRuntimeLineMasking, redactContextFileContent } from "../privacy/payload-redact.js";
+import type { PrivacyConfig } from "../privacy/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -495,6 +497,8 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Privacy/redaction config applied before content leaves the machine. */
+  privacyConfig?: PrivacyConfig;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -950,8 +954,21 @@ export function buildAgentSystemPrompt(params: {
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
   const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
-  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
-  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  // Apply privacy redaction to context file contents before building prompt sections
+  const redactedContextFiles = orderedContextFiles
+    .map((file) => ({
+      ...file,
+      content: redactContextFileContent(file.path, file.content, params.privacyConfig),
+    }))
+    .filter(
+      (file) => !(file.content === "" && params.privacyConfig?.systemPrompt?.suppressContextFiles),
+    );
+  const stableContextFiles = redactedContextFiles.filter(
+    (file) => !isDynamicContextFile(file.path),
+  );
+  const dynamicContextFiles = redactedContextFiles.filter((file) =>
+    isDynamicContextFile(file.path),
+  );
   lines.push(
     ...buildProjectContextSection({
       files: stableContextFiles,
@@ -1003,9 +1020,16 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
+  const rawRuntimeLine = buildRuntimeLine(
+    runtimeInfo,
+    runtimeChannel,
+    runtimeCapabilities,
+    params.defaultThinkLevel,
+  );
+  const maskedRuntimeLine = applyRuntimeLineMasking(rawRuntimeLine, params.privacyConfig);
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    maskedRuntimeLine,
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 

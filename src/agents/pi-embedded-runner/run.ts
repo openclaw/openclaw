@@ -835,6 +835,24 @@ export async function runEmbeddedPiAgent(
             },
           });
 
+          // Privacy: block image/media attachments before they reach the LLM provider.
+          const embeddedPrivacy = params.config?.privacy;
+          const embeddedImages =
+            embeddedPrivacy?.enabled && embeddedPrivacy.media?.blockAttachments
+              ? (() => {
+                  if (
+                    params.images &&
+                    params.images.length > 0 &&
+                    embeddedPrivacy.media.warnOnBlock !== false
+                  ) {
+                    process.stderr.write(
+                      `[privacy] dropped ${params.images.length} image attachment(s) — privacy.media.blockAttachments=true\n`,
+                    );
+                  }
+                  return undefined;
+                })()
+              : params.images;
+
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
@@ -872,7 +890,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
-            images: params.images,
+            images: embeddedImages,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,

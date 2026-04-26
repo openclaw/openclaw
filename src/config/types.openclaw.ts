@@ -1,3 +1,4 @@
+import type { PrivacyConfig } from "../privacy/types.js";
 import type {
   SilentReplyPolicyShape,
   SilentReplyRewriteShape,
@@ -135,6 +136,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  /** Controls what data is included in LLM inference payloads. */
+  privacy?: PrivacyConfig;
 };
 
 declare const openClawConfigStateBrand: unique symbol;
