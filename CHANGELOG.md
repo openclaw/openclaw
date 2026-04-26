@@ -165,6 +165,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Bedrock: defer the AWS SDK import until Bedrock discovery actually runs so plugin registration and setup stay lightweight on cold start. Fixes #71690. Thanks @jarvis-ai-gregmoser.
 - Installer/macOS: stop immediately when Homebrew `node@24` installation fails and avoid printing PATH advice for missing Homebrew Node installs. Fixes #70411. Thanks @1fanwang.
 - WhatsApp: remove ack reactions after a visible reply when `messages.removeAckAfterReply` is enabled, matching other reaction-capable channels. Fixes #26183. Thanks @MrUnforsaken.
+- CLI/update: keep Windows update restarts hidden without `findstr`, preserving the scheduled-task end/wait/run order and stale-listener cleanup. Fixes #59394 and #57682; addresses the stale-listener portion of #69970. Thanks @sherlock-huang.
 - Providers/Z.AI: map OpenClaw thinking controls to Z.AI's `thinking` payload and add opt-in preserved thinking replay via `params.preserveThinking`, so GLM 5.x can keep prior `reasoning_content` when requested. Fixes #58680. Thanks @xuanmingguo.
 - Channels/status: keep read-only channel lists on manifest and package metadata by default, loading setup runtime only for explicit fallback callers. Thanks @shakkernerd.
 - Plugins: scope setup and web-provider metadata manifest reads to explicit plugin ids when callers already know the owning plugin set. Thanks @vincentkoc.
