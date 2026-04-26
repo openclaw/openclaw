@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Codex/agent: translate `--thinking minimal` to `low` for modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) at request build time so the first turn is accepted instead of paying a wasted call + retry-with-low fallback. Older Codex models still receive `minimal` directly. Fixes #71946. Thanks @hclsys.
 - TTS/WhatsApp: add `/tts latest` read-aloud support with duplicate suppression and `/tts chat on|off|default` session-scoped auto-TTS overrides, completing the on-demand voice-note UX for current-chat replies. Fixes #66032.
 - Plugins/tokenjuice: bump the bundled tokenjuice runtime to 0.6.3. Thanks @vincentkoc.
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices while keeping shared provider credentials and preferences in the existing TTS config surface.
