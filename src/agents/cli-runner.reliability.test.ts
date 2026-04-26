@@ -8,6 +8,7 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -750,6 +752,55 @@ describe("runCliAgent reliability", () => {
       });
     } finally {
       historySpy.mockRestore();
+    }
+  });
+
+  it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: dir,
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+              args: ["exec"],
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        },
+      },
+    };
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "current ask",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        timeoutMs: 1_000,
+        runId: "run-history-hook",
+      });
+
+      expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
+      expect(context.openClawHistoryPrompt).toContain("User: earlier ask");
+      expect(context.openClawHistoryPrompt).toContain("hook context");
+      expect(context.openClawHistoryPrompt).toContain("current ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
