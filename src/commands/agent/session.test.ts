@@ -29,6 +29,10 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
+  resolveDefaultAgentId: (cfg: OpenClawConfig) => {
+    const agents = cfg.agents?.list ?? [];
+    return agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+  },
 }));
 
 describe("resolveSessionKeyForRequest", () => {
@@ -72,6 +76,70 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
     expect(result.sessionKey).toBe("agent:main:main");
+  });
+
+  it("uses the configured default agent store for new --to sessions", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {},
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+      } satisfies OpenClawConfig,
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("resumes legacy main-store main-key sessions for plain --to default-agent requests", async () => {
+    setupMainAndMybotStorePaths();
+    const mainStore = {
+      "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
+    };
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: mainStore,
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+      } satisfies OpenClawConfig,
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:main");
+    expect(result.sessionStore).toBe(mainStore);
+    expect(result.storePath).toBe(MAIN_STORE_PATH);
+  });
+
+  it("prefers the configured default-agent session over legacy main-store rows", async () => {
+    setupMainAndMybotStorePaths();
+    const mybotStore = {
+      "agent:mybot:main": { sessionId: "current-session-id", updatedAt: 2 },
+    };
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
+      },
+      [MYBOT_STORE_PATH]: mybotStore,
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+      } satisfies OpenClawConfig,
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.sessionStore).toBe(mybotStore);
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
   it("finds session by sessionId via reverse lookup in primary store", async () => {
