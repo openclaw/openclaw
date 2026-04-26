@@ -69,18 +69,11 @@ function stripInlineLeakedInternalContext(value: string): string {
 
 function sanitizeTaskStatusValue(value: unknown, errorContext: boolean): unknown {
   if (typeof value === "string") {
-    const withoutInlineInternalContext = stripInlineLeakedInternalContext(value);
-    const sanitized = sanitizeUserFacingText(withoutInlineInternalContext, {
+    const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value), {
       errorContext,
     })
       .replace(/\s+/g, " ")
       .trim();
-    if (!sanitized && withoutInlineInternalContext !== value) {
-      const visiblePrefix = withoutInlineInternalContext.replace(/\s+/g, " ").trim();
-      if (visiblePrefix) {
-        return visiblePrefix;
-      }
-    }
     return sanitized || undefined;
   }
   if (Array.isArray(value)) {
