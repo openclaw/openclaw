@@ -236,11 +236,6 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
 } from "./attempt.thread-helpers.js";
-import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
-import {
-  wrapStreamFnSanitizeMalformedToolCalls,
-  wrapStreamFnTrimToolCallNames,
-} from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
