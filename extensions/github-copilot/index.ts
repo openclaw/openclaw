@@ -1,7 +1,7 @@
 import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
@@ -42,7 +42,7 @@ function positiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
-export function mapCopilotWireModel(entry: CopilotModelWireEntry): ProviderRuntimeModel | null {
+export function mapCopilotWireModel(entry: CopilotModelWireEntry): ModelDefinitionConfig | null {
   const id =
     typeof entry.id === "string" && entry.id.trim()
       ? entry.id.trim()
@@ -64,8 +64,8 @@ export function mapCopilotWireModel(entry: CopilotModelWireEntry): ProviderRunti
     ? supports.reasoning_effort
     : [];
 
-  const contextWindow = positiveInteger(limits.max_context_window_tokens);
-  const maxTokens = positiveInteger(limits.max_output_tokens);
+  const contextWindow = positiveInteger(limits.max_context_window_tokens) ?? 128_000;
+  const maxTokens = positiveInteger(limits.max_output_tokens) ?? 8192;
   const supportsVision = supports.vision === true || Boolean(limits.vision);
   const supportsReasoning = reasoningEfforts.some(
     (level) => typeof level === "string" && level.trim().toLowerCase() !== "none",
@@ -74,36 +74,38 @@ export function mapCopilotWireModel(entry: CopilotModelWireEntry): ProviderRunti
   return {
     id,
     name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : id,
-    provider: PROVIDER_ID,
     api: endpoints.some((endpoint) => endpoint.includes("/v1/messages"))
       ? "anthropic-messages"
       : "openai-responses",
     reasoning: supportsReasoning,
     input: supportsVision ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...(contextWindow ? { contextWindow } : {}),
-    ...(maxTokens ? { maxTokens } : {}),
-    metadataSource: "github-copilot:/models",
-  } as ProviderRuntimeModel;
+    contextWindow,
+    maxTokens,
+    metadataSource: "models-add",
+  };
 }
 
 async function fetchCopilotModelCatalog(params: {
   baseUrl: string;
   token: string;
   timeoutMs?: number;
-  fetchFn?: typeof fetch;
-}): Promise<ProviderRuntimeModel[]> {
-  const response = await (params.fetchFn ?? fetch)(`${params.baseUrl.replace(/\/+$/, "")}/models`, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${params.token}`,
-      "Copilot-Integration-Id": "vscode-chat",
-      "Editor-Plugin-Version": "copilot-chat/0.35.0",
-      "Editor-Version": "vscode/1.96.2",
-      "User-Agent": "GitHubCopilotChat/0.26.7",
+  fetchImpl?: typeof fetch;
+}): Promise<ModelDefinitionConfig[]> {
+  const response = await (params.fetchImpl ?? fetch)(
+    `${params.baseUrl.replace(/\/+$/, "")}/models`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${params.token}`,
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Plugin-Version": "copilot-chat/0.35.0",
+        "Editor-Version": "vscode/1.96.2",
+        "User-Agent": "GitHubCopilotChat/0.26.7",
+      },
+      ...(params.timeoutMs ? { signal: AbortSignal.timeout(params.timeoutMs) } : {}),
     },
-    ...(params.timeoutMs ? { signal: AbortSignal.timeout(params.timeoutMs) } : {}),
-  });
+  );
   if (!response.ok) {
     return [];
   }
@@ -119,7 +121,7 @@ async function fetchCopilotModelCatalog(params: {
 
   return models
     .map((entry) => mapCopilotWireModel(entry as CopilotModelWireEntry))
-    .filter((entry): entry is ProviderRuntimeModel => entry !== null);
+    .filter((entry): entry is ModelDefinitionConfig => entry !== null);
 }
 
 type GithubCopilotPluginConfig = {
@@ -254,7 +256,6 @@ export default definePluginEntry({
             ? await fetchCopilotModelCatalog({
                 baseUrl,
                 token: apiToken,
-                fetchFn: ctx.fetchFn,
                 timeoutMs: 10_000,
               }).catch(() => [])
             : [];

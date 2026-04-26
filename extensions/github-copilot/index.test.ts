@@ -140,13 +140,12 @@ describe("github-copilot plugin", () => {
     expect(result).toMatchObject({
       id: "gpt-5.5",
       name: "GPT-5.5",
-      provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 400_000,
       maxTokens: 128_000,
-      metadataSource: "github-copilot:/models",
+      metadataSource: "models-add",
     });
   });
 
@@ -156,6 +155,7 @@ describe("github-copilot plugin", () => {
       baseUrl: "https://api.githubcopilot.live",
     });
     const provider = registerProviderWithPluginConfig({});
+    const originalFetch = globalThis.fetch;
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -179,30 +179,34 @@ describe("github-copilot plugin", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    const result = await provider.catalog.run({
-      config: {},
-      agentDir: "/tmp/agent",
-      env: { GH_TOKEN: "gh_test_token" },
-      fetchFn: fetchMock,
-      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
-    } as never);
+    try {
+      const result = await provider.catalog.run({
+        config: {},
+        agentDir: "/tmp/agent",
+        env: { GH_TOKEN: "gh_test_token" },
+        resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      } as never);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.githubcopilot.live/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer copilot_api_token",
-          "Copilot-Integration-Id": "vscode-chat",
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.githubcopilot.live/models",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer copilot_api_token",
+            "Copilot-Integration-Id": "vscode-chat",
+          }),
         }),
-      }),
-    );
-    expect(result.provider.models).toEqual([
-      expect.objectContaining({
-        id: "gpt-5.5",
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    ]);
+      );
+      expect(result.provider.models).toEqual([
+        expect.objectContaining({
+          id: "gpt-5.5",
+          contextWindow: 400_000,
+          maxTokens: 128_000,
+        }),
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
