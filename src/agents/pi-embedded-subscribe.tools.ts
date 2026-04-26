@@ -1,5 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import {
@@ -130,7 +131,8 @@ export function sanitizeToolResult(result: unknown): unknown {
     const entry = item as Record<string, unknown>;
     const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
-      return Object.assign({}, entry, { text: truncateToolText(entry.text) });
+      const redacted = redactSensitiveText(entry.text, { mode: "tools" });
+      return Object.assign({}, entry, { text: truncateToolText(redacted) });
     }
     if (type === "image") {
       const data = readStringValue(entry.data);
