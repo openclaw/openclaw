@@ -1180,6 +1180,60 @@ describe("qa mock openai server", () => {
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
+    const threadMemorySearchFromContext = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Prior qa-channel context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySearchFromContext.status).toBe(200);
+    expect(await threadMemorySearchFromContext.text()).toContain('"name":"memory_search"');
+
+    const threadMemoryFinalFromContext = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "Prior qa-channel context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({ text: "Thread-hidden codename: ORBIT-22." }),
+          },
+        ],
+      }),
+    });
+    expect(threadMemoryFinalFromContext.status).toBe(200);
+    expect(JSON.stringify(await threadMemoryFinalFromContext.json())).toContain("ORBIT-22");
+
     const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
