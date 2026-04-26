@@ -486,12 +486,19 @@ export const registerTelegramHandlers = ({
   const loadStoreAllowFrom = async () =>
     telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
 
+  const isSelfAuthoredTelegramMessage = (ctx: TelegramContext, msg: Message): boolean =>
+    msg.from?.id != null && msg.from.id === ctx.me?.id;
+
   const resolveReplyMediaForMessage = async (
     ctx: TelegramContext,
     msg: Message,
   ): Promise<TelegramMediaRef[]> => {
     const replyMessage = msg.reply_to_message;
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
+      return [];
+    }
+    // Skip media from the bot's own replies to avoid re-ingesting self-authored content
+    if (isSelfAuthoredTelegramMessage(ctx, replyMessage)) {
       return [];
     }
     const replyFileId = resolveInboundMediaFileId(replyMessage);
