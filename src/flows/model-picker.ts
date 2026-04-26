@@ -3,14 +3,23 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
+  isModelPickerVisibleModelRef,
+  isModelPickerVisibleProvider,
+} from "../agents/model-picker-visibility.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
+  type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
   resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { formatTokenK } from "../commands/models/shared.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
@@ -45,7 +54,7 @@ export type PromptDefaultModelParams = {
 };
 
 export type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
-export type PromptModelAllowlistResult = { models?: string[] };
+export type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
 
 async function loadModelPickerRuntime() {
   return import("../commands/model-picker.runtime.js");
@@ -117,6 +126,48 @@ function normalizeModelKeys(values: string[]): string[] {
   return next;
 }
 
+function resolveFallbackModelKey(params: {
+  cfg: OpenClawConfig;
+  raw: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): string | undefined {
+  const raw = normalizeOptionalString(params.raw);
+  if (!raw) {
+    return undefined;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  return modelKey(resolved.ref.provider, resolved.ref.model);
+}
+
+function resolveFallbackModelKeys(params: {
+  cfg: OpenClawConfig;
+  rawFallbacks: string[];
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): string[] {
+  return normalizeModelKeys(
+    params.rawFallbacks
+      .map((raw) =>
+        resolveFallbackModelKey({
+          cfg: params.cfg,
+          raw,
+          defaultProvider: params.defaultProvider,
+          aliasIndex: params.aliasIndex,
+        }),
+      )
+      .filter((key): key is string => Boolean(key)),
+  );
+}
+
 function resolveModelRouteHint(provider: string): string | undefined {
   const normalized = normalizeProviderId(provider);
   if (normalized === "openai") {
@@ -142,7 +193,11 @@ function addModelSelectOption(params: {
   hasAuth: (provider: string) => boolean;
 }) {
   const key = modelKey(params.entry.provider, params.entry.id);
-  if (params.seen.has(key) || HIDDEN_ROUTER_MODELS.has(key)) {
+  if (
+    params.seen.has(key) ||
+    HIDDEN_ROUTER_MODELS.has(key) ||
+    !isModelPickerVisibleProvider(params.entry.provider)
+  ) {
     return;
   }
   const hints: string[] = [];
@@ -263,15 +318,13 @@ async function maybeFilterModelsByProvider(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<typeof params.models> {
-  const providerIds = Array.from(new Set(params.models.map((entry) => entry.provider))).toSorted(
-    (a, b) => a.localeCompare(b),
+  let next = params.models.filter((entry) => isModelPickerVisibleProvider(entry.provider));
+  const providerIds = Array.from(new Set(next.map((entry) => entry.provider))).toSorted((a, b) =>
+    a.localeCompare(b),
   );
   const hasPreferredProvider = !!params.preferredProvider;
   const shouldPromptProvider =
-    !hasPreferredProvider &&
-    providerIds.length > 1 &&
-    params.models.length > PROVIDER_FILTER_THRESHOLD;
-  let next = params.models;
+    !hasPreferredProvider && providerIds.length > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
   const matchesPreferredProvider = params.preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider: params.preferredProvider,
@@ -473,6 +526,13 @@ export async function promptDefaultModel(
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  if (filteredModels.length === 0) {
+    return promptManualModel({
+      prompter: params.prompter,
+      allowBlank: allowKeep,
+      initialValue: configuredRaw || resolvedKey || undefined,
+    });
+  }
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -602,14 +662,29 @@ export async function promptModelAllowlist(params: {
     defaultModel: DEFAULT_MODEL,
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const fallbackAliasIndex =
+    resolved.provider === DEFAULT_PROVIDER
+      ? aliasIndex
+      : buildModelAliasIndex({
+          cfg,
+          defaultProvider: resolved.provider,
+        });
+  const fallbackKeys = resolveFallbackModelKeys({
+    cfg,
+    rawFallbacks: resolveAgentModelFallbackValues(cfg.agents?.defaults?.model),
+    defaultProvider: resolved.provider,
+    aliasIndex: fallbackAliasIndex,
+  });
   const initialSeeds = normalizeModelKeys([
     ...existingKeys,
     resolvedKey,
+    ...fallbackKeys,
     ...(params.initialSelections ?? []),
   ]);
-  const initialKeys = allowedKeySet
-    ? initialSeeds.filter((key) => allowedKeySet.has(key))
-    : initialSeeds;
 
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
@@ -619,11 +694,13 @@ export async function promptModelAllowlist(params: {
     allowlistProgress.stop();
   }
   if (catalog.length === 0 && allowedKeys.length === 0) {
+    const noCatalogInitialKeys =
+      existingKeys.length > 0 ? normalizeModelKeys([...existingKeys, ...fallbackKeys]) : [];
     const raw = await params.prompter.text({
       message:
         params.message ??
         "Allowlist models (comma-separated provider/model; blank to keep current)",
-      initialValue: existingKeys.join(", "),
+      initialValue: noCatalogInitialKeys.join(", "),
       placeholder: "provider/model, other-provider/model",
     });
     const parsed = (raw ?? "")
@@ -636,10 +713,6 @@ export async function promptModelAllowlist(params: {
     return { models: normalizeModelKeys(parsed) };
   }
 
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
@@ -650,19 +723,37 @@ export async function promptModelAllowlist(params: {
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
-  const allowedCatalog = allowedKeySet
-    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
-    : catalog;
+  const allowedCatalog = (
+    allowedKeySet
+      ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
+      : catalog
+  ).filter((entry) => isModelPickerVisibleProvider(entry.provider));
   const filteredCatalog =
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
 
+  const scopeKeys = allowedKeySet
+    ? allowedKeys
+    : preferredProvider
+      ? filteredCatalog.map((entry) => modelKey(entry.provider, entry.id))
+      : undefined;
+  const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null;
+  const selectableInitialSeeds =
+    scopeKeySet && !allowedKeySet
+      ? initialSeeds.filter((key) => scopeKeySet.has(key))
+      : initialSeeds;
+  const initialKeys = allowedKeySet
+    ? initialSeeds.filter((key) => allowedKeySet.has(key))
+    : selectableInitialSeeds.filter(isModelPickerVisibleModelRef);
+
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 
-  const supplementalKeys = allowedKeySet ? allowedKeys : existingKeys;
+  const supplementalKeys = (allowedKeySet ? allowedKeys : selectableInitialSeeds).filter(
+    isModelPickerVisibleModelRef,
+  );
   for (const key of supplementalKeys) {
     if (seen.has(key)) {
       continue;
@@ -686,7 +777,17 @@ export async function promptModelAllowlist(params: {
   });
   const selected = normalizeModelKeys(selection);
   if (selected.length > 0) {
-    return { models: selected };
+    return { models: selected, ...(scopeKeys ? { scopeKeys } : {}) };
+  }
+  if (scopeKeys) {
+    const confirmScopedClear = await params.prompter.confirm({
+      message: "Remove these provider models from the /model picker?",
+      initialValue: false,
+    });
+    if (!confirmScopedClear) {
+      return {};
+    }
+    return { models: [], scopeKeys };
   }
   if (existingKeys.length === 0) {
     return { models: [] };
@@ -701,12 +802,33 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {
+export function applyModelAllowlist(
+  cfg: OpenClawConfig,
+  models: string[],
+  opts: { scopeKeys?: string[] } = {},
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
+  const scopeKeys = opts.scopeKeys ? normalizeModelKeys(opts.scopeKeys) : [];
+  const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
   if (normalized.length === 0) {
     if (!defaults?.models) {
       return cfg;
+    }
+    if (scopeKeySet) {
+      const nextModels = { ...defaults.models };
+      for (const key of scopeKeySet) {
+        delete nextModels[key];
+      }
+      const { models: _ignored, ...restDefaults } = defaults;
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults:
+            Object.keys(nextModels).length > 0 ? { ...defaults, models: nextModels } : restDefaults,
+        },
+      };
     }
     const { models: _ignored, ...restDefaults } = defaults;
     return {
@@ -719,6 +841,26 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
   }
 
   const existingModels = defaults?.models ?? {};
+  if (scopeKeySet) {
+    const nextModels = { ...existingModels };
+    for (const key of scopeKeySet) {
+      delete nextModels[key];
+    }
+    for (const key of normalized) {
+      nextModels[key] = existingModels[key] ?? {};
+    }
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...defaults,
+          models: nextModels,
+        },
+      },
+    };
+  }
+
   const nextModels: Record<string, { alias?: string }> = {};
   for (const key of normalized) {
     nextModels[key] = existingModels[key] ?? {};
@@ -739,9 +881,12 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
 export function applyModelFallbacksFromSelection(
   cfg: OpenClawConfig,
   selection: string[],
+  opts: { scopeKeys?: string[] } = {},
 ): OpenClawConfig {
   const normalized = normalizeModelKeys(selection);
-  if (normalized.length <= 1) {
+  const scopeKeys = opts.scopeKeys ? normalizeModelKeys(opts.scopeKeys) : [];
+  const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
+  if (normalized.length === 0 && !scopeKeySet) {
     return cfg;
   }
 
@@ -751,7 +896,8 @@ export function applyModelFallbacksFromSelection(
     defaultModel: DEFAULT_MODEL,
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
-  if (!normalized.includes(resolvedKey)) {
+  const includesResolvedPrimary = normalized.includes(resolvedKey);
+  if (!includesResolvedPrimary && !scopeKeySet) {
     return cfg;
   }
 
@@ -763,20 +909,88 @@ export function applyModelFallbacksFromSelection(
       : existingModel && typeof existingModel === "object"
         ? existingModel.primary
         : undefined;
+  const preservedModelFields =
+    existingModel && typeof existingModel === "object"
+      ? (({ fallbacks: _oldFallbacks, ...rest }) => rest)(existingModel)
+      : {};
 
-  const fallbacks = normalized.filter((key) => key !== resolvedKey);
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: resolved.provider,
+  });
+  const existingFallbacks =
+    existingModel && typeof existingModel === "object" && Array.isArray(existingModel.fallbacks)
+      ? resolveFallbackModelKeys({
+          cfg,
+          rawFallbacks: existingModel.fallbacks,
+          defaultProvider: resolved.provider,
+          aliasIndex,
+        })
+      : [];
+  const existingFallbackSet = new Set(existingFallbacks);
+  const rawSelectedFallbacks = normalized.filter((key) => key !== resolvedKey);
+  const selectedFallbacks =
+    scopeKeySet && !includesResolvedPrimary
+      ? rawSelectedFallbacks.filter((key) => existingFallbackSet.has(key))
+      : rawSelectedFallbacks;
+  const preserveExistingFallback = scopeKeySet
+    ? (fallback: string) => !scopeKeySet.has(fallback)
+    : (fallback: string) => !isModelPickerVisibleModelRef(fallback);
+  const fallbacks = mergeFallbackSelection({
+    existingFallbacks,
+    selectedFallbacks,
+    preserveExistingFallback,
+  });
+  const nextModel = {
+    ...preservedModelFields,
+    ...(existingPrimary != null ? { primary: existingPrimary } : {}),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+  if (Object.keys(nextModel).length === 0) {
+    if (!defaults || !Object.hasOwn(defaults, "model")) {
+      return cfg;
+    }
+    const { model: _ignoredModel, ...restDefaults } = defaults;
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: restDefaults,
+      },
+    };
+  }
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...defaults,
-        model: {
-          ...(typeof existingModel === "object" ? existingModel : undefined),
-          primary: existingPrimary ?? resolvedKey,
-          fallbacks,
-        },
+        model: nextModel,
       },
     },
   };
+}
+
+function mergeFallbackSelection(params: {
+  existingFallbacks: string[];
+  selectedFallbacks: string[];
+  preserveExistingFallback: (fallback: string) => boolean;
+}): string[] {
+  const selected = new Set(params.selectedFallbacks);
+  const fallbacks: string[] = [];
+  for (const fallback of params.existingFallbacks) {
+    if (params.preserveExistingFallback(fallback)) {
+      fallbacks.push(fallback);
+      continue;
+    }
+    if (selected.delete(fallback)) {
+      fallbacks.push(fallback);
+    }
+  }
+  for (const fallback of params.selectedFallbacks) {
+    if (selected.has(fallback)) {
+      fallbacks.push(fallback);
+    }
+  }
+  return fallbacks;
 }

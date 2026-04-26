@@ -161,6 +161,22 @@ describe("buildCliArgs", () => {
     ).toEqual(["exec", "--json", "-c", 'model_instructions_file="/tmp/openclaw/system-prompt.md"']);
   });
 
+  it("passes Claude system prompts through its file flag", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptFileArg: "--append-system-prompt-file",
+        },
+        baseArgs: ["-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: false,
+      }),
+    ).toEqual(["-p", "--append-system-prompt-file", "/tmp/openclaw/system-prompt.md"]);
+  });
+
   it("replaces prompt placeholders before falling back to a trailing positional prompt", () => {
     expect(
       buildCliArgs({
@@ -275,11 +291,15 @@ describe("writeCliImages", () => {
         baseArgs: ["exec", "--json"],
         modelId: "gpt-5.4",
         imagePaths: prepared.imagePaths,
+        promptArg: "describe the attached image",
         useResume: false,
       });
 
       const imageArgIndex = argv.indexOf("--image");
+      const promptIndex = argv.indexOf("describe the attached image");
       expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeGreaterThanOrEqual(0);
+      expect(imageArgIndex).toBeGreaterThan(promptIndex);
       expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
       expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
 

@@ -21,6 +21,7 @@ import {
   resolveSilentReplyRewriteText,
   type SilentReplyConversationType,
 } from "../../shared/silent-reply-policy.js";
+import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -30,6 +31,8 @@ export type NormalizedOutboundPayload = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
+  hookContent?: string;
 };
 
 export type OutboundPayloadJson = {
@@ -56,6 +59,14 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  /**
+   * When true, bare silent payloads are dropped instead of being rewritten to
+   * visible fallback text. Set by callers that know the parent session has at
+   * least one pending spawned child whose completion will deliver the real
+   * reply. If omitted, the outbound plan consults the registered runtime query
+   * (see `pending-spawn-query.ts`).
+   */
+  hasPendingSpawnedChildren?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -178,6 +189,8 @@ export function createOutboundPayloadPlan(
     surface: context.surface,
     conversationType: context.conversationType,
   });
+  const hasPendingSpawnedChildren =
+    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
     const entry = createOutboundPayloadPlanEntry(payload);
@@ -208,7 +221,11 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
+    if (
+      hasVisibleNonSilentContent ||
+      resolvedSilentReplySettings.policy === "allow" ||
+      hasPendingSpawnedChildren
+    ) {
       continue;
     }
     if (!resolvedSilentReplySettings.rewrite) {
@@ -228,18 +245,18 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    const rewrittenPayload: ReplyPayload = {
+    const visibleSilentPayload: ReplyPayload = {
       ...entry.payload,
       text: resolveSilentReplyRewriteText({
         seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
       }),
     };
-    if (!isRenderablePayload(rewrittenPayload)) {
+    if (!isRenderablePayload(visibleSilentPayload)) {
       continue;
     }
     plan.push({
-      payload: rewrittenPayload,
-      parts: resolveSendableOutboundReplyParts(rewrittenPayload),
+      payload: visibleSilentPayload,
+      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
       hasPresentation: entry.hasPresentation,
       hasInteractive: entry.hasInteractive,
       hasChannelData: entry.hasChannelData,
@@ -318,6 +335,7 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
+  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
@@ -326,6 +344,7 @@ export function summarizeOutboundPayloadForTransport(
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
+    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

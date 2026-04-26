@@ -1,5 +1,7 @@
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
-
 declare module "tokenjuice/openclaw" {
-  export function createTokenjuiceOpenClawEmbeddedExtension(): ExtensionFactory;
+  type OpenClawPiRuntime = {
+    on(event: string, handler: (event: unknown, ctx: { cwd: string }) => unknown): void;
+  };
+
+  export function createTokenjuiceOpenClawEmbeddedExtension(): (pi: OpenClawPiRuntime) => void;
 }

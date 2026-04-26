@@ -31,6 +31,14 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndexSync: vi.fn(() => null),
+  };
+});
+
 import {
   hasConfiguredChannelsForReadOnlyScope,
   listConfiguredAnnounceChannelIdsForConfig,
@@ -41,6 +49,17 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
+
+function withManifestLoadPaths<T extends { id: string }>(plugin: T): T {
+  return {
+    rootDir: `/tmp/plugins/${plugin.id}`,
+    source: `/tmp/plugins/${plugin.id}/index.ts`,
+    manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
+    skills: [],
+    hooks: [],
+    ...plugin,
+  };
+}
 
 function createManifestRegistryFixture() {
   return {
@@ -177,7 +196,7 @@ function createManifestRegistryFixture() {
         providers: [],
         cliBackends: [],
       },
-    ],
+    ].map(withManifestLoadPaths),
     diagnostics: [],
   };
 }
@@ -197,7 +216,7 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
         providers: [],
         cliBackends: [],
       },
-    ],
+    ].map(withManifestLoadPaths),
   };
 }
 
@@ -508,6 +527,90 @@ describe("resolveGatewayStartupPluginIds", () => {
       env: {},
       expected: ["demo-channel", "browser"],
     });
+  });
+
+  it("does not treat explicitly disabled stale channel config as startup intent", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "demo-channel": {
+            enabled: false,
+            token: "stale",
+          },
+        },
+      } as OpenClawConfig,
+      env: {},
+      expected: ["browser"],
+    });
+  });
+
+  it("does not treat persisted auth alone as gateway startup intent", () => {
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expectStartupPluginIdsCase({
+      config: {} as OpenClawConfig,
+      env: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+      } as NodeJS.ProcessEnv,
+      expected: ["browser"],
+    });
+  });
+
+  it("does not treat persisted auth alone as deferred channel startup intent", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          channels: {
+            "demo-channel": {
+              enabled: false,
+              token: "stale",
+            },
+          },
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toEqual([]);
   });
 
   it("includes the explicitly selected memory slot plugin in startup scope", () => {

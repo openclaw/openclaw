@@ -4,7 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
-title: "gateway"
+title: "Gateway"
 ---
 
 # Gateway CLI
@@ -111,6 +111,59 @@ Options:
 
 - `--days <days>`: number of days to include (default `30`).
 
+### `gateway stability`
+
+Fetch the recent diagnostic stability recorder from a running Gateway.
+
+```bash
+openclaw gateway stability
+openclaw gateway stability --type payload.large
+openclaw gateway stability --bundle latest
+openclaw gateway stability --bundle latest --export
+openclaw gateway stability --json
+```
+
+Options:
+
+- `--limit <limit>`: maximum number of recent events to include (default `25`, max `1000`).
+- `--type <type>`: filter by diagnostic event type, such as `payload.large` or `diagnostic.memory.pressure`.
+- `--since-seq <seq>`: include only events after a diagnostic sequence number.
+- `--bundle [path]`: read a persisted stability bundle instead of calling the running Gateway. Use `--bundle latest` (or just `--bundle`) for the newest bundle under the state directory, or pass a bundle JSON path directly.
+- `--export`: write a shareable support diagnostics zip instead of printing stability details.
+- `--output <path>`: output path for `--export`.
+
+Notes:
+
+- Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
+- On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+
+### `gateway diagnostics export`
+
+Write a local diagnostics zip that is designed to attach to bug reports.
+For the privacy model and bundle contents, see [Diagnostics Export](/gateway/diagnostics).
+
+```bash
+openclaw gateway diagnostics export
+openclaw gateway diagnostics export --output openclaw-diagnostics.zip
+openclaw gateway diagnostics export --json
+```
+
+Options:
+
+- `--output <path>`: output zip path. Defaults to a support export under the state directory.
+- `--log-lines <count>`: maximum sanitized log lines to include (default `5000`).
+- `--log-bytes <bytes>`: maximum log bytes to inspect (default `1000000`).
+- `--url <url>`: Gateway WebSocket URL for the health snapshot.
+- `--token <token>`: Gateway token for the health snapshot.
+- `--password <password>`: Gateway password for the health snapshot.
+- `--timeout <ms>`: status/health snapshot timeout (default `3000`).
+- `--no-stability-bundle`: skip persisted stability bundle lookup.
+- `--json`: print the written path, size, and manifest as JSON.
+
+The export contains a manifest, a Markdown summary, config shape, sanitized config details, sanitized log summaries, sanitized Gateway status/health snapshots, and the newest stability bundle when one exists.
+
+It is meant to be shared. It keeps operational details that help debugging, such as safe OpenClaw log fields, subsystem names, status codes, durations, configured modes, ports, plugin ids, provider ids, non-secret feature settings, and redacted operational log messages. It omits or redacts chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, prompt/instruction text, hostnames, and secret values. When a LogTape-style message looks like user/chat/tool payload text, the export keeps only that a message was omitted plus its byte count.
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional probe of connectivity/auth capability.
@@ -135,6 +188,9 @@ Notes:
 
 - `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
 - Default `gateway status` proves service state, WebSocket connect, and the auth capability visible at handshake time. It does not prove read/write/admin operations.
+- Diagnostic probes are non-mutating for first-time device auth: they reuse an
+  existing cached device token when one exists, but they do not create a new CLI
+  device identity or read-only device pairing record just to check status.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
@@ -172,6 +228,8 @@ Interpretation:
 - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
 - `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
 - `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
+- Like `gateway status`, probe reuses existing cached device auth but does not
+  create first-time device identity or pairing state.
 - Exit code is non-zero only when no probed target is reachable.
 
 JSON notes (`--json`):
@@ -266,6 +324,7 @@ Command options:
 Notes:
 
 - `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
+- Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
 - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.
 - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
@@ -318,3 +377,8 @@ Notes:
 - On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when
   `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort`
   stays optional there too.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

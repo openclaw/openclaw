@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
+  materializePluginAutoEnableCandidates,
   resolvePluginAutoEnableCandidateReason,
 } from "./plugin-auto-enable.js";
 import {
@@ -97,16 +98,20 @@ describe("applyPluginAutoEnable core", () => {
     expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
   });
 
-  it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes setup auto-enable candidates under a restrictive plugins.allow", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        browser: {
-          defaultProfile: "openclaw",
-        },
         plugins: {
           allow: ["telegram"],
         },
       },
+      candidates: [
+        {
+          pluginId: "browser",
+          kind: "setup-auto-enable",
+          reason: "browser configured",
+        },
+      ],
       env,
     });
 
@@ -115,16 +120,20 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("browser configured, enabled automatically.");
   });
 
-  it("auto-enables browser when tools.alsoAllow references browser", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes setup auto-enable tool-reference reasons", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        tools: {
-          alsoAllow: ["browser"],
-        },
         plugins: {
           allow: ["telegram"],
         },
       },
+      candidates: [
+        {
+          pluginId: "browser",
+          kind: "setup-auto-enable",
+          reason: "browser tool referenced",
+        },
+      ],
       env,
     });
 
@@ -217,6 +226,94 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
     expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
+  });
+
+  it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+          activation: { onAgentHarnesses: ["codex"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["openai"]);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("keeps OpenAI Codex OAuth model refs owned by the OpenAI plugin", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+          activation: { onAgentHarnesses: ["codex"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.codex).toBeUndefined();
+    expect(result.changes).toEqual([
+      "openai-codex/gpt-5.5 model configured, enabled automatically.",
+    ]);
+  });
+
+  it("auto-enables Codex only for the native Codex harness with OpenAI model refs", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            embeddedHarness: {
+              runtime: "codex",
+              fallback: "none",
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+          activation: { onAgentHarnesses: ["codex"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toEqual([
+      "openai/gpt-5.5 model configured, enabled automatically.",
+      "codex agent harness runtime configured, enabled automatically.",
+    ]);
   });
 
   it("auto-enables an opt-in plugin when an embedded agent harness runtime is configured", () => {
@@ -356,7 +453,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           allow: ["glueclaw"],
@@ -369,7 +466,9 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
+      candidates: [],
       env,
+      manifestRegistry: makeRegistry([{ id: "discord", channels: [] }]),
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
@@ -377,7 +476,7 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           allow: ["glueclaw"],
@@ -390,7 +489,9 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
+      candidates: [],
       env,
+      manifestRegistry: makeRegistry([]),
     });
 
     expect(result.config.plugins?.allow).toEqual(["glueclaw"]);

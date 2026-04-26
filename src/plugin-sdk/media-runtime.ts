@@ -1,6 +1,7 @@
 // Public media/payload helpers for plugins that fetch, transform, or send attachments.
 
 export * from "../media/audio.js";
+export * from "../media/audio-transcode.js";
 export * from "../media/base64.js";
 export * from "../media/constants.js";
 export * from "../media/fetch.js";
@@ -15,6 +16,7 @@ export * from "../media/mime.js";
 export * from "../media/outbound-attachment.js";
 export * from "../media/png-encode.ts";
 export * from "../media/qr-image.ts";
+export * from "../media/qr-terminal.ts";
 export * from "../media/read-response-with-limit.js";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";

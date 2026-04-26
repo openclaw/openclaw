@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -19,6 +18,7 @@ import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  steerQueuedChatMessage as steerQueuedChatMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -39,6 +39,7 @@ import {
 } from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
+  applyLocalUserIdentity as applyLocalUserIdentityInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
@@ -55,6 +56,7 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import { RealtimeTalkSession, type RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -74,10 +76,12 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadSettings, type UiSettings } from "./storage.ts";
+import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -115,6 +119,7 @@ declare global {
 }
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
+const bootLocalUserIdentity = loadLocalUserIdentity();
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -151,6 +156,11 @@ export class OpenClawApp extends LitElement {
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() themeOrder: ThemeName[] = this.buildThemeOrder(this.theme);
+  @state() customThemeImportUrl = "";
+  @state() customThemeImportBusy = false;
+  @state() customThemeImportMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() customThemeImportExpanded = false;
+  @state() customThemeImportFocusToken = 0;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -161,7 +171,14 @@ export class OpenClawApp extends LitElement {
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
+  @state() assistantAvatarSource = bootAssistantIdentity.avatarSource ?? null;
+  @state() assistantAvatarStatus = bootAssistantIdentity.avatarStatus ?? null;
+  @state() assistantAvatarReason = bootAssistantIdentity.avatarReason ?? null;
+  @state() assistantAvatarUploadBusy = false;
+  @state() assistantAvatarUploadError: string | null = null;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() userName = bootLocalUserIdentity.name;
+  @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
@@ -181,12 +198,20 @@ export class OpenClawApp extends LitElement {
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
+  @state() chatAvatarSource: string | null = null;
+  @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
+  @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() realtimeTalkActive = false;
+  @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
+  @state() realtimeTalkDetail: string | null = null;
+  @state() realtimeTalkTranscript: string | null = null;
+  private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
 
@@ -487,6 +512,11 @@ export class OpenClawApp extends LitElement {
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
 
+  @state() webPushSupported = false;
+  @state() webPushPermission: NotificationPermission | "unsupported" = "unsupported";
+  @state() webPushSubscribed = false;
+  @state() webPushLoading = false;
+
   @state() logsLoading = false;
   @state() logsError: string | null = null;
   @state() logsFile: string | null = null;
@@ -557,6 +587,7 @@ export class OpenClawApp extends LitElement {
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    void this.initWebPushState();
   }
 
   protected firstUpdated() {
@@ -636,6 +667,13 @@ export class OpenClawApp extends LitElement {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
+  applyLocalUserIdentity(next: { name?: string | null; avatar?: string | null }) {
+    applyLocalUserIdentityInternal(
+      this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
+      next,
+    );
+  }
+
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     this.navDrawerOpen = false;
@@ -652,6 +690,61 @@ export class OpenClawApp extends LitElement {
       next,
       context,
     );
+  }
+
+  setCustomThemeImportUrl(next: string) {
+    this.customThemeImportUrl = next;
+    if (this.customThemeImportMessage?.kind === "error") {
+      this.customThemeImportMessage = null;
+    }
+  }
+
+  openCustomThemeImport() {
+    this.customThemeImportExpanded = true;
+    this.customThemeImportFocusToken += 1;
+  }
+
+  async importCustomTheme() {
+    if (this.customThemeImportBusy) {
+      return;
+    }
+    this.customThemeImportExpanded = true;
+    this.customThemeImportBusy = true;
+    this.customThemeImportMessage = null;
+    try {
+      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
+      applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+        ...this.settings,
+        customTheme,
+      });
+      this.customThemeImportUrl = "";
+      this.customThemeImportMessage = {
+        kind: "success",
+        text: `Imported ${customTheme.label}.`,
+      };
+    } catch (error) {
+      this.customThemeImportMessage = {
+        kind: "error",
+        text: error instanceof Error ? error.message : "Failed to import tweakcn theme.",
+      };
+    } finally {
+      this.customThemeImportBusy = false;
+    }
+  }
+
+  clearCustomTheme() {
+    const nextTheme = this.theme === "custom" ? "claw" : this.theme;
+    this.customThemeImportExpanded = true;
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      theme: nextTheme,
+      customTheme: undefined,
+    });
+    this.themeOrder = this.buildThemeOrder(nextTheme);
+    this.customThemeImportMessage = {
+      kind: "success",
+      text: "Cleared custom theme.",
+    };
   }
 
   setBorderRadius(value: number) {
@@ -695,6 +788,58 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
+    );
+  }
+
+  async toggleRealtimeTalk() {
+    if (this.realtimeTalkSession) {
+      this.realtimeTalkSession.stop();
+      this.realtimeTalkSession = null;
+      this.realtimeTalkActive = false;
+      this.realtimeTalkStatus = "idle";
+      this.realtimeTalkDetail = null;
+      this.realtimeTalkTranscript = null;
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.lastError = "Gateway not connected";
+      return;
+    }
+    this.realtimeTalkActive = true;
+    this.realtimeTalkStatus = "connecting";
+    this.realtimeTalkDetail = null;
+    this.realtimeTalkTranscript = null;
+    const session = new RealtimeTalkSession(this.client, this.sessionKey, {
+      onStatus: (status, detail) => {
+        this.realtimeTalkStatus = status;
+        this.realtimeTalkDetail = detail ?? null;
+        if (status === "idle" || status === "error") {
+          this.realtimeTalkActive = status !== "idle";
+        }
+      },
+      onTranscript: (entry) => {
+        this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+      },
+    });
+    this.realtimeTalkSession = session;
+    try {
+      await session.start();
+    } catch (error) {
+      session.stop();
+      if (this.realtimeTalkSession === session) {
+        this.realtimeTalkSession = null;
+      }
+      this.realtimeTalkActive = false;
+      this.realtimeTalkStatus = "error";
+      this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      this.lastError = this.realtimeTalkDetail;
+    }
+  }
+
+  async steerQueuedChatMessage(id: string) {
+    await steerQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof steerQueuedChatMessageInternal>[0],
+      id,
     );
   }
 
@@ -815,6 +960,97 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  private async initWebPushState() {
+    const supported =
+      "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    this.webPushSupported = supported;
+    this.webPushPermission = supported ? Notification.permission : "unsupported";
+    if (supported) {
+      try {
+        const { getExistingSubscription } = await import("./push-subscription.ts");
+        const existing = await getExistingSubscription();
+        this.webPushSubscribed = existing !== null;
+      } catch {
+        // ignore — just means we can't check
+      }
+    }
+  }
+
+  /** Re-register local push subscription with the gateway after connect. */
+  async reconcileWebPushState() {
+    if (!this.client) {
+      return;
+    }
+    try {
+      // Always check PushManager directly — initWebPushState may not have finished
+      // yet if gateway connected quickly.
+      const { getExistingSubscription } = await import("./push-subscription.ts");
+      const existing = await getExistingSubscription();
+      if (!existing) {
+        return;
+      }
+      this.webPushSubscribed = true;
+      const subJson = existing.toJSON();
+      if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+        await this.client.request("push.web.subscribe", {
+          endpoint: subJson.endpoint,
+          keys: { p256dh: subJson.keys.p256dh, auth: subJson.keys.auth },
+        });
+      }
+    } catch {
+      // Best-effort — don't block if gateway is unreachable.
+    }
+  }
+
+  async handleWebPushSubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { subscribeToWebPush } = await import("./push-subscription.ts");
+      await subscribeToWebPush(this.client);
+      this.webPushSubscribed = true;
+      this.webPushPermission = Notification.permission;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+      // Always refresh permission state — catches denied prompts too.
+      if ("Notification" in window) {
+        this.webPushPermission = Notification.permission;
+      }
+    }
+  }
+
+  async handleWebPushUnsubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { unsubscribeFromWebPush } = await import("./push-subscription.ts");
+      await unsubscribeFromWebPush(this.client);
+      this.webPushSubscribed = false;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+    }
+  }
+
+  async handleWebPushTest() {
+    if (!this.client) {
+      return;
+    }
+    try {
+      const { sendTestWebPush } = await import("./push-subscription.ts");
+      await sendTestWebPush(this.client);
+    } catch (err) {
+      this.lastError = String(err);
+    }
   }
 
   render() {

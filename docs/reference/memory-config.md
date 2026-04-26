@@ -1,14 +1,12 @@
 ---
-title: "Memory configuration reference"
 summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+title: "Memory configuration reference"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
   - You want to tune hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
-
-# Memory configuration reference
 
 This page lists every configuration knob for OpenClaw memory search. For
 conceptual overviews, see:
@@ -200,13 +198,37 @@ arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
 
 ## Local embedding config
 
-| Key                   | Type     | Default                | Description                     |
-| --------------------- | -------- | ---------------------- | ------------------------------- |
-| `local.modelPath`     | `string` | auto-downloaded        | Path to GGUF model file         |
-| `local.modelCacheDir` | `string` | node-llama-cpp default | Cache dir for downloaded models |
+| Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
+| --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
+| `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
+| `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
 Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
 Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+
+Use the standalone CLI to verify the same provider path the Gateway uses:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+If `provider` is `auto`, `local` is selected only when `local.modelPath` points
+to an existing local file. `hf:` and HTTP(S) model references can still be used
+explicitly with `provider: "local"`, but they do not make `auto` select local
+before the model is available on disk.
+
+### Inline embedding timeout
+
+| Key                                 | Type     | Default          | Description                                                              |
+| ----------------------------------- | -------- | ---------------- | ------------------------------------------------------------------------ |
+| `sync.embeddingBatchTimeoutSeconds` | `number` | provider default | Override the timeout for inline embedding batches during memory indexing |
+
+Unset uses the provider default: 600 seconds for local/self-hosted providers
+such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers.
+
+Increase this when local CPU-bound embedding batches are healthy but slow.
 
 ---
 
@@ -336,6 +358,10 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically
 fastest and cheapest for large backfills.
 
+This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls inline
+embedding calls used by local/self-hosted providers and hosted providers when
+provider batch APIs are not active.
+
 ---
 
 ## Session memory search (experimental)
@@ -425,7 +451,7 @@ runtime environment.
 ### Scope
 
 Controls which sessions can receive QMD search results. Same schema as
-[`session.sendPolicy`](/gateway/configuration-reference#session):
+[`session.sendPolicy`](/gateway/config-agents#session):
 
 ```json5
 {
@@ -520,3 +546,9 @@ Notes:
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Configuration reference](/gateway/configuration-reference)

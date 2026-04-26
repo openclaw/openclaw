@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   CodexAppServerClient,
   CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
+  isCodexAppServerApprovalRequest,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -30,7 +32,6 @@ describe("CodexAppServerClient", () => {
     resetSharedCodexAppServerClientForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -47,6 +48,24 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("logs a redacted preview for malformed app-server messages", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.process.stdout.write('{"token":"secret-value"} trailing\n');
+
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "failed to parse codex app-server message",
+        expect.objectContaining({
+          linePreview: '{"token":"<redacted>"} trailing',
+        }),
+      ),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
   });
 
   it("preserves JSON-RPC error codes", async () => {
@@ -99,7 +118,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.125.0 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -121,13 +140,61 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.117.9 (macOS; test)" },
+      result: { userAgent: "openclaw/0.124.9 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.117.9`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
+  });
+
+  it("blocks same-version Codex app-server prereleases below the stable floor", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.125.0-alpha.2 (macOS; test)" },
+    });
+
+    await expect(initializing).rejects.toThrow(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.125.0-alpha.2`,
+    );
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("blocks same-version Codex app-server build metadata below the stable floor", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.125.0+alpha.2 (macOS; test)" },
+    });
+
+    await expect(initializing).rejects.toThrow(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.125.0+alpha.2`,
+    );
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("accepts newer Codex app-server prereleases", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.126.0-alpha.1 (macOS; test)" },
+    });
+
+    await expect(initializing).resolves.toBeUndefined();
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+  });
+
+  it("accepts newer Codex app-server builds", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.126.0+custom (macOS; test)" },
+    });
+
+    await expect(initializing).resolves.toBeUndefined();
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
   });
 
   it("blocks app-server initialize responses without a version", async () => {
@@ -164,6 +231,38 @@ describe("CodexAppServerClient", () => {
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
   });
+
+  it("waits for app-server transport exit during async shutdown", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+      exitTimeoutMs: 100,
+      forceKillDelayMs: 25,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+    process.signalCode = "SIGKILL";
+    process.emit("exit");
+
+    await expect(closed).resolves.toBe(true);
+  });
+
   it("handles stdin write errors without crashing the process", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -198,14 +297,14 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reads the Codex version from the app-server user agent", () => {
-    expect(readCodexVersionFromUserAgent("Codex Desktop/0.118.0")).toBe("0.118.0");
-    expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");
-    expect(readCodexVersionFromUserAgent("codex_cli_rs/0.118.1-dev (linux; test)")).toBe(
-      "0.118.1-dev",
+    expect(readCodexVersionFromUserAgent("Codex Desktop/0.125.0")).toBe("0.125.0");
+    expect(readCodexVersionFromUserAgent("openclaw/0.125.0 (macOS; test)")).toBe("0.125.0");
+    expect(readCodexVersionFromUserAgent("codex_cli_rs/0.125.0-dev (linux; test)")).toBe(
+      "0.125.0-dev",
     );
     expect(readCodexVersionFromUserAgent("Codex Desktop/not-a-version")).toBeUndefined();
-    expect(readCodexVersionFromUserAgent("Codex Desktop/0.118")).toBeUndefined();
-    expect(readCodexVersionFromUserAgent("openclaw/0.118.0abc")).toBeUndefined();
+    expect(readCodexVersionFromUserAgent("Codex Desktop/0.124")).toBeUndefined();
+    expect(readCodexVersionFromUserAgent("openclaw/0.125.0abc")).toBeUndefined();
     expect(readCodexVersionFromUserAgent("missing-version")).toBeUndefined();
   });
 
@@ -242,6 +341,36 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "approval-1",
       result: { decision: "decline" },
+    });
+  });
+
+  it("only treats known Codex app-server approval methods as approvals", () => {
+    expect(isCodexAppServerApprovalRequest("item/commandExecution/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("item/fileChange/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("item/permissions/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("evil/Approval")).toBe(false);
+    expect(isCodexAppServerApprovalRequest("item/tool/requestApproval")).toBe(false);
+  });
+
+  it("fails closed for unhandled request_user_input prompts", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.send({
+      id: "input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions: [],
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "input-1",
+      result: { answers: {} },
     });
   });
 });

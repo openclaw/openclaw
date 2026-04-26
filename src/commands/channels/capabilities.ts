@@ -10,6 +10,8 @@ import type {
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -250,10 +252,34 @@ export async function channelsCapabilitiesCommand(
           });
           if (resolved.configChanged) {
             cfg = resolved.cfg;
-            await replaceConfigFile({
-              nextConfig: cfg,
-              baseHash: (await sourceSnapshotPromise)?.hash,
-            });
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            if (shouldMovePluginInstalls) {
+              const committed = await commitConfigWithPendingPluginInstalls({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              cfg = committed.config;
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                installRecords: committed.installRecords,
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              if (resolved.pluginInstalled) {
+                await refreshPluginRegistryAfterConfigMutation({
+                  config: cfg,
+                  reason: "source-changed",
+                  logger: { warn: (message) => runtime.log(message) },
+                });
+              }
+            }
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();

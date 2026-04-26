@@ -85,6 +85,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
   },
+  "thread.inheritParent": {
+    label: "Discord Thread Parent Inheritance",
+    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
+  },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
     help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
@@ -136,6 +140,10 @@ export const discordChannelConfigUiHints = {
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+  },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",

@@ -4,7 +4,7 @@ read_when:
   - Implementing or changing Bonjour discovery/advertising
   - Adjusting remote connection modes (direct vs SSH)
   - Designing node discovery + pairing for remote nodes
-title: "Discovery and Transports"
+title: "Discovery and transports"
 ---
 
 # Discovery & transports
@@ -86,6 +86,9 @@ Security notes:
 Disable/override:
 
 - `OPENCLAW_DISABLE_BONJOUR=1` disables advertising.
+- Docker Compose defaults `OPENCLAW_DISABLE_BONJOUR=1` because bridge networks
+  usually do not carry mDNS multicast reliably; use `0` only on host, macvlan,
+  or another mDNS-capable network.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port advertised when `sshPort` is emitted.
 - `OPENCLAW_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
@@ -139,3 +142,9 @@ The gateway is the source of truth for node/client admission.
 - **Gateway**: advertises discovery beacons, owns pairing decisions, and hosts the WS endpoint.
 - **macOS app**: helps you pick a gateway, shows pairing prompts, and uses SSH only as a fallback.
 - **iOS/Android nodes**: browse Bonjour as a convenience and connect to the paired Gateway WS.
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Tailscale](/gateway/tailscale)
+- [Bonjour discovery](/gateway/bonjour)
