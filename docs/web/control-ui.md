@@ -437,6 +437,9 @@ Notes:
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
 - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
   explicitly (full origins). This includes remote dev setups.
+- Gateway startup may seed local origins such as `http://localhost:<port>` and
+  `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote
+  browser origins still need explicit entries.
 - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
   local testing. It means allow any browser origin, not “match whatever host I am
   using.”

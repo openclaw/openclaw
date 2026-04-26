@@ -67,6 +67,9 @@ Docs: https://docs.openclaw.ai
   itself for the current Gateway process after repeated failed restarts while
   the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux,
   @FiredMosquito831, and @spikefcz.
+- Gateway/Fly.io: seed Control UI allowed origins from the actual runtime
+  bind and port so CLI-driven non-loopback starts do not crash before config
+  exists. Fixes #71823.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.

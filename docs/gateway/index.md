@@ -112,6 +112,12 @@ All of these run on the main Gateway port and use the same trusted operator auth
 | Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
 | Bind mode    | CLI/override → `gateway.bind` → `loopback`                    |
 
+Gateway startup uses the same effective port and bind when it seeds local
+Control UI origins for non-loopback binds. For example, `--bind lan --port 3000`
+seeds `http://localhost:3000` and `http://127.0.0.1:3000` before runtime
+validation runs. Add any remote browser origins, such as HTTPS proxy URLs, to
+`gateway.controlUi.allowedOrigins` explicitly.
+
 ### Hot reload modes
 
 | `gateway.reload.mode` | Behavior                                   |
