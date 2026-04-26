@@ -46,9 +46,10 @@ export function createPiAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
     resolveOutcome: async (session, result) =>
       applyAgentHarnessResultClassification(harness, result, session.params),
     cleanup: async (_params) => {
-      // PR 4 will route lifecycle cleanup through
-      // `attempt.subscription-cleanup.ts` here. PR 2 keeps cleanup intentionally
-      // empty so native and V1-adapter paths stay observationally identical.
+      // Cleanup remains intentionally empty so the native AgentHarnessV2 path
+      // and the V1-adapter path stay observationally identical. A future pass
+      // may route lifecycle cleanup through a dedicated subscription-cleanup
+      // helper once the stream-loop extraction lands.
     },
     compact: harness.compact ? (params) => harness.compact!(params) : undefined,
     reset: harness.reset ? (params) => harness.reset!(params) : undefined,

@@ -1,11 +1,11 @@
 // Pure message-summarization helpers extracted from `attempt.ts` so the
 // embedded attempt orchestrator does not own diagnostic-only payload counting.
 // This is the second ownership-boundary slice for RFC 72072 and the first
-// piece of the lifecycle-domain extraction. The full lifecycle / stream-loop
-// split that the RFC envisioned for PR 4 lands as separate follow-ups because
-// the larger seams (`runEmbeddedAttempt` cleanup `finally` block at lines
-// ~3036-3085, the per-turn stream loop at ~2200-2950) carry deep closure
-// dependencies that need a dedicated focused pass.
+// piece of the lifecycle-domain extraction. Companion lifecycle and stream
+// helpers (`attempt-lifecycle.ts`, `attempt-stream-wrappers.ts`) ship in this
+// consolidated package; the cleanup `finally` block and the per-turn stream
+// loop in `runEmbeddedAttempt` remain inline because their closure
+// dependencies need a dedicated focused pass to extract safely.
 //
 // The exported helpers are pure:
 //   - `summarizeMessagePayload(msg)` returns text/image character counts for

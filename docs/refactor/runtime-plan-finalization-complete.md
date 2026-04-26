@@ -13,7 +13,9 @@ Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/opencl
 
 ## Series at a glance
 
-All seven PRs were opened as drafts on fresh `origin/main` branches; none stack. Each PR links the RFC plus the relevant predecessor and follow-up PRs.
+> **Update:** PR [#72276](https://github.com/openclaw/openclaw/pull/72276) supersedes the seven-PR plan and lands the consolidated cleanup package together with the structural-split follow-ups (`attempt-prompt.ts`, `attempt-transport.ts`, `attempt-lifecycle.ts`, `attempt-stream-wrappers.ts`, `runtime-plan-factory.ts`, `lane-workspace.ts`, `terminal-result.ts`). The per-PR rows below are preserved for traceability and review-by-slice; see the [#72276 description](https://github.com/openclaw/openclaw/pull/72276) for the consolidated commit stack map.
+
+The original seven PRs were opened as drafts on fresh `origin/main` branches; none stacked at first. Each linked the RFC plus the relevant predecessor and follow-up PRs.
 
 | #   | Title                                      | PR                                                        | Effect                                                                                                                                                                                                                       |
 | --- | ------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -48,11 +50,22 @@ Not blocking RFC 72072 closure. Each is its own focused future PR.
 
 ### Structural splits
 
-The PR 3-5 RFC scopes that did not fit a single review-able PR:
+#### Landed in the consolidated PR (#72276)
 
-1. **`attempt-prompt.ts`** with `prepareAttemptPromptCache(...): PromptCachePrep` and `attempt-transport.ts` with `configureAttemptTransport(...)`. Best landed together with the stream-loop split below so the data-flow contract holds.
-2. **`attempt-stream-loop.ts`** with the per-turn send/yield/tool execution loop, and **`attempt-lifecycle.ts`** with terminal meta + liveness + cleanup handoff. Needs explicit data-flow contracts for the closure state listed above plus a focused abort-during-stream test.
-3. **`run-orchestration` four-module split** as the RFC originally scoped: `model-auth-plan.ts` (~150-270 LOC), `runtime-plan-factory.ts` (~575-600 LOC), `lane-workspace.ts` (~80-120 LOC), and `terminal-result.ts` (~1,380-1,450 LOC). The `terminal-result.ts` extraction in particular threads usage accumulator state, attempt history, fallback metadata, hook-runner output, replay-state observations, and live-model-switch state.
+The PR 3-5 RFC scopes that originally did not fit single review-able slices have now shipped in the consolidated package:
+
+- **`attempt-prompt.ts`** — bootstrap routing/context injection and prompt-boundary preparation helper extracted from `attempt.ts`.
+- **`attempt-transport.ts`** — per-turn `streamFn`, transport override, text-transform, extra-param, and prompt-cache-retention helper.
+- **`attempt-lifecycle.ts`** — diagnostic `run.started` / once-only `run.completed` lifecycle emitter.
+- **`attempt-stream-wrappers.ts`** — ordered stream wrapper stack for cache tracing, transcript sanitation, yield abort, malformed tool-call cleanup/repair, payload logging, and stop-reason recovery.
+- **`runtime-plan-factory.ts`** — attempt input builder and RuntimePlan wiring extracted from `run.ts`.
+- **`lane-workspace.ts`** — queue lane planning, tool-result format selection, probe-session detection, abort normalization, workspace context resolution, and fallback logging.
+- **`terminal-result.ts`** — success terminal `EmbeddedPiRunResult` shaping, stop-reason priority, execution trace, request shaping, completion trace, pending hosted tool calls, and silent-empty payloads.
+
+#### Still deferred
+
+- **`attempt-stream-loop.ts`** — the per-turn send/yield/tool execution loop. Needs explicit data-flow contracts for the closure state captured in the cleanup `finally` block plus a focused abort-during-stream test before extraction is safe.
+- **`model-auth-plan.ts`** (~150-270 LOC) — the remaining piece of the RFC's run-orchestration four-module split. Its seams sit inside `runEmbeddedPiAgent`'s closure with deep state dependencies and warrant a separate focused pass.
 
 ### Plugin-side work intentionally out of scope
 

@@ -2,13 +2,11 @@
 // orchestrator does not own auth-store seeding, trace-summary shaping,
 // session-key backfill, or handled-reply payload normalization.
 //
-// This is the third ownership-boundary slice for RFC 72072 and the first
-// piece of the run-orchestration extraction. The full split that the RFC
-// envisioned for PR 5 (`model-auth-plan.ts`, `runtime-plan-factory.ts`,
-// `lane-workspace.ts`, `terminal-result.ts`) lands as separate follow-ups
-// because the larger seams sit inside `runEmbeddedPiAgent`'s closure with
-// deep state dependencies. PR 5 keeps that pattern conservative, matching
-// the reduced scope used in PR 3 (#72110) and PR 4 (#72113).
+// This is the first piece of the run-orchestration extraction for RFC 72072.
+// The companion modules `runtime-plan-factory.ts`, `lane-workspace.ts`, and
+// `terminal-result.ts` ship in this consolidated package. `model-auth-plan.ts`
+// remains deferred — its seams sit inside `runEmbeddedPiAgent`'s closure with
+// deep state dependencies and warrant a separate focused pass.
 //
 // The exported helpers are pure or close-to-pure:
 //   - `createEmptyAuthProfileStore` returns a fresh AuthProfileStore.

@@ -1,9 +1,9 @@
 // Tool-allowlist and tool-runtime helpers extracted from `attempt.ts` so the
 // embedded attempt orchestrator does not own pure tool policy logic. This is
-// the first ownership-boundary slice for RFC 72072 PR 3. Prompt-cache prep and
-// transport configuration extractions follow as separate PRs because their
-// seams are interleaved with the per-turn stream loop in `attempt.ts` and need
-// dedicated focused passes.
+// the first ownership-boundary slice for RFC 72072. Prompt-cache prep
+// (`attempt-prompt.ts`) and transport configuration (`attempt-transport.ts`)
+// were extracted alongside this module; the per-turn stream loop and error
+// recovery remain inline in `attempt.ts` by design.
 //
 // The exported helpers are pure or close-to-pure:
 //   - `resolveUnknownToolGuardThreshold` clamps the unknown-tool guard knob.
