@@ -595,6 +595,8 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let cleanupbundlemcponrunend: Bool?
+    public let modelrun: Bool?
+    public let promptmode: AnyCodable?
     public let extrasystemprompt: String?
     public let bootstrapcontextmode: AnyCodable?
     public let bootstrapcontextrunkind: AnyCodable?
@@ -628,6 +630,8 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         cleanupbundlemcponrunend: Bool?,
+        modelrun: Bool?,
+        promptmode: AnyCodable?,
         extrasystemprompt: String?,
         bootstrapcontextmode: AnyCodable?,
         bootstrapcontextrunkind: AnyCodable?,
@@ -660,6 +664,8 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
+        self.modelrun = modelrun
+        self.promptmode = promptmode
         self.extrasystemprompt = extrasystemprompt
         self.bootstrapcontextmode = bootstrapcontextmode
         self.bootstrapcontextrunkind = bootstrapcontextrunkind
@@ -694,6 +700,8 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
+        case modelrun = "modelRun"
+        case promptmode = "promptMode"
         case extrasystemprompt = "extraSystemPrompt"
         case bootstrapcontextmode = "bootstrapContextMode"
         case bootstrapcontextrunkind = "bootstrapContextRunKind"
