@@ -198,6 +198,28 @@ export function createSessionVisibilityChecker(params: {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
+      // For send/write actions, A2A policy takes priority over visibility.
+      // A narrow A2A-allowed send path should pass even when visibility !== "all",
+      // because the operator explicitly opted in to cross-agent messaging
+      // without necessarily opening the read/list/history surface.
+      if (params.action === "send") {
+        if (!params.a2aPolicy.enabled) {
+          return {
+            allowed: false,
+            status: "forbidden",
+            error: a2aDisabledMessage(params.action),
+          };
+        }
+        if (!params.a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
+          return {
+            allowed: false,
+            status: "forbidden",
+            error: a2aDeniedMessage(params.action),
+          };
+        }
+        return { allowed: true };
+      }
+      // For read-surface actions (history, list, status), visibility still gates access.
       if (params.visibility !== "all") {
         return {
           allowed: false,
