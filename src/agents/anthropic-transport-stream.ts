@@ -27,6 +27,7 @@ import {
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
+
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_TOOLS = [
   "Read",
@@ -650,9 +651,13 @@ function buildAnthropicParams(
       },
     ];
   }
-  if (options?.temperature !== undefined && !options.thinkingEnabled) {
-    params.temperature = options.temperature;
-  }
+ if (
+  options?.temperature !== undefined &&
+  !options.thinkingEnabled &&
+  !isClaudeOpus47Model(model.id)
+) {
+  params.temperature = options.temperature;
+}
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
@@ -700,8 +705,8 @@ function resolveAnthropicTransportOptions(
   }
   const reasoningModelMaxTokens =
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
-  const resolved: AnthropicTransportOptions = {
-    temperature: options?.temperature,
+    const resolved: AnthropicTransportOptions = {
+    temperature: isClaudeOpus47Model(model.id) ? undefined : options?.temperature,
     maxTokens: baseMaxTokens,
     signal: options?.signal,
     apiKey,
