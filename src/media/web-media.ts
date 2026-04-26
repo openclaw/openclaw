@@ -8,6 +8,7 @@ import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
 import {
+  assertImagePixelLimit,
   convertHeicToJpeg,
   hasAlphaChannel,
   optimizeImageToPng,
@@ -95,7 +96,6 @@ function resolveWebMediaOptions(params: {
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WEBP_MIME_RE = /^image\/webp$/i;
-const WEBP_EXT_RE = /\.webp$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
@@ -216,11 +216,11 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
   return false;
 }
 
-function isWebpSource(opts: { contentType?: string; fileName?: string }): boolean {
-  if (opts.contentType && WEBP_MIME_RE.test(opts.contentType.trim())) {
-    return true;
+function isWebpSource(opts: { contentType?: string; contentTypeVerified?: boolean }): boolean {
+  if (!opts.contentTypeVerified) {
+    return false;
   }
-  if (opts.fileName && WEBP_EXT_RE.test(opts.fileName.trim())) {
+  if (opts.contentType && WEBP_MIME_RE.test(opts.contentType.trim())) {
     return true;
   }
   return false;
@@ -427,6 +427,7 @@ async function loadWebMediaInternal(
   const clampAndFinalize = async (params: {
     buffer: Buffer;
     contentType?: string;
+    contentTypeVerified?: boolean;
     kind: MediaKind | undefined;
     fileName?: string;
   }): Promise<WebMediaResult> => {
@@ -437,9 +438,10 @@ async function loadWebMediaInternal(
       const isGif = params.contentType === "image/gif";
       const isWebp = isWebpSource({
         contentType: params.contentType,
-        fileName: params.fileName,
+        contentTypeVerified: params.contentTypeVerified,
       });
       if (isGif || isWebp || !optimizeImages) {
+        await assertImagePixelLimit(params.buffer);
         if (params.buffer.length > cap) {
           throw new Error(
             formatCapLimit(isGif ? "GIF" : isWebp ? "WebP" : "Media", cap, params.buffer.length),
@@ -497,8 +499,16 @@ async function loadWebMediaInternal(
       trustExplicitProxyDns,
     });
     const { buffer, contentType, fileName } = fetched;
+    const sniffedContentType = normalizeMimeType(await detectMime({ buffer }));
+    const normalizedContentType = normalizeMimeType(contentType);
     const kind = kindFromMime(contentType);
-    return await clampAndFinalize({ buffer, contentType, kind, fileName });
+    return await clampAndFinalize({
+      buffer,
+      contentType,
+      contentTypeVerified: !!sniffedContentType && sniffedContentType === normalizedContentType,
+      kind,
+      fileName,
+    });
   }
 
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
@@ -560,6 +570,8 @@ async function loadWebMediaInternal(
   }
   const sniffedMime = await detectMime({ buffer: data });
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
+  const normalizedSniffedMime = normalizeMimeType(sniffedMime);
+  const normalizedMime = normalizeMimeType(mime);
   const kind = kindFromMime(mime);
   if (hostReadCapability) {
     assertHostReadMediaAllowed({
@@ -580,6 +592,7 @@ async function loadWebMediaInternal(
   return await clampAndFinalize({
     buffer: data,
     contentType: mime,
+    contentTypeVerified: !!normalizedSniffedMime && normalizedSniffedMime === normalizedMime,
     kind,
     fileName,
   });

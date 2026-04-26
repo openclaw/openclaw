@@ -29,6 +29,7 @@ import {
   createDiscordClient,
   resolveChannelId,
   resolveDiscordChannelType,
+  resolveVerifiedDiscordUploadContentType,
   toDiscordFileBlob,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
@@ -203,7 +204,10 @@ async function buildDiscordComponentPayload(params: {
     const filenameOverride = params.opts.filename?.trim();
     resolvedFileName = filenameOverride || media.fileName || "upload";
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    const fileData = toDiscordFileBlob(media.buffer);
+    const fileData = toDiscordFileBlob(
+      media.buffer,
+      await resolveVerifiedDiscordUploadContentType(media.buffer, media.contentType),
+    );
     files = [{ data: fileData, name: resolvedFileName }];
   }
 

@@ -11,7 +11,7 @@ import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
 import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
+import { detectMime, extensionForMime, normalizeMimeType } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
@@ -349,6 +349,18 @@ export function toDiscordFileBlob(data: Blob | Uint8Array, contentType?: string)
   return new Blob([arrayBuffer], contentType ? { type: contentType } : undefined);
 }
 
+export async function resolveVerifiedDiscordUploadContentType(
+  buffer: Buffer,
+  contentType?: string,
+): Promise<string | undefined> {
+  const normalizedContentType = normalizeMimeType(contentType);
+  if (!normalizedContentType) {
+    return undefined;
+  }
+  const sniffedContentType = normalizeMimeType(await detectMime({ buffer }));
+  return sniffedContentType === normalizedContentType ? normalizedContentType : undefined;
+}
+
 async function sendDiscordText(
   rest: RequestClient,
   channelId: string,
@@ -440,7 +452,10 @@ async function sendDiscordMedia(
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const fileData = toDiscordFileBlob(media.buffer, media.contentType);
+  const fileData = toDiscordFileBlob(
+    media.buffer,
+    await resolveVerifiedDiscordUploadContentType(media.buffer, media.contentType),
+  );
   const captionComponents = resolveDiscordSendComponents({
     components,
     text: caption,

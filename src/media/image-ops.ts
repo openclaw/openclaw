@@ -256,7 +256,7 @@ async function readImageMetadataForLimit(buffer: Buffer): Promise<ImageMetadata 
   return readImageMetadataFromHeader(buffer);
 }
 
-async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
+export async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
   const meta = await readImageMetadataForLimit(buffer);
   if (!meta) {
     if (prefersSips()) {
