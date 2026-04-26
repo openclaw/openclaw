@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $ACCENT = "`e[38;2;255;77;77m"    # coral-bright
 $SUCCESS = "`e[38;2;0;229;204m"    # cyan-bright
 $WARN = "`e[38;2;255;176;32m"     # amber
-$ERROR = "`e[38;2;230;57;70m"     # coral-mid
+$ERROR_COLOR = "`e[38;2;230;57;70m"     # coral-mid
 $MUTED = "`e[38;2;90;100;128m"    # text-muted
 $NC = "`e[0m"                     # No Color
 
@@ -27,7 +27,7 @@ function Write-Host {
     $msg = switch ($Level) {
         "success" { "$SUCCESS✓$NC $Message" }
         "warn" { "$WARN!$NC $Message" }
-        "error" { "$ERROR✗$NC $Message" }
+        "error" { "$ERROR_COLOR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
     Microsoft.PowerShell.Utility\Write-Host $msg
