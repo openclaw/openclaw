@@ -224,6 +224,16 @@ OpenClaw scans for plugins in this order (first match wins):
   </Step>
 </Steps>
 
+Packaged installs and Docker images normally resolve bundled plugins from the
+compiled `dist/extensions` tree. If a bundled plugin source directory is
+bind-mounted over the matching packaged source path, for example
+`/app/extensions/synology-chat`, OpenClaw treats that mounted source directory
+as a bundled source overlay and discovers it before the packaged
+`/app/dist/extensions/synology-chat` bundle. This keeps maintainer container
+loops working without switching every bundled plugin back to TypeScript source.
+Set `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS=1` to force packaged dist bundles
+even when source overlay mounts are present.
+
 ### Enablement rules
 
 - `plugins.enabled: false` disables all plugins

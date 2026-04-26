@@ -194,6 +194,12 @@ openclaw plugins list --json
 `plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code, enablement, hook policy, or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
 </Note>
 
+For bundled plugin work inside a packaged Docker image, bind-mount the plugin
+source directory over the matching packaged source path, such as
+`/app/extensions/synology-chat`. OpenClaw will discover that mounted source
+overlay before `/app/dist/extensions/synology-chat`; a plain copied source
+directory remains inert so normal packaged installs still use compiled dist.
+
 For runtime hook debugging:
 
 - `openclaw plugins inspect <id> --json` shows registered hooks and diagnostics from a module-loaded inspection pass.

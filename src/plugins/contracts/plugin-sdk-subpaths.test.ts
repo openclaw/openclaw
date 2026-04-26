@@ -657,6 +657,7 @@ describe("plugin-sdk subpath exports", () => {
       ],
       pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
       exclude: [
+        "src/plugins/compat/registry.ts",
         "src/plugins/sdk-alias.test.ts",
         "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       ],
