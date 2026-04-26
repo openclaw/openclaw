@@ -84,11 +84,20 @@ Current compatibility records include:
 - legacy hook-only plugin shapes and `before_agent_start`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
-- legacy SDK aliases such as `openclaw/plugin-sdk/channel-runtime`,
-  `openclaw/plugin-sdk/command-auth` status builders, and the
-  `ClawdbotConfig` type alias
+- legacy SDK aliases such as `openclaw/extension-api`,
+  `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
+  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig`
+  type alias
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
+- legacy provider plugin hooks and type aliases while providers move to
+  explicit catalog, auth, thinking, replay, and transport hooks
+- legacy runtime aliases such as `api.runtime.taskFlow`,
+  `api.runtime.subagent.getSession`, and `api.runtime.stt`
+- legacy memory-plugin split registration while memory plugins move to
+  `registerMemoryCapability`
+- legacy channel SDK helpers for native message schemas, mention gating,
+  inbound envelope formatting, and approval capability nesting
 - activation hints that are being replaced by manifest contribution ownership
 - `setup-api` runtime fallback while setup descriptors move to cold
   `setup.requiresRuntime: false` metadata
