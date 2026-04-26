@@ -20,6 +20,11 @@ If you want Codex or Claude Code to connect as an external MCP client directly
 to existing OpenClaw channel conversations, use [`openclaw mcp serve`](/cli/mcp)
 instead of ACP.
 
+ACP is not the default Codex path. It is the external-harness path. The native
+Codex app-server plugin owns `/codex ...` controls and the
+`embeddedHarness.runtime: "codex"` embedded runtime; ACP owns
+`/acp ...` controls and `sessions_spawn({ runtime: "acp" })` sessions.
+
 ## Which page do I want?
 
 There are three nearby surfaces that are easy to confuse:
@@ -34,6 +39,12 @@ There are three nearby surfaces that are easy to confuse:
 ## Does this work out of the box?
 
 Usually, yes. Fresh installs ship the bundled `acpx` runtime plugin enabled by default, with a plugin-local pinned `acpx` binary that OpenClaw probes and self-repairs on startup. Run `/acp doctor` for a readiness check.
+
+OpenClaw only teaches agents about ACP spawning when ACP is truly usable: ACP
+must be enabled, dispatch must not be disabled, the current session must not be
+sandbox-blocked, and a runtime backend must be loaded. If those conditions are
+not met, ACP plugin skills and `sessions_spawn` ACP guidance stay hidden so the
+agent does not suggest an unavailable backend.
 
 First-run gotchas:
 
@@ -141,6 +152,14 @@ conservative: it does not mutate Codex-native tool arguments or rewrite Codex
 thread records. Use explicit ACP only when you want the ACP runtime/session
 model. The embedded Codex support boundary is documented in the
 [Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+
+For model/provider/runtime selection, remember:
+
+- `openai-codex/*` is the PI Codex OAuth/subscription route.
+- `openai/*` plus `embeddedHarness.runtime: "codex"` is the native Codex
+  app-server embedded runtime route.
+- `/codex ...` is native Codex conversation control.
+- `/acp ...` or `runtime: "acp"` is explicit ACP/acpx control.
 
 Natural-language triggers that should route to the ACP runtime:
 

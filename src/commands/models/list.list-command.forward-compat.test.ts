@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     loadProviderCatalogModelsForList: vi.fn(),
+    loadStaticManifestCatalogRowsForList: vi.fn(),
     hasProviderStaticCatalogForFilter: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
@@ -89,6 +90,7 @@ function resetMocks() {
   });
   mocks.loadModelCatalog.mockResolvedValue([]);
   mocks.loadProviderCatalogModelsForList.mockResolvedValue([]);
+  mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   mocks.hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
@@ -145,6 +147,10 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("./list.provider-catalog.js", () => ({
     hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
+  }));
+
+  vi.doMock("./list.manifest-catalog.js", () => ({
+    loadStaticManifestCatalogRowsForList: mocks.loadStaticManifestCatalogRowsForList,
   }));
 
   vi.doMock("./list.registry-load.js", () => ({
@@ -465,6 +471,38 @@ describe("modelsListCommand forward-compat", () => {
         expect.objectContaining({
           key: "codex/gpt-5.4",
           available: true,
+        }),
+      ]);
+    });
+
+    it("uses manifest catalog rows before provider runtime catalog rows", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "moonshot",
+          id: "kimi-k2.6",
+          ref: "moonshot/kimi-k2.6",
+          mergeKey: "moonshot::kimi-k2.6",
+          name: "Kimi K2.6",
+          source: "manifest",
+          input: ["text", "image"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.moonshot.ai/v1",
+          contextWindow: 262_144,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "moonshot/kimi-k2.6",
+          available: false,
         }),
       ]);
     });

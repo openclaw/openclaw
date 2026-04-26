@@ -1,5 +1,6 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
@@ -61,13 +62,20 @@ export async function modelsListCommand(
   let availabilityErrorMessage: string | undefined;
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  let manifestCatalogRows: readonly NormalizedModelCatalogRow[] = [];
+  if (opts.all && providerFilter) {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    manifestCatalogRows = loadStaticManifestCatalogRowsForList({ cfg, providerFilter });
+  }
+  const useManifestCatalogFastPath = manifestCatalogRows.length > 0;
   const useProviderCatalogFastPath =
-    opts.all && providerFilter
+    !useManifestCatalogFastPath && opts.all && providerFilter
       ? await hasProviderStaticCatalogForFilter({ cfg, providerFilter })
       : false;
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
     all: opts.all,
     providerFilter,
+    useManifestCatalogFastPath,
     useProviderCatalogFastPath,
   });
   const loadRegistryState = async () => {
@@ -107,11 +115,13 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
-    let rowContext = buildRowContext(useProviderCatalogFastPath);
+    let rowContext = buildRowContext(useManifestCatalogFastPath || useProviderCatalogFastPath);
     const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
       modelRegistry,
+      manifestCatalogRows,
+      useManifestCatalogFastPath,
       useProviderCatalogFastPath,
     });
     if (initialAppend.requiresRegistryFallback) {
@@ -128,6 +138,8 @@ export async function modelsListCommand(
         rows,
         context: rowContext,
         modelRegistry,
+        manifestCatalogRows: [],
+        useManifestCatalogFastPath: false,
         useProviderCatalogFastPath: false,
       });
     }

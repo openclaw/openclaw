@@ -1,9 +1,11 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import {
   appendCatalogSupplementRows,
   appendConfiguredProviderRows,
   appendConfiguredRows,
   appendDiscoveredRows,
+  appendManifestCatalogRows,
   appendProviderCatalogRows,
   type RowBuilderContext,
 } from "./list.rows.js";
@@ -13,6 +15,8 @@ type AllModelRowSources = {
   rows: ModelRow[];
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
+  manifestCatalogRows?: readonly NormalizedModelCatalogRow[];
+  useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
 };
 
@@ -23,12 +27,16 @@ type AppendAllModelRowSourcesResult = {
 export function modelRowSourcesRequireRegistry(params: {
   all?: boolean;
   providerFilter?: string;
+  useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
 }): boolean {
   if (!params.all) {
     return false;
   }
-  if (params.providerFilter && params.useProviderCatalogFastPath) {
+  if (
+    params.providerFilter &&
+    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+  ) {
     return false;
   }
   return true;
@@ -37,19 +45,33 @@ export function modelRowSourcesRequireRegistry(params: {
 export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
-  if (params.context.filter.provider && params.useProviderCatalogFastPath) {
+  if (
+    params.context.filter.provider &&
+    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+  ) {
     let seenKeys = new Set<string>();
     appendConfiguredProviderRows({
       rows: params.rows,
       context: params.context,
       seenKeys,
     });
-    const catalogRows = await appendProviderCatalogRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-      staticOnly: true,
-    });
+    let catalogRows = 0;
+    if (params.useManifestCatalogFastPath) {
+      catalogRows = appendManifestCatalogRows({
+        rows: params.rows,
+        context: params.context,
+        seenKeys,
+        manifestRows: params.manifestCatalogRows ?? [],
+      });
+    }
+    if (catalogRows === 0 && params.useProviderCatalogFastPath) {
+      catalogRows = await appendProviderCatalogRows({
+        rows: params.rows,
+        context: params.context,
+        seenKeys,
+        staticOnly: true,
+      });
+    }
     if (catalogRows === 0) {
       if (!params.modelRegistry) {
         return { requiresRegistryFallback: true };

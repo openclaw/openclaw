@@ -6,6 +6,7 @@ import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.registry.js";
 import {
@@ -134,6 +135,17 @@ function toConfiguredProviderListModel(params: {
   };
 }
 
+function toManifestCatalogListModel(row: NormalizedModelCatalogRow): ListRowModel {
+  return {
+    provider: row.provider,
+    id: row.id,
+    name: row.name,
+    baseUrl: row.baseUrl,
+    input: [...row.input],
+    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+  };
+}
+
 function shouldListConfiguredProviderModel(params: {
   providerConfig: Partial<ModelProviderConfig>;
   model: Partial<ModelDefinitionConfig>;
@@ -211,6 +223,31 @@ export function appendConfiguredProviderRows(params: {
       });
     }
   }
+}
+
+export function appendManifestCatalogRows(params: {
+  rows: ModelRow[];
+  context: RowBuilderContext;
+  seenKeys: Set<string>;
+  manifestRows: readonly NormalizedModelCatalogRow[];
+}): number {
+  let appended = 0;
+  for (const manifestRow of params.manifestRows) {
+    const key = modelKey(manifestRow.provider, manifestRow.id);
+    if (
+      appendVisibleRow({
+        rows: params.rows,
+        model: toManifestCatalogListModel(manifestRow),
+        key,
+        context: params.context,
+        seenKeys: params.seenKeys,
+        allowProviderAvailabilityFallback: true,
+      })
+    ) {
+      appended += 1;
+    }
+  }
+  return appended;
 }
 
 export async function appendCatalogSupplementRows(params: {

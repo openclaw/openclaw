@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -61,7 +62,7 @@ export function resolvePluginSkillDirs(params: {
     params.config?.plugins,
     createRegistryPluginIdNormalizer(registry),
   );
-  const acpEnabled = params.config?.acp?.enabled !== false;
+  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: params.config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -81,8 +82,8 @@ export function resolvePluginSkillDirs(params: {
     if (!activationState.activated) {
       continue;
     }
-    // ACP router skills should not be attached when ACP is explicitly disabled.
-    if (!acpEnabled && record.id === "acpx") {
+    // ACP router skills should not be attached unless ACP can actually spawn.
+    if (!acpRuntimeAvailable && record.id === "acpx") {
       continue;
     }
     const memoryDecision = resolveMemorySlotDecision({
