@@ -61,6 +61,8 @@ import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -266,6 +268,23 @@ export async function runPreparedReply(
     workspaceDir,
     sessionStore,
   } = params;
+
+  let rootPersonality: string | undefined = undefined;
+  try {
+    const personalityPath = path.join(workspaceDir, "PERSONALITY.md");
+    const content = await fs.readFile(personalityPath, "utf-8");
+    if (content.length > 8192) {
+      console.warn("PERSONALITY.md is too large, truncating to 8KB");
+      rootPersonality = content.substring(0, 8192);
+    } else {
+      rootPersonality = content;
+    }
+  } catch (err: any) {
+    if (err.code !== "ENOENT") {
+      console.error("Failed to read root personality file:", err);
+    }
+  }
+
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,
     ctx,
@@ -357,6 +376,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    rootPersonality,
     buildExecOverridePromptHint({
       execOverrides,
       elevatedLevel: resolvedElevatedLevel,
@@ -370,6 +390,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    rootPersonality,
     buildExecOverridePromptHint({
       execOverrides,
       elevatedLevel: resolvedElevatedLevel,
