@@ -740,6 +740,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("materializes native draft tool progress before final-only text", async () => {
+    const draftStream = createTestDraftStream({ previewMode: "draft" });
+    draftStream.materialize.mockResolvedValue(321);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• `tool: exec`");
+    expect(draftStream.update).toHaveBeenCalledWith("Done");
+    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

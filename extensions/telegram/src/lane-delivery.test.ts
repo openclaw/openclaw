@@ -426,6 +426,28 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("materializes native draft tool-progress preview before final-only text", async () => {
+    const answerStream = createTestDraftStream({ previewMode: "draft" });
+    answerStream.materialize.mockResolvedValue(321);
+    const harness = createHarness({
+      answerStream: answerStream as DraftLaneState["stream"],
+      answerHasStreamedMessage: false,
+      answerLastPartialText: "Working...\n- tool: exec",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final only",
+      payload: { text: "Final only" },
+      infoKind: "final",
+    });
+
+    expect(expectPreviewFinalized(result)).toEqual({ content: "Final only", messageId: 321 });
+    expect(answerStream.update).toHaveBeenCalledWith("Final only");
+    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("materializes DM draft streaming final when revision changes", async () => {
     let previewRevision = 3;
     const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 654 });

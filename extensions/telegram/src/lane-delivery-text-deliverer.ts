@@ -197,8 +197,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewButtons?: TelegramInlineButtons,
   ) => {
     const hasPreviewButtons = Boolean(previewButtons && previewButtons.length > 0);
+    const hasDraftPreviewText = lane.lastPartialText.trim().length > 0;
     return (
-      lane.hasStreamedMessage &&
+      (lane.hasStreamedMessage || hasDraftPreviewText) &&
       isDraftPreviewLane(lane) &&
       !hasPreviewButtons &&
       typeof lane.stream?.materialize === "function"
