@@ -69,6 +69,19 @@ export function mergeHookPresets(existing: string[] | undefined, preset: string)
   return Array.from(next);
 }
 
+// The gmail preset uses templated mapping sessionKeys (`hook:gmail:{{...}}`),
+// which the gateway validator only accepts when allowedSessionKeyPrefixes is
+// set and includes "hook:". Adding "hook:" here keeps wizard-written configs
+// loadable without forcing the user to edit openclaw.json by hand.
+export function mergeAllowedSessionKeyPrefixes(
+  existing: string[] | undefined,
+  prefix: string,
+): string[] {
+  const next = new Set((existing ?? []).map((item) => item.trim()).filter(Boolean));
+  next.add(prefix);
+  return Array.from(next);
+}
+
 export function normalizeHooksPath(raw?: string): string {
   const base = raw?.trim() || DEFAULT_HOOKS_PATH;
   if (base === "/") {

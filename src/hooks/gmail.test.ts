@@ -4,6 +4,7 @@ import {
   buildDefaultHookUrl,
   buildGogWatchServeLogArgs,
   buildTopicPath,
+  mergeAllowedSessionKeyPrefixes,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -155,5 +156,23 @@ describe("gmail hook config", () => {
       tailscale: { mode: "funnel", target },
     });
     expectResolvedPaths(result, { servePath: "/custom", publicPath: "/custom", target });
+  });
+});
+
+describe("mergeAllowedSessionKeyPrefixes", () => {
+  it("seeds the list when none is configured", () => {
+    expect(mergeAllowedSessionKeyPrefixes(undefined, "hook:")).toEqual(["hook:"]);
+  });
+
+  it("preserves existing prefixes and adds the new one", () => {
+    expect(mergeAllowedSessionKeyPrefixes(["agent:"], "hook:")).toEqual(["agent:", "hook:"]);
+  });
+
+  it("dedupes when the prefix is already present", () => {
+    expect(mergeAllowedSessionKeyPrefixes(["hook:"], "hook:")).toEqual(["hook:"]);
+  });
+
+  it("trims and ignores empty entries", () => {
+    expect(mergeAllowedSessionKeyPrefixes([" agent: ", ""], "hook:")).toEqual(["agent:", "hook:"]);
   });
 });

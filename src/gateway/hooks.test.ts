@@ -434,6 +434,23 @@ describe("gateway hooks helpers", () => {
     ).not.toThrow();
   });
 
+  test("resolveHooksConfig accepts the gmail wizard's emitted config (preset + hook: prefix)", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          presets: ["gmail"],
+          allowedSessionKeyPrefixes: ["hook:"],
+          gmail: {
+            account: "user@example.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+          },
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
+
   test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
     expect(() =>
       resolveHooksConfig({

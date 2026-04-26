@@ -62,6 +62,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Hooks/Gmail: make `openclaw webhooks gmail setup` write
+  `hooks.allowedSessionKeyPrefixes: ["hook:"]` alongside the gmail preset so the
+  emitted config passes the gateway hooks validator on next start. Without
+  this, the wizard succeeded but the gateway then refused to load the config
+  because the gmail preset uses a templated mapping `sessionKey`
+  (`hook:gmail:{{messages[0].id}}`), which requires
+  `allowedSessionKeyPrefixes` to be set. Thanks @semmlerino.
 - QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
   directly for owner-authorized senders instead of returning `cronParams` and
   relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)
