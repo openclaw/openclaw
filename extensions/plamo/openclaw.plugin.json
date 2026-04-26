@@ -14,14 +14,14 @@
       "provider": "plamo",
       "method": "api-key",
       "choiceId": "plamo-api-key",
-      "choiceLabel": "PLaMo API key",
+      "choiceLabel": "Preferred Networks API key",
       "groupId": "plamo",
-      "groupLabel": "PLaMo",
-      "groupHint": "API key",
+      "groupLabel": "Preferred Networks",
+      "groupHint": "PLaMo API",
       "optionKey": "plamoApiKey",
       "cliFlag": "--plamo-api-key",
       "cliOption": "--plamo-api-key <key>",
-      "cliDescription": "PLaMo API key"
+      "cliDescription": "Preferred Networks API key"
     }
   ],
   "configSchema": {

@@ -10,7 +10,7 @@ import {
 import { applyPlamoConfig, applyPlamoProviderConfig, PLAMO_DEFAULT_MODEL_REF } from "./onboard.js";
 
 describe("plamo onboard", () => {
-  it("adds the PLaMo provider in provider-only mode without changing the primary model", () => {
+  it("adds the Preferred Networks provider in provider-only mode without changing the primary model", () => {
     const cfg = applyPlamoProviderConfig({
       agents: {
         defaults: {

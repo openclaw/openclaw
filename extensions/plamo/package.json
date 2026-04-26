@@ -2,7 +2,7 @@
   "name": "@openclaw/plamo-provider",
   "version": "2026.4.25",
   "private": true,
-  "description": "OpenClaw PLaMo provider plugin",
+  "description": "OpenClaw Preferred Networks model provider plugin for PLaMo",
   "type": "module",
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.70.2",

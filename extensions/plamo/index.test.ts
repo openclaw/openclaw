@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type {
@@ -158,17 +159,29 @@ beforeEach(() => {
 });
 
 describe("plamo provider plugin", () => {
-  it("registers PLaMo with api-key auth wizard metadata", async () => {
+  it("registers Preferred Networks with api-key auth wizard metadata", async () => {
     const provider = await registerSingleProviderPlugin(plamoPlugin);
     const resolved = resolveProviderPluginChoice({
       providers: [provider],
       choice: "plamo-api-key",
     });
+    const manifest = JSON.parse(
+      readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { providerAuthChoices?: Array<Record<string, unknown>> };
 
     expect(provider.id).toBe("plamo");
-    expect(provider.label).toBe("PLaMo");
+    expect(provider.label).toBe("Preferred Networks");
+    expect(provider.docsPath).toBe("/providers/preferred-networks");
     expect(provider.envVars).toEqual(["PLAMO_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
+    expect(provider.auth[0]).toMatchObject({
+      label: "Preferred Networks API key",
+      wizard: {
+        choiceLabel: "Preferred Networks API key",
+        groupLabel: "Preferred Networks",
+        groupHint: "PLaMo API",
+      },
+    });
     expect(provider.buildReplayPolicy).toBeTypeOf("function");
     expect(provider.sanitizeReplayHistory).toBeTypeOf("function");
     expect(provider.createStreamFn).toBeTypeOf("function");
@@ -176,6 +189,12 @@ describe("plamo provider plugin", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.provider.id).toBe("plamo");
     expect(resolved?.method.id).toBe("api-key");
+    expect(manifest.providerAuthChoices?.[0]).toMatchObject({
+      choiceLabel: "Preferred Networks API key",
+      groupLabel: "Preferred Networks",
+      groupHint: "PLaMo API",
+      cliDescription: "Preferred Networks API key",
+    });
   });
 
   it("advertises PLaMo refs as modern models", async () => {

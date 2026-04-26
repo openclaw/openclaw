@@ -201,6 +201,14 @@
       "destination": "/providers/opencode-go"
     },
     {
+      "source": "/preferred-networks",
+      "destination": "/providers/preferred-networks"
+    },
+    {
+      "source": "/plamo",
+      "destination": "/providers/preferred-networks"
+    },
+    {
       "source": "/qianfan",
       "destination": "/providers/qianfan"
     },
@@ -1333,6 +1341,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/preferred-networks",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",

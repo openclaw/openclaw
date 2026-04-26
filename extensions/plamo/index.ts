@@ -67,28 +67,28 @@ function resolvePlamoDynamicModel(ctx: ProviderResolveDynamicModelContext) {
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
-  name: "PLaMo Provider",
-  description: "Bundled PLaMo provider plugin",
+  name: "Preferred Networks Provider",
+  description: "Bundled Preferred Networks model provider plugin for PLaMo",
   provider: {
-    label: "PLaMo",
-    docsPath: "/providers/models",
+    label: "Preferred Networks",
+    docsPath: "/providers/preferred-networks",
     auth: [
       {
         methodId: "api-key",
-        label: "PLaMo API key",
+        label: "Preferred Networks API key",
         hint: "API key",
         optionKey: "plamoApiKey",
         flagName: "--plamo-api-key",
         envVar: "PLAMO_API_KEY",
-        promptMessage: "Enter PLaMo API key",
+        promptMessage: "Enter Preferred Networks API key",
         defaultModel: PLAMO_DEFAULT_MODEL_REF,
         applyConfig: applyPlamoConfig,
         wizard: {
           choiceId: "plamo-api-key",
-          choiceLabel: "PLaMo API key",
+          choiceLabel: "Preferred Networks API key",
           groupId: "plamo",
-          groupLabel: "PLaMo",
-          groupHint: "API key",
+          groupLabel: "Preferred Networks",
+          groupHint: "PLaMo API",
         },
       },
     ],

@@ -12,6 +12,18 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Preferred Networks",
+    "target": "Preferred Networks"
+  },
+  {
+    "source": "Preferred Networks (PLaMo)",
+    "target": "Preferred Networks（PLaMo）"
+  },
+  {
+    "source": "PLaMo",
+    "target": "PLaMo"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },

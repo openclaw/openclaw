@@ -14,7 +14,7 @@ For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic Claude CLI or API key, plus MiniMax, GLM, Ollama, Moonshot, StepFun, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic Claude CLI or API key, plus Preferred Networks, MiniMax, GLM, Ollama, Moonshot, StepFun, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost, Signal, BlueBubbles, and other bundled channel plugins)
@@ -151,6 +151,11 @@ What you set:
   <Accordion title="OpenCode">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
+  </Accordion>
+  <Accordion title="Preferred Networks">
+    Prompts for `PLAMO_API_KEY` and configures Preferred Networks as the provider for PLaMo models.
+    Default model: `plamo/plamo-3.0-prime-beta`.
+    More detail: [Preferred Networks](/providers/preferred-networks).
   </Accordion>
   <Accordion title="API key (generic)">
     Stores the key for you.
