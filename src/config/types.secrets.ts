@@ -284,10 +284,32 @@ export type ExecSecretProviderConfig = {
   allowSymlinkCommand?: boolean;
 };
 
+/**
+ * Plugin-owned secret provider config. Validation moves into the plugin's
+ * SecretProviderPlugin.validateConfig — core only sees the open shape.
+ */
+export type PluginSecretProviderConfig = {
+  source: string;
+  [key: string]: unknown;
+};
+
 export type SecretProviderConfig =
   | EnvSecretProviderConfig
   | FileSecretProviderConfig
-  | ExecSecretProviderConfig;
+  | ExecSecretProviderConfig
+  | PluginSecretProviderConfig;
+
+export function isEnvSecretProviderConfig(cfg: unknown): cfg is EnvSecretProviderConfig {
+  return isRecord(cfg) && cfg.source === "env";
+}
+
+export function isFileSecretProviderConfig(cfg: unknown): cfg is FileSecretProviderConfig {
+  return isRecord(cfg) && cfg.source === "file" && typeof cfg.path === "string";
+}
+
+export function isExecSecretProviderConfig(cfg: unknown): cfg is ExecSecretProviderConfig {
+  return isRecord(cfg) && cfg.source === "exec" && typeof cfg.command === "string";
+}
 
 export type SecretsConfig = {
   providers?: Record<string, SecretProviderConfig>;

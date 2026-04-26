@@ -573,3 +573,50 @@ describe("secret ref resolver", () => {
     }
   });
 });
+
+describe("plugin-owned secret provider dispatch", () => {
+  it("dispatches a plugin-owned source through the public-artifact resolver", async () => {
+    const fakeEntry = {
+      id: "fakecloud",
+      pluginId: "secrets-fakecloud",
+      label: "Fake Cloud",
+      resolve: vi.fn(async () => new Map<string, unknown>([["MY_KEY", "the-value"]])),
+    };
+    vi.doMock("../plugins/secret-provider-resolver.js", () => ({
+      resolveBundledSecretProviderForSource: vi.fn(async () => fakeEntry),
+    }));
+
+    const { resolveSecretRefValues } = await import("./resolve.js");
+    const config = {
+      secrets: {
+        providers: {
+          myFc: { source: "fakecloud", project: "p" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const out = await resolveSecretRefValues(
+      [{ source: "fakecloud", provider: "myFc", id: "MY_KEY" }],
+      { config },
+    );
+    expect(out.get("fakecloud:myFc:MY_KEY")).toBe("the-value");
+    expect(fakeEntry.resolve).toHaveBeenCalledOnce();
+    vi.doUnmock("../plugins/secret-provider-resolver.js");
+  });
+
+  it("returns an actionable error for an unknown plugin source", async () => {
+    vi.doMock("../plugins/secret-provider-resolver.js", () => ({
+      resolveBundledSecretProviderForSource: vi.fn(async () => undefined),
+    }));
+
+    const { resolveSecretRefValues } = await import("./resolve.js");
+    const config = {
+      secrets: { providers: { foo: { source: "unknownsrc" } } },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      resolveSecretRefValues([{ source: "unknownsrc", provider: "foo", id: "X" }], { config }),
+    ).rejects.toThrow(/Install a plugin that provides it/);
+    vi.doUnmock("../plugins/secret-provider-resolver.js");
+  });
+});
