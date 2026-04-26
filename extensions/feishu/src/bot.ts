@@ -759,6 +759,10 @@ export async function handleFeishuMessage(params: {
       chatType: isGroup ? "group" : "direct",
       log,
     });
+    const preflightAudioIndex =
+      audioTranscript === undefined
+        ? -1
+        : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
     const agentFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
       audioTranscript === undefined
@@ -1078,6 +1082,7 @@ export async function handleFeishuMessage(params: {
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
         ...mediaPayload,
+        ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
       });
     };
 

@@ -21,6 +21,8 @@ need a separate `openclaw plugins install` step.
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.
 - Attachments and stickers are ingested as inbound media (and surfaced to the agent when possible).
+- Auto-TTS replies that synthesize MP3 or CAF audio are delivered as iMessage
+  voice memo bubbles instead of plain file attachments.
 - Pairing/allowlist works the same way as other channels (`/channels/pairing` etc) with `channels.bluebubbles.allowFrom` + pairing codes.
 - Reactions are surfaced as system events just like Slack/Telegram so agents can "mention" them before replying.
 - Advanced features: edit, unsend, reply threading, message effects, group management.

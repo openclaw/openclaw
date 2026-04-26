@@ -10,6 +10,7 @@ const ackReactionHandle = {
   ackReactionValue: "👀",
   remove: vi.fn(async () => undefined),
 };
+const applyGroupGatingMock = vi.fn();
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -28,7 +29,7 @@ vi.mock("./broadcast.js", () => ({
 }));
 
 vi.mock("./group-gating.js", () => ({
-  applyGroupGating: vi.fn(async () => ({ shouldProcess: true })),
+  applyGroupGating: (...args: unknown[]) => applyGroupGatingMock(...args),
 }));
 
 vi.mock("./last-route.js", () => ({
@@ -127,6 +128,8 @@ describe("createWebOnMessageHandler audio preflight", () => {
     });
     processMessageMock.mockReset();
     processMessageMock.mockResolvedValue(true);
+    applyGroupGatingMock.mockReset();
+    applyGroupGatingMock.mockResolvedValue({ shouldProcess: true });
   });
 
   it("sends ack reaction before audio preflight for voice notes", async () => {
@@ -256,6 +259,96 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeGroupAudioMsg());
 
     expect(events).toEqual(["ack", "stt"]);
+    expect(processMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("uses group voice transcript for mention gating before dispatch", async () => {
+    applyGroupGatingMock
+      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
+      .mockResolvedValueOnce({ shouldProcess: true });
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeGroupAudioMsg());
+
+    expect(applyGroupGatingMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        deferMissingMention: true,
+      }),
+    );
+    expect(events).toEqual(["ack", "stt"]);
+    expect(applyGroupGatingMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mentionText: "transcribed voice note",
+      }),
+    );
+    expect(processMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preflightAudioTranscript: "transcribed voice note",
+        ackAlreadySent: true,
+      }),
+    );
+  });
+
+  it("does not transcribe group voice when policy gating rejects before mention", async () => {
+    applyGroupGatingMock.mockResolvedValueOnce({ shouldProcess: false });
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeGroupAudioMsg());
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 });

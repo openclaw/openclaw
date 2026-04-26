@@ -96,6 +96,14 @@ Docs: https://docs.openclaw.ai
   before agent dispatch and keep raw Feishu `file_key` payloads out of message
   text. Fixes #67120 and #61876.
 - Tasks: terminalize async Gateway agent task records from the Gateway run result while preserving aborted, failed, and cancelled outcomes instead of leaving completed runs stuck as active or lost. (#71905) Thanks @likewen-tech.
+- WhatsApp: let authorized group voice-note transcripts satisfy mention gating
+  before reply dispatch, while keeping unmentioned transcripts in pending group
+  history. Fixes #44908.
+- Media understanding: carry channel voice-note preflight state into attachment
+  selection so WhatsApp, Feishu, Telegram, and Discord do not transcribe the
+  same inbound audio twice. Fixes #70580.
+- TTS/BlueBubbles: deliver compatible auto-TTS audio as iMessage voice memo
+  bubbles instead of plain MP3/CAF file attachments. Fixes #16848.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.

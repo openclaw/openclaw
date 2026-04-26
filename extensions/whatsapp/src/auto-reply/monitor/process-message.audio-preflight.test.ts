@@ -93,6 +93,7 @@ vi.mock("./inbound-dispatch.js", () => ({
     commandAuthorized?: boolean;
     commandBody?: string;
     msg: { body: string; mediaPath?: string; mediaType?: string };
+    mediaTranscribedIndexes?: number[];
     rawBody?: string;
     transcript?: string;
   }) => ({
@@ -102,6 +103,7 @@ vi.mock("./inbound-dispatch.js", () => ({
     CommandBody: params.commandBody ?? params.msg.body,
     MediaPath: params.msg.mediaPath,
     MediaType: params.msg.mediaType,
+    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
     RawBody: params.rawBody ?? params.msg.body,
     Transcript: params.transcript,
   }),
@@ -230,6 +232,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "<media:audio>",
       RawBody: "<media:audio>",
       Transcript: "okay let's test this voice message",
+      MediaTranscribedIndexes: [0],
     });
     // mediaPath and mediaType must be preserved so inboundAudio detection (used by
     // features like messages.tts.auto: "inbound") still recognises this as audio.
@@ -315,6 +318,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "<media:audio>",
       RawBody: "<media:audio>",
       Transcript: "/new start a new session",
+      MediaTranscribedIndexes: [0],
     });
   });
 
@@ -335,6 +339,7 @@ describe("processMessage audio preflight transcription", () => {
       CommandBody: "<media:audio>",
       RawBody: "<media:audio>",
       Transcript: "pre-computed transcript from fan-out caller",
+      MediaTranscribedIndexes: [0],
     });
   });
 
