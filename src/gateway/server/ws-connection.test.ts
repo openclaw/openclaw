@@ -70,6 +70,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       getResolvedAuth: () => currentAuth,
       gatewayMethods: [],
       events: [],
+      refreshHealthSnapshot: vi.fn(async () => ({}) as never),
       logGateway: createLogger() as never,
       logHealth: createLogger() as never,
       logWsControl: createLogger() as never,
