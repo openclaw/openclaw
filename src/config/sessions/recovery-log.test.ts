@@ -94,29 +94,34 @@ describe("session recovery log", () => {
 
     expect(entry?.sessionId).toBeTruthy();
     const events = await readSessionRecoveryEventsForTest(storePath);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      version: 1,
-      eventType: "session.meta.recorded",
-      sessionKey: "agent:main:discord:dm:user-1",
-      sessionId: entry?.sessionId,
-      source: {
-        kind: "inbound",
-        provider: "discord",
-        surface: "discord",
-        channel: "discord",
-        chatType: "direct",
-      },
-      details: {
-        accountId: "default",
-        from: "user-1",
-        to: "bot-1",
-        originatingTo: "user-1",
-        messageSid: "message-1",
-        messageThreadId: "thread-1",
-        nativeChannelId: "dm-1",
-      },
-    });
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.eventType)).toEqual([
+      "inbound.received",
+      "session.meta.recorded",
+    ]);
+    for (const event of events) {
+      expect(event).toMatchObject({
+        version: 1,
+        sessionKey: "agent:main:discord:dm:user-1",
+        sessionId: entry?.sessionId,
+        source: {
+          kind: "inbound",
+          provider: "discord",
+          surface: "discord",
+          channel: "discord",
+          chatType: "direct",
+        },
+        details: {
+          accountId: "default",
+          from: "user-1",
+          to: "bot-1",
+          originatingTo: "user-1",
+          messageSid: "message-1",
+          messageThreadId: "thread-1",
+          nativeChannelId: "dm-1",
+        },
+      });
+    }
   });
 
   it("does not fail inbound metadata recording when recovery event append fails", async () => {

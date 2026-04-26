@@ -669,6 +669,51 @@ export async function updateSessionStoreEntry(params: {
   });
 }
 
+function sessionRecoverySourceFromInbound(ctx: MsgContext) {
+  return {
+    kind: "inbound",
+    provider: ctx.Provider,
+    surface: ctx.Surface,
+    channel: ctx.OriginatingChannel,
+    chatType: ctx.ChatType,
+  };
+}
+
+function sessionRecoveryDetailsFromInbound(ctx: MsgContext) {
+  return {
+    accountId: ctx.AccountId,
+    from: ctx.From,
+    to: ctx.To,
+    originatingTo: ctx.OriginatingTo,
+    messageSid: ctx.MessageSid,
+    messageSidFull: ctx.MessageSidFull,
+    messageThreadId: ctx.MessageThreadId,
+    replyToId: ctx.ReplyToId,
+    rootMessageId: ctx.RootMessageId,
+    nativeChannelId: ctx.NativeChannelId,
+    nativeDirectUserId: ctx.NativeDirectUserId,
+  };
+}
+
+async function appendInboundSessionRecoveryEvent(params: {
+  storePath: string;
+  eventType: "inbound.received" | "session.meta.recorded";
+  sessionKey: string;
+  sessionId: string;
+  ctx: MsgContext;
+}): Promise<void> {
+  await appendSessionRecoveryEvent({
+    storePath: params.storePath,
+    eventType: params.eventType,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    source: sessionRecoverySourceFromInbound(params.ctx),
+    details: sessionRecoveryDetailsFromInbound(params.ctx),
+  }).catch((err) => {
+    log.warn(`Failed to append session recovery event: ${String(err)}`);
+  });
+}
+
 export async function recordSessionMetaFromInbound(params: {
   storePath: string;
   sessionKey: string;
@@ -715,33 +760,20 @@ export async function recordSessionMetaFromInbound(params: {
     { activeSessionKey: normalizeStoreSessionKey(sessionKey) },
   );
   if (result) {
-    await appendSessionRecoveryEvent({
+    const recoverySessionKey = normalizeStoreSessionKey(sessionKey);
+    await appendInboundSessionRecoveryEvent({
+      storePath,
+      eventType: "inbound.received",
+      sessionKey: recoverySessionKey,
+      sessionId: result.sessionId,
+      ctx,
+    });
+    await appendInboundSessionRecoveryEvent({
       storePath,
       eventType: "session.meta.recorded",
-      sessionKey: normalizeStoreSessionKey(sessionKey),
+      sessionKey: recoverySessionKey,
       sessionId: result.sessionId,
-      source: {
-        kind: "inbound",
-        provider: ctx.Provider,
-        surface: ctx.Surface,
-        channel: ctx.OriginatingChannel,
-        chatType: ctx.ChatType,
-      },
-      details: {
-        accountId: ctx.AccountId,
-        from: ctx.From,
-        to: ctx.To,
-        originatingTo: ctx.OriginatingTo,
-        messageSid: ctx.MessageSid,
-        messageSidFull: ctx.MessageSidFull,
-        messageThreadId: ctx.MessageThreadId,
-        replyToId: ctx.ReplyToId,
-        rootMessageId: ctx.RootMessageId,
-        nativeChannelId: ctx.NativeChannelId,
-        nativeDirectUserId: ctx.NativeDirectUserId,
-      },
-    }).catch((err) => {
-      log.warn(`Failed to append session recovery event: ${String(err)}`);
+      ctx,
     });
   }
   return result;
