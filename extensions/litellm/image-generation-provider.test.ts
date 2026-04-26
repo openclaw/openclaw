@@ -311,6 +311,75 @@ describe("litellm image generation provider", () => {
     expect(result.images[0].buffer.toString()).toBe("standalone");
   });
 
+  it("does not duplicate images when LiteLLM ships them in both message.images and message.content", async () => {
+    // Real LiteLLM Gemini behavior: the same generated image is returned in
+    // both `choices[0].message.images[*].image_url.url` (structured) and
+    // embedded inside `choices[0].message.content` (string or array). Without
+    // dedup, the parser would emit the same image twice.
+    const pngB64 = Buffer.from("dup-once").toString("base64");
+    const dataUrl = `data:image/png;base64,${pngB64}`;
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: [{ type: "image_url", image_url: { url: dataUrl } }],
+                images: [{ type: "image_url", image_url: { url: dataUrl } }],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "litellm",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "x",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("dup-once");
+  });
+
+  it("falls back to scanning content when message.images is missing", async () => {
+    const pngB64 = Buffer.from("content-only").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:image/png;base64,${pngB64}` },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "litellm",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "x",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("content-only");
+  });
+
   it("throws when chat-completions response yields no image data", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

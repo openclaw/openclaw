@@ -190,9 +190,12 @@ function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedI
       continue;
     }
 
-    // Prefer the typed `images` array if the proxy ships one (some LiteLLM
-    // routes return generated images out-of-band rather than embedding them
-    // in `content`).
+    // LiteLLM's Gemini route ships generated images in BOTH the typed
+    // `message.images` array AND embedded inside `message.content`. Trust
+    // `images` when present and skip the content scan to avoid duplicating
+    // every image. Fall back to scanning `content` only when `images` is
+    // empty/missing (some routes only ship one or the other).
+    const before = images.length;
     for (const standalone of message.images ?? []) {
       if (typeof standalone === "string") {
         if (standalone.startsWith("data:")) {
@@ -229,6 +232,10 @@ function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedI
         // policy here, and chat-completion responses for image gen normally
         // ship inline data URLs anyway.
       }
+    }
+
+    if (images.length > before) {
+      continue;
     }
 
     const content = message.content;
