@@ -10,7 +10,7 @@ const DISCORD_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 500,
   maxDelayMs: 30_000,
-  jitter: 0.1,
+  jitter: 0,
 };
 const DISCORD_HTML_RATE_LIMIT_RETRY_AFTER_SECONDS = 30;
 const DISCORD_ERROR_DETAIL_MAX_CHARS = 240;

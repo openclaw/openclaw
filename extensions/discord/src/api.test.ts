@@ -81,6 +81,37 @@ describe("fetchDiscord", () => {
     expect(message).not.toContain("alert");
   });
 
+  it("waits the full Retry-After before retrying HTML rate limits", async () => {
+    vi.useFakeTimers();
+    const html = "<html><title>Error 1015</title><body>rate limited</body></html>";
+    let calls = 0;
+    const fetcher = withFetchPreconnect(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(html, {
+          status: 429,
+          headers: { "Retry-After": "7" },
+        });
+      }
+      return jsonResponse([{ id: "1", name: "Guild" }], 200);
+    });
+
+    const resultPromise = fetchDiscord<Array<{ id: string; name: string }>>(
+      "/users/@me/guilds",
+      "test",
+      fetcher,
+      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000 } },
+    );
+
+    await vi.waitFor(() => expect(calls).toBe(1));
+    await vi.advanceTimersByTimeAsync(6_999);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(2);
+
+    await expect(resultPromise).resolves.toEqual([{ id: "1", name: "Guild" }]);
+  });
+
   it("uses a conservative cooldown for application metadata HTML rate limits", async () => {
     const fetcher = withFetchPreconnect(
       async () =>
