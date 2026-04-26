@@ -1,167 +1,171 @@
-# AI REM 睡眠记忆系统
-
-## SKILL.md
-
 ---
-summary: "AI记忆整理技能。模拟人类REM睡眠的记忆巩固机制，定期回顾对话、提取洞察、更新长期记忆。适用于需要跨对话保持记忆连续性的AI助手场景。"
-read_when:
-  - 需要定期整理对话记忆
-  - 跨会话保持记忆连续性
-  - 用户希望AI主动回顾和提炼日常交流中的深度内容
+name: rem-memory
+description: Daily REM sleep memory consolidation — reviews sessions and updates long-term memory files.
+metadata:
+  {
+    "openclaw": {
+      "emoji": "🧠",
+      "requires": {}
+    }
+  }
 ---
 
-# AI REM 睡眠记忆系统
+# AI REM Sleep Memory System
 
-## 核心概念
+A skill that gives AI assistants human-like REM (Rapid Eye Movement) sleep memory consolidation capabilities.
 
-类比人类的REM（快速眼动）睡眠阶段：
-- 人类REM：巩固白天记忆、连接不同时间的知识、产生新洞察
-- AI REM：回顾对话 → 提取洞察 → 更新长期记忆 → 发现主题关联
+## Core Concept
 
-## 设计原则
+Human REM sleep does three things:
+- **Consolidates** daily memories into long-term storage
+- **Connects** knowledge across different time points
+- **Generates** new insights ("connecting the dots")
 
-### 1. 自动触发
-- 通过cron任务在凌晨（用户睡眠时间）自动执行
-- 不需要用户手动触发
-- 无对话的日期正确标记"缺失"，不编造内容
+This skill replicates that process for AI:
+```
+Daily conversations → daily/ (raw log) → monthly/ (distilled) → MEMORY.md (long-term)
+```
 
-### 2. 记忆分层
+## Memory Layer Structure
+
 ```
 memory/
-├── daily/           # 每日原始记录（详细）
-├── monthly/         # 月度提炼（结构化）
-└── flomo/           # 碎片想法（按标签/时间分类）
+├── daily/           # Daily raw records (detailed)
+├── monthly/         # Monthly summaries (structured)
+└── flomo/           # Fragmented thoughts (by tag/date)
 ```
 
-- **daily/** — 当天发生了什么、聊了什么、有什么感悟
-- **monthly/** — 本月核心事件、突破、认知变化
-- **MEMORY.md** — 长期记忆，从daily和monthly中蒸馏出来的持久知识
+- **daily/** — What happened, what was discussed, key insights
+- **monthly/** — Monthly highlights, breakthroughs, cognitive shifts
+- **MEMORY.md** — Distilled long-term memory (essentials only)
 
-### 3. 深度内容自动入库
-触发条件（满足任一即触发）：
-- 包含个人核心认知和底层逻辑
-- 形成系统性思考或公式
-- 体现价值观或人生哲学
-- 是长期实践的经验总结
-- 用户明确要求"记录到记忆和灵魂"
+## Setup
 
-入库路径：
-1. `memory/daily/YYYY-MM-DD.md` — 保留完整原文
-2. `MEMORY.md` — 结构化记录核心观点和框架
+### Cron Job Configuration
 
-### 4. "连点成线"
-不只搬运，而是：
-- 跨时间点找关联（"今天这个想法和上个月那个对话有关"）
-- 发现新的文章主题或创作灵感
-- 识别行为模式（"连续三次周二都焦虑"）
-
-## 执行流程
-
-### Cron 任务配置
+Create an isolated cron job that runs daily during the user's sleeping hours (e.g., 2:00 AM):
 
 ```yaml
-cron:
-  id: rem-memory-consolidation
-  schedule: "0 2 * * *"  # 每天凌晨2点
-  task: |
-    1. 读取当天对话日志（最近的session history）
-    2. 如果有对话内容：
-       - 提取关键事件、感悟、决策、新想法
-       - 写入 memory/daily/YYYY-MM-DD.md
-       - 检查是否有深度内容需要入库 MEMORY.md
-       - 检查是否需要更新 memory/monthly/
-    3. 如果无对话：
-       - 写入 "REM: 今日对话日志缺失"
-    4. 跨日关联：检查过去7天的daily文件，寻找跨日模式
+schedule: "0 2 * * *"
+sessionTarget: isolated
+payload:
+  kind: agentTurn
+  message: |
+    REM Memory Consolidation task.
+    
+    1. Read today's session history from:
+       $OPENCLAW_STATE_DIR/agents/<agentId>/sessions/*.jsonl
+       (Filter by today's date. JSONL format, one JSON object per line.)
+    
+    2. If conversations exist:
+       - Extract key events, insights, decisions, new ideas
+       - Write to memory/daily/YYYY-MM-DD.md
+       - Check for "deep content" (see Deep Content criteria below)
+       - If deep content found: update MEMORY.md
+       - Check if monthly/YYYY-MM.md needs updating
+       - Cross-day scan: check past 7 days of daily/ for patterns
+    
+    3. If no conversations:
+       - Write "REM: No conversations today." to daily/YYYY-MM-DD.md
+       - Do NOT fabricate content
 ```
 
-### 每日记录模板
+### Deep Content Auto-Capture
+
+Promote content to MEMORY.md when any of these conditions are met:
+- Contains core cognitive frameworks or mental models
+- Forms systematic thinking or formulas
+- Reflects personal values or life philosophy
+- Summarizes long-term practical experience
+- User explicitly requests "record this to memory"
+
+### Cross-Day Connections
+
+Don't just log — connect:
+- "Today's thought relates to that conversation last month"
+- "Anxious three Tuesdays in a row — possible pattern"
+- Identify potential article themes or creative material
+
+## Daily Record Template
 
 ```markdown
-# YYYY-MM-DD 周X
+# YYYY-MM-DD Day of Week
 
 ---
 
-## 今日记录：[一句话概括今天的主基调]
+## Today: [One-sentence summary of the day's vibe]
 
-### [时间段/主题1]
-- 具体事件（发生了什么）
-- 关键细节（值得记住的）
-- **感悟：** [核心想法]
+### [Time period/Theme 1]
+- What happened (concrete events)
+- Key details worth remembering
+- **Insight:** [Core thought]
 
-### [时间段/主题2]
+### [Time period/Theme 2]
 ...
 
 ---
 
-## 深度感悟（如有）
+## Deep Insights (if any)
 
-### [感悟标题]
-**核心洞察：**
-> [引用原文或提炼的一句话]
+### [Insight Title]
+**Core insight:**
+> [Quote or one-line distillation]
 
-**延伸思考：**
+**Further thinking:**
 - ...
 ```
 
-### 月度记录模板
+## Monthly Record Template
 
 ```markdown
-# YYYY年M月记忆
+# YYYY Month Memory
 
-## [大主题1]
-### [具体事件]
-**时间**：YYYY年M月D日
-**核心洞察：**
+## [Major Theme 1]
+### [Specific Event]
+**Date:** YYYY-MM-DD
+**Core insight:**
 ...
 
-## [大主题2]
+## [Major Theme 2]
 ...
 ```
 
-### MEMORY.md 更新规则
+## MEMORY.md Update Rules
 
-只在以下情况更新：
-- 新的认知突破（不是重复已有内容）
-- 行为模式的变化
-- 重要决策的记录
-- 工作流程的优化
+Only update when:
+- New cognitive breakthrough (not repeating existing content)
+- Behavioral pattern change
+- Important decision recorded
+- Workflow optimization
 
-**不要**把daily里的所有内容都搬进MEMORY.md。MEMORY.md是蒸馏后的精华。
+**Do NOT** copy everything from daily/ into MEMORY.md. MEMORY.md is distilled essence, not a dump.
 
-## 实际运行经验
+## Production Experience
 
-### 一周运行观察
+### One-Week Run Results
 
-| 日期 | 对话量 | 记录状态 | 备注 |
-|------|--------|----------|------|
-| 有对话日 | 丰富 | ✅ 完整 | 提取事件+感悟+素材 |
-| 无对话日 | 无 | ✅ 标记缺失 | 正确行为，不编造 |
+| Day Type | Result |
+|----------|--------|
+| Days with conversations | ✅ Full extraction: events + insights + materials |
+| Days without conversations | ✅ Correctly marked "missing" — no fabrication |
 
-### 已验证的价值
+### Verified Benefits
 
-1. **跨对话连续性** — 用户第二天提到"昨天说的那个"，AI能从daily文件中找回
-2. **创作素材积累** — 日常体验自动归档，写文章时直接调用
-3. **认知模式识别** — 发现"连续周二焦虑"等跨日模式
-4. **小说创作参考** — 瑜伽课细节、露营体验等自动成为小说素材
+1. **Cross-session continuity** — User says "that thing we discussed yesterday" and AI can retrieve it
+2. **Creative material accumulation** — Daily experiences auto-archived for article/novel writing
+3. **Cognitive pattern detection** — Discovered cross-day behavioral patterns
+4. **Novel writing reference** — Yoga class details, camping experiences auto-became novel material
 
-### 注意事项
+### Important Notes
 
-- 不要在记录中编造用户没说过的话
-- 用户在跟其他工具（如扣子）聊天时，REM会正确标记"缺失"
-- 对话摘要（session compaction）和文件记忆是互补的，不是替代
-- 记录时用用户的第一人称视角，保持语气一致
+- Never fabricate what the user didn't say
+- Use the user's first-person perspective in records
+- Distill, don't dump — MEMORY.md is essence only
+- Conversation summaries (session compaction) and file memory are complementary, not replacements
 
-## 适用场景
+## Extension Ideas
 
-- 个人AI助手需要长期记住用户的偏好、习惯、决策
-- 内容创作者需要积累日常素材
-- 项目管理需要追踪决策历史
-- 任何需要"AI拥有记忆"的场景
-
-## 扩展方向
-
-- [ ] 自动生成周/月总结报告
-- [ ] 基于记忆的主动提醒（"你上次说的那个计划进展如何？"）
-- [ ] 记忆搜索优化（语义搜索跨时间点关联）
-- [ ] 多用户记忆隔离
+- [ ] Auto-generate weekly/monthly summary reports
+- [ ] Proactive reminders based on memory ("You mentioned that plan last week — how's it going?")
+- [ ] Semantic search across time points for better cross-day connections
+- [ ] Multi-user memory isolation
