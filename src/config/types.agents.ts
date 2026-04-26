@@ -13,6 +13,7 @@ import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js"
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
@@ -95,6 +96,8 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Optional per-agent TTS overrides, deep-merged over messages.tts. */
+  tts?: TtsConfig;
   /** Optional per-agent skills subsystem overrides. */
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
   /** Optional per-agent overrides for selected context/token-heavy limits. */

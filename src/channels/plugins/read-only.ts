@@ -7,10 +7,8 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
@@ -24,6 +22,7 @@ type ReadOnlyChannelPluginOptions = {
   workspaceDir?: string;
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
+  includeSetupRuntimeFallback?: boolean;
   cache?: boolean;
 };
 
@@ -490,6 +489,7 @@ function resolveExternalReadOnlyChannelPluginIds(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     cache: params.cache,
+    manifestRecords: params.records,
   });
   if (candidatePluginIds.length === 0) {
     return [];
@@ -520,11 +520,12 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const manifestRecords = loadPluginManifestRegistry({
+  const manifestRecords = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     workspaceDir,
     env,
     cache: options.cache,
+    includeDisabled: true,
   }).plugins;
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const configuredChannelIds = [
@@ -585,7 +586,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
           [pluginId, channelIds.filter((channelId) => missingChannelIdSet.has(channelId))] as const,
       ),
     );
-    if (setupMissingChannelIds.length > 0) {
+    if (setupMissingChannelIds.length > 0 && options.includeSetupRuntimeFallback === true) {
       const registry = loadOpenClawPlugins({
         config: cfg,
         activationSourceConfig: options.activationSourceConfig ?? cfg,

@@ -598,6 +598,24 @@ describe("buildSessionEntry", () => {
         content: "User: Actual user text",
         lineMap: [3],
       },
+      {
+        name: "inter-session user provenance",
+        fileName: "inter-session-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: "A background task completed. Internal relay text.",
+              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+            },
+          },
+          { type: "message", message: { role: "assistant", content: "User-facing summary." } },
+          { type: "message", message: { role: "user", content: "Actual user follow-up." } },
+        ],
+        content: "Assistant: User-facing summary.\nUser: Actual user follow-up.",
+        lineMap: [2, 3],
+      },
     ] as const;
 
     for (const testCase of cases) {

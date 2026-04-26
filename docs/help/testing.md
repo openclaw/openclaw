@@ -55,6 +55,15 @@ When debugging real providers/models (requires real creds):
     Slack DM with `/codex bind`, exercises `/codex fast` and
     `/codex permissions`, then verifies a plain reply and an image attachment
     route through the native plugin binding instead of ACP.
+- Codex app-server harness smoke: `pnpm test:docker:live-codex-harness`
+  - Runs gateway agent turns through the plugin-owned Codex app-server harness,
+    verifies `/codex status` and `/codex models`, and by default exercises image,
+    cron MCP, sub-agent, and Guardian probes. Disable the sub-agent probe with
+    `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when isolating other Codex
+    app-server failures. For a focused sub-agent check, disable the other probes:
+    `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 pnpm test:docker:live-codex-harness`.
+    This exits after the sub-agent probe unless
+    `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY=0` is set.
 - Crestodian rescue command smoke: `pnpm test:live:crestodian-rescue-channel`
   - Opt-in belt-and-suspenders check for the message-channel rescue command
     surface. It exercises `/crestodian status`, queues a persistent model
@@ -399,7 +408,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
     - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-    - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
+    - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
+    - Live Docker ACP harness edits run a focused local gate: shell syntax for the live Docker auth scripts, live Docker scheduler dry-run, ACP bind unit tests, and the ACPX extension tests. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
     - `auto-reply` has dedicated buckets for top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. CI further splits the reply subtree into agent-runner, dispatch, and commands/state-routing shards so one import-heavy bucket does not own the full Node tail.

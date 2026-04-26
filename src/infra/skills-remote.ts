@@ -254,6 +254,12 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
     if (Array.isArray(parsed.bins)) {
       return parsed.bins.map((bin) => normalizeOptionalString(String(bin)) ?? "").filter(Boolean);
     }
+    if (parsed.bins && typeof parsed.bins === "object") {
+      return Object.entries(parsed.bins)
+        .filter(([, resolvedPath]) => normalizeOptionalString(resolvedPath) !== undefined)
+        .map(([bin]) => normalizeOptionalString(bin) ?? "")
+        .filter(Boolean);
+    }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout
         .split(/\r?\n/)

@@ -41,6 +41,8 @@ const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
+const metricExporterCtor = vi.hoisted(() => vi.fn());
+const logExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
   context: {
@@ -70,7 +72,9 @@ vi.mock("@opentelemetry/sdk-node", () => ({
 }));
 
 vi.mock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
-  OTLPMetricExporter: function OTLPMetricExporter() {},
+  OTLPMetricExporter: function OTLPMetricExporter(options?: unknown) {
+    metricExporterCtor(options);
+  },
 }));
 
 vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({
@@ -80,7 +84,9 @@ vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({
 }));
 
 vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
-  OTLPLogExporter: function OTLPLogExporter() {},
+  OTLPLogExporter: function OTLPLogExporter(options?: unknown) {
+    logExporterCtor(options);
+  },
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
@@ -133,6 +139,10 @@ const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
+const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
+  process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
+const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
 
 function createLogger() {
@@ -173,7 +183,10 @@ function createOtelContext(
     },
     logger: createLogger(),
     stateDir: OTEL_TEST_STATE_DIR,
-    internalDiagnostics: { onEvent: onInternalDiagnosticEvent },
+    internalDiagnostics: {
+      emit: emitTrustedDiagnosticEvent,
+      onEvent: onInternalDiagnosticEvent,
+    },
   };
 }
 
@@ -220,6 +233,11 @@ describe("diagnostics-otel service", () => {
     logEmit.mockReset();
     logShutdown.mockClear();
     traceExporterCtor.mockClear();
+    metricExporterCtor.mockClear();
+    logExporterCtor.mockClear();
+    delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+    delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
+    delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
   });
 
   afterEach(() => {
@@ -232,6 +250,22 @@ describe("diagnostics-otel service", () => {
       delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     } else {
       process.env.OTEL_SEMCONV_STABILITY_OPT_IN = ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
+        ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
     }
   });
 
@@ -395,6 +429,124 @@ describe("diagnostics-otel service", () => {
     expect(logShutdown).toHaveBeenCalledTimes(1);
   });
 
+  test("emits and records bounded telemetry exporter health events", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+
+    await service.start(ctx);
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "traces",
+          status: "started",
+          reason: "configured",
+        }),
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "metrics",
+          status: "started",
+          reason: "configured",
+        }),
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "logs",
+          status: "started",
+          reason: "configured",
+        }),
+      ]),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.exporter": "diagnostics-otel",
+      "openclaw.signal": "logs",
+      "openclaw.status": "started",
+      "openclaw.reason": "configured",
+    });
+
+    unsubscribe();
+    await service.stop?.(ctx);
+  });
+
+  test("reports log exporter emit failures without exporting raw error text", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    logEmit.mockImplementationOnce(() => {
+      throw new TypeError("token sk-test-secret should not leave as telemetry");
+    });
+
+    await service.start(ctx);
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "export me",
+    });
+    await flushDiagnosticEvents();
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "logs",
+          status: "failure",
+          reason: "emit_failed",
+          errorCategory: "TypeError",
+        }),
+      ]),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.exporter": "diagnostics-otel",
+      "openclaw.signal": "logs",
+      "openclaw.status": "failure",
+      "openclaw.reason": "emit_failed",
+      "openclaw.errorCategory": "TypeError",
+    });
+
+    unsubscribe();
+    await service.stop?.(ctx);
+  });
+
+  test("ignores untrusted telemetry exporter events for OTEL metrics", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+
+    await service.start(ctx);
+    telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add.mockClear();
+    emitDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "spoofed-plugin-exporter",
+      signal: "metrics",
+      status: "failure",
+      reason: "emit_failed",
+    });
+
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
   test("honors disabled traces when an OpenTelemetry SDK is preloaded", async () => {
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
     const service = createDiagnosticsOtelService();
@@ -486,6 +638,50 @@ describe("diagnostics-otel service", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.(ctx);
+  });
+
+  test("uses signal-specific OTLP endpoints ahead of the shared endpoint", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    ctx.config.diagnostics!.otel!.tracesEndpoint = "https://trace.example.com/otlp";
+    ctx.config.diagnostics!.otel!.metricsEndpoint = "https://metric.example.com/v1/metrics";
+    ctx.config.diagnostics!.otel!.logsEndpoint = "https://log.example.com/otlp";
+
+    await service.start(ctx);
+
+    const traceOptions = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const metricOptions = metricExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const logOptions = logExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(traceOptions?.url).toBe("https://trace.example.com/otlp/v1/traces");
+    expect(metricOptions?.url).toBe("https://metric.example.com/v1/metrics");
+    expect(logOptions?.url).toBe("https://log.example.com/otlp/v1/logs");
+    await service.stop?.(ctx);
+  });
+
+  test("uses signal-specific OTLP env endpoints when config is unset", async () => {
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://trace-env.example.com/v1/traces";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "https://metric-env.example.com/otlp";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://log-env.example.com/otlp";
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    const traceOptions = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const metricOptions = metricExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const logOptions = logExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(traceOptions?.url).toBe("https://trace-env.example.com/v1/traces");
+    expect(metricOptions?.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
+    expect(logOptions?.url).toBe("https://log-env.example.com/otlp/v1/logs");
     await service.stop?.(ctx);
   });
 

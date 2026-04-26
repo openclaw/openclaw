@@ -883,6 +883,11 @@ Matrix accepts these target forms anywhere OpenClaw asks you for a room or user 
 - Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server`
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
+Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix
+when configuring explicit delivery targets, cron jobs, bindings, or allowlists.
+OpenClaw keeps internal session keys canonical for storage, so those lowercase
+keys are not a reliable source for Matrix delivery IDs.
+
 Live directory lookup uses the logged-in Matrix account:
 
 - User lookups query the Matrix user directory on that homeserver.

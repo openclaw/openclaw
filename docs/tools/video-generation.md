@@ -82,22 +82,22 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 
 ## Supported providers
 
-| Provider              | Default model                   | Text | Image ref                                            | Video ref        | API key                                  |
-| --------------------- | ------------------------------- | ---- | ---------------------------------------------------- | ---------------- | ---------------------------------------- |
-| Alibaba               | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (1.0)        | `seedance-1-0-pro-250528`       | Yes  | Up to 2 images (I2V models only; first + last frame) | No               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       | Yes  | Up to 2 images (first + last frame via role)         | No               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  | Yes  | Up to 9 reference images                             | Up to 3 videos   | `BYTEPLUS_API_KEY`                       |
-| ComfyUI               | `workflow`                      | Yes  | 1 image                                              | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
-| fal                   | `fal-ai/minimax/video-01-live`  | Yes  | 1 image                                              | No               | `FAL_KEY`                                |
-| Google                | `veo-3.1-fast-generate-preview` | Yes  | 1 image                                              | 1 video          | `GEMINI_API_KEY`                         |
-| MiniMax               | `MiniMax-Hailuo-2.3`            | Yes  | 1 image                                              | No               | `MINIMAX_API_KEY` or MiniMax OAuth       |
-| OpenAI                | `sora-2`                        | Yes  | 1 image                                              | 1 video          | `OPENAI_API_KEY`                         |
-| Qwen                  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `QWEN_API_KEY`                           |
-| Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video          | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No               | `TOGETHER_API_KEY`                       |
-| Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No               | `VYDRA_API_KEY`                          |
-| xAI                   | `grok-imagine-video`            | Yes  | 1 first-frame image or up to 7 `reference_image`s    | 1 video          | `XAI_API_KEY`                            |
+| Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | API key                                  |
+| --------------------- | ------------------------------- | ---- | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
+| Alibaba               | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
+| BytePlus (1.0)        | `seedance-1-0-pro-250528`       | Yes  | Up to 2 images (I2V models only; first + last frame) | No                                              | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       | Yes  | Up to 2 images (first + last frame via role)         | No                                              | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  | Yes  | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
+| ComfyUI               | `workflow`                      | Yes  | 1 image                                              | No                                              | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| fal                   | `fal-ai/minimax/video-01-live`  | Yes  | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
+| Google                | `veo-3.1-fast-generate-preview` | Yes  | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
+| MiniMax               | `MiniMax-Hailuo-2.3`            | Yes  | 1 image                                              | No                                              | `MINIMAX_API_KEY` or MiniMax OAuth       |
+| OpenAI                | `sora-2`                        | Yes  | 1 image                                              | 1 video                                         | `OPENAI_API_KEY`                         |
+| Qwen                  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
+| Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
+| Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No                                              | `TOGETHER_API_KEY`                       |
+| Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No                                              | `VYDRA_API_KEY`                          |
+| xAI                   | `grok-imagine-video`            | Yes  | 1 first-frame image or up to 7 `reference_image`s    | 1 video                                         | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -114,7 +114,7 @@ and the shared live sweep.
 | Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
 | BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
 | ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
-| fal      | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| fal      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                   |
 | Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input  |
 | MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
 | OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side inpaint/remix access |
@@ -296,7 +296,7 @@ entries.
   </Accordion>
 
   <Accordion title="fal">
-    Uses a queue-backed flow for long-running jobs. Single image reference only.
+    Uses a queue-backed flow for long-running jobs. Most fal video models accept a single image reference. Seedance 2.0 reference-to-video models accept up to 9 images, 3 videos, and 3 audio references, with at most 12 total reference files.
   </Accordion>
 
   <Accordion title="Google (Gemini / Veo)">
@@ -349,6 +349,7 @@ capabilities: {
     enabled: true,
     maxVideos: 1,
     maxInputImages: 1,
+    maxInputImagesByModel: { "provider/reference-to-video": 9 },
     maxDurationSeconds: 5,
   },
   videoToVideo: {
@@ -365,6 +366,10 @@ enough to advertise transform-mode support. Providers should declare
 `generate`, `imageToVideo`, and `videoToVideo` explicitly so live tests,
 contract tests, and the shared `video_generate` tool can validate mode support
 deterministically.
+
+When one model in a provider has wider reference-input support than the rest,
+use `maxInputImagesByModel`, `maxInputVideosByModel`, or
+`maxInputAudiosByModel` instead of raising the mode-wide limit.
 
 ## Live tests
 

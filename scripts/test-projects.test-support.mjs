@@ -97,6 +97,7 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-c
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
+const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -225,6 +226,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
   ],
 ]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
@@ -248,6 +250,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
+  ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   [
@@ -286,6 +289,11 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/auto-reply/reply/effective-reply-route.test.ts",
       "src/auto-reply/reply/dispatch-from-config.test.ts",
     ],
+  ],
+  ["src/auto-reply/reply/commands-acp.ts", ["src/auto-reply/reply/commands-acp.test.ts"]],
+  [
+    "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+    ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
   ],
 ]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
@@ -1054,7 +1062,10 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const expandShard =
+      expandToProjectConfigs ||
+      shard.config === FULL_AGENTIC_VITEST_CONFIG ||
+      shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.map((config) => ({
       config,

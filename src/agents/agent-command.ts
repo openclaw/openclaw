@@ -40,6 +40,8 @@ import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
+  resolveAcpPromptBody,
+  resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
@@ -247,8 +249,6 @@ async function prepareAgentCommandExecution(
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
-  const body = prependInternalEventContext(message, opts.internalEvents);
-  const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -366,6 +366,12 @@ async function prepareAgentCommandExecution(
         sessionKey,
       })
     : null;
+  const body =
+    acpResolution?.kind === "ready"
+      ? resolveAcpPromptBody(message, opts.internalEvents)
+      : prependInternalEventContext(message, opts.internalEvents);
+  const transcriptBody =
+    opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
     body,
@@ -616,14 +622,17 @@ async function agentCommandInternal(
       : currentSkillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+      const now = Date.now();
       const current = sessionEntry ?? {
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        sessionStartedAt: now,
       };
       const next: SessionEntry = {
         ...current,
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        sessionStartedAt: current.sessionStartedAt ?? now,
         skillsSnapshot,
       };
       await persistSessionEntry({
@@ -637,9 +646,16 @@ async function agentCommandInternal(
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
+      const now = Date.now();
       const entry = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
+        sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: now,
+        sessionStartedAt: entry.sessionStartedAt ?? now,
+        lastInteractionAt: now,
+      };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
       }
@@ -1064,6 +1080,10 @@ async function agentCommandInternal(
         fallbackProvider,
         fallbackModel,
         result,
+        touchInteraction:
+          opts.bootstrapContextRunKind !== "cron" &&
+          opts.bootstrapContextRunKind !== "heartbeat" &&
+          !opts.internalEvents?.length,
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }

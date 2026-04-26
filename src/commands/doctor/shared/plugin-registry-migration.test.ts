@@ -43,6 +43,7 @@ function createCandidate(
   rootDir: string,
   id = "demo",
   origin: PluginCandidate["origin"] = "global",
+  options: { enabledByDefault?: boolean } = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -54,6 +55,7 @@ function createCandidate(
     JSON.stringify({
       id,
       name: id,
+      ...(options.enabledByDefault ? { enabledByDefault: true } : {}),
       configSchema: { type: "object" },
       providers: [id],
     }),
@@ -182,6 +184,34 @@ describe("plugin registry install migration", () => {
       "enabled-demo",
       "disabled-demo",
     ]);
+  });
+
+  it("keeps enabled-by-default bundled provider plugins discoverable for setup", async () => {
+    const stateDir = makeTempDir();
+    const openaiDir = path.join(stateDir, "plugins", "openai");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(openaiDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [
+          createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
+          createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+        ],
+        readConfig: async () => ({}),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "openai", enabledByDefault: true })],
+      },
+    });
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {

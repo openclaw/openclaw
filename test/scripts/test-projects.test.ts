@@ -302,6 +302,23 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes ACP command source files to ACP command regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/auto-reply/reply/commands-acp.ts",
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ],
+    });
+  });
+
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",
@@ -635,7 +652,19 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-contracts.config.ts",
         "test/vitest/vitest.full-core-bundled.config.ts",
         "test/vitest/vitest.full-core-runtime.config.ts",
-        "test/vitest/vitest.full-agentic.config.ts",
+        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
+        "test/vitest/vitest.gateway-methods.config.ts",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+        "test/vitest/vitest.commands-light.config.ts",
+        "test/vitest/vitest.commands.config.ts",
+        "test/vitest/vitest.agents.config.ts",
+        "test/vitest/vitest.daemon.config.ts",
+        "test/vitest/vitest.plugin-sdk-light.config.ts",
+        "test/vitest/vitest.plugin-sdk.config.ts",
+        "test/vitest/vitest.plugins.config.ts",
+        "test/vitest/vitest.channels.config.ts",
         "test/vitest/vitest.full-auto-reply.config.ts",
         "test/vitest/vitest.extension-acpx.config.ts",
         "test/vitest/vitest.extension-bluebubbles.config.ts",

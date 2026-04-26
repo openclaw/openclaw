@@ -11,7 +11,6 @@ import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
-import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
@@ -36,17 +35,6 @@ export type InstalledPluginIndexRefreshReason =
   | "host-contract-changed"
   | "compat-registry-changed"
   | "manual";
-
-export type InstalledPluginIndexContributions = {
-  providers: readonly string[];
-  channels: readonly string[];
-  channelConfigs: readonly string[];
-  setupProviders: readonly string[];
-  cliBackends: readonly string[];
-  modelCatalogProviders: readonly string[];
-  commandAliases: readonly string[];
-  contracts: readonly string[];
-};
 
 export type InstalledPluginStartupInfo = {
   sidecar: boolean;
@@ -96,6 +84,10 @@ export type InstalledPluginIndexRecord = {
   packageInstall?: PluginInstallSourceInfo;
   manifestPath: string;
   manifestHash: string;
+  format?: PluginManifestRecord["format"];
+  bundleFormat?: PluginManifestRecord["bundleFormat"];
+  source?: string;
+  setupSource?: string;
   packageJson?: {
     path: string;
     hash: string;
@@ -104,7 +96,6 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
-  contributions: InstalledPluginIndexContributions;
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
 };
@@ -122,19 +113,6 @@ export type InstalledPluginIndex = {
   plugins: readonly InstalledPluginIndexRecord[];
   diagnostics: readonly PluginDiagnostic[];
 };
-
-export type InstalledPluginContributions = {
-  providers: ReadonlyMap<string, readonly string[]>;
-  channels: ReadonlyMap<string, readonly string[]>;
-  channelConfigs: ReadonlyMap<string, readonly string[]>;
-  setupProviders: ReadonlyMap<string, readonly string[]>;
-  cliBackends: ReadonlyMap<string, readonly string[]>;
-  modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
-  commandAliases: ReadonlyMap<string, readonly string[]>;
-  contracts: ReadonlyMap<string, readonly string[]>;
-};
-
-export type InstalledPluginContributionKey = keyof InstalledPluginIndexContributions;
 
 export type LoadInstalledPluginIndexParams = {
   config?: OpenClawConfig;
@@ -193,32 +171,12 @@ function sortUnique(values: readonly string[] | undefined): readonly string[] {
   );
 }
 
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return sortUnique(value ? Object.keys(value) : []);
-}
-
-function collectCommandAliasNames(
-  aliases: readonly PluginManifestCommandAlias[] | undefined,
-): readonly string[] {
-  return sortUnique(aliases?.map((alias) => alias.name) ?? []);
-}
-
-function collectContractKeys(record: PluginManifestRecord): readonly string[] {
-  const contracts = record.contracts;
-  if (!contracts) {
-    return [];
-  }
-  return sortUnique(
-    Object.entries(contracts).flatMap(([key, value]) =>
-      Array.isArray(value) && value.length > 0 ? [key] : [],
-    ),
-  );
-}
-
 function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
+  const providers = record.providers ?? [];
+  const cliBackends = record.cliBackends ?? [];
   return Boolean(
-    record.providers.length > 0 ||
-    record.cliBackends.length > 0 ||
+    providers.length > 0 ||
+    cliBackends.length > 0 ||
     record.contracts?.speechProviders?.length ||
     record.contracts?.mediaUnderstandingProviders?.length ||
     record.contracts?.documentExtractors?.length ||
@@ -234,8 +192,9 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
 }
 
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
+  const channels = record.channels ?? [];
   return {
-    sidecar: record.channels.length === 0 && !hasRuntimeContractSurface(record),
+    sidecar: channels.length === 0 && !hasRuntimeContractSurface(record),
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -267,19 +226,6 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
     codes.push("activation-capability-hint");
   }
   return sortUnique(codes) as readonly PluginCompatCode[];
-}
-
-function buildContributions(record: PluginManifestRecord): InstalledPluginIndexContributions {
-  return {
-    providers: sortUnique(record.providers),
-    channels: sortUnique(record.channels),
-    channelConfigs: collectObjectKeys(record.channelConfigs),
-    setupProviders: sortUnique(record.setup?.providers?.map((provider) => provider.id) ?? []),
-    cliBackends: sortUnique([...(record.cliBackends ?? []), ...(record.setup?.cliBackends ?? [])]),
-    modelCatalogProviders: collectObjectKeys(record.modelCatalog?.providers),
-    commandAliases: collectCommandAliasNames(record.commandAliases),
-    contracts: collectContractKeys(record),
-  };
 }
 
 function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
@@ -536,7 +482,8 @@ function buildInstalledPluginIndex(
   const { candidates, registry } = resolveRegistry(params);
   const candidateByRootDir = buildCandidateLookup(candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
+  const registryDiagnostics = registry.diagnostics ?? [];
+  const diagnostics: PluginDiagnostic[] = [...registryDiagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const installRecords = normalizeInstallRecordMap(params.installRecords);
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
@@ -568,15 +515,24 @@ function buildInstalledPluginIndex(
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
+      source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
       enabled,
-      contributions: buildContributions(record),
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
+    if (record.format && record.format !== "openclaw") {
+      indexRecord.format = record.format;
+    }
+    if (record.bundleFormat) {
+      indexRecord.bundleFormat = record.bundleFormat;
+    }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
+    }
+    if (record.setupSource) {
+      indexRecord.setupSource = record.setupSource;
     }
     if (candidate?.packageName) {
       indexRecord.packageName = candidate.packageName;
@@ -676,118 +632,6 @@ export function isInstalledPluginEnabled(
     rootConfig: config,
     enabledByDefault: record.enabledByDefault,
   }).enabled;
-}
-
-function resolveContributionRecordSet(
-  index: InstalledPluginIndex,
-  options: { includeDisabled?: boolean; config?: OpenClawConfig },
-): readonly InstalledPluginIndexRecord[] {
-  return options.includeDisabled
-    ? index.plugins
-    : listEnabledInstalledPluginRecords(index, options.config);
-}
-
-export function listInstalledPluginContributionIds(
-  index: InstalledPluginIndex,
-  contribution: InstalledPluginContributionKey,
-  options: { includeDisabled?: boolean; config?: OpenClawConfig } = {},
-): readonly string[] {
-  return sortUnique(
-    resolveContributionRecordSet(index, options).flatMap(
-      (plugin) => plugin.contributions[contribution],
-    ),
-  );
-}
-
-export function resolveInstalledPluginContributionOwners(
-  index: InstalledPluginIndex,
-  contribution: InstalledPluginContributionKey,
-  matches: string | ((contributionId: string) => boolean),
-  options: { includeDisabled?: boolean; config?: OpenClawConfig } = {},
-): readonly string[] {
-  const matcher =
-    typeof matches === "string" ? (contributionId: string) => contributionId === matches : matches;
-  const owners: string[] = [];
-  for (const plugin of resolveContributionRecordSet(index, options)) {
-    if (plugin.contributions[contribution].some(matcher)) {
-      owners.push(plugin.pluginId);
-    }
-  }
-  return sortUnique(owners);
-}
-
-function addContribution(
-  target: Map<string, string[]>,
-  contributionId: string,
-  pluginId: string,
-): void {
-  const existing = target.get(contributionId);
-  if (existing) {
-    existing.push(pluginId);
-  } else {
-    target.set(contributionId, [pluginId]);
-  }
-}
-
-function freezeContributionMap(
-  source: Map<string, string[]>,
-): ReadonlyMap<string, readonly string[]> {
-  const frozen = new Map<string, readonly string[]>();
-  for (const [key, pluginIds] of source) {
-    frozen.set(key, sortUnique(pluginIds));
-  }
-  return frozen;
-}
-
-export function resolveInstalledPluginContributions(
-  index: InstalledPluginIndex,
-): InstalledPluginContributions {
-  const providers = new Map<string, string[]>();
-  const channels = new Map<string, string[]>();
-  const channelConfigs = new Map<string, string[]>();
-  const setupProviders = new Map<string, string[]>();
-  const cliBackends = new Map<string, string[]>();
-  const modelCatalogProviders = new Map<string, string[]>();
-  const commandAliases = new Map<string, string[]>();
-  const contracts = new Map<string, string[]>();
-
-  for (const plugin of index.plugins) {
-    for (const provider of plugin.contributions.providers) {
-      addContribution(providers, provider, plugin.pluginId);
-    }
-    for (const channel of plugin.contributions.channels) {
-      addContribution(channels, channel, plugin.pluginId);
-    }
-    for (const channelConfig of plugin.contributions.channelConfigs) {
-      addContribution(channelConfigs, channelConfig, plugin.pluginId);
-    }
-    for (const setupProvider of plugin.contributions.setupProviders) {
-      addContribution(setupProviders, setupProvider, plugin.pluginId);
-    }
-    for (const cliBackend of plugin.contributions.cliBackends) {
-      addContribution(cliBackends, cliBackend, plugin.pluginId);
-    }
-    for (const modelCatalogProvider of plugin.contributions.modelCatalogProviders) {
-      addContribution(modelCatalogProviders, modelCatalogProvider, plugin.pluginId);
-    }
-    for (const commandAlias of plugin.contributions.commandAliases) {
-      addContribution(commandAliases, commandAlias, plugin.pluginId);
-    }
-    for (const contract of plugin.contributions.contracts) {
-      addContribution(contracts, contract, plugin.pluginId);
-    }
-  }
-
-  return {
-    providers: freezeContributionMap(providers),
-    channels: freezeContributionMap(channels),
-    channelConfigs: freezeContributionMap(channelConfigs),
-    setupProviders: freezeContributionMap(setupProviders),
-    cliBackends: freezeContributionMap(cliBackends),
-    modelCatalogProviders: freezeContributionMap(modelCatalogProviders),
-    commandAliases: freezeContributionMap(commandAliases),
-    contracts: freezeContributionMap(contracts),
-  };
 }
 
 export function diffInstalledPluginIndexInvalidationReasons(

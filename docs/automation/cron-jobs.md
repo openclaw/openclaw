@@ -84,7 +84,7 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
-**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). Those system events do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
 For isolated jobs, “fresh session” means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
@@ -140,13 +140,18 @@ forever.
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
 For isolated jobs, chat delivery is shared. If a chat route is available, the
 agent can use the `message` tool even when the job uses `--no-deliver`. If the
 agent sends to the configured/current target, OpenClaw skips the fallback
 announce. Otherwise `announce`, `webhook`, and `none` only control what the
 runner does with the final reply after the agent turn.
+
+When an agent creates an isolated reminder from an active chat, OpenClaw stores
+the preserved live delivery target for the fallback announce route. Internal
+session keys may be lowercase; provider delivery targets are not reconstructed
+from those keys when current chat context is available.
 
 Failure notifications follow a separate destination path:
 
@@ -418,12 +423,27 @@ openclaw doctor
 - Delivery mode `none` means no runner fallback send is expected. The agent can
   still send directly with the `message` tool when a chat route is available.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
+- For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can
+  fail because Matrix room IDs are case-sensitive. Edit the job to the exact
+  `!room:server` or `room:!room:server` value from Matrix.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
   OpenClaw suppresses direct outbound delivery and also suppresses the fallback
   queued summary path, so nothing is posted back to chat.
 - If the agent should message the user itself, check that the job has a usable
   route (`channel: "last"` with a previous chat, or an explicit channel/target).
+
+### Cron or heartbeat appears to prevent `/new`-style rollover
+
+- Daily and idle reset freshness is not based on `updatedAt`; see
+  [Session management](/concepts/session#session-lifecycle).
+- Cron wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may
+  update the session row for routing/status, but they do not extend
+  `sessionStartedAt` or `lastInteractionAt`.
+- For legacy rows created before those fields existed, OpenClaw can recover
+  `sessionStartedAt` from the transcript JSONL session header when the file is
+  still available. Legacy idle rows without `lastInteractionAt` use that
+  recovered start time as their idle baseline.
 
 ### Timezone gotchas
 

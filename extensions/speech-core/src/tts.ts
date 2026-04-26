@@ -62,6 +62,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
+const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 type TtsUserPrefs = {
   tts?: {
@@ -240,6 +241,48 @@ function resolveRawProviderConfig(
   return asProviderConfig(direct);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMergeDefined(base: unknown, override: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(override)) {
+    return override === undefined ? base : override;
+  }
+
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
+      continue;
+    }
+    const existing = result[key];
+    result[key] = key in result ? deepMergeDefined(existing, value) : value;
+  }
+  return result;
+}
+
+function normalizeAgentConfigId(value: string | undefined | null): string {
+  return normalizeLowercaseStringOrEmpty(value);
+}
+
+function resolveAgentTtsOverride(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+): TtsConfig | undefined {
+  if (!agentId || !Array.isArray(cfg.agents?.list)) {
+    return undefined;
+  }
+  const normalized = normalizeAgentConfigId(agentId);
+  const agent = cfg.agents.list.find((entry) => normalizeAgentConfigId(entry.id) === normalized);
+  return agent?.tts;
+}
+
+function resolveEffectiveTtsRawConfig(cfg: OpenClawConfig, agentId?: string): TtsConfig {
+  const base = cfg.messages?.tts ?? {};
+  const override = resolveAgentTtsOverride(cfg, agentId);
+  return deepMergeDefined(base, override ?? {}) as TtsConfig;
+}
+
 function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
@@ -313,8 +356,8 @@ export function getResolvedSpeechProviderConfig(
   return resolveLazyProviderConfig(config, canonical, cfg);
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
+  const raw: TtsConfig = resolveEffectiveTtsRawConfig(cfg, agentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const auto = resolveConfiguredTtsAutoMode(raw);
@@ -367,11 +410,15 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-function resolveEffectiveTtsAutoState(params: { cfg: OpenClawConfig; sessionAuto?: string }): {
+function resolveEffectiveTtsAutoState(params: {
+  cfg: OpenClawConfig;
+  sessionAuto?: string;
+  agentId?: string;
+}): {
   autoMode: TtsAutoMode;
   prefsPath: string;
 } {
-  const raw: TtsConfig = params.cfg.messages?.tts ?? {};
+  const raw: TtsConfig = resolveEffectiveTtsRawConfig(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
   const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
   if (sessionAuto) {
@@ -387,12 +434,15 @@ function resolveEffectiveTtsAutoState(params: { cfg: OpenClawConfig; sessionAuto
   };
 }
 
-export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
-  const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({ cfg });
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
+  const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({ cfg, agentId });
   if (autoMode === "off") {
     return undefined;
   }
-  const _config = resolveTtsConfig(cfg);
+  const _config = resolveTtsConfig(cfg, agentId);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -504,11 +554,12 @@ export function resolveExplicitTtsOverrides(params: {
   provider?: string;
   modelId?: string;
   voiceId?: string;
+  agentId?: string;
 }): TtsDirectiveOverrides {
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
   const voiceId = params.voiceId?.trim();
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const selectedProvider =
     canonicalizeSpeechProviderId(providerInput, params.cfg) ??
@@ -589,7 +640,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
-const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu"]);
+const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu", "whatsapp"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -741,6 +792,7 @@ function resolveTtsRequestSetup(params: {
   prefsPath?: string;
   providerOverride?: TtsProvider;
   disableFallback?: boolean;
+  agentId?: string;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -749,7 +801,7 @@ function resolveTtsRequestSetup(params: {
   | {
       error: string;
     } {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   if (params.text.length > config.maxTextLength) {
     return {
@@ -774,6 +826,7 @@ export async function textToSpeech(params: {
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
   timeoutMs?: number;
+  agentId?: string;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -819,6 +872,7 @@ export async function synthesizeSpeech(params: {
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
   timeoutMs?: number;
+  agentId?: string;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -826,6 +880,7 @@ export async function synthesizeSpeech(params: {
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
     disableFallback: params.disableFallback,
+    agentId: params.agentId,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -1064,6 +1119,7 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentId?: string;
 }): Promise<ReplyPayload> {
   if (params.payload.isCompactionNotice) {
     return params.payload;
@@ -1071,11 +1127,12 @@ export async function maybeApplyTtsToPayload(params: {
   const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
+    agentId: params.agentId,
   });
   if (autoMode === "off") {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const activeProvider = getTtsProvider(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
@@ -1183,6 +1240,7 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentId: params.agentId,
   });
 
   if (result.success && result.audioPath) {

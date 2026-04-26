@@ -326,6 +326,7 @@ export async function runEmbeddedPiAgent(
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
+        jobId: params.jobId,
         agentId: workspaceResolution.agentId,
         sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
@@ -616,9 +617,9 @@ export async function runEmbeddedPiAgent(
       let timeoutCompactionAttempts = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
-      // user-visible text. The existing empty-response retry is gated on
-      // isStrictAgenticSupportedProviderModel (gpt-5 only). This is an
-      // orthogonal, model-agnostic resubmission.
+      // user-visible text. This is an orthogonal, model-agnostic resubmission
+      // for errored turns; stopReason="stop" empty zero-token turns use the
+      // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -2088,13 +2089,10 @@ export async function runEmbeddedPiAgent(
           // ── silent-error retry ────────────────────────────────────────────
           // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
           // and zero output tokens AND empty content after a successful
-          // tool-call sequence, producing no user-visible text at all. The
-          // existing empty-response retry path (resolveEmptyResponseRetryInstruction)
-          // is gated on the strict-agentic contract (gpt-5 only), so non-frontier
-          // models fall through to "incomplete turn detected" → silent gap
-          // until the user nudges. This is a narrower, model-agnostic
-          // resubmission: same prompt, same session transcript (tool results
-          // already captured), no instruction injection. Placed before the
+          // tool-call sequence, producing no user-visible text at all. This
+          // path is narrower than the empty-response continuation retry:
+          // same prompt, same session transcript (tool results already
+          // captured), no instruction injection. Placed before the
           // incompleteTurnText return so it actually gets a chance to fire.
           //
           // Content-empty guard: a reasoning-only error (content has thinking

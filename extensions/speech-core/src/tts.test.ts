@@ -49,7 +49,7 @@ vi.mock("../api.js", async () => {
   };
 });
 
-const { _test, maybeApplyTtsToPayload } = await import("./tts.js");
+const { _test, maybeApplyTtsToPayload, resolveTtsConfig } = await import("./tts.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -71,7 +71,12 @@ async function expectTtsPayloadResult(params: {
   text: string;
   target: "voice-note" | "audio-file";
   audioAsVoice: true | undefined;
+  providerResult?: MockSpeechSynthesisResult;
+  mediaExtension?: string;
 }) {
+  if (params.providerResult) {
+    synthesizeMock.mockResolvedValueOnce(params.providerResult);
+  }
   const cfg = createTtsConfig(params.prefsName);
   let mediaDir: string | undefined;
   try {
@@ -84,7 +89,7 @@ async function expectTtsPayloadResult(params: {
 
     expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ target: params.target }));
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
-    expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+    expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -118,35 +123,26 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
-  it("marks Feishu voice-note TTS for channel-side transcoding when provider returns mp3", async () => {
-    synthesizeMock.mockResolvedValueOnce({
-      audioBuffer: Buffer.from("mp3"),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
-    });
-    const cfg = createTtsConfig("openclaw-speech-core-tts-feishu-mp3-test");
-    let mediaDir: string | undefined;
-    try {
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: "This Feishu reply should be transcoded by the channel." },
-        cfg,
-        channel: "feishu",
-        kind: "final",
+  it.each(["feishu", "whatsapp"] as const)(
+    "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
+    async (channel) => {
+      expect(_test.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
+      await expectTtsPayloadResult({
+        channel,
+        prefsName: `openclaw-speech-core-tts-${channel}-mp3-test`,
+        text: `This ${channel} reply should be transcoded by the channel.`,
+        target: "voice-note",
+        audioAsVoice: true,
+        mediaExtension: "mp3",
+        providerResult: {
+          audioBuffer: Buffer.from("mp3"),
+          outputFormat: "mp3",
+          fileExtension: ".mp3",
+          voiceCompatible: false,
+        },
       });
-
-      expect(synthesizeMock).toHaveBeenCalledWith(
-        expect.objectContaining({ target: "voice-note" }),
-      );
-      expect(result.audioAsVoice).toBe(true);
-      expect(result.mediaUrl).toMatch(/voice-\d+\.mp3$/);
-      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
-  });
+    },
+  );
 
   it("keeps non-native voice-note channels as regular audio files", async () => {
     await expectTtsPayloadResult({
@@ -156,5 +152,84 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+});
+
+describe("speech-core per-agent TTS config", () => {
+  it("deep-merges the active agent TTS override over messages.tts", () => {
+    const cfg = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: "${OPENAI_API_KEY}",
+              voice: "coral",
+              speed: 1,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "reader",
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  voice: "nova",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveTtsConfig(cfg, "reader");
+
+    expect(resolved.rawConfig).toMatchObject({
+      enabled: true,
+      provider: "openai",
+      providers: {
+        openai: {
+          apiKey: "${OPENAI_API_KEY}",
+          voice: "nova",
+          speed: 1,
+        },
+      },
+    });
+  });
+
+  it("ignores prototype-pollution keys in agent TTS overrides", () => {
+    const cfg = {
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "coral",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "reader",
+            tts: JSON.parse(
+              '{"providers":{"openai":{"voice":"nova","__proto__":{"polluted":true}}}}',
+            ),
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveTtsConfig(cfg, "reader");
+
+    expect(resolved.rawConfig?.providers?.openai).toEqual({ voice: "nova" });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });

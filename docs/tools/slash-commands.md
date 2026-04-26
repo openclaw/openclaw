@@ -9,6 +9,11 @@ title: "Slash commands"
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
+When a conversation or thread is bound to an ACP session, normal follow-up text
+routes to that ACP harness. Gateway management commands still stay local:
+`/acp ...` always reaches the OpenClaw ACP command handler, and `/status` plus
+`/unfocus` stay local whenever command handling is enabled for the surface.
+
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
@@ -129,7 +134,7 @@ Built-in commands available today:
 - `/plugins list|inspect|show|get|install|enable|disable` inspects or mutates plugin state. `/plugin` is an alias. Owner-only for writes. Requires `commands.plugins: true`.
 - `/debug show|set|unset|reset` manages runtime-only config overrides. Owner-only. Requires `commands.debug: true`.
 - `/usage off|tokens|full|cost` controls the per-response usage footer or prints a local cost summary.
-- `/tts on|off|status|provider|limit|summary|audio|help` controls TTS. See [/tools/tts](/tools/tts).
+- `/tts on|off|status|chat|latest|provider|limit|summary|audio|help` controls TTS. See [/tools/tts](/tools/tts).
 - `/restart` restarts OpenClaw when enabled. Default: enabled; set `commands.restart: false` to disable it.
 - `/activation mention|always` sets group activation mode.
 - `/send on|off|inherit` sets send policy. Owner-only.
