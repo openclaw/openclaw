@@ -133,35 +133,42 @@ function shortPath(p) {
 
 /**
  * Derive project cwd from Claude Code session directory name.
- * Directory names are the cwd path with '/' replaced by '-'.
- * e.g. '-Users-dirghpatel-Documents-myproject' → '/Users/dirghpatel/Documents/myproject'
- * Handles directory names containing hyphens by validating against filesystem.
+ * Simple mechanical fallback — works for paths without hyphens in directory names.
+ * Prefer extractCwdFromTranscript() when a JSONL file is available.
  */
 function cwdFromProjectDir(dirName) {
   if (!dirName) {
     return null;
   }
-
-  // Remove leading hyphen and split by hyphen
-  const parts = dirName.slice(1).split("-").filter(Boolean);
-
-  // Try all possible depth levels from full depth down to 1, checking filesystem
-  for (let i = parts.length; i >= 1; i--) {
-    // Try concatenating remaining parts with hyphens
-    const remaining = parts.slice(i).join("-");
-    const pathParts = remaining ? [...parts.slice(0, i), remaining] : parts.slice(0, i);
-    const candidate = "/" + pathParts.join("/");
-
-    try {
-      require("fs").statSync(candidate);
-      return candidate;
-    } catch {
-      // Path doesn't exist, continue trying other depths
-    }
-  }
-
-  // Fallback: just replace all hyphens (original behavior)
   return "/" + dirName.slice(1).replace(/-/g, "/");
 }
 
-module.exports = { parseTranscript, cwdFromProjectDir };
+/**
+ * Extract the real cwd by scanning early JSONL lines for a user entry with a cwd field.
+ * More reliable than cwdFromProjectDir when project directory names contain hyphens.
+ *
+ * @param {string} filePath - absolute path to .jsonl session file
+ * @returns {string | null}
+ */
+function extractCwdFromTranscript(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const lines = raw.split("\n").filter(Boolean).slice(0, 20);
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.cwd) {
+        return entry.cwd;
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  return null;
+}
+
+module.exports = { parseTranscript, cwdFromProjectDir, extractCwdFromTranscript };
