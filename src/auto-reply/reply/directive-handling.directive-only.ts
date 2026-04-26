@@ -15,6 +15,7 @@ export function isDirectiveOnly(params: {
   if (
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
+    !directives.hasEmotionsDirective &&
     !directives.hasTraceDirective &&
     !directives.hasFastDirective &&
     !directives.hasReasoningDirective &&

@@ -231,7 +231,7 @@ export async function buildReplyPayloads(params: {
           ).text.trim();
           setReplyPayloadMetadata(mediaNormalizedPayload, {
             ttsSourceText: cleanedRawEmotionTtsText,
-            ...(cleanedPlainTtsText.length > 0 && cleanedPlainTtsText !== cleanedRawEmotionTtsText
+            ...(cleanedPlainTtsText !== cleanedRawEmotionTtsText
               ? { ttsPlainText: cleanedPlainTtsText }
               : {}),
           });

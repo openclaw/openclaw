@@ -13,7 +13,6 @@ import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
-import { normalizeEmotionMode } from "../../emotion-mode.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { listRegisteredPluginCommands } from "../../plugins/command-registry-state.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -148,12 +147,6 @@ export async function resolveCommandsSystemPromptBundle(
       }
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg, sessionAgentId) : undefined;
-  // PR-B note: emotionMode is resolved here for the directive plumbing layer,
-  // but the system-prompt-side voice.md / tag-dictionary injection lives in
-  // PR-C. PR-B doesn't pass emotionMode into buildAgentSystemPrompt yet.
-  const _emotionMode = normalizeEmotionMode(targetSessionEntry?.emotionMode) ?? "off";
-  void _emotionMode;
-
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,

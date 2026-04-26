@@ -412,6 +412,63 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
+  it("returns a directive-only ack for emotions commands instead of continuing into the agent path", async () => {
+    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
+      kind: "reply",
+      reply: {
+        text: "Emotions mode enabled (tags hidden).",
+      },
+    });
+
+    const result = await resolveReplyDirectives({
+      ctx: buildTestCtx({
+        Body: "/emotions on",
+        CommandBody: "/emotions on",
+        CommandAuthorized: true,
+      }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp",
+      agentCfg: {},
+      sessionCtx: {
+        Body: "/emotions on",
+        BodyStripped: "/emotions on",
+        BodyForAgent: "/emotions on",
+        CommandBody: "/emotions on",
+        Provider: "telegram",
+        Surface: "telegram",
+      } as TemplateContext,
+      sessionEntry: makeSessionEntry(),
+      sessionStore: {
+        "agent:main:telegram:+2000": makeSessionEntry(),
+      },
+      sessionKey: "agent:main:telegram:+2000",
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "/emotions on",
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: makeTypingController(),
+      opts: undefined,
+      skillFilter: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: "Emotions mode enabled (tags hidden).",
+      },
+    });
+  });
+
   it("uses the model reasoning default when thinking is off", async () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
       defaultThinking: "off",

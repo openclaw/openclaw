@@ -177,7 +177,7 @@ export async function handleDirectiveOnly(
       };
     }
     return {
-      text: `Unrecognized emotions mode "${directives.rawEmotionMode}". Valid modes: off, on, full.`,
+      text: `Unrecognized emotions mode "${directives.rawEmotionMode}". Valid modes: on, off, full.`,
     };
   }
   if (directives.hasTraceDirective && !directives.traceLevel) {
