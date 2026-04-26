@@ -22,6 +22,11 @@ Remote mode supports two transports:
 - **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
+In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
+`gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
+tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
+browser automation all use the same safe loopback transport.
+
 ## Prereqs on the remote host
 
 1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
