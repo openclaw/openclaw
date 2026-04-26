@@ -167,6 +167,8 @@ import {
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
   type PluginsUiDescriptorsParams,
+  type PluginsSessionActionParams,
+  PluginsSessionActionParamsSchema,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
   type ErrorShape,
@@ -593,6 +595,9 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsSessionActionParams = ajv.compile<PluginsSessionActionParams>(
+  PluginsSessionActionParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -762,6 +767,7 @@ export {
   CommandsListParamsSchema,
   CommandsListResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  PluginsSessionActionParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
