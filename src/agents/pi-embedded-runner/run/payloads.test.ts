@@ -199,4 +199,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTexts: ['{"action":"NO_REPLY"}'],
     });
   });
+
+  it("strips proactive_candidate wrappers from assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        '<proactive_candidate source="heartbeat">Time to stretch and refill your water.</proactive_candidate>',
+      ],
+    });
+
+    expectSinglePayloadText(payloads, "Time to stretch and refill your water.");
+  });
 });
