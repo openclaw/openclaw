@@ -288,10 +288,10 @@ function Install-OpenClawNpm {
             "--no-audit"
         )
         if ($installResult.Stdout) {
-            Microsoft.PowerShell.Utility\Write-Output $installResult.Stdout
+            Microsoft.PowerShell.Utility\Write-Host $installResult.Stdout
         }
         if ($installResult.Stderr) {
-            Microsoft.PowerShell.Utility\Write-Output $installResult.Stderr
+            Microsoft.PowerShell.Utility\Write-Host $installResult.Stderr
         }
         if ($installResult.ExitCode -ne 0) {
             Write-Host "npm install failed with exit code $($installResult.ExitCode)" -Level error
