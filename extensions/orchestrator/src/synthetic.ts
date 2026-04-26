@@ -56,10 +56,12 @@ export interface SyntheticHarnessOptions {
 const FIXTURE_FILE = "synthetic-tasks.json";
 
 function defaultFixturePath(): string {
-  // synthetic.ts lives at extensions/orchestrator/src/synthetic.ts. The
-  // canonical fixture file ships under test/fixtures/.
+  // The canonical fixture is a production asset (the live-flip runbook
+  // requires `synthetic-all` to gate mode flips), so it ships under
+  // src/fixtures/ — not test/fixtures/, which is excluded from the
+  // package boundary.
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "..", "test", "fixtures", FIXTURE_FILE);
+  return resolve(here, "fixtures", FIXTURE_FILE);
 }
 
 export function loadSyntheticFixtures(path?: string): SyntheticFixtureFile {

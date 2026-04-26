@@ -463,6 +463,35 @@ describe("POST /orchestrator/tasks/:id/transition", () => {
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error.code).toBe("invalid_reason");
   });
+
+  test("non-string reason on reject returns 400 (not 500)", async () => {
+    const store = createStore({ openclawHome: tmpHome });
+    const t = store.submit({ goal: "x", submittedBy: "tester" });
+    const handler = makeHandler(store);
+    const res = await call(handler, {
+      method: "POST",
+      url: `/orchestrator/tasks/${t.id}/transition`,
+      headers: authHeaders(),
+      body: { action: "reject", reason: 123 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("invalid_reason");
+  });
+
+  test("synthetic-mode submit ignores body.kind and forces kind='synthetic'", async () => {
+    const store = createStore({ openclawHome: tmpHome });
+    const handler = makeHandler(store);
+    const res = await call(handler, {
+      method: "POST",
+      url: "/orchestrator/tasks",
+      headers: authHeaders(),
+      body: { goal: "x", submittedBy: "tester", kind: "live" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect((JSON.parse(res.body).task as Task).kind).toBe("synthetic");
+    expect(store.list({ kind: "live" })).toEqual([]);
+    expect(store.list({ kind: "synthetic" }).length).toBe(1);
+  });
 });
 
 describe("unknown / wrong-method paths", () => {

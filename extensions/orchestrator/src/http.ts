@@ -275,12 +275,15 @@ export function createOrchestratorHttpHandler(opts: HttpHandlersOptions): Orches
         sendError(res, 400, "goal_too_long", "`goal` must be ≤ 8 KB");
         return true;
       }
+      // Route is mode-gated to synthetic (the LIVE_DISABLED check above), so
+      // force kind here. Trusting body.kind would let a client submit
+      // {kind: "live"} into the synthetic namespace and bypass the gate.
       const queued = opts.store.submit({
         goal: body.goal,
         workspaceDir: body.workspaceDir ?? null,
         requiredCapabilities: body.requiredCapabilities ?? [],
         submittedBy: body.submittedBy ?? submittedByDefault,
-        kind: body.kind ?? "synthetic",
+        kind: "synthetic",
       });
       const final = opts.dispatch ? await opts.dispatch(queued) : queued;
       sendJson(res, 201, { task: final });
@@ -304,8 +307,8 @@ export function createOrchestratorHttpHandler(opts: HttpHandlersOptions): Orches
           action = { type: "approve" };
           break;
         case "reject": {
-          const reason = body.reason ?? "";
-          if (reason.trim() === "" || reason.length > 1024) {
+          const reason = body.reason;
+          if (typeof reason !== "string" || reason.trim() === "" || reason.length > 1024) {
             sendError(
               res,
               400,

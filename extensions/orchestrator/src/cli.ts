@@ -81,7 +81,6 @@ export function registerOrchestratorCli(program: Command, deps: CliDependencies 
             "",
           ].join("\n"),
         );
-        process.exitCode = 1;
         return;
       }
       const credentials = writeCredentials({

@@ -55,6 +55,15 @@ describe("init", () => {
     expect(tryReadCredentials({ path: credPath })?.token).toBe(original);
   });
 
+  test("re-running init when a token already exists is idempotent (exit 0)", async () => {
+    const { stream } = captureOut();
+    await buildProgram(stream).parseAsync(["orchestrator", "init"], { from: "user" });
+    process.exitCode = 0;
+    const { stream: stream2 } = captureOut();
+    await buildProgram(stream2).parseAsync(["orchestrator", "init"], { from: "user" });
+    expect(process.exitCode).toBe(0);
+  });
+
   test("--force replaces the existing token", async () => {
     const { stream } = captureOut();
     await buildProgram(stream).parseAsync(["orchestrator", "init"], { from: "user" });
