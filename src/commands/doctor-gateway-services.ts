@@ -31,6 +31,12 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./dae
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
+import {
+  confirmDoctorServiceRepair,
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+  resolveServiceRepairPolicy,
+} from "./doctor-service-repair-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -302,6 +308,9 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+
   note(
     audit.issues
       .map((issue) =>
@@ -321,15 +330,32 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
-  const repair = needsAggressive
-    ? await prompter.confirmAggressiveAutoFix({
-        message: "Overwrite gateway service config with current defaults now?",
-        initialValue: prompter.shouldForce,
-      })
-    : await prompter.confirmAutoFix({
-        message: "Update gateway service config to the recommended defaults now?",
-        initialValue: true,
-      });
+  if (serviceRepairExternal) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+    return;
+  }
+
+  const repair =
+    serviceRepairPolicy === "prompt"
+      ? await confirmDoctorServiceRepair(
+          prompter,
+          {
+            message: needsAggressive
+              ? "Overwrite gateway service config with current defaults now?"
+              : "Update gateway service config to the recommended defaults now?",
+            initialValue: needsAggressive ? prompter.shouldForce : true,
+          },
+          serviceRepairPolicy,
+        )
+      : needsAggressive
+        ? await prompter.confirmAggressiveAutoFix({
+            message: "Overwrite gateway service config with current defaults now?",
+            initialValue: prompter.shouldForce,
+          })
+        : await prompter.confirmAutoFix({
+            message: "Update gateway service config to the recommended defaults now?",
+            initialValue: true,
+          });
   if (!repair) {
     return;
   }
@@ -414,10 +440,21 @@ export async function maybeScanExtraGatewayServices(
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
-    const shouldRemove = await prompter.confirmRuntimeRepair({
-      message: "Remove legacy gateway services now?",
-      initialValue: true,
-    });
+    const serviceRepairPolicy = resolveServiceRepairPolicy();
+    const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+    }
+    const shouldRemove = serviceRepairExternal
+      ? false
+      : await confirmDoctorServiceRepair(
+          prompter,
+          {
+            message: "Remove legacy gateway services now?",
+            initialValue: true,
+          },
+          serviceRepairPolicy,
+        );
     if (shouldRemove) {
       const removed: string[] = [];
       const { darwinUserServices, linuxUserServices, failed } =
