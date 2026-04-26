@@ -6552,6 +6552,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 
 ### Changes
 
+- Plugins/Hugging Face: add text-to-image generation through the `hf-inference` Inference Providers route, reusing the existing `HUGGINGFACE_HUB_TOKEN`/`HF_TOKEN` credentials and routing requests through the shared SSRF-guarded provider HTTP helpers; defaults to `black-forest-labs/FLUX.1-Krea-dev` with width/height forwarded from `--size`. Thanks @lyfuci.
 - TTS/WhatsApp: add `/tts latest` read-aloud support with duplicate suppression and `/tts chat on|off|default` session-scoped auto-TTS overrides, completing the on-demand voice-note UX for current-chat replies. Fixes #66032.
 - TTS/channels: resolve channel and account TTS overrides generically, enabling Feishu and QQBot accounts to deep-merge `channels.<channel>.accounts.<id>.tts` over global and per-agent TTS config. Thanks @sahilsatralkar.
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices, and make `/tts audio`, `/tts status`, and the `tts` agent tool honor the active voice/provider override while keeping shared provider credentials and preferences in the existing TTS config surface.
