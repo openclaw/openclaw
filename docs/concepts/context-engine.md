@@ -253,6 +253,10 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 The slot is exclusive at run time — only one registered context engine is resolved for a given run or compaction operation. Other enabled `kind: "context-engine"` plugins can still load and run their registration code; `plugins.slots.contextEngine` only selects which registered engine id OpenClaw resolves when it needs a context engine.
 </Note>
 
+<Note>
+**Plugin uninstall:** when you uninstall the plugin currently selected as `plugins.slots.contextEngine`, OpenClaw resets the slot back to the default (`legacy`). The same reset behavior applies to `plugins.slots.memory`. No manual config edit is required.
+</Note>
+
 ## Relationship to compaction and memory
 
 <AccordionGroup>
