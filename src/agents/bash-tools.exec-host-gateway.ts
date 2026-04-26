@@ -236,7 +236,7 @@ export async function processGatewayAllowlist(
         baseDecision,
         approvedByAsk,
         deniedReason,
-        requiresInlineEvalApproval,
+        requiresInlineEvalApproval: hasInlineEvalApproval,
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
@@ -312,7 +312,7 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (!requiresInlineEvalApproval) {
+        if (!hasInlineEvalApproval) {
           const patterns = persistAllowAlwaysPatterns({
             approvals: approvals.file,
             agentId: params.agentId,
@@ -332,7 +332,7 @@ export async function processGatewayAllowlist(
         baseDecision,
         approvedByAsk,
         deniedReason,
-        requiresInlineEvalApproval,
+        requiresInlineEvalApproval: hasInlineEvalApproval,
       }));
 
       if (
