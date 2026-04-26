@@ -9,7 +9,7 @@ title: "RuntimePlan finalization complete"
 
 ## Status
 
-PR 7 of 7 for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). Documentation only. Companion to the baseline doc at [`docs/refactor/runtime-plan-finalization-baseline.md`](/refactor/runtime-plan-finalization-baseline). Captures the final state of the 7-PR roadmap, the deferred follow-up work, and the verification commands a maintainer should run after the structural PRs land.
+Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). Companion to the baseline doc at [`docs/refactor/runtime-plan-finalization-baseline.md`](/refactor/runtime-plan-finalization-baseline). Captures the final state of the 7-PR roadmap, the deferred follow-up work, and the verification commands a maintainer should run after the structural PRs land. It was later carried into the consolidated cleanup package with the code/test PRs it summarizes.
 
 ## Series at a glance
 
@@ -23,7 +23,7 @@ All seven PRs were opened as drafts on fresh `origin/main` branches; none stack.
 | 4   | Extract attempt message summary helpers    | [#72113](https://github.com/openclaw/openclaw/pull/72113) | Reduced scope. Extracted `summarizeMessagePayload`, `summarizeSessionContext` from `attempt.ts`.                                                                                                                             |
 | 5   | Extract run orchestration helpers          | [#72116](https://github.com/openclaw/openclaw/pull/72116) | Reduced scope. Extracted `createEmptyAuthProfileStore`, `buildTraceToolSummary`, `backfillSessionKey`, `buildHandledReplyPayloads` from `run.ts` (2,347 → 2,259 LOC).                                                        |
 | 6   | Add embedded runner directory barrels      | [#72118](https://github.com/openclaw/openclaw/pull/72118) | Reduced scope. Created `embedded-runner/index.ts` (canonical) and `pi-embedded-runner/index.ts` (deprecated). Extended `aliases.test.ts` with directory-barrel identity asserts.                                             |
-| 7   | This handoff doc                           | (this PR)                                                 | Doc only.                                                                                                                                                                                                                    |
+| 7   | This handoff doc                           | [#72119](https://github.com/openclaw/openclaw/pull/72119) | Originally drafted as doc-only; carried into the consolidated cleanup package with the six predecessor slices.                                                                                                               |
 
 ## Why several PRs landed at reduced scope
 
@@ -106,5 +106,5 @@ This handoff doc cannot run the smoke matrix from CI — it depends on live mode
 - Linked RFC: [openclaw/openclaw#72072](https://github.com/openclaw/openclaw/issues/72072).
 - Predecessor context: PR [#71722](https://github.com/openclaw/openclaw/pull/71722) (closed-merged at commit `2c35a6e`), RFC #71004 (closed-implemented).
 - Companion baseline doc: [`docs/refactor/runtime-plan-finalization-baseline.md`](/refactor/runtime-plan-finalization-baseline) (added in #72098).
-- This is a documentation-only PR. No production or test code is touched.
+- In the original seven-PR draft series this file was documentation-only; in the consolidated package it ships alongside the production/test cleanup slices listed above.
 - If maintainers want a different sequencing for the deferred structural splits, please flag here and I will queue follow-up PRs against this handoff doc rather than against the RFC issue directly.

@@ -9,11 +9,11 @@ title: "RuntimePlan finalization baseline"
 
 ## Status
 
-PR 1 of 7 for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). This PR is documentation only. Its job is to capture a clean baseline before the structural PRs land, and to record the drift we found between the RFC's recon snapshot and current `origin/main`.
+Originally drafted as PR 1 (docs-only) in the 7-PR [RFC 72072](https://github.com/openclaw/openclaw/issues/72072) series. Its job is to capture a clean baseline before the structural PRs land, and to record the drift we found between the RFC's recon snapshot and current `origin/main`. It was later carried into the consolidated cleanup package with the code/test PRs it references.
 
 The roadmap is:
 
-1. **PR 1 (this one)** baseline doc and check capture
+1. **Originally drafted as PR 1** baseline doc and check capture
 2. **PR 2** native internal Harness V2 factory and parity test
 3. **PR 3** split Pi attempt preparation domains out of `attempt.ts`
 4. **PR 4** split Pi stream loop and lifecycle out of `attempt.ts`

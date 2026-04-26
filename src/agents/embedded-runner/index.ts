@@ -8,8 +8,9 @@
 // when scanning module ownership boundaries; the flat file alone makes that
 // shape ambiguous. RFC 72072 PR 6 closes the gap.
 //
-// `pi-embedded-runner/index.ts` is the deprecated mirror of this barrel and
-// chains here so old Pi-shaped directory imports keep working.
+// `pi-embedded-runner/index.ts` is the deprecated counterpart. It re-exports
+// from the flat PI compatibility barrel so old Pi-shaped directory imports keep
+// both neutral and Pi-named symbols working.
 
 export {
   abortEmbeddedAgentRun,

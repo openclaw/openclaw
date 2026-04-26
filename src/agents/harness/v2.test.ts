@@ -584,7 +584,7 @@ describe("AgentHarness V2 native factory registry", () => {
       supports: () => ({ supported: true }),
       runAttempt,
     };
-    registerNativeAgentHarnessV2Factory(harness.id, (h) => ({
+    const restoreFactory = registerNativeAgentHarnessV2Factory(harness.id, (h) => ({
       id: h.id,
       label: h.label,
       pluginId: h.pluginId,
@@ -600,11 +600,17 @@ describe("AgentHarness V2 native factory registry", () => {
       resolveOutcome: async (_session, r) => r,
       cleanup: async () => {},
     }));
+    try {
+      const result = await runAgentHarnessV2LifecycleAttempt(
+        resolveAgentHarnessV2(harness),
+        params,
+      );
 
-    const result = await runAgentHarnessV2LifecycleAttempt(resolveAgentHarnessV2(harness), params);
-
-    expect(result).toBe(nativeResult);
-    expect(runAttempt).not.toHaveBeenCalled();
+      expect(result).toBe(nativeResult);
+      expect(runAttempt).not.toHaveBeenCalled();
+    } finally {
+      restoreFactory();
+    }
   });
 
   it("native AgentHarnessV2 produces the same final attempt result as the V1 adapter for the same V1 harness", async () => {
