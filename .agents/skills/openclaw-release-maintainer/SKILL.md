@@ -86,10 +86,11 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   parallel, publish npm from the successful npm preflight, then start published
   npm install/update, Docker, and Parallels verification while mac artifacts
   continue.
-- After a beta is published, run the expensive Docker, Parallels, and QA-Lab
-  release rosters in parallel instead of serializing them. Use selective reruns
-  after failures or fixes, but keep proof that Docker, Parallels, and QA-Lab
-  each passed at least once before stable/latest promotion.
+- After a beta is published, overlap remote/manual release rosters where useful,
+  but avoid piling local Docker, Parallels, and QA-Lab work onto the same host
+  when it would create system-load noise. Use selective reruns after failures or
+  fixes, but keep proof that Docker, Parallels, and QA-Lab each passed at least
+  once before stable/latest promotion.
 - Mac packaging may be built from a slight release-branch variation of the
   tagged commit when the delta is mac packaging, signing, workflow, or
   validation-only release machinery. If mac packaging needs release-branch-only
@@ -558,9 +559,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     the next beta if the fix must change the already-published package. If any
     lane fails after the beta tag/package is pushed or published, fix,
     commit/push/pull, increment to the next beta tag, and rerun the affected
-    beta evidence. Start Docker, Parallels, and QA-Lab in parallel once the
-    beta is live. Ensure the full expensive roster has passed at least once
-    before stable/latest promotion. The roster includes the manual Actions >
+    beta evidence. Once the beta is live, start remote/manual rosters where they
+    can overlap safely, but keep local Docker and Parallels load controlled.
+    Ensure the full expensive roster has passed at least once before
+    stable/latest promotion. The roster includes the manual Actions >
     `NPM Telegram Beta E2E` workflow against the exact published beta package.
     If a pre-npm lane fails before any tag/package leaves the machine, fix and
     rerun the same intended beta attempt. Repeat up to the operator's
