@@ -998,5 +998,9 @@
   {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Z.AI (GLM)",
+    "target": "Z.AI (GLM)"
   }
 ]

@@ -534,7 +534,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
     [Qwen Cloud](/providers/qwen),
-    [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
+    [MiniMax](/providers/minimax), [Z.AI (GLM)](/providers/zai),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
@@ -560,8 +560,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     For production or multi-user workloads, Anthropic API key auth is still the
     safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
-    Models](/providers/glm).
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI
+    (GLM)](/providers/zai).
 
   </Accordion>
 
