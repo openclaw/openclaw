@@ -466,7 +466,18 @@ restore_snapshot() {
   wait_for_guest_ready || die "guest did not become ready in $VM_NAME"
 }
 
+sync_guest_clock() {
+  local host_now
+  host_now="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  guest_exec date -u -s "$host_now" >/dev/null
+  guest_exec hwclock --systohc >/dev/null 2>&1 || true
+  guest_exec timedatectl set-ntp true >/dev/null 2>&1 || true
+  guest_exec systemctl restart systemd-timesyncd >/dev/null 2>&1 || true
+  guest_exec date -u
+}
+
 bootstrap_guest() {
+  sync_guest_clock
   guest_exec apt-get -o Acquire::Check-Date=false update
   guest_exec apt-get install -y curl ca-certificates
 }
