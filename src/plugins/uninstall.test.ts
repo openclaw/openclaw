@@ -801,6 +801,26 @@ describe("uninstallPlugin", () => {
     });
     await expect(fs.access(managedDir)).rejects.toThrow();
   });
+
+  it("deletes tracked installs from a recorded managed extensions root", async () => {
+    const currentExtensionsDir = path.join(tempDir, "current", "extensions");
+    const recordedExtensionsDir = path.join(tempDir, "recorded", "extensions");
+    const installPath = resolvePluginInstallDir("my-plugin", recordedExtensionsDir);
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(path.join(installPath, "index.js"), "// plugin");
+
+    const result = await uninstallPlugin({
+      config: createSingleNpmInstallConfig(installPath),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir: currentExtensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    await expect(fs.access(installPath)).rejects.toThrow();
+  });
 });
 
 describe("resolveUninstallDirectoryTarget", () => {
@@ -848,6 +868,29 @@ describe("resolveUninstallDirectoryTarget", () => {
           installPath,
         },
         extensionsDir,
+      }),
+    ).toBe(installPath);
+  });
+
+  it("uses configured installPath when it is under the recorded managed extensions root", () => {
+    const currentExtensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-current", "extensions");
+    const recordedExtensionsDir = path.join(
+      os.tmpdir(),
+      "openclaw-uninstall-recorded",
+      "extensions",
+    );
+    const installPath = resolvePluginInstallDir("my-plugin", recordedExtensionsDir);
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "my-plugin",
+        hasInstall: true,
+        installRecord: {
+          source: "npm",
+          spec: "my-plugin@1.0.0",
+          installPath,
+        },
+        extensionsDir: currentExtensionsDir,
       }),
     ).toBe(installPath);
   });
