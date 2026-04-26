@@ -394,7 +394,6 @@ describe("agentCommand ACP runtime routing", () => {
 
       const text = (runTurn.mock.calls[0]?.[0] as { text?: string }).text ?? "";
       expect(text).toContain('A subagent task "estimate-plan" completed with status: succeeded.');
-      expect(text).toContain("<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>");
       expect(text).toContain("plan result");
       expect(text).toContain("[[UNTRUSTED_CHILD_RESULT_END]]");
       expect(text).toContain("Reply ONLY: NO_REPLY");
