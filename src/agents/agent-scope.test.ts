@@ -18,6 +18,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
+  suggestPeerAgentWorkspaceDir,
 } from "./agent-scope.js";
 
 afterEach(() => {
@@ -513,6 +514,39 @@ describe("resolveAgentConfig", () => {
     };
     const workspace = resolveAgentWorkspaceDir(cfg, "main");
     expect(workspace).toBe(path.join(stateDir, "workspace-main"));
+  });
+});
+
+describe("suggestPeerAgentWorkspaceDir (#71889)", () => {
+  it("returns peer-level path next to defaults.workspace when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: "/Users/me/.openclaw/workspace" } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "testbug");
+    expect(suggested).toBe(path.join("/Users/me/.openclaw", "workspace-testbug"));
+  });
+
+  it("derives peer-level path from the default workspace location when no fallback", () => {
+    const home = path.join(path.sep, "srv", "openclaw-home");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    const suggested = suggestPeerAgentWorkspaceDir({}, "alex");
+    expect(suggested).toBe(path.join(path.resolve(home), ".openclaw", "workspace-alex"));
+  });
+
+  it("treats a custom shared base as the peer root rather than nesting under it", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: "/shared-ws" }, list: [{ id: "main" }] },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "ops");
+    expect(suggested).toBe(path.resolve("/shared-ws-ops"));
+  });
+
+  it("normalizes agent ids before suffixing", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: "/Users/me/.openclaw/workspace" } },
+    };
+    const suggested = suggestPeerAgentWorkspaceDir(cfg, "Test Bug");
+    expect(suggested).toBe(path.join("/Users/me/.openclaw", "workspace-test-bug"));
   });
 });
 

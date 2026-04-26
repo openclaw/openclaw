@@ -187,3 +187,28 @@ export function resolveAgentDir(
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
 }
+
+/**
+ * Suggest a peer-level workspace path for a NEW agent, used as the wizard's
+ * `Workspace directory` initial value. Matches the documented `~/.openclaw/
+ * workspace-<agentId>` convention from docs/concepts/multi-agent.md and avoids
+ * the nested `<main>/<agentId>` footgun where main's recursive workspace
+ * operations leak into other agents' folders (#71889).
+ *
+ * Existing per-agent overrides and runtime resolution via
+ * `resolveAgentWorkspaceDir` are intentionally unchanged.
+ */
+export function suggestPeerAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const id = normalizeAgentId(agentId);
+  const fallback = cfg.agents?.defaults?.workspace?.trim();
+  const baseWorkspace = fallback
+    ? resolveUserPath(fallback, env)
+    : resolveDefaultAgentWorkspaceDir(env);
+  const dir = path.dirname(baseWorkspace);
+  const base = path.basename(baseWorkspace);
+  return stripNullBytes(path.join(dir, `${base}-${id}`));
+}
