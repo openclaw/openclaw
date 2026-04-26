@@ -77,6 +77,24 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
+  resolveGroupSilentReplyBehavior: vi.fn(
+    (params: {
+      sessionEntry?: SessionEntry;
+      defaultActivation: "always" | "mention";
+      silentReplyPolicy?: "allow" | "disallow";
+      silentReplyRewrite?: boolean;
+    }) => {
+      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
+      const canUseSilentReply =
+        params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+      return {
+        activation,
+        canUseSilentReply,
+        allowEmptyAssistantReplyAsSilent:
+          activation === "always" && params.silentReplyPolicy === "allow",
+      };
+    },
+  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
@@ -264,6 +282,51 @@ describe("runPreparedReply media-only handling", () => {
         }),
       }),
     );
+  });
+
+  it("propagates empty-assistant silence only for always-on group runs", async () => {
+    await runPreparedReply(baseParams());
+
+    let call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+
+    await runPreparedReply(
+      baseParams({
+        defaultActivation: "mention",
+      }),
+    );
+
+    call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it("does not propagate empty-assistant silence for direct runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {

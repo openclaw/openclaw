@@ -124,6 +124,40 @@ describe("group runtime loading", () => {
     expect(rewritten).not.toContain("Be extremely selective");
   });
 
+  it("marks empty assistant replies silent only for always-on groups with silence allowed", async () => {
+    const groups = await import("./groups.js");
+
+    expect(
+      groups.resolveGroupSilentReplyBehavior({
+        defaultActivation: "always",
+        silentReplyPolicy: "allow",
+      }).allowEmptyAssistantReplyAsSilent,
+    ).toBe(true);
+
+    expect(
+      groups.resolveGroupSilentReplyBehavior({
+        defaultActivation: "mention",
+        silentReplyPolicy: "allow",
+      }).allowEmptyAssistantReplyAsSilent,
+    ).toBe(false);
+
+    expect(
+      groups.resolveGroupSilentReplyBehavior({
+        sessionEntry: { groupActivation: "mention" } as never,
+        defaultActivation: "always",
+        silentReplyPolicy: "allow",
+      }).allowEmptyAssistantReplyAsSilent,
+    ).toBe(false);
+
+    expect(
+      groups.resolveGroupSilentReplyBehavior({
+        defaultActivation: "always",
+        silentReplyPolicy: "disallow",
+        silentReplyRewrite: true,
+      }).allowEmptyAssistantReplyAsSilent,
+    ).toBe(false);
+  });
+
   it("loads the group runtime only when requireMention resolution needs it", async () => {
     const groupsRuntimeLoads = vi.fn();
     vi.doMock("./groups.runtime.js", () => {

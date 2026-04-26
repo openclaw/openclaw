@@ -345,6 +345,25 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+export function shouldTreatEmptyAssistantReplyAsSilent(params: {
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
+    return false;
+  }
+  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+    return false;
+  }
+  return isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
+}
+
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
