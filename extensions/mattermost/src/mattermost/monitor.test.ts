@@ -11,6 +11,7 @@ import {
   evaluateMattermostMentionGate,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
+  resolveMattermostDeliveryReplyToId,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
@@ -162,6 +163,7 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
     // mode, the deliver callback should still use the existing threadRootId.
     expect(
       resolveMattermostReplyRootId({
+        kind: "channel",
         threadRootId: "thread-root-1",
         replyToId: "streamed-reply-id",
       }),
@@ -173,9 +175,19 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
     // inbound post id as replyToId from the "all" threading mode.
     expect(
       resolveMattermostReplyRootId({
+        kind: "channel",
         replyToId: "inbound-post-for-threading",
       }),
     ).toBe("inbound-post-for-threading");
+  });
+
+  it("uses the existing thread root only when a delivery reply target exists", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "channel",
+        threadRootId: "thread-root-1",
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -183,6 +195,7 @@ describe("resolveMattermostReplyRootId", () => {
   it("uses replyToId for top-level replies", () => {
     expect(
       resolveMattermostReplyRootId({
+        kind: "channel",
         replyToId: "inbound-post-123",
       }),
     ).toBe("inbound-post-123");
@@ -191,14 +204,76 @@ describe("resolveMattermostReplyRootId", () => {
   it("keeps the thread root when replying inside an existing thread", () => {
     expect(
       resolveMattermostReplyRootId({
+        kind: "group",
         threadRootId: "thread-root-456",
         replyToId: "child-post-789",
       }),
     ).toBe("thread-root-456");
   });
 
+  it("drops payload replyToId for direct messages", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        replyToId: "dm-post-123",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps direct messages non-threaded even when a thread root is present", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        threadRootId: "thread-root-456",
+        replyToId: "child-post-789",
+      }),
+    ).toBeUndefined();
+  });
+
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostDeliveryReplyToId", () => {
+  it("uses the session reply id when replyToMode routes to a thread", () => {
+    expect(
+      resolveMattermostDeliveryReplyToId({
+        kind: "channel",
+        effectiveReplyToId: "thread-root-456",
+        postId: "child-post-789",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("keeps replyToMode off sessions top-level while preserving threaded delivery targets", () => {
+    expect(
+      resolveMattermostDeliveryReplyToId({
+        kind: "channel",
+        postId: "child-post-789",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBe("child-post-789");
+  });
+
+  it("does not create a delivery reply target for top-level posts without session threading", () => {
+    expect(
+      resolveMattermostDeliveryReplyToId({
+        kind: "channel",
+        postId: "top-level-post-123",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not create delivery reply targets for direct messages", () => {
+    expect(
+      resolveMattermostDeliveryReplyToId({
+        kind: "direct",
+        postId: "dm-post-123",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
   });
 });
 

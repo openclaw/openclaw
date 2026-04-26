@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/memory-core: respect configured memory-search embedding concurrency during non-batch indexing so local Ollama embedding backends can serialize indexing instead of flooding the server. Fixes #66822. (#66931) Thanks @oliviareid-svg and @LyraInTheFlesh.
 - Docker/update smoke: keep the package-derived update-channel fixture on package-shipped files and make its UI build stub create the asset the updater verifies. Thanks @vincentkoc.
 - Gateway/models: repair legacy `models.providers.*.api = "openai"` config values to `openai-completions`, and skip providers with future stale API enum values during startup instead of bricking the gateway. Fixes #72477. (#72542) Thanks @JooyoungChoi14 and @obviyus.
+- Mattermost/thread replies: use the Mattermost thread root for delivery when replying to an existing thread without turning `replyToMode: "off"` conversations into thread-scoped sessions, preventing invalid non-root reply delivery. (#55151, #55186, #57565) Thanks @dlindegaard, @hnykda, and @dave.
 
 ## 2026.4.26
 

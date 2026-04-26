@@ -231,14 +231,22 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
 }
 
 export function resolveMattermostReplyRootId(params: {
+  kind?: ChatType;
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
+  const replyToId = normalizeOptionalString(params.replyToId);
+  if (!replyToId) {
+    return undefined;
+  }
   const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
-  return normalizeOptionalString(params.replyToId);
+  return replyToId;
 }
 
 export function canFinalizeMattermostPreviewInPlace(params: {
@@ -360,6 +368,24 @@ export function resolveMattermostEffectiveReplyToId(params: {
     params.replyToMode === "first" ||
     params.replyToMode === "batched"
     ? postId
+    : undefined;
+}
+
+export function resolveMattermostDeliveryReplyToId(params: {
+  kind?: ChatType;
+  effectiveReplyToId?: string;
+  postId?: string | null;
+  threadRootId?: string | null;
+}): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
+  const effectiveReplyToId = normalizeOptionalString(params.effectiveReplyToId);
+  if (effectiveReplyToId) {
+    return effectiveReplyToId;
+  }
+  return normalizeOptionalString(params.threadRootId)
+    ? normalizeOptionalString(params.postId)
     : undefined;
 }
 
@@ -631,6 +657,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           replyToMode,
           threadRootId: opts.post.root_id,
         });
+        const deliveryReplyToId = resolveMattermostDeliveryReplyToId({
+          kind,
+          effectiveReplyToId: threadContext.effectiveReplyToId,
+          postId: opts.post.id || opts.postId,
+          threadRootId: opts.post.root_id,
+        });
+        const deliveryReplyRootId = resolveMattermostReplyRootId({
+          kind,
+          threadRootId: opts.post.root_id ?? undefined,
+          replyToId: deliveryReplyToId,
+        });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
         const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -658,7 +695,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
           MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
-          ReplyToId: threadContext.effectiveReplyToId,
+          ReplyToId: deliveryReplyToId,
           MessageThreadId: threadContext.effectiveReplyToId,
           WasMentioned: true,
           CommandAuthorized: false,
@@ -683,7 +720,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
           typing: {
-            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+            start: () => sendTypingIndicator(opts.channelId, deliveryReplyRootId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -707,7 +744,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
-                  threadRootId: threadContext.effectiveReplyToId,
+                  kind,
+                  threadRootId: opts.post.root_id ?? undefined,
                   replyToId: payload.replyToId,
                 }),
                 textLimit,
@@ -813,9 +851,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     postId: string;
     messageSid?: string;
     effectiveReplyToId?: string;
+    deliveryReplyToId?: string;
+    threadRootId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
+    const deliveryReplyRootId = resolveMattermostReplyRootId({
+      kind: params.kind,
+      threadRootId: params.threadRootId,
+      replyToId: params.deliveryReplyToId ?? params.effectiveReplyToId,
+    });
     const fromLabel =
       params.kind === "direct"
         ? `Mattermost DM from ${params.senderName}`
@@ -846,7 +891,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       Provider: "mattermost" as const,
       Surface: "mattermost" as const,
       MessageSid: params.messageSid ?? `interaction:${params.postId}:${Date.now()}`,
-      ReplyToId: params.effectiveReplyToId,
+      ReplyToId: params.deliveryReplyToId ?? params.effectiveReplyToId,
       MessageThreadId: params.effectiveReplyToId,
       Timestamp: Date.now(),
       WasMentioned: true,
@@ -877,7 +922,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       typing: shouldDeliverReplies
         ? {
-            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+            start: () => sendTypingIndicator(params.channelId, deliveryReplyRootId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -915,7 +960,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
-              threadRootId: params.effectiveReplyToId,
+              kind: params.kind,
+              threadRootId: params.threadRootId,
               replyToId: trimmedPayload.replyToId,
             }),
             textLimit,
@@ -1058,6 +1104,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       replyToMode,
       threadRootId: params.post.root_id,
     });
+    const deliveryReplyToId = resolveMattermostDeliveryReplyToId({
+      kind,
+      effectiveReplyToId: threadContext.effectiveReplyToId,
+      postId: params.post.id || params.payload.post_id,
+      threadRootId: params.post.root_id,
+    });
     const modelSessionRoute = {
       agentId: route.agentId,
       sessionKey: threadContext.sessionKey,
@@ -1143,6 +1195,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             model: pickerState.model,
           }),
           effectiveReplyToId: threadContext.effectiveReplyToId,
+          deliveryReplyToId,
+          threadRootId: params.post.root_id ?? undefined,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
@@ -1374,6 +1428,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId,
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
+        const deliveryReplyToId = resolveMattermostDeliveryReplyToId({
+          kind,
+          effectiveReplyToId,
+          postId: post.id,
+          threadRootId,
+        });
+        const deliveryReplyRootId = resolveMattermostReplyRootId({
+          kind,
+          threadRootId,
+          replyToId: deliveryReplyToId,
+        });
         const historyKey = kind === "direct" ? null : sessionKey;
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
@@ -1557,7 +1622,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
           MessageSidLast:
             allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-          ReplyToId: effectiveReplyToId,
+          ReplyToId: deliveryReplyToId,
           MessageThreadId: effectiveReplyToId,
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
@@ -1608,7 +1673,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
           typing: {
-            start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+            start: () => sendTypingIndicator(channelId, deliveryReplyRootId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -1622,7 +1687,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const draftStream = createMattermostDraftStream({
           client,
           channelId,
-          rootId: effectiveReplyToId,
+          rootId: deliveryReplyRootId,
           throttleMs: 1200,
           log: logVerboseMessage,
           warn: logVerboseMessage,
@@ -1697,7 +1762,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 info,
                 client,
                 draftStream,
-                effectiveReplyToId,
+                effectiveReplyToId: deliveryReplyRootId,
                 resolvePreviewFinalText,
                 previewState,
                 logVerboseMessage,
@@ -1710,7 +1775,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     accountId: account.accountId,
                     agentId: route.agentId,
                     replyToId: resolveMattermostReplyRootId({
-                      threadRootId: effectiveReplyToId,
+                      kind,
+                      threadRootId,
                       replyToId: payload.replyToId,
                     }),
                     textLimit,
