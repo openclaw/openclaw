@@ -32,7 +32,7 @@ openclaw --update
 
 ## Options
 
-- `--no-restart`: skip restarting the Gateway service after a successful update.
+- `--no-restart`: skip restarting the Gateway service after a successful update. Package-manager updates that do restart the Gateway verify the restarted service reports the expected updated version before the command succeeds.
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
 - `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.

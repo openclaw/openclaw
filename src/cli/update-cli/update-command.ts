@@ -750,6 +750,52 @@ async function maybeRestartService(params: {
   restartScriptPath?: string | null;
   invocationCwd?: string;
 }): Promise<boolean> {
+  const verifyRestartedGateway = async (expectedGatewayVersion: string | undefined) => {
+    const service = resolveGatewayService();
+    let health = await waitForGatewayHealthyRestart({
+      service,
+      port: params.gatewayPort,
+      expectedVersion: expectedGatewayVersion,
+    });
+    if (!health.healthy && health.staleGatewayPids.length > 0) {
+      if (!params.opts.json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+          ),
+        );
+      }
+      await terminateStaleGatewayPids(health.staleGatewayPids);
+      await runDaemonRestart();
+      health = await waitForGatewayHealthyRestart({
+        service,
+        port: params.gatewayPort,
+        expectedVersion: expectedGatewayVersion,
+      });
+    }
+
+    if (health.healthy) {
+      return true;
+    }
+
+    const diagnosticLines = [
+      "Gateway did not become healthy after restart.",
+      ...renderRestartDiagnostics(health),
+      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
+    ];
+    if (params.opts.json) {
+      defaultRuntime.error(diagnosticLines.join("\n"));
+    } else {
+      defaultRuntime.log(theme.warn(diagnosticLines[0] ?? "Gateway did not become healthy."));
+      for (const line of diagnosticLines.slice(1)) {
+        defaultRuntime.log(theme.muted(line));
+      }
+    }
+
+    return !(health.versionMismatch || health.activatedPluginErrors?.length);
+  };
+
   if (params.shouldRestart) {
     if (!params.opts.json) {
       defaultRuntime.log("");
@@ -791,6 +837,22 @@ async function maybeRestartService(params: {
         restarted = await runDaemonRestart();
       }
 
+      const shouldVerifyRestart =
+        restartInitiated || (restarted && expectedGatewayVersion !== undefined);
+      if (shouldVerifyRestart) {
+        const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion);
+        if (!restartHealthy) {
+          if (!params.opts.json) {
+            defaultRuntime.log("");
+          }
+          return false;
+        }
+        if (!params.opts.json && restartInitiated) {
+          defaultRuntime.log(theme.success("Daemon restart completed."));
+          defaultRuntime.log("");
+        }
+      }
+
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
@@ -805,52 +867,6 @@ async function maybeRestartService(params: {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
           delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-        }
-      }
-
-      if (!params.opts.json && restartInitiated) {
-        const service = resolveGatewayService();
-        let health = await waitForGatewayHealthyRestart({
-          service,
-          port: params.gatewayPort,
-          expectedVersion: expectedGatewayVersion,
-        });
-        if (!health.healthy && health.staleGatewayPids.length > 0) {
-          if (!params.opts.json) {
-            defaultRuntime.log(
-              theme.warn(
-                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
-              ),
-            );
-          }
-          await terminateStaleGatewayPids(health.staleGatewayPids);
-          await runDaemonRestart();
-          health = await waitForGatewayHealthyRestart({
-            service,
-            port: params.gatewayPort,
-            expectedVersion: expectedGatewayVersion,
-          });
-        }
-
-        if (health.healthy) {
-          defaultRuntime.log(theme.success("Daemon restart completed."));
-        } else {
-          defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
-          for (const line of renderRestartDiagnostics(health)) {
-            defaultRuntime.log(theme.muted(line));
-          }
-          defaultRuntime.log(
-            theme.muted(`Restart log: ${resolveGatewayRestartLogPath(process.env)}`),
-          );
-          defaultRuntime.log(
-            theme.muted(
-              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
-            ),
-          );
-        }
-        defaultRuntime.log("");
-        if (!health.healthy && (health.versionMismatch || health.activatedPluginErrors?.length)) {
-          return false;
         }
       }
     } catch (err) {
