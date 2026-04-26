@@ -1,0 +1,32 @@
+# Generated outputs
+graphify-out/
+node_modules/
+dist/
+build/
+
+# Stray gcloud SDK directories
+exec -l /bin/bash/
+google-cloud-sdk/
+
+# Lock files and generated metadata
+pnpm-lock.yaml
+*.generated.*
+*.d.ts
+
+# App build artifacts
+apps/android/
+apps/ios/
+apps/macos/
+
+# Test fixtures (large, not architecture signal)
+test-fixtures/
+
+# Patches and vendor
+patches/
+vendor/
+
+# Install/config files for other agents
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md

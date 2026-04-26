@@ -199,3 +199,13 @@ Scoped guides:
 - Connection/provider additions: update all UI surfaces + docs + status/config forms.
 - Provider-facing tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject generated `anyOf`. Do not treat this as a repo-wide protocol/schema ban.
 - External messaging surfaces: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses message edits/chunks and must preserve final/fallback delivery.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)

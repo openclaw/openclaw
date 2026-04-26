@@ -1,0 +1,59 @@
+#!/bin/sh
+# graphify-hook-start
+# Auto-rebuilds the knowledge graph after each commit (code files only, no LLM needed).
+# Installed by: graphify hook install
+
+CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD 2>/dev/null)
+if [ -z "$CHANGED" ]; then
+    exit 0
+fi
+
+# Detect the correct Python interpreter (handles pipx, venv, system installs)
+GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
+if [ -n "$GRAPHIFY_BIN" ]; then
+    _SHEBANG=$(head -1 "$GRAPHIFY_BIN" | sed 's/^#![[:space:]]*//')
+    case "$_SHEBANG" in
+        */env\ *) GRAPHIFY_PYTHON="${_SHEBANG#*/env }" ;;
+        *)         GRAPHIFY_PYTHON="$_SHEBANG" ;;
+    esac
+    # Allowlist: only keep characters valid in a filesystem path to prevent
+    # injection if the shebang contains shell metacharacters
+    case "$GRAPHIFY_PYTHON" in
+        *[!a-zA-Z0-9/_.-]*) GRAPHIFY_PYTHON="" ;;
+    esac
+    if [ -n "$GRAPHIFY_PYTHON" ] && ! "$GRAPHIFY_PYTHON" -c "import graphify" 2>/dev/null; then
+        GRAPHIFY_PYTHON=""
+    fi
+fi
+# Fall back: try python3, then python (Windows has no python3 shim)
+if [ -z "$GRAPHIFY_PYTHON" ]; then
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import graphify" 2>/dev/null; then
+        GRAPHIFY_PYTHON="python3"
+    elif command -v python >/dev/null 2>&1 && python -c "import graphify" 2>/dev/null; then
+        GRAPHIFY_PYTHON="python"
+    else
+        exit 0
+    fi
+fi
+
+export GRAPHIFY_CHANGED="$CHANGED"
+$GRAPHIFY_PYTHON -c "
+import os, sys
+from pathlib import Path
+
+changed_raw = os.environ.get('GRAPHIFY_CHANGED', '')
+changed = [Path(f.strip()) for f in changed_raw.strip().splitlines() if f.strip()]
+
+if not changed:
+    sys.exit(0)
+
+print(f'[graphify hook] {len(changed)} file(s) changed - rebuilding graph...')
+
+try:
+    from graphify.watch import _rebuild_code
+    _rebuild_code(Path('.'))
+except Exception as exc:
+    print(f'[graphify hook] Rebuild failed: {exc}')
+    sys.exit(1)
+"
+# graphify-hook-end
