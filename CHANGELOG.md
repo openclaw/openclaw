@@ -89,6 +89,7 @@ Docs: https://docs.openclaw.ai
 - Security/audit: read channel exposure and plugin allowlist ownership from read-only plugin index metadata so cold audits do not depend on loaded channel runtime. Thanks @shakkernerd.
 - Plugins/chat: keep `/plugins list`, `/plugins enable`, and `/plugins disable` on the persisted plugin index path so chat plugin management does not load diagnostic/runtime plugin registries before execution. Thanks @shakkernerd.
 - Plugins/doctor: read workspace plugin status and legacy web-search ownership through installed-index manifest metadata instead of broad manifest registry scans. Thanks @shakkernerd.
+- CLI/agents: read channel provider status from read-only plugin index metadata for text `agents list` output instead of the loaded channel registry. Thanks @shakkernerd.
 - Logging: redact configured secret patterns at console and file-log sink exits
   so credentials that reach the logger are masked before terminal display or
   JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.
