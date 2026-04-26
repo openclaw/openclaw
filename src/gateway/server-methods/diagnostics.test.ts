@@ -3,10 +3,8 @@ import {
   emitDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
-import {
-  __resetGatewayModelPricingCacheForTest,
-  replaceGatewayModelPricingCache,
-} from "../model-pricing-cache-state.js";
+import { replaceGatewayModelPricingCache } from "../model-pricing-cache-state.js";
+import { __resetGatewayModelPricingCacheForTest } from "../model-pricing-cache.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
