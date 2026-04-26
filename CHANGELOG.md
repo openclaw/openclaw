@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/plugins: stop persisted WhatsApp auth state from activating bundled channel runtime-dependency repair during startup when `channels.whatsapp` is absent, avoiding npm/git stalls on packaged Linux installs. Fixes #71994. Thanks @xiao398008.
 - CLI/model runs: keep `openclaw infer model run` on explicit OpenRouter models from loading the full provider catalog or inheriting chat-agent silent-reply policy, restoring non-empty one-shot probe output. Fixes #68791. Thanks @limpredator.
 - Installer/macOS: rerun Homebrew install steps without the gum spinner when raw-mode ioctl failures occur, and avoid claiming `node@24` was installed when the Homebrew keg binary is missing. Fixes #70411. Thanks @1fanwang and @dad-io.
 - Installer: load nvm before Node.js detection so `curl | bash` installs respect nvm-managed Node instead of stale system Node. Fixes #49556. Thanks @heavenlxj.

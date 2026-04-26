@@ -85,6 +85,8 @@ Packaged installs keep bundled plugin runtime dependencies out of the read-only
 package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs
 runtime dependencies only for bundled plugins that are active in config, active
 through legacy channel config, or enabled by their bundled manifest default.
+Persisted channel auth state alone does not trigger Gateway startup
+runtime-dependency repair.
 
 Explicit disablement wins. A disabled plugin or channel does not get its
 runtime dependencies repaired just because it exists in the package. External
