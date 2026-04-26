@@ -84,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Feishu: transcribe inbound voice-note audio with the shared media audio path
   before agent dispatch and keep raw Feishu `file_key` payloads out of message
   text. Fixes #67120 and #61876.
+- Tasks: terminalize async Gateway agent task records from the Gateway run result while preserving aborted, failed, and cancelled outcomes instead of leaving completed runs stuck as active or lost. (#71905) Thanks @likewen-tech.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.

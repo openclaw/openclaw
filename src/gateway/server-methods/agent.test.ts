@@ -6,7 +6,11 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import {
+  findTaskByRunId,
+  markTaskTerminalById,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
@@ -1047,6 +1051,114 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("preserves aborted async gateway agent runs as timed out", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [],
+        meta: { durationMs: 100, aborted: true },
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-aborted",
+        },
+        { reqId: "task-registry-agent-run-aborted" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-aborted")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "timed_out",
+          terminalSummary: "aborted",
+        });
+      });
+    });
+  });
+
+  it("classifies aborted async gateway agent rejections as timed out", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const abortError = new Error("This operation was aborted");
+      abortError.name = "AbortError";
+      mocks.agentCommand.mockRejectedValueOnce(abortError);
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-abort-error",
+        },
+        { reqId: "task-registry-agent-run-abort-error" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-abort-error")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "timed_out",
+          error: "AbortError: This operation was aborted",
+        });
+      });
+    });
+  });
+
+  it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      let resolveRun: (value: {
+        payloads: Array<{ text: string }>;
+        meta: { durationMs: number };
+      }) => void;
+      const pending = new Promise<{
+        payloads: Array<{ text: string }>;
+        meta: { durationMs: number };
+      }>((resolve) => {
+        resolveRun = resolve;
+      });
+      mocks.agentCommand.mockReturnValueOnce(pending);
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-cancelled",
+        },
+        { reqId: "task-registry-agent-run-cancelled" },
+      );
+
+      const task = findTaskByRunId("task-registry-agent-run-cancelled");
+      expect(task).toMatchObject({ status: "running" });
+      const cancelledAt = (task?.startedAt ?? Date.now()) + 1;
+      markTaskTerminalById({
+        taskId: task!.taskId,
+        status: "cancelled",
+        endedAt: cancelledAt,
+        lastEventAt: cancelledAt,
+        terminalSummary: "Cancelled by operator.",
+      });
+
+      resolveRun!({ payloads: [{ text: "ok" }], meta: { durationMs: 100 } });
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-cancelled")).toMatchObject({
+          status: "cancelled",
+          endedAt: cancelledAt,
+          terminalSummary: "Cancelled by operator.",
+        });
+      });
+    });
+  });
+
   it("does not let --agent force the agent main session when --session-id is provided", async () => {
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
     mockMainSessionEntry({ sessionId: "resume-whatsapp-session" });
@@ -1280,15 +1392,15 @@ describe("gateway agent handler", () => {
         (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
           defaultRuntime.createRunningTaskRun(...args),
       );
-      const completeTaskRunByRunIdSpy = vi.fn(
-        (...args: Parameters<typeof defaultRuntime.completeTaskRunByRunId>) =>
-          defaultRuntime.completeTaskRunByRunId(...args),
+      const finalizeTaskRunByRunIdSpy = vi.fn(
+        (...args: Parameters<NonNullable<typeof defaultRuntime.finalizeTaskRunByRunId>>) =>
+          defaultRuntime.finalizeTaskRunByRunId!(...args),
       );
 
       setDetachedTaskLifecycleRuntime({
         ...defaultRuntime,
         createRunningTaskRun: createRunningTaskRunSpy,
-        completeTaskRunByRunId: completeTaskRunByRunIdSpy,
+        finalizeTaskRunByRunId: finalizeTaskRunByRunIdSpy,
       });
 
       await invokeAgent(
@@ -1309,10 +1421,11 @@ describe("gateway agent handler", () => {
           task: expect.stringContaining("background cli seam task"),
         }),
       );
-      expect(completeTaskRunByRunIdSpy).toHaveBeenCalledWith(
+      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           runtime: "cli",
           runId: "task-registry-agent-seam",
+          status: "succeeded",
           terminalSummary: "completed",
         }),
       );

@@ -399,6 +399,22 @@ function normalizeTaskTerminalOutcome(
   return value === "succeeded" || value === "blocked" ? value : undefined;
 }
 
+function shouldApplyRunScopedStatusUpdate(params: {
+  currentStatus: TaskStatus;
+  nextStatus: TaskStatus;
+}): boolean {
+  if (params.currentStatus === params.nextStatus) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.currentStatus)) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.nextStatus)) {
+    return false;
+  }
+  return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
+}
+
 function resolveTaskTerminalOutcome(params: {
   status: TaskStatus;
   terminalOutcome?: TaskTerminalOutcome | null;
@@ -1584,6 +1600,15 @@ function updateTaskStateByRunId(params: {
   for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+    if (
+      params.status &&
+      !shouldApplyRunScopedStatusUpdate({
+        currentStatus: current.status,
+        nextStatus,
+      })
+    ) {
+      continue;
+    }
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
     if (params.status) {
       patch.status = normalizeTaskStatus(params.status);
@@ -1699,6 +1724,22 @@ export function recordTaskProgressByRunId(params: {
 }
 
 export function markTaskTerminalByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
+  return finalizeTaskRunByRunId(params);
+}
+
+export function finalizeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;

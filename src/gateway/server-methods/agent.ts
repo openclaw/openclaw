@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
@@ -41,6 +42,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
@@ -55,11 +57,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import {
-  completeTaskRunByRunId,
-  createRunningTaskRun,
-  failTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
+import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
+import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -241,27 +240,29 @@ function emitSessionsChanged(
   );
 }
 
-function tryCompleteTrackedAgentTask(params: { runId: string; terminalSummary: string }): void {
-  try {
-    completeTaskRunByRunId({
-      runId: params.runId,
-      runtime: "cli",
-      endedAt: Date.now(),
-      terminalSummary: params.terminalSummary,
-    });
-  } catch {
-    // Best-effort only: background task tracking must not block agent runs.
-  }
+type GatewayAgentTaskTerminalStatus = Extract<
+  TaskStatus,
+  "succeeded" | "failed" | "timed_out" | "cancelled"
+>;
+
+function resolveFailedTrackedAgentTaskStatus(error: unknown): GatewayAgentTaskTerminalStatus {
+  return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
 }
 
-function tryFailTrackedAgentTask(params: { runId: string; error: string }): void {
+function tryFinalizeTrackedAgentTask(params: {
+  runId: string;
+  status: GatewayAgentTaskTerminalStatus;
+  error?: string;
+  terminalSummary?: string;
+}): void {
   try {
-    failTaskRunByRunId({
+    finalizeTaskRunByRunId({
       runId: params.runId,
       runtime: "cli",
+      status: params.status,
       endedAt: Date.now(),
-      error: params.error,
-      terminalSummary: params.error,
+      ...(params.error !== undefined ? { error: params.error } : {}),
+      ...(params.terminalSummary !== undefined ? { terminalSummary: params.terminalSummary } : {}),
     });
   } catch {
     // Best-effort only: background task tracking must not block agent runs.
@@ -310,7 +311,12 @@ function dispatchAgentRunFromGateway(params: {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       if (shouldTrackTask) {
-        tryCompleteTrackedAgentTask({ runId: params.runId, terminalSummary: "completed" });
+        const aborted = result.meta.aborted === true;
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: aborted ? "timed_out" : "succeeded",
+          terminalSummary: aborted ? "aborted" : "completed",
+        });
       }
       const payload = {
         runId: params.runId,
@@ -333,7 +339,13 @@ function dispatchAgentRunFromGateway(params: {
     })
     .catch((err) => {
       if (shouldTrackTask) {
-        tryFailTrackedAgentTask({ runId: params.runId, error: String(err) });
+        const error = String(err);
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: resolveFailedTrackedAgentTaskStatus(err),
+          error,
+          terminalSummary: error,
+        });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
