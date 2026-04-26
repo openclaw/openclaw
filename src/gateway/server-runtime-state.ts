@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
@@ -19,11 +19,8 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import {
-  createGatewayBroadcaster,
-  type GatewayBroadcastFn,
-  type GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
   createChatRunState,
@@ -43,6 +40,10 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import {
+  createPreauthConnectionBudget,
+  type PreauthConnectionBudget,
+} from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -60,6 +61,7 @@ export async function createGatewayRuntimeState(params: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
@@ -82,7 +84,9 @@ export async function createGatewayRuntimeState(params: {
   httpServer: HttpServer;
   httpServers: HttpServer[];
   httpBindHosts: string[];
+  startListening: () => Promise<void>;
   wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -165,9 +169,18 @@ export async function createGatewayRuntimeState(params: {
           "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
       );
     }
+    // Create WebSocketServer first (with noServer: true) so we can attach upgrade handlers
+    // before HTTP servers start listening. This prevents a race condition where connections
+    // arrive before the upgrade handler is attached, which causes silent 1006 errors.
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    const preauthConnectionBudget = createPreauthConnectionBudget();
+
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
-    for (const host of bindHosts) {
+    for (const _host of bindHosts) {
       const httpServer = createGatewayHttpServer({
         canvasHost,
         clients,
@@ -183,47 +196,68 @@ export async function createGatewayRuntimeState(params: {
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
         resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
-      try {
-        await listenGatewayHttpServer({
-          httpServer,
-          bindHost: host,
-          port: params.port,
-        });
-        httpServers.push(httpServer);
-        httpBindHosts.push(host);
-      } catch (err) {
-        if (host === bindHosts[0]) {
-          throw err;
-        }
-        params.log.warn(
-          `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
-        );
-      }
+      // Attach upgrade handler BEFORE listening to prevent race condition
+      attachGatewayUpgradeHandler({
+        httpServer,
+        wss,
+        canvasHost,
+        clients,
+        preauthConnectionBudget,
+        resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
+        rateLimiter: params.rateLimiter,
+        log: params.log,
+      });
+      httpServers.push(httpServer);
     }
     const httpServer = httpServers[0];
     if (!httpServer) {
       throw new Error("Gateway HTTP server failed to start");
     }
-
-    const wss = new WebSocketServer({
-      noServer: true,
-      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
-    });
-    for (const server of httpServers) {
-      attachGatewayUpgradeHandler({
-        httpServer: server,
-        wss,
-        canvasHost,
-        clients,
-        resolvedAuth: params.resolvedAuth,
-        rateLimiter: params.rateLimiter,
-      });
-    }
-
+    let startListeningPromise: Promise<void> | null = null;
+    const startListening = async (): Promise<void> => {
+      if (startListeningPromise) {
+        await startListeningPromise;
+        return;
+      }
+      startListeningPromise = (async () => {
+        for (const [index, host] of bindHosts.entries()) {
+          const server = httpServers[index];
+          if (!server) {
+            throw new Error(`Missing gateway HTTP server for bind host ${host}`);
+          }
+          try {
+            await listenGatewayHttpServer({
+              httpServer: server,
+              bindHost: host,
+              port: params.port,
+            });
+            httpBindHosts.push(host);
+          } catch (err) {
+            if (host === bindHosts[0]) {
+              throw err;
+            }
+            params.log.warn(
+              `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+            );
+          }
+        }
+        if (httpBindHosts.length === 0) {
+          throw new Error("Gateway HTTP server failed to start");
+        }
+      })();
+      try {
+        await startListeningPromise;
+      } catch (err) {
+        startListeningPromise = null;
+        throw err;
+      }
+    };
     const agentRunSeq = new Map<string, number>();
     const dedupe = new Map<string, DedupeEntry>();
     const chatRunState = createChatRunState();
@@ -250,7 +284,9 @@ export async function createGatewayRuntimeState(params: {
       httpServer,
       httpServers,
       httpBindHosts,
+      startListening,
       wss,
+      preauthConnectionBudget,
       clients,
       broadcast,
       broadcastToConnIds,

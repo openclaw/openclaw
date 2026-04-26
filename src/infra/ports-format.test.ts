@@ -4,35 +4,17 @@ import {
   classifyPortListener,
   formatPortDiagnostics,
   formatPortListener,
+  isDualStackLoopbackGatewayListeners,
 } from "./ports-format.js";
 
 describe("ports-format", () => {
-  it("classifies listeners across gateway, ssh, and unknown command lines", () => {
-    const cases = [
-      {
-        listener: { commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" },
-        expected: "ssh",
-      },
-      {
-        listener: { command: "ssh" },
-        expected: "ssh",
-      },
-      {
-        listener: { commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" },
-        expected: "gateway",
-      },
-      {
-        listener: { commandLine: "python -m http.server 18789" },
-        expected: "unknown",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(
-        classifyPortListener(testCase.listener, 18789),
-        JSON.stringify(testCase.listener),
-      ).toBe(testCase.expected);
-    }
+  it.each([
+    [{ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, "ssh"],
+    [{ command: "ssh" }, "ssh"],
+    [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ commandLine: "python -m http.server 18789" }, "unknown"],
+  ] as const)("classifies port listener %j", (listener, expected) => {
+    expect(classifyPortListener(listener, 18789)).toBe(expected);
   });
 
   it("builds ordered hints for mixed listener kinds and multiplicity", () => {
@@ -54,14 +36,26 @@ describe("ports-format", () => {
     expect(buildPortHints([], 18789)).toEqual([]);
   });
 
-  it("formats listeners with pid, user, command, and address fallbacks", () => {
-    expect(
-      formatPortListener({ pid: 123, user: "alice", commandLine: "ssh -N", address: "::1" }),
-    ).toBe("pid 123 alice: ssh -N (::1)");
-    expect(formatPortListener({ command: "ssh", address: "127.0.0.1:18789" })).toBe(
-      "pid ?: ssh (127.0.0.1:18789)",
-    );
-    expect(formatPortListener({})).toBe("pid ?: unknown");
+  it("treats single-process loopback dual-stack gateway listeners as benign", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+    ];
+    expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([
+      expect.stringContaining("Gateway already running locally."),
+    ]);
+  });
+
+  it.each([
+    [
+      { pid: 123, user: "alice", commandLine: "ssh -N", address: "::1" },
+      "pid 123 alice: ssh -N (::1)",
+    ],
+    [{ command: "ssh", address: "127.0.0.1:18789" }, "pid ?: ssh (127.0.0.1:18789)"],
+    [{}, "pid ?: unknown"],
+  ] as const)("formats port listener %j", (listener, expected) => {
+    expect(formatPortListener(listener)).toBe(expected);
   });
 
   it("formats free and busy port diagnostics", () => {

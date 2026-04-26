@@ -2,9 +2,15 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const packageJsonPath = join(repoRoot, "package.json");
+
+function collapseDockerContinuations(dockerfile: string): string {
+  return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
+}
 
 describe("Dockerfile", () => {
   it("uses shared multi-arch base image refs for all root Node stages", async () => {
@@ -37,24 +43,58 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
-  it("prunes runtime dependencies after the build stage", async () => {
+  it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("CI=true pnpm prune --prod");
-    expect(dockerfile).not.toContain('npm install --prefix "extensions/$ext" --omit=dev --silent');
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+    expect(dockerfile).toContain("Verifying critical native addons");
+    expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(dockerfile).not.toMatch(
+      /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
     );
   });
 
-  it("pins bundled plugin discovery to copied source extensions in runtime images", async () => {
+  it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/extensions");
+    expect(dockerfile).toContain("FROM build AS runtime-assets");
+    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
+    expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
+    expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
+    expect(dockerfile).toContain("  - ui\\n");
+    expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain("prune must not rediscover unrelated workspaces");
+    expect(dockerfile).not.toContain(
+      `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+    );
+  });
+
+  it("keeps package manager patch files in runtime images", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+      pnpm?: { patchedDependencies?: Record<string, string> };
+    };
+
+    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+    );
+  });
+
+  it("does not override bundled plugin discovery in runtime images", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    expect(dockerfile).toContain(`ARG OPENCLAW_BUNDLED_PLUGIN_DIR=${BUNDLED_PLUGIN_ROOT_DIR}`);
+    expect(dockerfile).not.toMatch(/^\s*ENV\b[^\n]*\bOPENCLAW_BUNDLED_PLUGINS_DIR\b/m);
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("for dir in /app/extensions /app/.agent /app/.agents");
+    expect(dockerfile).toContain(
+      "RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \\",
+    );
     expect(dockerfile).toContain('find "$dir" -type d -exec chmod 755 {} +');
     expect(dockerfile).toContain('find "$dir" -type f -exec chmod 644 {} +');
   });

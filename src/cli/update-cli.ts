@@ -75,7 +75,7 @@ ${theme.heading("Switch channels:")}
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Combine with --channel/--tag/--restart/--json/--timeout as needed
+  - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
 ${theme.heading("Examples:")}

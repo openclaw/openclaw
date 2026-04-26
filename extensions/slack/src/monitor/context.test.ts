@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 
 function createTestContext() {
@@ -15,6 +15,7 @@ function createTestContext() {
     app: { client: {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
+    botId: "B_BOT",
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,
@@ -34,6 +35,7 @@ function createTestContext() {
     replyToMode: "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
+    threadRequireExplicitMention: false,
     slashCommand: {
       enabled: true,
       name: "openclaw",

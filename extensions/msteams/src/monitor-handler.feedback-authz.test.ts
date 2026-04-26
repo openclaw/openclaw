@@ -12,12 +12,19 @@ import {
   createActivityHandler,
   createMSTeamsMessageHandlerDeps,
 } from "./monitor-handler.test-helpers.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const feedbackReflectionMockState = vi.hoisted(() => ({
   runFeedbackReflection: vi.fn(),
+}));
+
+vi.mock("./monitor-handler/message-handler.js", () => ({
+  createMSTeamsMessageHandler: () => async () => {},
+}));
+
+vi.mock("./monitor-handler/reaction-handler.js", () => ({
+  createMSTeamsReactionHandler: () => async () => {},
 }));
 
 vi.mock("./feedback-reflection.js", async () => {

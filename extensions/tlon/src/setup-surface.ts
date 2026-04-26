@@ -1,19 +1,16 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
   resolveTlonSetupConfigured,
   resolveTlonSetupStatusLines,
-  type TlonSetupInput,
-  tlonSetupAdapter,
 } from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
-import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
+import { resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
-const channel = "tlon" as const;
+const _channel = "tlon" as const;
 
-function isConfigured(account: TlonResolvedAccount): boolean {
+function _isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
 }
 
@@ -27,8 +24,9 @@ function parseList(value: string): string[] {
 export { tlonSetupAdapter } from "./setup-core.js";
 
 export const tlonSetupWizard = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg }) => await resolveTlonSetupConfigured(cfg),
-  resolveStatusLines: async ({ cfg }) => await resolveTlonSetupStatusLines(cfg),
+  resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
+  resolveStatusLines: async ({ cfg, accountId }) =>
+    await resolveTlonSetupStatusLines(cfg, accountId),
   finalize: async ({ cfg, accountId, prompter }) => {
     let next = cfg;
     const resolved = resolveTlonAccount(next, accountId);
@@ -37,21 +35,21 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
       throw new Error(`Invalid URL: ${validatedUrl.error}`);
     }
 
-    let allowPrivateNetwork = resolved.allowPrivateNetwork ?? false;
+    let dangerouslyAllowPrivateNetwork = resolved.dangerouslyAllowPrivateNetwork ?? false;
     if (isBlockedUrbitHostname(validatedUrl.hostname)) {
-      allowPrivateNetwork = await prompter.confirm({
+      dangerouslyAllowPrivateNetwork = await prompter.confirm({
         message:
           "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
-        initialValue: allowPrivateNetwork,
+        initialValue: dangerouslyAllowPrivateNetwork,
       });
-      if (!allowPrivateNetwork) {
-        throw new Error("Refusing private/internal Ship URL without explicit approval");
+      if (!dangerouslyAllowPrivateNetwork) {
+        throw new Error("Refusing private/internal ship URL without explicit network opt-in");
       }
     }
     next = applyTlonSetupConfig({
       cfg: next,
       accountId,
-      input: { allowPrivateNetwork },
+      input: { dangerouslyAllowPrivateNetwork },
     });
 
     const currentGroups = resolved.groupChannels;
@@ -68,7 +66,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
       next = applyTlonSetupConfig({
         cfg: next,
         accountId,
-        input: { groupChannels: parseList(String(entry ?? "")) },
+        input: { groupChannels: parseList(entry ?? "") },
       });
     }
 
@@ -87,7 +85,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
         cfg: next,
         accountId,
         input: {
-          dmAllowlist: parseList(String(entry ?? "")).map((ship) => normalizeShip(ship)),
+          dmAllowlist: parseList(entry ?? "").map((ship) => normalizeShip(ship)),
         },
       });
     }

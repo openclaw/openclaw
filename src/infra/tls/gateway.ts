@@ -6,6 +6,7 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
 const execFileAsync = promisify(execFile);
@@ -41,7 +42,13 @@ async function generateSelfSignedCert(params: {
   if (keyDir !== certDir) {
     await ensureDir(keyDir);
   }
-  await execFileAsync("openssl", [
+  const opensslBin = resolveSystemBin("openssl");
+  if (!opensslBin) {
+    throw new Error(
+      "openssl not found in trusted system directories. Install it in an OS-managed location.",
+    );
+  }
+  await execFileAsync(opensslBin, [
     "req",
     "-x509",
     "-newkey",

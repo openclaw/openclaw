@@ -22,6 +22,13 @@ describe("normalizeConfigPaths", () => {
               },
             },
           },
+          whatsapp: {
+            accounts: {
+              personal: {
+                authDir: "~/.openclaw/credentials/wa-personal",
+              },
+            },
+          },
           imessage: {
             accounts: { personal: { dbPath: "~/Library/Messages/chat.db" } },
           },
@@ -49,6 +56,9 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.tools?.exec?.pathPrepend?.[0]).toBe(path.join(home, "bin"));
       expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".openclaw", "telegram.token"),
+      );
+      expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
+        path.join(home, ".openclaw", "credentials", "wa-personal"),
       );
       expect(cfg.channels?.imessage?.accounts?.personal?.dbPath).toBe(
         path.join(home, "Library", "Messages", "chat.db"),

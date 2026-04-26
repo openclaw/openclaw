@@ -25,6 +25,10 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
+    });
+
     afterAll(async () => {
       await server.close();
     });
@@ -53,8 +57,14 @@ export function registerAuthModesSuite(): void {
     beforeAll(async () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
       port = await getFreePort();
       server = await startGatewayServer(port);
+    });
+
+    beforeEach(() => {
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
     });
 
     afterAll(async () => {
@@ -114,6 +124,11 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = { mode: "none" };
+    });
+
     afterAll(async () => {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -130,9 +145,18 @@ export function registerAuthModesSuite(): void {
   describe("tailscale auth", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
+    const tailscaleOrigin = "https://gateway.tailnet.ts.net";
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: {
+          auth: testState.gatewayAuth,
+          controlUi: testState.gatewayControlUi,
+        },
+      });
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
@@ -142,6 +166,8 @@ export function registerAuthModesSuite(): void {
     });
 
     beforeEach(() => {
+      testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 
@@ -154,6 +180,20 @@ export function registerAuthModesSuite(): void {
       const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
+      ws.close();
+    });
+
+    test("skips pairing for tailscale-authenticated control ui with device identity", async () => {
+      const ws = await openTailscaleWs(port, { origin: tailscaleOrigin });
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(true);
       ws.close();
     });
 

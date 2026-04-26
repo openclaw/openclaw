@@ -5,6 +5,7 @@ import {
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -29,37 +30,63 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric" });
 }
 
+function forEachSessionHourSlice(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  visitor: (params: {
+    usage: NonNullable<UsageSessionEntry["usage"]>;
+    hour: number;
+    weekday: number;
+    share: number;
+  }) => void,
+) {
+  const usage = session.usage;
+  if (!usage) {
+    return false;
+  }
+
+  const start = usage.firstActivity ?? session.updatedAt;
+  const end = usage.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  const durationMs = Math.max(endMs - startMs, 1);
+  const totalMinutes = durationMs / 60000;
+
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const date = new Date(cursor);
+    const nextHour = setToHourEnd(date, timeZone);
+    const nextMs = Math.min(nextHour.getTime(), endMs);
+    const minutes = Math.max((nextMs - cursor) / 60000, 0);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: minutes / totalMinutes,
+    });
+    cursor = nextMs + 1;
+  }
+
+  return true;
+}
+
 function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
   const hourErrors = Array.from({ length: 24 }, () => 0);
   const hourMsgs = Array.from({ length: 24 }, () => 0);
 
   for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
+    const messageCounts = session.usage?.messageCounts;
+    if (!messageCounts || messageCounts.total === 0) {
       continue;
     }
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
-      continue;
-    }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
-
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourErrors[hour] += usage.messageCounts.errors * share;
-      hourMsgs[hour] += usage.messageCounts.total * share;
-      cursor = nextMs + 1;
-    }
+    forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
+      hourErrors[hour] += messageCounts.errors * share;
+      hourMsgs[hour] += messageCounts.total * share;
+    });
   }
 
   return hourMsgs
@@ -79,7 +106,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} ${t("usage.overview.errors").toLowerCase()} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
+      sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
 
@@ -124,31 +151,15 @@ function buildUsageMosaicStats(
     }
     totalTokens += usage.totalTokens;
 
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
+    if (
+      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
+        hourTotals[hour] += usage.totalTokens * share;
+        weekdayTotals[weekday] += usage.totalTokens * share;
+      })
+    ) {
       continue;
     }
     hasData = true;
-
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
-
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const weekday = getZonedWeekday(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourTotals[hour] += usage.totalTokens * share;
-      weekdayTotals[weekday] += usage.totalTokens * share;
-      cursor = nextMs + 1;
-    }
   }
 
   const weekdayLabels = [
@@ -187,7 +198,9 @@ function renderUsageMosaic(
             <div class="usage-mosaic-title">${t("usage.mosaic.title")}</div>
             <div class="usage-mosaic-sub">${t("usage.mosaic.subtitleEmpty")}</div>
           </div>
-          <div class="usage-mosaic-total">${formatTokens(0)} ${t("usage.metrics.tokens").toLowerCase()}</div>
+          <div class="usage-mosaic-total">
+            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+          </div>
         </div>
         <div class="usage-empty-block usage-empty-block--compact">
           ${t("usage.mosaic.noTimelineData")}
@@ -214,7 +227,8 @@ function renderUsageMosaic(
           </div>
         </div>
         <div class="usage-mosaic-total">
-          ${formatTokens(stats.totalTokens)} ${t("usage.metrics.tokens").toLowerCase()}
+          ${formatTokens(stats.totalTokens)}
+          ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       </div>
       <div class="usage-mosaic-grid">
@@ -248,7 +262,9 @@ function renderUsageMosaic(
                 value > 0
                   ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
                   : "transparent";
-              const title = `${hour}:00 · ${formatTokens(value)} ${t("usage.metrics.tokens").toLowerCase()}`;
+              const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                t("usage.metrics.tokens"),
+              )}`;
               const border =
                 intensity > 0.7
                   ? "color-mix(in srgb, var(--accent) 60%, transparent)"
@@ -563,15 +579,25 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  const peakErrorDay = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => ({
+  let peakErrorDay: UsageInsightStats["peakErrorDay"];
+  for (const day of aggregates.daily) {
+    if (day.messages <= 0 || day.errors <= 0) {
+      continue;
+    }
+    const candidate = {
       date: day.date,
       errors: day.errors,
       messages: day.messages,
       rate: day.errors / day.messages,
-    }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    };
+    if (
+      !peakErrorDay ||
+      candidate.rate > peakErrorDay.rate ||
+      (candidate.rate === peakErrorDay.rate && candidate.errors > peakErrorDay.errors)
+    ) {
+      peakErrorDay = candidate;
+    }
+  }
 
   return {
     durationSumMs,

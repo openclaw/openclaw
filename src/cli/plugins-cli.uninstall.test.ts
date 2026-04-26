@@ -1,17 +1,24 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginStatusReport,
+  buildPluginDiagnosticsReport,
   loadConfig,
-  parseClawHubPluginSpec,
   promptYesNo,
+  refreshPluginRegistry,
+  replaceConfigFile,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   uninstallPlugin,
   writeConfigFile,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
+
+const CLI_STATE_ROOT = "/tmp/openclaw-state";
+const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("plugins cli uninstall", () => {
   beforeEach(() => {
@@ -29,13 +36,16 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: "/tmp/openclaw-state/extensions/alpha",
-            installPath: "/tmp/openclaw-state/extensions/alpha",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
           },
+        },
+        slots: {
+          contextEngine: "alpha",
         },
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -44,7 +54,9 @@ describe("plugins cli uninstall", () => {
 
     expect(uninstallPlugin).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("Dry run, no changes made."))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("context engine slot"))).toBe(true);
   });
 
   it("uninstalls with --force and --keep-files without prompting", async () => {
@@ -56,8 +68,8 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: "/tmp/openclaw-state/extensions/alpha",
-            installPath: "/tmp/openclaw-state/extensions/alpha",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
           },
         },
       },
@@ -70,7 +82,8 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
-    buildPluginStatusReport.mockReturnValue({
+    setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -84,6 +97,7 @@ describe("plugins cli uninstall", () => {
         allowlist: false,
         loadPath: false,
         memorySlot: false,
+        contextEngineSlot: false,
         directory: false,
       },
     });
@@ -97,7 +111,78 @@ describe("plugins cli uninstall", () => {
         deleteFiles: false,
       }),
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      plugins: {
+        entries: {},
+      },
+    });
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          entries: {},
+        },
+      },
+      installRecords: {},
+      reason: "source-changed",
+    });
+  });
+
+  it("restores install records when the config write rejects during uninstall", async () => {
+    const installRecords = {
+      alpha: {
+        source: "path",
+        sourcePath: ALPHA_INSTALL_PATH,
+        installPath: ALPHA_INSTALL_PATH,
+      },
+    } as const;
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: installRecords,
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      plugins: {
+        entries: {},
+        installs: {},
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    uninstallPlugin.mockResolvedValue({
+      ok: true,
+      config: nextConfig,
+      warnings: [],
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        directory: false,
+      },
+    });
+    replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    await expect(
+      runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]),
+    ).rejects.toThrow("config changed");
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(1, {});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      installRecords,
+    );
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("exits when uninstall target is not managed by plugin install records", async () => {
@@ -107,7 +192,7 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -118,74 +203,5 @@ describe("plugins cli uninstall", () => {
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
     expect(uninstallPlugin).not.toHaveBeenCalled();
-  });
-
-  it("accepts the recorded ClawHub spec as an uninstall target", async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "linkmind-context": { enabled: true },
-        },
-        installs: {
-          "linkmind-context": {
-            source: "npm",
-            spec: "clawhub:linkmind-context",
-            clawhubPackage: "linkmind-context",
-          },
-        },
-      },
-    } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
-      plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
-      diagnostics: [],
-    });
-    parseClawHubPluginSpec.mockImplementation((raw: string) =>
-      raw === "clawhub:linkmind-context" ? { name: "linkmind-context" } : null,
-    );
-
-    await runPluginsCommand(["plugins", "uninstall", "clawhub:linkmind-context", "--force"]);
-
-    expect(uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "linkmind-context",
-      }),
-    );
-  });
-
-  it("accepts a versionless ClawHub spec when the install was pinned", async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "linkmind-context": { enabled: true },
-        },
-        installs: {
-          "linkmind-context": {
-            source: "npm",
-            spec: "clawhub:linkmind-context@1.2.3",
-          },
-        },
-      },
-    } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
-      plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
-      diagnostics: [],
-    });
-    parseClawHubPluginSpec.mockImplementation((raw: string) => {
-      if (raw === "clawhub:linkmind-context") {
-        return { name: "linkmind-context" };
-      }
-      if (raw === "clawhub:linkmind-context@1.2.3") {
-        return { name: "linkmind-context", version: "1.2.3" };
-      }
-      return null;
-    });
-
-    await runPluginsCommand(["plugins", "uninstall", "clawhub:linkmind-context", "--force"]);
-
-    expect(uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "linkmind-context",
-      }),
-    );
   });
 });

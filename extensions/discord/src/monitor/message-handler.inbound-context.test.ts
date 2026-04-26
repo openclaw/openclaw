@@ -1,43 +1,12 @@
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
+import { buildFinalizedDiscordDirectInboundContext } from "./inbound-context.test-helpers.js";
 
 describe("discord processDiscordMessage inbound context", () => {
   it("builds a finalized direct-message MsgContext shape", () => {
-    const { groupSystemPrompt, ownerAllowFrom, untrustedContext } =
-      buildDiscordInboundAccessContext({
-        channelConfig: null,
-        guildInfo: null,
-        sender: { id: "U1", name: "Alice", tag: "alice" },
-        isGuild: false,
-      });
-
-    const ctx = finalizeInboundContext({
-      Body: "hi",
-      BodyForAgent: "hi",
-      RawBody: "hi",
-      CommandBody: "hi",
-      From: "discord:U1",
-      To: "user:U1",
-      SessionKey: "agent:main:discord:direct:u1",
-      AccountId: "default",
-      ChatType: "direct",
-      ConversationLabel: "Alice",
-      SenderName: "Alice",
-      SenderId: "U1",
-      SenderUsername: "alice",
-      GroupSystemPrompt: groupSystemPrompt,
-      OwnerAllowFrom: ownerAllowFrom,
-      UntrustedContext: untrustedContext,
-      Provider: "discord",
-      Surface: "discord",
-      WasMentioned: false,
-      MessageSid: "m1",
-      CommandAuthorized: true,
-      OriginatingChannel: "discord",
-      OriginatingTo: "user:U1",
-    });
+    const ctx = buildFinalizedDiscordDirectInboundContext();
 
     expectInboundContextContract(ctx);
   });
