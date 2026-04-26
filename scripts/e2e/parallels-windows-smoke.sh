@@ -2398,8 +2398,9 @@ New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
 EOF
 )"
+  stop_gateway
   guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
-    agent --agent main --session-id parallels-windows-smoke --message "Reply with exact ASCII text OK only." --json
+    agent --local --agent main --session-id parallels-windows-smoke --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
