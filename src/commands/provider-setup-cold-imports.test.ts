@@ -26,8 +26,9 @@ describe("provider setup cold imports", () => {
     for (const file of coldProviderSetupFiles) {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       for (const importPath of forbiddenRuntimeImports) {
+        const escapedImportPath = importPath.replaceAll(".", "\\.");
         const staticImportPattern = new RegExp(
-          `\\bfrom\\s+["'][^"']*${importPath.replaceAll(".", "\\.")}["']`,
+          `(?:\\bfrom\\s+["'][^"']*${escapedImportPath}["']|\\bimport\\s+["'][^"']*${escapedImportPath}["'])`,
         );
         expect(source, `${file} must not statically import ${importPath}`).not.toMatch(
           staticImportPattern,
