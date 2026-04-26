@@ -372,6 +372,34 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
+  it("falls back to editing a long-lived preview when fresh final send returns false", async () => {
+    const visibleSinceMs = 10_000;
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Working...",
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: HELLO_FINAL,
+      messageId: 999,
+    });
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 999,
+        text: HELLO_FINAL,
+      }),
+    );
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("sends a fresh final for stale archived previews", async () => {
     const visibleSinceMs = 10_000;
     const harness = createHarness({
