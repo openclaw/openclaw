@@ -194,6 +194,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const clearStaleStreamingRunIfNoTrackedRunRemains = () => {
+    const activeRunId = state.activeChatRunId;
+    if (
+      !activeRunId ||
+      sessionRuns.has(activeRunId) ||
+      sessionRuns.size > 0 ||
+      state.activityStatus !== "streaming"
+    ) {
+      return;
+    }
+    state.activeChatRunId = null;
+    setActivityStatus("idle");
+    clearStreamingWatchdog();
+    flushPendingHistoryRefreshIfIdle();
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -205,8 +221,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -223,8 +242,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };

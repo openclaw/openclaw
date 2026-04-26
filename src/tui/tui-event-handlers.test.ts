@@ -532,6 +532,73 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
   });
 
+  it("clears stale streaming when an orphan final arrives and no tracked run remains", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("flushes deferred history reload after stale streaming clear makes the TUI idle", () => {
+    const { state, loadHistory, noteLocalRunId, setActivityStatus, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+      });
+
+    noteLocalRunId("run-local-empty");
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not surface inactive orphan final failures as the global status", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-orphan-error",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "failed" }], stopReason: "error" },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
+  it("does not force idle for an inactive final while another tracked run is active", () => {
+    const { state, setActivityStatus, handleChatEvent } = createConcurrentRunHarness("partial");
+    state.activityStatus = "streaming";
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other final" }] },
+    });
+
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
   it("suppresses non-local empty final placeholders during concurrent runs", () => {
     const { state, chatLog, loadHistory, handleChatEvent } =
       createConcurrentRunHarness("local stream");
