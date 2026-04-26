@@ -14,7 +14,11 @@ import {
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -695,15 +699,19 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
+        // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message".
+        const rawText = readStringValue(argsRecord.content) ?? readStringValue(argsRecord.message);
+        const text = normalizeOptionalString(rawText);
         const sendTarget = extractMessagingToolSend(toolName, argsRecord);
         if (sendTarget) {
-          ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
+          ctx.state.pendingMessagingTargets.set(
+            toolCallId,
+            text ? { ...sendTarget, hasText: true, sentText: rawText } : sendTarget,
+          );
         }
-        // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-        const text = (argsRecord.content as string) ?? (argsRecord.message as string);
-        if (text && typeof text === "string") {
-          ctx.state.pendingMessagingTexts.set(toolCallId, text);
-          ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+        if (text && rawText) {
+          ctx.state.pendingMessagingTexts.set(toolCallId, rawText);
+          ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${rawText.length}`);
         }
         // Track media URLs from messaging tool args (pending until tool_execution_end).
         const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);

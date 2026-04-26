@@ -50,7 +50,15 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ text: "hello world!" }],
         messageProvider: "slack",
         originatingTo: "channel:C1",
-        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            hasText: true,
+            sentText: "hello world!",
+          },
+        ],
       }),
     ).toEqual([]);
   });
@@ -63,7 +71,15 @@ describe("resolveFollowupDeliveryPayloads", () => {
         messageProvider: "heartbeat",
         originatingChannel: "telegram",
         originatingTo: "268300329",
-        sentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+        sentTargets: [
+          {
+            tool: "telegram",
+            provider: "telegram",
+            to: "268300329",
+            hasText: true,
+            sentText: "hello world!",
+          },
+        ],
       }),
     ).toEqual([]);
   });

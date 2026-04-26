@@ -4,4 +4,6 @@ export type MessagingToolSend = {
   accountId?: string;
   to?: string;
   threadId?: string;
+  hasText?: boolean;
+  sentText?: string;
 };

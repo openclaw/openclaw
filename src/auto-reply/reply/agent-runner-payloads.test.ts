@@ -19,7 +19,15 @@ async function expectSameTargetRepliesSuppressed(params: { provider: string; to:
     originatingChannel: "feishu",
     originatingTo: "ou_abc123",
     messagingToolSentTexts: ["different message"],
-    messagingToolSentTargets: [{ tool: "message", provider: params.provider, to: params.to }],
+    messagingToolSentTargets: [
+      {
+        tool: "message",
+        provider: params.provider,
+        to: params.to,
+        hasText: true,
+        sentText: "different message",
+      },
+    ],
   });
 
   expect(replyPayloads).toHaveLength(0);
@@ -157,6 +165,52 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
+  it("dedupes same-target media-only sends without suppressing final text", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "photo caption", mediaUrl: "file:///tmp/photo.jpg" }],
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "photo caption",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("ignores different-target sent text when same-target send was media-only", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "shared caption", mediaUrl: "file:///tmp/photo.jpg" }],
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentTexts: ["shared caption"],
+      messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "123" },
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          hasText: true,
+          sentText: "shared caption",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "shared caption",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
   it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -165,7 +219,15 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "telegram",
       originatingTo: "268300329",
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          hasText: true,
+          sentText: "different message",
+        },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);
@@ -445,6 +507,8 @@ describe("buildReplyPayloads media filter integration", () => {
           provider: "telegram",
           to: "268300329",
           accountId: "work",
+          hasText: true,
+          sentText: "different message",
         },
       ],
     });

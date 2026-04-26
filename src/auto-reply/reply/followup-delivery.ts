@@ -12,6 +12,7 @@ import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
+  getOriginMatchingMessagingToolSends,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
@@ -62,9 +63,25 @@ export function resolveFollowupDeliveryPayloads(params: {
     replyToMode,
     replyToChannel,
   });
+  const originMatchingMessagingToolSends = getOriginMatchingMessagingToolSends({
+    messageProvider: replyToChannel,
+    messagingToolSentTargets: params.sentTargets,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.originatingTo,
+    }),
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.originatingAccountId,
+    }),
+  });
+  const sentTexts =
+    (params.sentTargets?.length ?? 0) === 0
+      ? (params.sentTexts ?? [])
+      : originMatchingMessagingToolSends.flatMap((target) =>
+          target.sentText?.trim() ? [target.sentText] : [],
+        );
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,
-    sentTexts: params.sentTexts ?? [],
+    sentTexts,
   });
   const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
     payloads: dedupedPayloads,

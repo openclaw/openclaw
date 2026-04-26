@@ -1781,7 +1781,15 @@ describe("runReplyAgent messaging tool suppression", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          hasText: true,
+          sentText: "different message",
+        },
+      ],
       meta: {},
     });
 

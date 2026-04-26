@@ -803,6 +803,45 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  it("marks pending messaging targets with non-empty sent text", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-text-target",
+      args: { action: "send", provider: "slack", to: "channel:C1", content: "hello" },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-text-target")).toMatchObject({
+      provider: "slack",
+      to: "channel:C1",
+      hasText: true,
+      sentText: "hello",
+    });
+    expect(ctx.state.pendingMessagingTexts.get("tool-text-target")).toBe("hello");
+  });
+
+  it("does not mark whitespace-only messaging content as sent text", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-whitespace-target",
+      args: { action: "send", provider: "slack", to: "channel:C1", content: "   " },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-whitespace-target")).toMatchObject({
+      provider: "slack",
+      to: "channel:C1",
+    });
+    expect(
+      ctx.state.pendingMessagingTargets.get("tool-whitespace-target")?.hasText,
+    ).toBeUndefined();
+    expect(ctx.state.pendingMessagingTexts.has("tool-whitespace-target")).toBe(false);
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

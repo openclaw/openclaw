@@ -121,23 +121,23 @@ function targetsMatchForSuppression(params: {
   return params.targetKey === params.originTarget;
 }
 
-export function shouldSuppressMessagingToolReplies(params: {
+export function getOriginMatchingMessagingToolSends(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
-}): boolean {
+}): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
-    return false;
+    return [];
   }
   const originRawTarget = normalizeOptionalString(params.originatingTo);
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
-    return false;
+    return [];
   }
-  return sentTargets.some((target) => {
+  return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,
@@ -168,4 +168,13 @@ export function shouldSuppressMessagingToolReplies(params: {
       targetThreadId: target.threadId,
     });
   });
+}
+
+export function shouldSuppressMessagingToolReplies(params: {
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  accountId?: string;
+}): boolean {
+  return getOriginMatchingMessagingToolSends(params).some((target) => target.hasText === true);
 }

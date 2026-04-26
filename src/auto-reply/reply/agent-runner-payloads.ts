@@ -180,8 +180,8 @@ export async function buildReplyPayloads(params: {
   const dedupeRuntime = shouldCheckMessagingToolDedupe
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
-  const suppressMessagingToolReplies =
-    dedupeRuntime?.shouldSuppressMessagingToolReplies({
+  const originMatchingMessagingToolSends =
+    dedupeRuntime?.getOriginMatchingMessagingToolSends({
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: params.originatingChannel,
         provider: params.messageProvider,
@@ -193,13 +193,22 @@ export async function buildReplyPayloads(params: {
       accountId: resolveOriginAccountId({
         originatingAccountId: params.accountId,
       }),
-    }) ?? false;
+    }) ?? [];
+  const suppressMessagingToolReplies = originMatchingMessagingToolSends.some(
+    (target) => target.hasText === true,
+  );
   // Only dedupe against messaging tool sends for the same origin target.
   // Cross-target sends (for example posting to another channel) must not
   // suppress the current conversation's final reply.
   // If target metadata is unavailable, keep legacy dedupe behavior.
   const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+    originMatchingMessagingToolSends.length > 0 || messagingToolSentTargets.length === 0;
+  const sameTargetSentTexts =
+    messagingToolSentTargets.length === 0
+      ? messagingToolSentTexts
+      : originMatchingMessagingToolSends.flatMap((target) =>
+          target.sentText?.trim() ? [target.sentText] : [],
+        );
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
@@ -217,7 +226,7 @@ export async function buildReplyPayloads(params: {
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
         payloads: mediaFilteredPayloads,
-        sentTexts: messagingToolSentTexts,
+        sentTexts: sameTargetSentTexts,
       })
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>

@@ -134,7 +134,9 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
-        messagingToolSentTargets: [{ tool: "message", provider: "", to: "123" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "", to: "123", hasText: true, sentText: "hello" },
+        ],
       }),
     ).toBe(true);
   });
@@ -144,9 +146,21 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
-        messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "message", to: "123", hasText: true, sentText: "hello" },
+        ],
       }),
     ).toBe(true);
+  });
+
+  it("does not suppress when the matching target sent media without text", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        messagingToolSentTargets: [{ tool: "message", provider: "", to: "123" }],
+      }),
+    ).toBe(false);
   });
 
   it("does not suppress when providerless target does not match origin route", () => {
@@ -166,7 +180,14 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "-100123",
+            threadId: "77",
+            hasText: true,
+            sentText: "hello",
+          },
         ],
       }),
     ).toBe(true);
@@ -200,7 +221,15 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123",
-        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "-100123",
+            hasText: true,
+            sentText: "hello",
+          },
+        ],
       }),
     ).toBe(true);
   });
@@ -214,7 +243,14 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "-100123",
+            threadId: "77",
+            hasText: true,
+            sentText: "hello",
+          },
         ],
       }),
     ).toBe(true);
