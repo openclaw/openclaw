@@ -65,6 +65,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure`
+  and show daemon state separately when available, so `gateway.tailscale.mode:
+"off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
+  Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when
   the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables
   itself for the current Gateway process after repeated failed restarts while
