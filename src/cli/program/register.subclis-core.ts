@@ -30,12 +30,13 @@ async function registerSubCliWithPluginCommands(
   registerSubCli: () => Promise<void>,
   pluginCliPosition: "before" | "after",
 ) {
+  const isHelpOrVersion = resolveCliArgvInvocation(process.argv).hasHelpOrVersion;
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
-  if (pluginCliPosition === "before") {
+  if (pluginCliPosition === "before" && !isHelpOrVersion) {
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
-  if (pluginCliPosition === "after") {
+  if (pluginCliPosition === "after" && !isHelpOrVersion) {
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }
