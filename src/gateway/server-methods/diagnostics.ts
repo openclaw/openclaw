@@ -27,8 +27,8 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
     respond(
       true,
       {
-        cachedAt: meta.cachedAt || null,
-        age: meta.cachedAt ? Date.now() - meta.cachedAt : null,
+        cachedAt: meta.cachedAt === 0 ? null : meta.cachedAt,
+        age: meta.cachedAt === 0 ? null : Date.now() - meta.cachedAt,
         ttlMs: meta.ttlMs,
         size: meta.size,
       },
