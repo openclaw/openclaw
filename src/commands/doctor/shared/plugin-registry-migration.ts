@@ -226,6 +226,9 @@ export function listMigrationRelevantPluginRecords(params: {
     if (plugin.origin !== "bundled") {
       return true;
     }
+    if (plugin.enabledByDefault && plugin.contributions.providers.length > 0) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }

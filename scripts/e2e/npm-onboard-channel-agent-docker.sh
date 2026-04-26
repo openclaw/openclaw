@@ -61,6 +61,7 @@ if ! docker run --rm \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
   -e OPENCLAW_CURRENT_PACKAGE_TGZ="$DOCKER_PACKAGE_TGZ" \
   -v "$PACKAGE_TGZ:$DOCKER_PACKAGE_TGZ:ro" \
+  -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
