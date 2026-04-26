@@ -8,7 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Doctor: honor `OPENCLAW_SERVICE_REPAIR_POLICY=external` by reporting gateway service health while skipping service install/start/restart/bootstrap, supervisor rewrites, and legacy service cleanup for externally managed environments. Thanks @shakkernerd.
 
-## 2026.4.25
+## 2026.4.26
 
 ### Changes
 
