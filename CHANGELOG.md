@@ -75,6 +75,8 @@ Docs: https://docs.openclaw.ai
 - Telegram: preserve exact selected quote text when sending native quote replies, and retry with legacy replies if Telegram rejects quote parameters. (#71952) Thanks @rubencu.
 - Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
 - Security/audit: read channel exposure and plugin allowlist ownership from read-only plugin index metadata so cold audits do not depend on loaded channel runtime. Thanks @shakkernerd.
+- Plugins/chat: keep `/plugins list`, `/plugins enable`, and `/plugins disable` on the persisted plugin index path so chat plugin management does not load diagnostic/runtime plugin registries before execution. Thanks @shakkernerd.
+- Plugins/doctor: read workspace plugin status and legacy web-search ownership through installed-index manifest metadata instead of broad manifest registry scans. Thanks @shakkernerd.
 - Logging: redact configured secret patterns at console and file-log sink exits
   so credentials that reach the logger are masked before terminal display or
   JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.

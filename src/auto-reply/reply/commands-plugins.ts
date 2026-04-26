@@ -26,7 +26,7 @@ import {
   buildAllPluginInspectReports,
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginSnapshotReport,
+  buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
@@ -308,7 +308,7 @@ async function loadPluginCommandState(
     report:
       options?.loadModules === true
         ? buildPluginDiagnosticsReport({ config, workspaceDir })
-        : buildPluginSnapshotReport({ config, workspaceDir }),
+        : buildPluginRegistrySnapshotReport({ config, workspaceDir }),
   };
 }
 
@@ -399,7 +399,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   const loaded = await loadPluginCommandState(params.workspaceDir, {
-    loadModules: pluginsCommand.action !== "list",
+    loadModules: pluginsCommand.action === "inspect",
   });
   if (!loaded.ok) {
     return {
