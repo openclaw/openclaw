@@ -226,8 +226,25 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).toContain("use the first-class `gateway` tool");
+    expect(prompt).toContain(
+      "Only use CLI service lifecycle commands when the user explicitly asks",
+    );
     expect(prompt).toContain("openclaw gateway restart");
+    expect(prompt).toContain("Do not chain `openclaw gateway stop`");
     expect(prompt).toContain("Do not invent commands");
+  });
+
+  it("points agents to config field docs and broader configuration docs", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+    });
+
+    expect(prompt).toContain("For config field docs");
+    expect(prompt).toContain("`gateway` tool action `config.schema.lookup`");
+    expect(prompt).toContain("docs/gateway/configuration.md");
+    expect(prompt).toContain("docs/gateway/configuration-reference.md");
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {
@@ -559,6 +576,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("config.schema.lookup");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("config.patch");
+    expect(prompt).toContain("Config writes hot-reload when possible");
     expect(prompt).toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");

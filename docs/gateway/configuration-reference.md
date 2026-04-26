@@ -16,6 +16,11 @@ Code truth:
 - `config.schema.lookup` returns one path-scoped schema node for drill-down tooling
 - `pnpm config:docs:check` / `pnpm config:docs:gen` validate the config-doc baseline hash against the current schema surface
 
+Agent lookup path: use the `gateway` tool action `config.schema.lookup` for
+exact field-level docs and constraints before edits. Use
+[Configuration](/gateway/configuration) for task-oriented guidance and this page
+for the broader field map, defaults, and links to subsystem references.
+
 Dedicated deep references:
 
 - [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`

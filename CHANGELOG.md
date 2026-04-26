@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
 - TTS/status: show configured TTS model, voice, and sanitized custom endpoint in `/status`, preserve OpenAI-compatible TTS instructions on custom endpoints, and retry empty Microsoft/Edge TTS output once. Addresses #46602, #47232, and #43936. Thanks @leekuangtao, @Huntterxx, and @rex993.
+- Agents/Gateway: steer agent-driven config edits and restarts through the owner-only `gateway` tool, document `config.schema.lookup` as the field-doc source, and warn against using `gateway stop && gateway start` as a restart substitute on macOS. Fixes #71929. Thanks @ygc3817922006-sketch.
 - Providers/vLLM: send Nemotron 3 chat-template kwargs when thinking is off
   and honor configured `params.chat_template_kwargs` for OpenAI-compatible
   completions, so vLLM/Nemotron replies stay visible instead of becoming

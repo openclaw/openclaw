@@ -422,6 +422,7 @@ function buildDocsSection(params: {
     docsPath
       ? "For OpenClaw behavior, commands, config, or architecture: consult local docs first."
       : "For OpenClaw behavior, commands, config, or architecture: consult the docs mirror first.",
+    "For config field docs, prefer the `gateway` tool action `config.schema.lookup`; for broader config guidance, read `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`.",
     sourcePath
       ? "If docs are incomplete or stale, inspect the local OpenClaw source code before answering."
       : "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
@@ -784,11 +785,15 @@ export function buildAgentSystemPrompt(params: {
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
+    "For config changes, use the first-class `gateway` tool (`config.schema.lookup`, `config.get`, `config.patch`, `config.apply`) instead of editing config through exec; the gateway tool hot-reloads config when possible and uses a safe restart only when required.",
+    "Use the `gateway` tool action `restart` for Gateway restarts. Only use CLI service lifecycle commands when the user explicitly asks for them.",
+    "Gateway service lifecycle quick reference:",
     "- openclaw gateway status",
+    "- openclaw gateway restart",
+    "Operator-only, explicit user request:",
     "- openclaw gateway start",
     "- openclaw gateway stop",
-    "- openclaw gateway restart",
+    "Do not chain `openclaw gateway stop` and `openclaw gateway start` as a restart substitute.",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
     ...skillsSection,
@@ -800,7 +805,7 @@ export function buildAgentSystemPrompt(params: {
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Use config.schema.lookup with a specific dot path to inspect only the relevant config subtree before making config changes or answering config-field questions; avoid guessing field names/types.",
-          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart).",
+          "Actions: config.schema.lookup, config.get, config.patch (partial update, merges with existing), config.apply (validate + write full config), update.run (update deps or git, then restart). Config writes hot-reload when possible and use a safe restart only when required.",
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
