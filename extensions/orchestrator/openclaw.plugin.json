@@ -1,0 +1,20 @@
+{
+  "id": "orchestrator",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Master off-switch for the orchestrator extension. When false, the extension contributes no CLI verbs, no HTTP routes, and no expiry sweeper."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["synthetic", "shadow", "live"],
+        "default": "synthetic",
+        "description": "Dispatch mode. 'synthetic' (default) runs the routing engine and writes task records but never invokes sessions_spawn — Pipeline tab renders without touching specialists. 'shadow' invokes real spawn but bypasses operator approval and writes to a separate archive. 'live' is the production mode."
+      }
+    }
+  }
+}

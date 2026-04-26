@@ -257,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: orchestrator":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/orchestrator/**"
 "extensions: tokenjuice":
   - changed-files:
       - any-glob-to-any-file:
