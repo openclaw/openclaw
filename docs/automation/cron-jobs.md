@@ -4,10 +4,8 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
   - Deciding between heartbeat and cron for scheduled tasks
-title: "Scheduled Tasks"
+title: "Scheduled tasks"
 ---
-
-# Scheduled Tasks (Cron)
 
 Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output back to a chat channel or webhook endpoint.
 
@@ -25,6 +23,7 @@ openclaw cron add \
 
 # Check your jobs
 openclaw cron list
+openclaw cron show <job-id>
 
 # See run history
 openclaw cron runs --id <job-id>
@@ -33,7 +32,9 @@ openclaw cron runs --id <job-id>
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
+- After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
@@ -83,13 +84,22 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
-**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+**Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). Those system events do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+
+For isolated jobs, “fresh session” means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
+
+Isolated cron runs also dispose any bundled MCP runtime instances created for the job through the shared runtime-cleanup path. This matches how main-session and custom-session MCP clients are torn down, so isolated cron jobs do not leak stdio child processes or long-lived MCP connections across runs.
 
 When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
 running, OpenClaw suppresses that partial parent update instead of announcing it.
+
+For text-only Discord announce targets, OpenClaw sends the canonical final
+assistant text once instead of replaying both streamed/intermediate text payloads
+and the final answer. Media and structured Discord payloads are still delivered
+as separate payloads so attachments and components are not dropped.
 
 ### Payload options for isolated jobs
 
@@ -108,7 +118,7 @@ Model-selection precedence for isolated jobs is:
 
 1. Gmail hook model override (when the run came from Gmail and that override is allowed)
 2. Per-job payload `model`
-3. Stored cron session model override
+3. User-selected stored cron session model override
 4. Agent/default model selection
 
 Fast mode follows the resolved live selection too. If the selected model config
@@ -116,29 +126,32 @@ has `params.fastMode`, isolated cron uses that by default. A stored session
 `fastMode` override still wins over config in either direction.
 
 If an isolated run hits a live model-switch handoff, cron retries with the
-switched provider/model and persists that live selection before retrying. When
-the switch also carries a new auth profile, cron persists that auth profile
-override too. Retries are bounded: after the initial attempt plus 2 switch
-retries, cron aborts instead of looping forever.
+switched provider/model and persists that live selection for the active run
+before retrying. When the switch also carries a new auth profile, cron persists
+that auth profile override for the active run too. Retries are bounded: after
+the initial attempt plus 2 switch retries, cron aborts instead of looping
+forever.
 
 ## Delivery and output
 
-| Mode       | What happens                                             |
-| ---------- | -------------------------------------------------------- |
-| `announce` | Deliver summary to target channel (default for isolated) |
-| `webhook`  | POST finished event payload to a URL                     |
-| `none`     | Internal only, no delivery                               |
+| Mode       | What happens                                                        |
+| ---------- | ------------------------------------------------------------------- |
+| `announce` | Fallback-deliver final text to the target if the agent did not send |
+| `webhook`  | POST finished event payload to a URL                                |
+| `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-For cron-owned isolated jobs, the runner owns the final delivery path. The
-agent is prompted to return a plain-text summary, and that summary is then sent
-through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
-does not hand delivery back to the agent; it keeps the run internal.
+For isolated jobs, chat delivery is shared. If a chat route is available, the
+agent can use the `message` tool even when the job uses `--no-deliver`. If the
+agent sends to the configured/current target, OpenClaw skips the fallback
+announce. Otherwise `announce`, `webhook`, and `none` only control what the
+runner does with the final reply after the agent turn.
 
-If the original task explicitly says to message some external recipient, the
-agent should note who/where that message should go in its output instead of
-trying to send it directly.
+When an agent creates an isolated reminder from an active chat, OpenClaw stores
+the preserved live delivery target for the fallback announce route. Internal
+session keys may be lowercase; provider delivery targets are not reconstructed
+from those keys when current chat context is available.
 
 Failure notifications follow a separate destination path:
 
@@ -233,7 +246,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -317,6 +330,9 @@ gog gmail watch start \
 # List all jobs
 openclaw cron list
 
+# Show one job, including resolved delivery route
+openclaw cron show <jobId>
+
 # Edit a job
 openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
 
@@ -368,6 +384,10 @@ Model override note:
 }
 ```
 
+The runtime state sidecar is derived from `cron.store`: a `.json` store such as
+`~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path
+without a `.json` suffix appends `-state.json`.
+
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
@@ -400,15 +420,30 @@ openclaw doctor
 
 ### Cron fired but no delivery
 
-- Delivery mode is `none` means no external message is expected.
+- Delivery mode `none` means no runner fallback send is expected. The agent can
+  still send directly with the `message` tool when a chat route is available.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
+- For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can
+  fail because Matrix room IDs are case-sensitive. Edit the job to the exact
+  `!room:server` or `room:!room:server` value from Matrix.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
   OpenClaw suppresses direct outbound delivery and also suppresses the fallback
   queued summary path, so nothing is posted back to chat.
-- For cron-owned isolated jobs, do not expect the agent to use the message tool
-  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
-  internal instead of allowing a direct send.
+- If the agent should message the user itself, check that the job has a usable
+  route (`channel: "last"` with a previous chat, or an explicit channel/target).
+
+### Cron or heartbeat appears to prevent `/new`-style rollover
+
+- Daily and idle reset freshness is not based on `updatedAt`; see
+  [Session management](/concepts/session#session-lifecycle).
+- Cron wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may
+  update the session row for routing/status, but they do not extend
+  `sessionStartedAt` or `lastInteractionAt`.
+- For legacy rows created before those fields existed, OpenClaw can recover
+  `sessionStartedAt` from the transcript JSONL session header when the file is
+  still available. Legacy idle rows without `lastInteractionAt` use that
+  recovered start time as their idle baseline.
 
 ### Timezone gotchas
 

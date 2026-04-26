@@ -15,6 +15,15 @@ vi.mock("./session.js", async () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
+function createListenerStub(messageId = "ok") {
+  return {
+    sendMessage: vi.fn(async () => ({ messageId })),
+    sendPoll: vi.fn(async () => ({ messageId })),
+    sendReaction: vi.fn(async () => {}),
+    sendComposingTo: vi.fn(async () => {}),
+  };
+}
+
 describe("WhatsAppConnectionController", () => {
   let controller: WhatsAppConnectionController;
 
@@ -66,6 +75,24 @@ describe("WhatsAppConnectionController", () => {
     expect(controller.getActiveListener()).toBeNull();
   });
 
+  it("lets createWaSocket own the auth barrier before opening a socket", async () => {
+    const callOrder: string[] = [];
+    createWaSocketMock.mockImplementationOnce(async () => {
+      callOrder.push("create");
+      return { ws: { close: vi.fn() } } as never;
+    });
+    waitForWaConnectionMock.mockImplementationOnce(async () => {
+      callOrder.push("wait-for-connection");
+    });
+
+    await controller.openConnection({
+      connectionId: "conn-flush-first",
+      createListener: async () => createListenerStub() as never,
+    });
+
+    expect(callOrder).toEqual(["create", "wait-for-connection"]);
+  });
+
   it("keeps the previous registered controller until a replacement listener is ready", async () => {
     const liveController = new WhatsAppConnectionController({
       accountId: "work",
@@ -83,12 +110,7 @@ describe("WhatsAppConnectionController", () => {
         maxAttempts: 5,
       },
     });
-    const liveListener = {
-      sendMessage: vi.fn(async () => ({ messageId: "live-msg" })),
-      sendPoll: vi.fn(async () => ({ messageId: "live-poll" })),
-      sendReaction: vi.fn(async () => {}),
-      sendComposingTo: vi.fn(async () => {}),
-    };
+    const liveListener = createListenerStub("live");
     createWaSocketMock.mockResolvedValueOnce({ ws: { close: vi.fn() } } as never);
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     await liveController.openConnection({

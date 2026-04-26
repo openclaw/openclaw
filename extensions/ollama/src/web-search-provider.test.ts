@@ -39,6 +39,23 @@ function createOllamaConfig(provider: OllamaProviderConfigOverride = {}): OpenCl
   };
 }
 
+function createOllamaConfigWithWebSearchBaseUrl(baseUrl: string): OpenClawConfig {
+  return {
+    ...createOllamaConfig(),
+    plugins: {
+      entries: {
+        ollama: {
+          config: {
+            webSearch: {
+              baseUrl,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 function createSetupNotes() {
   const notes: Array<{ title?: string; message: string }> = [];
   return {
@@ -90,7 +107,25 @@ describe("ollama web search provider", () => {
     ).toBe("http://ollama.local:11434");
   });
 
-  it("maps generic search args into the Ollama experimental search endpoint", async () => {
+  it("prefers the plugin web search base URL over the model provider host", () => {
+    expect(
+      testing.resolveOllamaWebSearchBaseUrl(
+        createOllamaConfigWithWebSearchBaseUrl("http://localhost:11434/v1"),
+      ),
+    ).toBe("http://localhost:11434");
+  });
+
+  it("uses the configured Ollama Cloud host for web search", () => {
+    expect(
+      testing.resolveOllamaWebSearchBaseUrl(
+        createOllamaConfig({
+          baseUrl: "https://ollama.com",
+        }),
+      ),
+    ).toBe("https://ollama.com");
+  });
+
+  it("maps generic search args into the Ollama search endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
@@ -122,7 +157,7 @@ describe("ollama web search provider", () => {
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "http://ollama.local:11434/api/experimental/web_search",
+        url: "http://ollama.local:11434/api/web_search",
         auditContext: "ollama-web-search.search",
       }),
     );

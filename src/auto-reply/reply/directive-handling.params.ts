@@ -31,6 +31,7 @@ export type HandleDirectiveOnlyCoreParams = {
 };
 
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;
   currentFastMode?: boolean;
@@ -39,10 +40,12 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentElevatedLevel?: ElevatedLevel;
   surface?: string;
   gatewayClientScopes?: string[];
+  senderIsOwner?: boolean;
 };
 
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
   commandAuthorized: boolean;
+  senderIsOwner: boolean;
   ctx: MsgContext;
   agentId?: string;
   isGroup: boolean;

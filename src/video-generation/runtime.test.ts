@@ -18,6 +18,23 @@ vi.mock("./provider-registry.js", () => ({
   listVideoGenerationProviders: mocks.listVideoGenerationProviders,
 }));
 
+function createProviderOptionsCaptureProvider(
+  capabilities: VideoGenerationProvider["capabilities"],
+): { provider: VideoGenerationProvider; getSeenProviderOptions: () => unknown } {
+  let seenProviderOptions: unknown;
+  return {
+    provider: {
+      id: "video-plugin",
+      capabilities,
+      async generateVideo(req) {
+        seenProviderOptions = req.providerOptions;
+        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
+      },
+    },
+    getSeenProviderOptions: () => seenProviderOptions,
+  };
+}
+
 describe("video-generation runtime", () => {
   beforeEach(() => {
     resetVideoGenerationRuntimeMocks();
@@ -26,12 +43,14 @@ describe("video-generation runtime", () => {
   it("generates videos through the active video-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
       capabilities: {},
-      async generateVideo(req: { authStore?: unknown }) {
+      async generateVideo(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           videos: [
             {
@@ -57,6 +76,7 @@ describe("video-generation runtime", () => {
       prompt: "animate a cat",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("video-plugin");
@@ -64,6 +84,7 @@ describe("video-generation runtime", () => {
     expect(result.attempts).toEqual([]);
     expect(result.ignoredOverrides).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.videos).toEqual([
       {
         buffer: Buffer.from("mp4-bytes"),
@@ -137,21 +158,13 @@ describe("video-generation runtime", () => {
 
   it("forwards providerOptions to providers that declare the matching schema", async () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
-    let seenProviderOptions: unknown;
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {
-        providerOptions: {
-          seed: "number",
-          draft: "boolean",
-          camera_fixed: "boolean",
-        },
+    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({
+      providerOptions: {
+        seed: "number",
+        draft: "boolean",
+        camera_fixed: "boolean",
       },
-      async generateVideo(req) {
-        seenProviderOptions = req.providerOptions;
-        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
-      },
-    };
+    });
     mocks.getVideoGenerationProvider.mockReturnValue(provider);
 
     await generateVideo({
@@ -162,22 +175,14 @@ describe("video-generation runtime", () => {
       providerOptions: { seed: 42, draft: true, camera_fixed: false },
     });
 
-    expect(seenProviderOptions).toEqual({ seed: 42, draft: true, camera_fixed: false });
+    expect(getSeenProviderOptions()).toEqual({ seed: 42, draft: true, camera_fixed: false });
   });
 
   it("passes providerOptions through to providers that do not declare any schema", async () => {
     // Undeclared schema = backward-compatible pass-through: the provider receives the
     // options and can handle or ignore them. No skip occurs.
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
-    let seenProviderOptions: unknown;
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {}, // no providerOptions declared
-      async generateVideo(req) {
-        seenProviderOptions = req.providerOptions;
-        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
-      },
-    };
+    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({});
     mocks.getVideoGenerationProvider.mockReturnValue(provider);
 
     await generateVideo({
@@ -188,7 +193,7 @@ describe("video-generation runtime", () => {
       providerOptions: { seed: 42 },
     });
 
-    expect(seenProviderOptions).toEqual({ seed: 42 });
+    expect(getSeenProviderOptions()).toEqual({ seed: 42 });
   });
 
   it("skips candidates that explicitly declare an empty providerOptions schema", async () => {
@@ -196,7 +201,11 @@ describe("video-generation runtime", () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
-      capabilities: { providerOptions: {} as Record<string, VideoGenerationProviderOptionType> }, // explicitly empty
+      capabilities: {
+        providerOptions: {
+          // explicitly empty
+        } as Record<string, VideoGenerationProviderOptionType>,
+      },
       async generateVideo() {
         throw new Error("should not be called");
       },
@@ -394,6 +403,61 @@ describe("video-generation runtime", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.provider).toBe("openai");
     expect(result.attempts[0]?.error).toMatch(/does not support reference audio inputs/);
+  });
+
+  it("forwards mixed image, video, and audio references when explicitly supported", async () => {
+    const seenRequest: {
+      inputImages?: unknown;
+      inputVideos?: unknown;
+      inputAudios?: unknown;
+    } = {};
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue(
+      "fal/bytedance/seedance-2.0/fast/reference-to-video",
+    );
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "fal",
+      capabilities: {
+        videoToVideo: {
+          enabled: true,
+          maxInputImages: 9,
+          maxInputVideos: 3,
+          maxInputAudios: 3,
+        },
+      },
+      async generateVideo(req) {
+        seenRequest.inputImages = req.inputImages;
+        seenRequest.inputVideos = req.inputVideos;
+        seenRequest.inputAudios = req.inputAudios;
+        return {
+          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+          model: "bytedance/seedance-2.0/fast/reference-to-video",
+        };
+      },
+    });
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "Blend all references",
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
+
+    expect(result.provider).toBe("fal");
+    expect(result.attempts).toEqual([]);
+    expect(seenRequest).toEqual({
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
   });
 
   it("fails when every candidate is skipped for unsupported reference audio inputs", async () => {
@@ -757,12 +821,10 @@ describe("video-generation runtime", () => {
     ]);
     mocks.getProviderEnvVars.mockReturnValue(["MOTION_ONE_API_KEY"]);
 
-    const promise = generateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" });
-
-    await expect(promise).rejects.toThrow("No video-generation model configured.");
-    await expect(promise).rejects.toThrow(
-      'Set agents.defaults.videoGenerationModel.primary to a provider/model like "motion-one/animate-v1".',
+    await expect(
+      generateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" }),
+    ).rejects.toThrow(
+      'No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
     );
-    await expect(promise).rejects.toThrow("motion-one: MOTION_ONE_API_KEY");
   });
 });

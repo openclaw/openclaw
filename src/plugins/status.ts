@@ -10,44 +10,47 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import {
+  buildPluginShapeSummary,
+  type PluginCapabilityEntry,
+  type PluginInspectShape,
+} from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import {
+  loadPluginRegistrySnapshotWithMetadata,
+  type PluginRegistrySnapshotDiagnostic,
+  type PluginRegistrySnapshotSource,
+} from "./plugin-registry.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
-import type { PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import type { PluginHookName } from "./types.js";
+import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
 };
 
-export type PluginCapabilityKind =
-  | "cli-backend"
-  | "text-inference"
-  | "speech"
-  | "realtime-transcription"
-  | "realtime-voice"
-  | "media-understanding"
-  | "image-generation"
-  | "web-search"
-  | "agent-harness"
-  | "channel";
+export type PluginRegistryStatusReport = PluginStatusReport & {
+  registrySource: PluginRegistrySnapshotSource;
+  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
+};
 
-export type PluginInspectShape =
-  | "hook-only"
-  | "plain-capability"
-  | "hybrid-capability"
-  | "non-capability";
+export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
   code: "legacy-before-agent-start" | "hook-only";
+  compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
 };
@@ -63,10 +66,7 @@ export type PluginInspectReport = {
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
-  capabilities: Array<{
-    kind: PluginCapabilityKind;
-    ids: string[];
-  }>;
+  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;
@@ -82,6 +82,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
     name: string;
@@ -96,6 +97,7 @@ export type PluginInspectReport = {
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
+    allowConversationAccess?: boolean;
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
@@ -112,6 +114,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "legacy-before-agent-start",
+      compatCode: "legacy-before-agent-start",
       severity: "warn",
       message:
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
@@ -121,6 +124,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "hook-only",
+      compatCode: "hook-only-plugin-shape",
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
@@ -148,7 +152,79 @@ type PluginReportParams = {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
 };
+
+function buildPluginRecordFromInstalledIndex(
+  plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
+  manifest?: PluginManifestRecord,
+): PluginRecord {
+  return {
+    id: plugin.pluginId,
+    name: plugin.pluginId,
+    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
+    format: "openclaw",
+    source: plugin.manifestPath,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled: plugin.enabled,
+    status: plugin.enabled ? "loaded" : "disabled",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [...(manifest?.channels ?? [])],
+    cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
+    providerIds: [...(manifest?.providers ?? [])],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+    contracts: {},
+  };
+}
+
+export function buildPluginRegistrySnapshotReport(
+  params?: PluginReportParams,
+): PluginRegistryStatusReport {
+  const config = params?.config ?? loadConfig();
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: result.snapshot,
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+    includeDisabled: true,
+  });
+  const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  return {
+    workspaceDir: params?.workspaceDir,
+    ...createEmptyPluginRegistry(),
+    plugins: result.snapshot.plugins.map((plugin) =>
+      buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
+    ),
+    diagnostics: [...result.snapshot.diagnostics],
+    registrySource: result.source,
+    registryDiagnostics: result.diagnostics,
+  };
+}
 
 function buildPluginReport(
   params: PluginReportParams | undefined,
@@ -157,6 +233,7 @@ function buildPluginReport(
   const baseContext = resolvePluginRuntimeLoadContext({
     config: params?.config ?? loadConfig(),
     env: params?.env,
+    logger: params?.logger,
     workspaceDir: params?.workspaceDir,
   });
   const workspaceDir = baseContext.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
@@ -207,6 +284,7 @@ function buildPluginReport(
         activationSourceConfig: rawConfig,
         workspaceDir,
         env: params?.env,
+        logger: params?.logger,
         loadModules: false,
       });
   const importedPluginIds = new Set([
@@ -222,11 +300,12 @@ function buildPluginReport(
   return {
     workspaceDir,
     ...registry,
-    plugins: registry.plugins.map((plugin) => ({
-      ...plugin,
-      imported: plugin.format !== "bundle" && importedPluginIds.has(plugin.id),
-      version: resolveReportedPluginVersion(plugin, params?.env),
-    })),
+    plugins: registry.plugins.map((plugin) =>
+      Object.assign({}, plugin, {
+        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+        version: resolveReportedPluginVersion(plugin, params?.env),
+      }),
+    ),
   };
 }
 
@@ -238,69 +317,26 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
-  return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
-    { kind: "text-inference" as const, ids: plugin.providerIds },
-    { kind: "speech" as const, ids: plugin.speechProviderIds },
-    { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
-    { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
-    { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
-    { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
-    { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
-    { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
-    { kind: "channel" as const, ids: plugin.channelIds },
-  ].filter((entry) => entry.ids.length > 0);
-}
-
-function deriveInspectShape(params: {
-  capabilityCount: number;
-  typedHookCount: number;
-  customHookCount: number;
-  toolCount: number;
-  commandCount: number;
-  cliCount: number;
-  serviceCount: number;
-  gatewayMethodCount: number;
-  httpRouteCount: number;
-}): PluginInspectShape {
-  if (params.capabilityCount > 1) {
-    return "hybrid-capability";
-  }
-  if (params.capabilityCount === 1) {
-    return "plain-capability";
-  }
-  const hasOnlyHooks =
-    params.typedHookCount + params.customHookCount > 0 &&
-    params.toolCount === 0 &&
-    params.commandCount === 0 &&
-    params.cliCount === 0 &&
-    params.serviceCount === 0 &&
-    params.gatewayMethodCount === 0 &&
-    params.httpRouteCount === 0;
-  if (hasOnlyHooks) {
-    return "hook-only";
-  }
-  return "non-capability";
-}
-
 export function buildPluginInspectReport(params: {
   id: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
   const rawConfig = params.config ?? loadConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
+    logger: params.logger,
     workspaceDir: params.workspaceDir,
   }).config;
   const report =
     params.report ??
     buildPluginDiagnosticsReport({
       config: rawConfig,
+      logger: params.logger,
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
@@ -309,7 +345,6 @@ export function buildPluginInspectReport(params: {
     return null;
   }
 
-  const capabilities = buildCapabilityEntries(plugin);
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -332,18 +367,8 @@ export function buildPluginInspectReport(params: {
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
-  const capabilityCount = capabilities.length;
-  const shape = deriveInspectShape({
-    capabilityCount,
-    typedHookCount: typedHooks.length,
-    customHookCount: customHooks.length,
-    toolCount: tools.length,
-    commandCount: plugin.commands.length,
-    cliCount: plugin.cliCommands.length,
-    serviceCount: plugin.services.length,
-    gatewayMethodCount: plugin.gatewayMethods.length,
-    httpRouteCount: plugin.httpRoutes,
-  });
+  const shapeSummary = buildPluginShapeSummary({ plugin, report });
+  const shape = shapeSummary.shape;
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -385,9 +410,7 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const usesLegacyBeforeAgentStart = typedHooks.some(
-    (entry) => entry.name === "before_agent_start",
-  );
+  const usesLegacyBeforeAgentStart = shapeSummary.usesLegacyBeforeAgentStart;
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
@@ -397,15 +420,16 @@ export function buildPluginInspectReport(params: {
     workspaceDir: report.workspaceDir,
     plugin,
     shape,
-    capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
-    capabilityCount,
-    capabilities,
+    capabilityMode: shapeSummary.capabilityMode,
+    capabilityCount: shapeSummary.capabilityCount,
+    capabilities: shapeSummary.capabilities,
     typedHooks,
     customHooks,
     tools,
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods: [...plugin.gatewayMethods],
     mcpServers,
     lspServers,
@@ -414,6 +438,7 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
+      allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
@@ -427,6 +452,7 @@ export function buildAllPluginInspectReports(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
   const rawConfig = params?.config ?? loadConfig();
@@ -434,6 +460,7 @@ export function buildAllPluginInspectReports(params?: {
     params?.report ??
     buildPluginDiagnosticsReport({
       config: rawConfig,
+      logger: params?.logger,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
     });
@@ -443,6 +470,7 @@ export function buildAllPluginInspectReports(params?: {
       buildPluginInspectReport({
         id: plugin.id,
         config: rawConfig,
+        logger: params?.logger,
         report,
       }),
     )
@@ -453,6 +481,7 @@ export function buildPluginCompatibilityWarnings(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
@@ -462,9 +491,22 @@ export function buildPluginCompatibilityNotices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function buildPluginCompatibilitySnapshotNotices(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginCompatibilityNotice[] {
+  const report = buildPluginSnapshotReport(params);
+  return buildPluginCompatibilityNotices({
+    ...params,
+    report,
+  });
 }
 
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {

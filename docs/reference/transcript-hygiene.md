@@ -4,31 +4,47 @@ read_when:
   - You are debugging provider request rejections tied to transcript shape
   - You are changing transcript sanitization or tool-call repair logic
   - You are investigating tool-call id mismatches across providers
-title: "Transcript Hygiene"
+title: "Transcript hygiene"
 ---
 
-# Transcript Hygiene (Provider Fixups)
-
 This document describes **provider-specific fixes** applied to transcripts before a run
-(building model context). These are **in-memory** adjustments used to satisfy strict
-provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
-on disk; however, a separate session-file repair pass may rewrite malformed JSONL files
-by dropping invalid lines before the session is loaded. When a repair occurs, the original
-file is backed up alongside the session file.
+(building model context). Most of these are **in-memory** adjustments used to satisfy
+strict provider requirements. A separate session-file repair pass may also rewrite
+stored JSONL before the session is loaded, either by dropping malformed JSONL lines or
+by repairing persisted turns that are syntactically valid but known to be rejected by a
+provider during replay. When a repair occurs, the original file is backed up alongside
+the session file.
 
 Scope includes:
 
+- Runtime-only prompt context staying out of user-visible transcript turns
 - Tool call id sanitization
 - Tool call input validation
 - Tool result pairing repair
 - Turn validation / ordering
 - Thought signature cleanup
+- Thinking signature cleanup
 - Image payload sanitization
 - User-input provenance tagging (for inter-session routed prompts)
+- Empty assistant error-turn repair for Bedrock Converse replay
 
 If you need transcript storage details, see:
 
-- [/reference/session-management-compaction](/reference/session-management-compaction)
+- [Session management deep dive](/reference/session-management-compaction)
+
+---
+
+## Global rule: runtime context is not user transcript
+
+Runtime/system context can be added to the model prompt for a turn, but it is
+not end-user-authored content. OpenClaw keeps a separate transcript-facing
+prompt body for Gateway replies, queued followups, ACP, CLI, and embedded Pi
+runs. Stored visible user turns use that transcript body instead of the
+runtime-enriched prompt.
+
+For legacy sessions that already persisted runtime wrappers, Gateway history
+surfaces apply a display projection before returning messages to WebChat,
+TUI, REST, or SSE clients.
 
 ---
 
@@ -37,7 +53,7 @@ If you need transcript storage details, see:
 All transcript hygiene is centralized in the embedded runner:
 
 - Policy selection: `src/agents/transcript-policy.ts`
-- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
@@ -73,7 +89,7 @@ persisted tool calls (for example, after a rate limit failure).
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
-- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 ---
 
@@ -99,11 +115,11 @@ external end-user instructions.
 **OpenAI / OpenAI Codex**
 
 - Image sanitization only.
-- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
+- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
 - No tool call id sanitization.
-- No tool result pairing repair.
+- Tool result pairing repair may move real matched outputs and synthesize Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering.
-- No synthetic tool results.
+- Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
@@ -118,6 +134,26 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Thinking blocks with missing, empty, or blank replay signatures are stripped
+  before provider conversion. If that empties an assistant turn, OpenClaw keeps
+  turn shape with non-empty omitted-reasoning text.
+- Older thinking-only assistant turns that must be stripped are replaced with
+  non-empty omitted-reasoning text so provider adapters do not drop the replay
+  turn.
+
+**Amazon Bedrock (Converse API)**
+
+- Empty assistant stream-error turns are repaired to a non-empty fallback text block
+  before replay. Bedrock Converse rejects assistant messages with `content: []`, so
+  persisted assistant turns with `stopReason: "error"` and empty content are also
+  repaired on disk before load.
+- Claude thinking blocks with missing, empty, or blank replay signatures are
+  stripped before Converse replay. If that empties an assistant turn, OpenClaw
+  keeps turn shape with non-empty omitted-reasoning text.
+- Older thinking-only assistant turns that must be stripped are replaced with
+  non-empty omitted-reasoning text so the Converse replay keeps strict turn shape.
+- Replay filters OpenClaw delivery-mirror and gateway-injected assistant turns.
+- Image sanitization applies through the global rule.
 
 **Mistral (including model-id based detection)**
 
@@ -149,3 +185,8 @@ Before the 2026.1.22 release, OpenClaw applied multiple layers of transcript hyg
 This complexity caused cross-provider regressions (notably `openai-responses`
 `call_id|fc_id` pairing). The 2026.1.22 cleanup removed the extension, centralized
 logic in the runner, and made OpenAI **no-touch** beyond image sanitization.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)

@@ -4,12 +4,14 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
+import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { withoutPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import {
   type ChatChannel,
   channelLabel,
@@ -101,15 +103,20 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const resolvedPluginState =
-    !useWizard && rawChannel
-      ? await resolveInstallableChannelPlugin({
+  const shouldResolveInstallablePlugin =
+    !useWizard && rawChannel && (!channel || !getChannelPlugin(channel));
+  const resolvedPluginState = shouldResolveInstallablePlugin
+    ? await (async () => {
+        const { resolveInstallableChannelPlugin } =
+          await import("../channel-setup/channel-plugin-resolution.js");
+        return await resolveInstallableChannelPlugin({
           cfg,
           runtime,
           rawChannel,
           allowInstall: true,
-        })
-      : null;
+        });
+      })()
+    : null;
   if (resolvedPluginState?.configChanged) {
     cfg = resolvedPluginState.cfg;
   }
@@ -167,10 +174,31 @@ export async function channelsRemoveCommand(
     });
   }
 
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-  });
+  const shouldMovePluginInstalls = Boolean(
+    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
+  );
+  const nextInstallRecords = next.plugins?.installs ?? {};
+  if (shouldMovePluginInstalls) {
+    next = withoutPluginInstallRecords(next);
+    await commitPluginInstallRecordsWithConfig({
+      nextInstallRecords,
+      nextConfig: next,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+  } else {
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+  }
+  if (shouldMovePluginInstalls || resolvedPluginState?.pluginInstalled) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: next,
+      reason: "source-changed",
+      ...(shouldMovePluginInstalls ? { installRecords: nextInstallRecords } : {}),
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig

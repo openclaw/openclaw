@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   replaceConfigFile: vi.fn(),
+  commitConfigWithPendingPluginInstalls: vi.fn(),
   setVerbose: vi.fn(),
+  callGateway: vi.fn(),
   createClackPrompter: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
@@ -57,6 +59,14 @@ vi.mock("../globals.js", () => ({
   setVerbose: mocks.setVerbose,
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
+
+vi.mock("./plugins-install-record-commit.js", () => ({
+  commitConfigWithPendingPluginInstalls: mocks.commitConfigWithPendingPluginInstalls,
+}));
+
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
@@ -72,7 +82,7 @@ describe("channel-auth", () => {
   const plugin = {
     id: "whatsapp",
     auth: { login: mocks.login },
-    gateway: { logoutAccount: mocks.logoutAccount },
+    gateway: { startAccount: vi.fn(), logoutAccount: mocks.logoutAccount },
     config: {
       listAccountIds: vi.fn().mockReturnValue(["default"]),
       resolveAccount: mocks.resolveAccount,
@@ -89,6 +99,46 @@ describe("channel-auth", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.commitConfigWithPendingPluginInstalls.mockImplementation(
+      async ({
+        nextConfig,
+        baseHash,
+      }: {
+        nextConfig: { plugins?: { installs?: Record<string, unknown> } };
+        baseHash?: string;
+      }) => {
+        if (
+          !nextConfig.plugins?.installs ||
+          Object.keys(nextConfig.plugins.installs).length === 0
+        ) {
+          await mocks.replaceConfigFile({
+            nextConfig,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+          });
+          return {
+            config: nextConfig,
+            installRecords: {},
+            movedInstallRecords: false,
+          };
+        }
+        const { installs: _installs, ...plugins } = nextConfig.plugins;
+        const strippedConfig =
+          Object.keys(plugins).length > 0
+            ? { ...nextConfig, plugins }
+            : Object.fromEntries(Object.entries(nextConfig).filter(([key]) => key !== "plugins"));
+        await mocks.replaceConfigFile({
+          nextConfig: strippedConfig,
+          ...(baseHash !== undefined ? { baseHash } : {}),
+          writeOptions: { unsetPaths: [["plugins", "installs"]] },
+        });
+        return {
+          config: strippedConfig,
+          installRecords: nextConfig.plugins.installs,
+          movedInstallRecords: true,
+        };
+      },
+    );
+    mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.listChannelPlugins.mockReturnValue([plugin]);
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
@@ -121,6 +171,41 @@ describe("channel-auth", () => {
         verbose: true,
         channelInput: "wa",
       }),
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.start",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-1",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+  });
+
+  it("skips gateway runtime reconcile in remote mode and warns without failing login", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: { mode: "remote" },
+      channels: { whatsapp: {} },
+    });
+
+    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway is in remote mode"));
+  });
+
+  it("keeps login successful when local gateway runtime reconcile fails", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).resolves.toBeUndefined();
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("running gateway did not restart it: gateway unreachable"),
     );
   });
 
@@ -318,6 +403,73 @@ describe("channel-auth", () => {
       baseHash: "config-1",
     });
     expect(mocks.login).toHaveBeenCalled();
+  });
+
+  it("strips pending install records before persisting install-on-demand login config", async () => {
+    const catalogEntry = {
+      id: "whatsapp",
+      pluginId: "@openclaw/whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "wa",
+      },
+      install: {
+        npmSpec: "@openclaw/whatsapp",
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([catalogEntry]);
+    mocks.ensureChannelSetupPluginInstalled.mockResolvedValueOnce({
+      cfg: {
+        channels: { whatsapp: {} },
+        plugins: {
+          entries: { whatsapp: { enabled: true } },
+          installs: {
+            whatsapp: {
+              source: "npm",
+              spec: "@openclaw/whatsapp",
+            },
+          },
+        },
+      },
+      installed: true,
+      pluginId: "whatsapp",
+    });
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel
+      .mockReturnValueOnce({
+        channels: [],
+        channelSetups: [],
+      })
+      .mockReturnValueOnce({
+        channels: [{ plugin }],
+        channelSetups: [],
+      });
+
+    await runChannelLogin({ channel: "whatsapp" }, runtime);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        channels: { whatsapp: {} },
+        plugins: {
+          entries: { whatsapp: { enabled: true } },
+        },
+      },
+      baseHash: "config-1",
+      writeOptions: { unsetPaths: [["plugins", "installs"]] },
+    });
+    expect(mocks.login).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {
+          channels: { whatsapp: {} },
+          plugins: {
+            entries: { whatsapp: { enabled: true } },
+          },
+        },
+      }),
+    );
   });
 
   it("resolves explicit channel login through the catalog when registry normalize misses", async () => {

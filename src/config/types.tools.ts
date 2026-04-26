@@ -169,6 +169,8 @@ export type ToolLoopDetectionConfig = {
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
   warningThreshold?: number;
+  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
+  unknownToolThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
@@ -391,6 +393,12 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /**
+     * Context window size for the local embedding context (default: 4096).
+     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
+     * trained maximum — not recommended for 8B+ models.
+     */
+    contextSize?: number | "auto";
   };
   /** Index storage configuration. */
   store?: {
@@ -425,6 +433,11 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    /**
+     * Timeout in seconds for inline embedding batches during memory indexing.
+     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
+     */
+    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;

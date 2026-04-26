@@ -6,8 +6,6 @@ read_when:
 title: "Doctor"
 ---
 
-# Doctor
-
 `openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
 config/state, checks health, and provides actionable repair steps.
 
@@ -72,6 +70,7 @@ cat ~/.openclaw/openclaw.json
 - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
+- Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -86,6 +85,7 @@ cat ~/.openclaw/openclaw.json
 - Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - Gateway auth checks for local token mode (offers token generation when no token source exists; does not overwrite token SecretRef configs).
+- Device pairing trouble detection (pending first-time pair requests, pending role/scope upgrades, stale local device-token cache drift, and paired-record auth drift).
 - systemd linger check on Linux.
 - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
 - Shell completion status check and auto-install/upgrade.
@@ -173,9 +173,11 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.provider: "edge"` and `plugins.entries.voice-call.config.tts.providers.edge` → `provider: "microsoft"` and `providers.microsoft`
 - `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
 - `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
 - `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
@@ -316,6 +318,15 @@ considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair`
 mode it removes stale lock files automatically; otherwise it prints a note and
 instructs you to rerun with `--fix`.
 
+### 3d) Session transcript branch repair
+
+Doctor scans agent session JSONL files for the duplicated branch shape created
+by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with
+OpenClaw internal runtime context plus an active sibling containing the same
+visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected
+file next to the original and rewrites the transcript to the active branch so
+gateway history and memory readers no longer see duplicate turns.
+
 ### 4) State integrity checks (session persistence, routing, and safety)
 
 The state directory is the operational brainstem. If it vanishes, you lose
@@ -379,10 +390,20 @@ switch to legacy names if the current image is missing.
 
 ### 7b) Bundled plugin runtime deps
 
-Doctor verifies that bundled plugin runtime dependencies (for example the
-Discord plugin runtime packages) are present in the OpenClaw install root.
-If any are missing, doctor reports the packages and installs them in
-`openclaw doctor --fix` / `openclaw doctor --repair` mode.
+Doctor verifies runtime dependencies only for bundled plugins that are active in
+the current config or enabled by their bundled manifest default, for example
+`plugins.entries.discord.enabled: true`, legacy
+`channels.discord.enabled: true`, or a default-enabled bundled provider. If any
+are missing, doctor reports the packages and installs them in
+`openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still
+use `openclaw plugins install` / `openclaw plugins update`; doctor does not
+install dependencies for arbitrary plugin paths.
+
+The Gateway and local CLI can also repair active bundled plugin runtime
+dependencies on demand before importing a bundled plugin. These installs are
+scoped to the plugin runtime install root, run with scripts disabled, do not
+write a package lock, and are guarded by an install-root lock so concurrent CLI
+or Gateway starts do not mutate the same `node_modules` tree at the same time.
 
 ### 8) Gateway service migrations and cleanup hints
 
@@ -401,6 +422,34 @@ encrypted-state preparation. Both steps are non-fatal; errors are logged and
 startup continues. In read-only mode (`openclaw doctor` without `--fix`) this check
 is skipped entirely.
 
+### 8c) Device pairing and auth drift
+
+Doctor now inspects device-pairing state as part of the normal health pass.
+
+What it reports:
+
+- pending first-time pairing requests
+- pending role upgrades for already paired devices
+- pending scope upgrades for already paired devices
+- public-key mismatch repairs where the device id still matches but the device
+  identity no longer matches the approved record
+- paired records missing an active token for an approved role
+- paired tokens whose scopes drift outside the approved pairing baseline
+- local cached device-token entries for the current machine that predate a
+  gateway-side token rotation or carry stale scope metadata
+
+Doctor does not auto-approve pair requests or auto-rotate device tokens. It
+prints the exact next steps instead:
+
+- inspect pending requests with `openclaw devices list`
+- approve the exact request with `openclaw devices approve <requestId>`
+- rotate a fresh token with `openclaw devices rotate --device <deviceId> --role <role>`
+- remove and re-approve a stale record with `openclaw devices remove <deviceId>`
+
+This closes the common "already paired but still getting pairing required"
+hole: doctor now distinguishes first-time pairing from pending role/scope
+upgrades and from stale token/device-identity drift.
+
 ### 9) Security warnings
 
 Doctor emits warnings when a provider is open to DMs without an allowlist, or
@@ -418,7 +467,7 @@ Doctor prints a summary of the workspace state for the default agent:
 - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
 - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories
   exist alongside the current workspace.
-- **Plugin status**: counts loaded/disabled/errored plugins; lists plugin IDs for any
+- **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any
   errors; reports bundle plugin capabilities.
 - **Plugin compatibility warnings**: flags plugins that have compatibility issues with
   the current runtime.
@@ -542,3 +591,8 @@ if the workspace is not already under git.
 
 See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to
 workspace structure and git backup (recommended private GitHub or GitLab).
+
+## Related
+
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Gateway runbook](/gateway)

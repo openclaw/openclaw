@@ -1,4 +1,5 @@
-import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
+import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/infra-runtime";
@@ -14,6 +15,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
   type ManagedWhatsAppListener,
@@ -26,7 +28,7 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
-import { loadConfig } from "./config.runtime.js";
+import { getRuntimeConfigSourceSnapshot, loadConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
@@ -59,6 +61,41 @@ function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
 }
 
+function resolveExplicitWhatsAppDebounceOverride(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sourceCfg?: ReturnType<typeof loadConfig> | null;
+  accountId: string;
+}): number | undefined {
+  const channel = params.sourceCfg?.channels?.whatsapp;
+  if (!channel) {
+    return undefined;
+  }
+
+  const accountId = normalizeReconnectAccountId(params.accountId);
+  const accountDebounce = resolveAccountEntry(channel.accounts, accountId)?.debounceMs;
+  if (accountDebounce !== undefined) {
+    return accountDebounce;
+  }
+  if (accountId !== "default") {
+    const defaultAccountDebounce = resolveAccountEntry(channel.accounts, "default")?.debounceMs;
+    if (defaultAccountDebounce !== undefined) {
+      return defaultAccountDebounce;
+    }
+  }
+
+  return channel.debounceMs;
+}
+
+function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
+  return (
+    error instanceof WhatsAppAuthUnstableError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === WHATSAPP_AUTH_UNSTABLE_CODE)
+  );
+}
+
 export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof attachWebInboxToSocket | undefined = attachWebInboxToSocket,
@@ -75,10 +112,10 @@ export async function monitorWebChannel(
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
   const statusController = createWebChannelStatusController(tuning.statusSink);
-  const _status = statusController.snapshot();
   statusController.emit();
 
   const baseCfg = loadConfig();
+  const sourceCfg = getRuntimeConfigSourceSnapshot();
   const account = resolveWhatsAppAccount({
     cfg: baseCfg,
     accountId: tuning.accountId,
@@ -108,7 +145,7 @@ export async function monitorWebChannel(
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
-    cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
+    account.historyLimit ??
     cfg.channels?.whatsapp?.historyLimit ??
     cfg.messages?.groupChat?.historyLimit ??
     DEFAULT_GROUP_HISTORY_LIMIT;
@@ -166,7 +203,15 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
-      const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
+      const inboundDebounceMs = resolveInboundDebounceMs({
+        cfg,
+        channel: "whatsapp",
+        overrideMs: resolveExplicitWhatsAppDebounceOverride({
+          cfg,
+          sourceCfg,
+          accountId: account.accountId,
+        }),
+      });
       const shouldDebounce = (msg: WebInboundMsg) => {
         if (msg.mediaPath || msg.mediaType) {
           return false;
@@ -180,89 +225,139 @@ export async function monitorWebChannel(
         return !hasControlCommand(msg.body, cfg);
       };
 
-      const connection = await controller.openConnection({
-        connectionId,
-        createListener: async ({ sock, connection }) => {
-          const onMessage = createWebOnMessageHandler({
-            cfg,
-            verbose,
-            connectionId,
-            maxMediaBytes,
-            groupHistoryLimit,
-            groupHistories,
-            groupMemberNames,
-            echoTracker,
-            backgroundTasks: connection.backgroundTasks,
-            replyResolver: activeReplyResolver,
-            replyLogger,
-            baseMentionConfig,
-            account,
-          });
+      let connection;
+      try {
+        connection = await controller.openConnection({
+          connectionId,
+          createListener: async ({ sock, connection }) => {
+            const onMessage = createWebOnMessageHandler({
+              cfg,
+              verbose,
+              connectionId,
+              maxMediaBytes,
+              groupHistoryLimit,
+              groupHistories,
+              groupMemberNames,
+              echoTracker,
+              backgroundTasks: connection.backgroundTasks,
+              replyResolver: activeReplyResolver,
+              replyLogger,
+              baseMentionConfig,
+              account,
+            });
 
-          return (await (listenerFactory ?? attachWebInboxToSocket)({
-            verbose,
-            accountId: account.accountId,
-            authDir: account.authDir,
-            mediaMaxMb: account.mediaMaxMb,
-            selfChatMode: account.selfChatMode,
-            sendReadReceipts: account.sendReadReceipts,
-            debounceMs: inboundDebounceMs,
-            shouldDebounce,
-            socketRef: controller.socketRef,
-            shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
-            disconnectRetryPolicy: reconnectPolicy,
-            disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
-            onMessage: async (msg: WebInboundMsg) => {
-              const inboundAt = Date.now();
-              controller.noteInbound(inboundAt);
-              statusController.noteInbound(inboundAt);
-              await onMessage(msg);
-            },
-            sock,
-          })) as ManagedWhatsAppListener;
-        },
-        onHeartbeat: (snapshot) => {
-          const authAgeMs = getWebAuthAgeMs(account.authDir);
-          const minutesSinceLastMessage = snapshot.lastInboundAt
-            ? Math.floor((Date.now() - snapshot.lastInboundAt) / 60000)
-            : null;
+            return (await (listenerFactory ?? attachWebInboxToSocket)({
+              cfg,
+              verbose,
+              accountId: account.accountId,
+              authDir: account.authDir,
+              mediaMaxMb: account.mediaMaxMb,
+              selfChatMode: account.selfChatMode,
+              sendReadReceipts: account.sendReadReceipts,
+              debounceMs: inboundDebounceMs,
+              shouldDebounce,
+              socketRef: controller.socketRef,
+              shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
+              disconnectRetryPolicy: reconnectPolicy,
+              disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
+              onMessage: async (msg: WebInboundMsg) => {
+                const inboundAt = Date.now();
+                controller.noteInbound(inboundAt);
+                statusController.noteInbound(inboundAt);
+                await onMessage(msg);
+              },
+              sock,
+            })) as ManagedWhatsAppListener;
+          },
+          onHeartbeat: (snapshot) => {
+            const authAgeMs = getWebAuthAgeMs(account.authDir);
+            const minutesSinceLastMessage = snapshot.lastInboundAt
+              ? Math.floor((Date.now() - snapshot.lastInboundAt) / 60000)
+              : null;
 
-          const logData = {
-            connectionId: snapshot.connectionId,
-            reconnectAttempts: snapshot.reconnectAttempts,
-            messagesHandled: snapshot.handledMessages,
-            lastInboundAt: snapshot.lastInboundAt,
-            authAgeMs,
-            uptimeMs: snapshot.uptimeMs,
-            ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
-              ? { minutesSinceLastMessage }
-              : {}),
-          };
-
-          if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-            heartbeatLogger.warn(logData, "⚠️ web gateway heartbeat - no messages in 30+ minutes");
-          } else {
-            heartbeatLogger.info(logData, "web gateway heartbeat");
-          }
-        },
-        onWatchdogTimeout: (snapshot) => {
-          const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
-          const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
-          statusController.noteWatchdogStale();
-          heartbeatLogger.warn(
-            {
+            const logData = {
               connectionId: snapshot.connectionId,
-              minutesSinceLastMessage,
-              lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+              reconnectAttempts: snapshot.reconnectAttempts,
               messagesHandled: snapshot.handledMessages,
+              lastInboundAt: snapshot.lastInboundAt,
+              authAgeMs,
+              uptimeMs: snapshot.uptimeMs,
+              ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
+                ? { minutesSinceLastMessage }
+                : {}),
+            };
+
+            if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
+              heartbeatLogger.warn(
+                logData,
+                "⚠️ web gateway heartbeat - no messages in 30+ minutes",
+              );
+            } else {
+              heartbeatLogger.info(logData, "web gateway heartbeat");
+            }
+          },
+          onWatchdogTimeout: (snapshot) => {
+            const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
+            const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
+            statusController.noteWatchdogStale();
+            heartbeatLogger.warn(
+              {
+                connectionId: snapshot.connectionId,
+                minutesSinceLastMessage,
+                lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+                messagesHandled: snapshot.handledMessages,
+              },
+              "Message timeout detected - forcing reconnect",
+            );
+            whatsappHeartbeatLog.warn(
+              `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+            );
+          },
+        });
+      } catch (error) {
+        if (!isRetryableAuthUnstableError(error)) {
+          throw error;
+        }
+        const retryDecision = controller.consumeReconnectAttempt();
+        statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+        statusController.noteClose({
+          error: error.message,
+          reconnectAttempts: retryDecision.reconnectAttempts,
+          healthState: retryDecision.healthState,
+        });
+        if (retryDecision.action === "stop") {
+          reconnectLogger.warn(
+            {
+              connectionId,
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              maxAttempts: reconnectPolicy.maxAttempts,
             },
-            "Message timeout detected - forcing reconnect",
+            "web reconnect: auth state stayed unstable; max attempts reached",
           );
-          whatsappHeartbeatLog.warn(
-            `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+          runtime.error(
+            `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
           );
-        },
-      });
+          await controller.shutdown();
+          break;
+        }
+        reconnectLogger.info(
+          {
+            connectionId,
+            reconnectAttempts: retryDecision.reconnectAttempts,
+            delayMs: retryDecision.delayMs,
+          },
+          "web reconnect: auth state still stabilizing during inbox attach; retrying",
+        );
+        runtime.error(
+          `WhatsApp auth state is still stabilizing. Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} for inbox attach in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+        );
+        try {
+          await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+        } catch {
+          break;
+        }
+        continue;
+      }
 
       statusController.noteConnected();
       controller.setUnhandledRejectionCleanup(

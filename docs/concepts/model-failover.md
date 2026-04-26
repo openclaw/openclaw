@@ -4,10 +4,8 @@ read_when:
   - Diagnosing auth profile rotation, cooldowns, or model fallback behavior
   - Updating failover rules for auth profiles or models
   - Understanding how session model overrides interact with fallback retries
-title: "Model Failover"
+title: "Model failover"
 ---
-
-# Model failover
 
 OpenClaw handles failures in two stages:
 
@@ -131,15 +129,25 @@ validation failures) are treated as failover‑worthy and use the same cooldowns
 OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
 `stop reason: error`, and `reason: error` are classified as timeout/failover
 signals.
-Provider-scoped generic server text can also land in that timeout bucket when
-the source matches a known transient pattern. For example, Anthropic bare
-`An unknown error occurred` and JSON `api_error` payloads with transient server
-text such as `internal server error`, `unknown error, 520`, `upstream error`,
-or `backend error` are treated as failover-worthy timeouts. OpenRouter-specific
-generic upstream text such as bare `Provider returned error` is also treated as
-timeout only when the provider context is actually OpenRouter. Generic internal
-fallback text such as `LLM request failed with an unknown error.` stays
-conservative and does not trigger failover by itself.
+Generic server text can also land in that timeout bucket when the source matches
+a known transient pattern. For example, the bare pi-ai stream-wrapper message
+`An unknown error occurred` is treated as failover-worthy for every provider
+because pi-ai emits it when provider streams end with `stopReason: "aborted"` or
+`stopReason: "error"` without specific details. JSON `api_error` payloads with
+transient server text such as `internal server error`, `unknown error, 520`,
+`upstream error`, or `backend error` are also treated as failover-worthy
+timeouts.
+OpenRouter-specific generic upstream text such as bare `Provider returned error`
+is treated as timeout only when the provider context is actually OpenRouter.
+Generic internal fallback text such as `LLM request failed with an unknown
+error.` stays conservative and does not trigger failover by itself.
+
+Some provider SDKs may otherwise sleep for a long `Retry-After` window before
+returning control to OpenClaw. For Stainless-based SDKs such as Anthropic and
+OpenAI, OpenClaw caps SDK-internal `retry-after-ms` / `retry-after` waits at 60
+seconds by default and surfaces longer retryable responses immediately so this
+failover path can run. Tune or disable the cap with
+`OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS`; see [/concepts/retry](/concepts/retry).
 
 Rate-limit cooldowns can also be model-scoped:
 

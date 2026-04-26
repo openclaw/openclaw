@@ -1,17 +1,16 @@
 ---
-title: "Agent Harness Plugins"
-sidebarTitle: "Agent Harness"
 summary: "Experimental SDK surface for plugins that replace the low level embedded agent executor"
+title: "Agent harness plugins"
+sidebarTitle: "Agent Harness"
 read_when:
   - You are changing the embedded agent runtime or harness registry
   - You are registering an agent harness from a bundled or trusted plugin
   - You need to understand how the Codex plugin relates to model providers
 ---
 
-# Agent Harness Plugins
-
 An **agent harness** is the low level executor for one prepared OpenClaw agent
 turn. It is not a model provider, not a channel, and not a tool registry.
+For the user-facing mental model, see [Agent runtimes](/concepts/agent-runtimes).
 
 Use this surface only for bundled or trusted native plugins. The contract is
 still experimental because the parameter types intentionally mirror the current
@@ -46,6 +45,23 @@ Before a harness is selected, OpenClaw has already resolved:
 
 That split is intentional. A harness runs a prepared attempt; it does not pick
 providers, replace channel delivery, or silently switch models.
+
+The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
+policy bundle for runtime decisions that must stay shared across PI and native
+harnesses:
+
+- `runtimePlan.tools.normalize(...)` and
+  `runtimePlan.tools.logDiagnostics(...)` for provider-aware tool schema policy
+- `runtimePlan.transcript.resolvePolicy(...)` for transcript sanitization and
+  tool-call repair policy
+- `runtimePlan.delivery.isSilentPayload(...)` for shared `NO_REPLY` and media
+  delivery suppression
+- `runtimePlan.outcome.classifyRunResult(...)` for model fallback classification
+- `runtimePlan.observability` for resolved provider/model/harness metadata
+
+Harnesses may use the plan for decisions that need to match PI behavior, but
+should still treat it as host-owned attempt state. Do not mutate it or use it to
+switch providers/models inside a turn.
 
 ## Register a harness
 
@@ -87,17 +103,31 @@ export default definePluginEntry({
 
 OpenClaw chooses a harness after provider/model resolution:
 
-1. `OPENCLAW_AGENT_RUNTIME=<id>` forces a registered harness with that id.
-2. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
-3. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
+1. An existing session's recorded harness id wins, so config/env changes do not
+   hot-switch that transcript to another runtime.
+2. `OPENCLAW_AGENT_RUNTIME=<id>` forces a registered harness with that id for
+   sessions that are not already pinned.
+3. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
+4. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
    resolved provider/model.
-4. If no registered harness matches, OpenClaw uses PI unless PI fallback is
+5. If no registered harness matches, OpenClaw uses PI unless PI fallback is
    disabled.
 
-Forced plugin harness failures surface as run failures. In `auto` mode,
-OpenClaw may fall back to PI when the selected plugin harness fails before a
-turn has produced side effects. Set `OPENCLAW_AGENT_HARNESS_FALLBACK=none` or
-`embeddedHarness.fallback: "none"` to make that fallback a hard failure instead.
+Plugin harness failures surface as run failures. In `auto` mode, PI fallback is
+only used when no registered plugin harness supports the resolved
+provider/model. Once a plugin harness has claimed a run, OpenClaw does not
+replay that same turn through PI because that can change auth/runtime semantics
+or duplicate side effects.
+
+The selected harness id is persisted with the session id after an embedded run.
+Legacy sessions created before harness pins are treated as PI-pinned once they
+have transcript history. Use a new/reset session when changing between PI and a
+native plugin harness. `/status` shows non-default harness ids such as `codex`
+next to `Fast`; PI stays hidden because it is the default compatibility path.
+If the selected harness is surprising, enable `agents/harness` debug logging and
+inspect the gateway's structured `agent harness selected` record. It includes
+the selected harness id, selection reason, runtime/fallback policy, and, in
+`auto` mode, each plugin candidate's support result.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
@@ -111,57 +141,85 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 
 The bundled Codex plugin follows this pattern:
 
-- provider id: `codex`
-- user model refs: `codex/gpt-5.4`, `codex/gpt-5.2`, or another model returned
-  by the Codex app server
+- preferred user model refs: `openai/gpt-5.5` plus
+  `embeddedHarness.runtime: "codex"`
+- compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
+  configs should not use them as normal provider/model refs
 - harness id: `codex`
 - auth: synthetic provider availability, because the Codex harness owns the
   native Codex login/session
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
-The Codex plugin is additive. Plain `openai/gpt-*` refs remain OpenAI provider
-refs and continue to use the normal OpenClaw provider path. Select `codex/gpt-*`
-when you want Codex-managed auth, Codex model discovery, native threads, and
-Codex app-server execution. `/model` can switch among the Codex models returned
-by the Codex app server without requiring OpenAI provider credentials.
+The Codex plugin is additive. Plain `openai/gpt-*` refs continue to use the
+normal OpenClaw provider path unless you force the Codex harness with
+`embeddedHarness.runtime: "codex"`. Older `codex/gpt-*` refs still select the
+Codex provider and harness for compatibility.
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
 
-OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
+OpenClaw requires Codex app-server `0.125.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
-OpenClaw only runs against the protocol surface it has been tested with.
+OpenClaw only runs against the protocol surface it has been tested with. The
+`0.125.0` floor includes the native MCP hook payload support that landed in
+Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
+
+### Tool-result middleware
+
+Bundled plugins can attach runtime-neutral tool-result middleware through
+`api.registerAgentToolResultMiddleware(...)` when their manifest declares the
+targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
+seam is for async tool-result transforms that must run before PI or Codex feeds
+tool output back into the model.
+
+Legacy bundled plugins can still use
+`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
+middleware, but new result transforms should use the runtime-neutral API.
+The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
+Pi tool-result transforms must use runtime-neutral middleware.
+
+### Terminal outcome classification
+
+Native harnesses that own their own protocol projection can use
+`classifyAgentHarnessTerminalOutcome(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` when a completed turn produced no
+visible assistant text. The helper returns `empty`, `reasoning-only`, or
+`planning-only` so OpenClaw's fallback policy can decide whether to retry on a
+different model. It intentionally leaves prompt errors, in-flight turns, and
+intentional silent replies such as `NO_REPLY` unclassified.
 
 ### Native Codex harness mode
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
-`plugins.allow` if your config uses a restrictive allowlist. It is different
-from `openai-codex/*`:
-
-- `openai-codex/*` uses ChatGPT/Codex OAuth through the normal OpenClaw provider
-  path.
-- `codex/*` uses the bundled Codex provider and routes the turn through Codex
-  app-server.
+`plugins.allow` if your config uses a restrictive allowlist. Native app-server
+configs should use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`.
+Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
+model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use `embeddedHarness.runtime: "codex"` with
-`embeddedHarness.fallback: "none"` when you need to prove that the Codex
-app-server path is used and PI fallback is not hiding a broken native harness.
+selection. Use `embeddedHarness.runtime: "codex"` without a `fallback` override
+when you need to prove that only the Codex app-server path can claim the run.
+Explicit plugin runtimes already fail closed by default. Set `fallback: "pi"`
+only when you intentionally want PI to handle missing harness selection. Codex
+app-server failures already fail directly instead of retrying through PI.
 
 ## Disable PI fallback
 
 By default, OpenClaw runs embedded agents with `agents.defaults.embeddedHarness`
 set to `{ runtime: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
-harnesses can claim a provider/model pair. If none match, or if an auto-selected
-plugin harness fails before producing output, OpenClaw falls back to PI.
+harnesses can claim a provider/model pair. If none match, OpenClaw falls back
+to PI.
 
-Set `fallback: "none"` when you need to prove that a plugin harness is the only
-runtime being exercised. This disables automatic PI fallback; it does not block
-an explicit `runtime: "pi"` or `OPENCLAW_AGENT_RUNTIME=pi`.
+In `auto` mode, set `fallback: "none"` when you need missing plugin harness
+selection to fail instead of using PI. Explicit plugin runtimes such as
+`runtime: "codex"` already fail closed by default, unless `fallback: "pi"` is
+set in the same config or environment override scope. Selected plugin harness
+failures always fail hard. This does not block an explicit `runtime: "pi"` or
+`OPENCLAW_AGENT_RUNTIME=pi`.
 
 For Codex-only embedded runs:
 
@@ -169,10 +227,9 @@ For Codex-only embedded runs:
 {
   "agents": {
     "defaults": {
-      "model": "codex/gpt-5.4",
+      "model": "openai/gpt-5.5",
       "embeddedHarness": {
-        "runtime": "codex",
-        "fallback": "none"
+        "runtime": "codex"
       }
     }
   }
@@ -210,7 +267,7 @@ Per-agent overrides use the same shape:
     "list": [
       {
         "id": "codex-only",
-        "model": "codex/gpt-5.4",
+        "model": "openai/gpt-5.5",
         "embeddedHarness": {
           "runtime": "codex",
           "fallback": "none"

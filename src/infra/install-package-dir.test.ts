@@ -92,6 +92,37 @@ async function withInstallBaseReboundOnRealpathCall<T>(params: {
   }
 }
 
+async function createExistingInstallFixture(fixtureRoot: string) {
+  const installBaseDir = path.join(fixtureRoot, "plugins");
+  const sourceDir = path.join(fixtureRoot, "source");
+  const targetDir = path.join(installBaseDir, "demo");
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+  await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+  return { installBaseDir, sourceDir, targetDir };
+}
+
+async function createReboundInstallFixture(params: {
+  fixtureRoot: string;
+  withExistingInstall?: boolean;
+}) {
+  const sourceDir = path.join(params.fixtureRoot, "source");
+  const installBaseDir = path.join(params.fixtureRoot, "plugins");
+  const preservedInstallRoot = path.join(params.fixtureRoot, "plugins-preserved");
+  const outsideInstallRoot = path.join(params.fixtureRoot, "outside-plugins");
+  const targetDir = path.join(installBaseDir, "demo");
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(installBaseDir, { recursive: true });
+  await fs.mkdir(outsideInstallRoot, { recursive: true });
+  if (params.withExistingInstall) {
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+  }
+  await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+  return { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir };
+}
+
 describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
@@ -105,13 +136,8 @@ describe("installPackageDir", () => {
   it("keeps the existing install in place when staged validation fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
 
     const result = await installPackageDir({
       sourceDir,
@@ -146,13 +172,8 @@ describe("installPackageDir", () => {
   it("restores the original install if publish rename fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
 
     const realRename = fs.rename.bind(fs);
     let renameCalls = 0;
@@ -189,15 +210,8 @@ describe("installPackageDir", () => {
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
-    const outsideInstallRoot = path.join(fixtureRoot, "outside-plugins");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(installBaseDir, { recursive: true });
-    await fs.mkdir(outsideInstallRoot, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
+      await createReboundInstallFixture({ fixtureRoot });
 
     const warnings: string[] = [];
     await withInstallBaseReboundOnRealpathCall({
@@ -237,17 +251,8 @@ describe("installPackageDir", () => {
   it("warns and leaves the backup in place when the install base changes before backup cleanup", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
-    const outsideInstallRoot = path.join(fixtureRoot, "outside-plugins");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(installBaseDir, { recursive: true });
-    await fs.mkdir(outsideInstallRoot, { recursive: true });
-    await fs.mkdir(path.join(installBaseDir, "demo"), { recursive: true });
-    await fs.writeFile(path.join(installBaseDir, "demo", "marker.txt"), "old");
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
+      await createReboundInstallFixture({ fixtureRoot, withExistingInstall: true });
 
     const warnings: string[] = [];
     const result = await withInstallBaseReboundOnRealpathCall({
@@ -381,5 +386,73 @@ describe("installPackageDir", () => {
     await expect(
       listMatchingEntries(targetDir, ".openclaw-install-hidden-npmrc-"),
     ).resolves.toHaveLength(0);
+  });
+
+  it("forces dependency installs to stay project-local when npm global config leaks in", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+
+    vi.stubEnv("NPM_CONFIG_GLOBAL", "true");
+    vi.stubEnv("npm_config_global", "true");
+    vi.stubEnv("NPM_CONFIG_LOCATION", "global");
+    vi.stubEnv("npm_config_location", "global");
+    vi.stubEnv("NPM_CONFIG_PREFIX", path.join(fixtureRoot, "global-prefix-uppercase"));
+    vi.stubEnv("npm_config_prefix", path.join(fixtureRoot, "global-prefix"));
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          npm_config_global: "false",
+          npm_config_location: "project",
+          npm_config_package_lock: "false",
+          npm_config_save: "false",
+        }),
+      }),
+    );
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          NPM_CONFIG_GLOBAL: expect.any(String),
+          NPM_CONFIG_LOCATION: expect.any(String),
+          NPM_CONFIG_PREFIX: expect.any(String),
+          npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
   });
 });

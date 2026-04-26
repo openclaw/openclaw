@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -104,6 +104,83 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
   });
 
+  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
+        },
+        candidates: Array.from({ length: 20 }, (_, index) => ({
+          pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        })),
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(
+        readFileSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith("plugins/catalog.json"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
       const result = applyWithApnChannelConfig();
@@ -128,6 +205,90 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(false);
       expect(result.changes).toEqual([]);
+    });
+
+    it("prefers an external plugin that declares preferOver for a bundled channel", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(false);
+      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+    });
+
+    it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: { entries: { "openclaw-qqbot": { enabled: false } } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+      expect(result.config.channels?.qqbot?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+    });
+
+    it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: {
+            entries: {
+              qqbot: { enabled: true },
+            },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
     });
 
     it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
@@ -169,7 +330,7 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.secondary?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "secondary configured, enabled automatically.",
@@ -180,7 +341,7 @@ describe("applyPluginAutoEnable channels", () => {
       const result = applyWithBluebubblesImessageConfig();
 
       expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("BlueBubbles configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "iMessage configured, enabled automatically.",

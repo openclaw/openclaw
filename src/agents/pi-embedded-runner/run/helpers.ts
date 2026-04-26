@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
@@ -123,6 +124,7 @@ export function buildErrorAgentMeta(params: {
   sessionId: string;
   provider: string;
   model: string;
+  contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
@@ -138,6 +140,7 @@ export function buildErrorAgentMeta(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
@@ -152,4 +155,15 @@ export function resolveFinalAssistantVisibleText(
   }
   const visibleText = extractAssistantVisibleText(lastAssistant).trim();
   return visibleText || undefined;
+}
+
+export function resolveFinalAssistantRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
+  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
+  return rawText || undefined;
 }

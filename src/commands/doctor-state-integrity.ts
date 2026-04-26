@@ -2,23 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listBundledChannelPluginIds } from "../channels/plugins/bundled-ids.js";
-import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
-  loadSessionStore,
-  resolveMainSessionKey,
+} from "../config/sessions/artifacts.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
-} from "../config/sessions.js";
+} from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
@@ -71,6 +72,10 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function isReachableConfiguredAgentDir(params: {
@@ -547,10 +552,23 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (!channels) {
     return false;
   }
-  for (const channelId of listBundledChannelPluginIds()) {
-    if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
-      return true;
-    }
+  const withPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+      cache: true,
+    }),
+  );
+  const withoutPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+      cache: true,
+      includePersistedAuthState: false,
+    }),
+  );
+  if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
+    return true;
   }
   // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
@@ -874,7 +892,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -883,8 +903,10 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
+      );
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);

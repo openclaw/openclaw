@@ -6,8 +6,6 @@ read_when:
 title: "Heartbeat"
 ---
 
-# Heartbeat (Gateway)
-
 > **Heartbeat vs Cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
 
 Heartbeat runs **periodic agent turns** in the main session so the model can
@@ -262,8 +260,15 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   outbound message is sent.
 - If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
 - If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.
-- Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
-  is restored so idle expiry behaves normally.
+- If the resolved heartbeat target supports typing, OpenClaw shows typing while
+  the heartbeat run is active. This uses the same target the heartbeat would
+  send chat output to, and it is disabled by `typingMode: "never"`.
+- Heartbeat-only replies do **not** keep the session alive. Heartbeat metadata
+  may update the session row, but idle expiry uses `lastInteractionAt` from the
+  last real user/channel message, and daily expiry uses `sessionStartedAt`.
+- Control UI and WebChat history hide heartbeat prompts and OK-only
+  acknowledgments. The underlying session transcript can still contain those
+  turns for audit/replay.
 - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
 
 ## Visibility controls

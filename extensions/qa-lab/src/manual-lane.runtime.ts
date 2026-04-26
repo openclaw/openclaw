@@ -4,24 +4,26 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import type { QaProviderMode } from "./model-selection.js";
+import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 
 type QaManualLaneParams = {
   repoRoot: string;
   transportId?: QaTransportId;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   message: string;
   timeoutMs?: number;
+  replySettleMs?: number;
 };
 
 function resolveManualLaneTimeoutMs(params: {
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   timeoutMs?: number;
@@ -54,13 +56,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     id: params.transportId ?? "qa-channel",
     state: lab.state,
   });
-  const mock =
-    params.providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const mock = await startQaProviderServer(params.providerMode);
   const gateway = await startQaGatewayChild({
     repoRoot: params.repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
@@ -113,7 +109,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       { timeoutMs: timeoutMs + 5_000 },
     )) as { status?: string; error?: string };
 
-    await sleep(500);
+    const replySettleMs = params.replySettleMs ?? 500;
+    if (replySettleMs > 0) {
+      await sleep(replySettleMs);
+    }
 
     const reply =
       lab.state

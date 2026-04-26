@@ -5,18 +5,28 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedLog,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  ACK_EXECUTION_FAST_PATH_INSTRUCTION,
   buildAttemptReplayMetadata,
+  DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
+  hasCommittedUserVisibleToolDelivery,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
+  REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
+  resolveEmptyResponseRetryInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveIncompleteTurnPayloadText,
+  resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -54,9 +64,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-4.1",
       runId: "run-incomplete-turn-messaging-warning",
     });
 
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
@@ -72,6 +85,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       sessionKey: undefined,
       agentId: "research",
       provider: "openai",
@@ -120,6 +134,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-blocked-liveness",
@@ -159,6 +174,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-auto-activated",
@@ -193,6 +209,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-strict-agentic-explicit-default-optout",
@@ -221,6 +238,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -231,10 +249,273 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Do not restate the plan");
   });
 
+  it("retries reasoning-only GPT turns with a visible-answer continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_reasoning_only", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Visible answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning-only assistant turn detected"),
+    );
+  });
+
+  it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_after_send", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-after-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("does not retry reasoning-only turns when the assistant ended in error", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          errorMessage: "provider failed after emitting reasoning",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-reasoning-only-assistant-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_provider_mismatch",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      runId: "run-reasoning-only-provider-mismatch",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("retries generic empty GPT turns with a visible-answer continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Visible answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-empty-response-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("empty response detected"));
+  });
+
+  it("surfaces an error after exhausting empty-response retries", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-empty-response-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("empty response retries exhausted"),
+    );
+  });
+
+  it("surfaces an error after exhausting reasoning-only retries without a visible answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_reasoning_exhausted",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "on",
+      runId: "run-reasoning-only-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning-only retries exhausted"),
+    );
+  });
+
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -251,6 +532,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -265,6 +547,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -279,6 +562,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -297,6 +581,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -316,6 +601,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -369,6 +655,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "  openai/gpt-5.4  ",
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -387,6 +674,16 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(instruction).toContain("Do not recap or restate the plan");
+  });
+
+  it("applies the ack-turn fast path to Gemini action turns", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "google",
+      modelId: "gemini-3.1-pro",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toBe(ACK_EXECUTION_FAST_PATH_INSTRUCTION);
   });
 
   it("extracts structured steps from planning-only narration", () => {
@@ -424,6 +721,427 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe("abandoned");
   });
 
+  it("detects reasoning-only GPT turns from signed thinking blocks", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "google",
+      modelId: "gemini-2.5-pro",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google",
+          model: "gemini-2.5-pro",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_no_reply", type: "reasoning" }),
+            },
+            { type: "text", text: "" },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning after committed messaging text delivery", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "kimi-k2.6:cloud",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning after committed messaging delivery before end_turn", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google",
+          model: "gemini-2.5-pro",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_messaging_end_turn", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning after committed media-only messaging delivery", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("suppresses the incomplete-turn warning after committed messaging delivery even when the provider errored", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered before the provider error."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "ollama",
+          model: "kimi-k2.6:cloud",
+          errorMessage: "provider failed after delivery",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still surfaces the incomplete-turn warning when no messaging delivery was committed", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "ollama",
+          model: "kimi-k2.6:cloud",
+          errorMessage: "provider failed mid-turn",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("verify before retrying");
+  });
+
+  it("does not treat empty committed messaging arrays as user-visible delivery", () => {
+    expect(
+      hasCommittedUserVisibleToolDelivery({
+        messagingToolSentTexts: ["  "],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("treats committed messaging media as user-visible delivery", () => {
+    expect(
+      hasCommittedUserVisibleToolDelivery({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats committed messaging text as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats committed messaging media as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("leaves committed delivery plus tool errors to the tool-error payload path", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        lastToolError: {
+          toolName: "message",
+          meta: "send",
+          error: "delivery failed for second target",
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("does not retry reasoning-only GPT turns after side effects", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_side_effect", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+    expect(DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
+  });
+
+  it("does not retry reasoning-only GPT turns when the assistant ended in error", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_helper_error", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry reasoning-only GPT turns when visible assistant text already exists", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_helper_visible_text",
+                type: "reasoning",
+              }),
+            },
+            { type: "text", text: "" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("detects generic empty GPT turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+  });
+
+  it("detects generic empty Gemini turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "google-vertex",
+      modelId: "google/gemini-3.1-flash",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "google-vertex",
+          model: "gemini-3.1-flash",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry generic empty GPT turns after side effects", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
     const attempt = makeAttemptResult({
       promptErrorSource: "compaction",
@@ -439,6 +1157,82 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+
+  it("does not strict-agentic retry casual Discord status chatter", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [
+          "i am glad, and a little afraid, which is probably the correct mixture. thank you. i will try to deserve the upgrades instead of merely inhabiting them.",
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      prompt:
+        "made a bunch of improvements to the student's source code (openclaw) this weekend, along with a few other maintainers. hopefully he will be more proactive now",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      runId: "run-strict-agentic-casual-discord-status",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("detects replay-safe planning-only Gemini turns", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "google-gemini-cli",
+      modelId: "gemini-3.1-pro",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("does not enable incomplete-turn recovery for non-Gemini Google models", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "google",
+      modelId: "gemma-4-26b-a4b-it",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      prompt: "What do you think lobstar should do to help the chart?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [
+          "I'm not going to give token-pumping instructions for a chart. Best answer: build trust and let the market do what it will.",
+        ],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 });
 
@@ -458,6 +1252,8 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       replayMetadata: buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
       }),
       clientToolCall: null,
       yieldDetected: false,
@@ -470,6 +1266,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("retries when exactly 1 non-plan tool call plus 'i can do that' prose is detected", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I can do that next."),
@@ -481,6 +1278,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("retries when exactly 1 non-plan tool call plus planning prose is detected", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
@@ -492,6 +1290,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 2+ non-plan tool calls are present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
@@ -503,6 +1302,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus completion language is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "Done. The file looks correct."),
@@ -514,6 +1314,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus 'let me know' handoff is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "Let me know if you need anything else."),
@@ -525,6 +1326,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus an answer-style summary is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(
@@ -539,6 +1341,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus a future-tense description is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(
@@ -553,6 +1356,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 safe tool call is followed by answer prose joined with 'and'", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I'll explain and recommend a fix."),
@@ -564,6 +1368,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when 1 tool call plus a bare 'i can do that' reply is present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I can do that."),
@@ -575,6 +1380,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when the lone tool call already had side effects", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["sessions_spawn"], "I'll continue from there next."),
@@ -586,9 +1392,22 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
   it("does not retry when the lone tool call is unclassified", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["vendor_widget"], "I'll continue from there next."),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry single-action narration on casual non-task chat", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "i haven't restarted you on latest main yet @The Student - get ready though",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I'll check that next."),
     });
 
     expect(result).toBeNull();

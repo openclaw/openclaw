@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   isNonSecretApiKeyMarker,
@@ -10,6 +9,7 @@ import {
   readNumberParam,
   readResponseText,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
   truncateText,
@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
@@ -40,7 +41,7 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-const OLLAMA_WEB_SEARCH_PATH = "/api/experimental/web_search";
+const OLLAMA_WEB_SEARCH_PATH = "/api/web_search";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
 const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
@@ -64,6 +65,12 @@ function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefin
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
+  const pluginBaseUrl = normalizeOptionalString(
+    resolveProviderWebSearchPluginConfig(config, "ollama")?.baseUrl,
+  );
+  if (pluginBaseUrl) {
+    return resolveOllamaApiBase(pluginBaseUrl);
+  }
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
   if (normalizeOptionalString(configuredBaseUrl)) {
     return resolveOllamaApiBase(configuredBaseUrl);
@@ -220,7 +227,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
       }),
     createTool: (ctx) => ({
       description:
-        "Search the web using Ollama's experimental web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
+        "Search the web using Ollama's web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
       parameters: OLLAMA_WEB_SEARCH_SCHEMA,
       execute: async (args) =>
         await runOllamaWebSearch({

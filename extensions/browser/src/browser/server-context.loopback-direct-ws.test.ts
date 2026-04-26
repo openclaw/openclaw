@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-support.js";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import * as cdpModule from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-import { createBrowserRouteContext } from "./server-context.js";
-import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
+import {
+  createTestBrowserRouteContext,
+  makeState,
+  originalFetch,
+} from "./server-context.remote-tab-ops.harness.js";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -11,7 +14,7 @@ afterEach(() => {
 });
 
 describe("browser server-context loopback direct WebSocket profiles", () => {
-  it("uses an HTTP /json/list base when opening tabs", async () => {
+  it("uses an HTTP /json/list base when opening about:blank under strict SSRF", async () => {
     const createTargetViaCdp = vi
       .spyOn(cdpModule, "createTargetViaCdp")
       .mockResolvedValue({ targetId: "CREATED" });
@@ -25,7 +28,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
           {
             id: "CREATED",
             title: "New Tab",
-            url: "http://127.0.0.1:8080",
+            url: "about:blank",
             webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
             type: "page",
           },
@@ -33,25 +36,26 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       } as unknown as Response;
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
     state.resolved.profiles.openclaw = {
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
-    const opened = await openclaw.openTab("http://127.0.0.1:8080");
+    const opened = await openclaw.openTab("about:blank");
     expect(opened.targetId).toBe("CREATED");
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
-      url: "http://127.0.0.1:8080",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      url: "about:blank",
+      ssrfPolicy: undefined,
     });
   });
 
-  it("uses an HTTP /json base for focus and close", async () => {
+  it("uses an HTTP /json base for focus and close under strict SSRF", async () => {
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
       if (u === "http://127.0.0.1:18800/json/list?token=abc") {
@@ -77,13 +81,14 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       throw new Error(`unexpected fetch: ${u}`);
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
     state.resolved.profiles.openclaw = {
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await openclaw.focusTab("T1");
@@ -125,13 +130,13 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       throw new Error(`unexpected fetch: ${u}`);
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.profiles.openclaw = {
       cdpUrl: "wss://127.0.0.1:18800/cdp?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const tabs = await openclaw.listTabs();
@@ -141,19 +146,22 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     await openclaw.closeTab("T2");
   });
 
-  it("blocks direct WebSocket tab operations when strict SSRF policy rejects the cdpUrl", async () => {
+  it("blocks direct WebSocket tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["browserless.example.com"],
+    };
     state.resolved.profiles.openclaw = {
       cdpUrl: "ws://10.0.0.42:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",
     };
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await expect(openclaw.listTabs()).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);

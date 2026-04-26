@@ -8,6 +8,7 @@ import {
 import {
   fetchWithSsrFGuard,
   formatErrorMessage,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveOllamaApiBase } from "./provider-models.js";
@@ -47,6 +48,7 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const OLLAMA_EMBEDDING_BATCH_CONCURRENCY = 1;
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
@@ -55,22 +57,6 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
     return sanitized;
   }
   return sanitized.map((value) => value / magnitude);
-}
-
-function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
 }
 
 async function withRemoteHttpResponse<T>(params: {
@@ -149,7 +135,7 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
   };
 }
@@ -187,7 +173,12 @@ export async function createOllamaEmbeddingProvider(
     model: client.model,
     embedQuery: embedOne,
     embedBatch: async (texts) => {
-      return await Promise.all(texts.map(embedOne));
+      const embeddings: number[][] = [];
+      for (let index = 0; index < texts.length; index += OLLAMA_EMBEDDING_BATCH_CONCURRENCY) {
+        const batch = texts.slice(index, index + OLLAMA_EMBEDDING_BATCH_CONCURRENCY);
+        embeddings.push(...(await Promise.all(batch.map(embedOne))));
+      }
+      return embeddings;
     },
   };
 

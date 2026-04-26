@@ -1,13 +1,23 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
+  classifyAgentHarnessTerminalOutcome,
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
+  formatToolAggregate,
+  formatToolProgressOutput,
+  inferToolMetaFromArgs,
   normalizeUsage,
-  type NormalizedUsage,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type MessagingToolSend,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -42,6 +52,17 @@ const ZERO_USAGE: Usage = {
   },
 };
 
+const CURRENT_TOKEN_USAGE_KEYS = [
+  "last",
+  "current",
+  "lastCall",
+  "lastCallUsage",
+  "lastTokenUsage",
+  "last_token_usage",
+] as const;
+
+const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
@@ -50,6 +71,13 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
+  private readonly toolResultSummaryItemIds = new Set<string>();
+  private readonly toolResultOutputItemIds = new Set<string>();
+  private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly toolResultOutputDeltaState = new Map<
+    string,
+    { chars: number; messages: number; truncated: boolean }
+  >();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -58,7 +86,7 @@ export class CodexAppServerEventProjector {
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private aborted = false;
-  private tokenUsage: NormalizedUsage | undefined;
+  private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
 
@@ -70,7 +98,14 @@ export class CodexAppServerEventProjector {
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !this.isNotificationForTurn(params)) {
+    if (!params) {
+      return;
+    }
+    if (isHookNotificationMethod(notification.method)) {
+      if (!this.isHookNotificationForCurrentThread(params)) {
+        return;
+      }
+    } else if (!this.isNotificationForTurn(params)) {
       return;
     }
 
@@ -89,18 +124,24 @@ export class CodexAppServerEventProjector {
         this.handleTurnPlanUpdated(params);
         break;
       case "item/started":
-        this.handleItemStarted(params);
+        await this.handleItemStarted(params);
         break;
       case "item/completed":
-        this.handleItemCompleted(params);
+        await this.handleItemCompleted(params);
+        break;
+      case "item/commandExecution/outputDelta":
+        this.handleOutputDelta(params, "bash");
+        break;
+      case "item/fileChange/outputDelta":
+        this.handleOutputDelta(params, "apply_patch");
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
-        this.guardianReviewCount += 1;
-        this.params.onAgentEvent?.({
-          stream: "codex_app_server.guardian",
-          data: { method: notification.method },
-        });
+        this.handleGuardianReviewNotification(notification.method, params);
+        break;
+      case "hook/started":
+      case "hook/completed":
+        this.handleHookNotification(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
         this.handleTokenUsage(params);
@@ -108,8 +149,14 @@ export class CodexAppServerEventProjector {
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
+      case "rawResponseItem/completed":
+        this.handleRawResponseItemCompleted(params);
+        break;
       case "error":
-        this.promptError = readString(params, "message") ?? "codex app-server error";
+        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
+          break;
+        }
+        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -151,6 +198,13 @@ export class CodexAppServerEventProjector {
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+    const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
+      assistantTexts,
+      reasoningText,
+      planText,
+      promptError,
+      turnCompleted: Boolean(this.completedTurn),
+    });
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
@@ -160,6 +214,7 @@ export class CodexAppServerEventProjector {
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,
+      ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,
@@ -262,7 +317,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleItemStarted(params: JsonObject): void {
+  private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -270,7 +325,21 @@ export class CodexAppServerEventProjector {
     }
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
-      this.params.onAgentEvent?.({
+      await runAgentHarnessBeforeCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "start",
@@ -282,13 +351,14 @@ export class CodexAppServerEventProjector {
       });
     }
     this.emitStandardItemEvent({ phase: "start", item });
-    this.params.onAgentEvent?.({
+    this.emitToolResultSummary(item);
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "started", itemId, type: item?.type },
     });
   }
 
-  private handleItemCompleted(params: JsonObject): void {
+  private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -306,7 +376,22 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.params.onAgentEvent?.({
+      await runAgentHarnessAfterCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        compactedCount: -1,
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "end",
@@ -319,7 +404,9 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
-    this.params.onAgentEvent?.({
+    this.emitToolResultSummary(item);
+    this.emitToolResultOutput(item);
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
@@ -327,15 +414,65 @@ export class CodexAppServerEventProjector {
 
   private handleTokenUsage(params: JsonObject): void {
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const total = tokenUsage && isJsonObject(tokenUsage.total) ? tokenUsage.total : undefined;
-    if (!total) {
+    const current =
+      (tokenUsage ? readFirstJsonObject(tokenUsage, CURRENT_TOKEN_USAGE_KEYS) : undefined) ??
+      readFirstJsonObject(params, CURRENT_TOKEN_USAGE_KEYS);
+    if (!current) {
       return;
     }
-    this.tokenUsage = normalizeUsage({
-      input: readNumber(total, "inputTokens"),
-      output: readNumber(total, "outputTokens"),
-      cacheRead: readNumber(total, "cachedInputTokens"),
-      total: readNumber(total, "totalTokens"),
+    const usage = normalizeCodexTokenUsage(current);
+    if (usage) {
+      this.tokenUsage = usage;
+    }
+  }
+
+  private handleGuardianReviewNotification(method: string, params: JsonObject): void {
+    this.guardianReviewCount += 1;
+    const review = isJsonObject(params.review) ? params.review : undefined;
+    const action = isJsonObject(params.action) ? params.action : undefined;
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        method,
+        phase: method.endsWith("/started") ? "started" : "completed",
+        reviewId: readString(params, "reviewId"),
+        targetItemId: readNullableString(params, "targetItemId"),
+        decisionSource: readString(params, "decisionSource"),
+        status: review ? readString(review, "status") : undefined,
+        riskLevel: review ? readString(review, "riskLevel") : undefined,
+        userAuthorization: review ? readString(review, "userAuthorization") : undefined,
+        rationale: review ? readNullableString(review, "rationale") : undefined,
+        actionType: action ? readString(action, "type") : undefined,
+      },
+    });
+  }
+
+  private handleHookNotification(method: string, params: JsonObject): void {
+    const run = isJsonObject(params.run) ? params.run : undefined;
+    if (!run) {
+      return;
+    }
+    const durationMs = readNumber(run, "durationMs");
+    const entries = readHookOutputEntries(run.entries);
+    const hookTurnId = readNullableString(params, "turnId");
+    this.emitAgentEvent({
+      stream: "codex_app_server.hook",
+      data: {
+        phase: method === "hook/started" ? "started" : "completed",
+        threadId: this.threadId,
+        turnId: hookTurnId === undefined ? this.turnId : hookTurnId,
+        hookRunId: readString(run, "id"),
+        eventName: readString(run, "eventName"),
+        handlerType: readString(run, "handlerType"),
+        executionMode: readString(run, "executionMode"),
+        scope: readString(run, "scope"),
+        source: readString(run, "source"),
+        sourcePath: readString(run, "sourcePath"),
+        status: readString(run, "status"),
+        statusMessage: readNullableString(run, "statusMessage"),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(entries.length > 0 ? { entries } : {}),
+      },
     });
   }
 
@@ -362,9 +499,72 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.emitToolResultSummary(item);
+      this.emitToolResultOutput(item);
     }
     this.activeCompactionItemIds.clear();
     await this.maybeEndReasoning();
+  }
+
+  private handleOutputDelta(params: JsonObject, toolName: string): void {
+    const itemId = readString(params, "itemId");
+    const delta = readString(params, "delta");
+    if (!itemId || !delta || !this.shouldEmitToolOutput()) {
+      return;
+    }
+    const state = this.toolResultOutputDeltaState.get(itemId) ?? {
+      chars: 0,
+      messages: 0,
+      truncated: false,
+    };
+    if (state.truncated) {
+      return;
+    }
+    const remainingChars = Math.max(0, TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.chars);
+    const remainingMessages = Math.max(0, MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM - state.messages);
+    if (remainingChars === 0 || remainingMessages === 0) {
+      state.truncated = true;
+      this.toolResultOutputDeltaState.set(itemId, state);
+      this.emitToolResultMessage({
+        itemId,
+        text: formatToolOutput(toolName, undefined, "(output truncated)"),
+      });
+      return;
+    }
+    const chunk = delta.length > remainingChars ? delta.slice(0, remainingChars) : delta;
+    state.chars += chunk.length;
+    state.messages += 1;
+    const reachedLimit =
+      delta.length > remainingChars ||
+      state.chars >= TOOL_PROGRESS_OUTPUT_MAX_CHARS ||
+      state.messages >= MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM;
+    if (reachedLimit) {
+      state.truncated = true;
+    }
+    this.toolResultOutputDeltaState.set(itemId, state);
+    this.toolResultOutputStreamedItemIds.add(itemId);
+    this.emitToolResultMessage({
+      itemId,
+      text: formatToolOutput(
+        toolName,
+        undefined,
+        reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
+      ),
+    });
+  }
+
+  private handleRawResponseItemCompleted(params: JsonObject): void {
+    const item = isJsonObject(params.item) ? params.item : undefined;
+    if (!item || readString(item, "role") !== "assistant") {
+      return;
+    }
+    const text = extractRawAssistantText(item);
+    if (!text) {
+      return;
+    }
+    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    this.rememberAssistantItem(itemId);
+    this.assistantTextByItem.set(itemId, text);
   }
 
   private async maybeEndReasoning(): Promise<void> {
@@ -379,7 +579,7 @@ export class CodexAppServerEventProjector {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "plan",
       data: {
         phase: "update",
@@ -403,7 +603,7 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "item",
       data: {
         itemId: item.id,
@@ -415,6 +615,78 @@ export class CodexAppServerEventProjector {
         ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
       },
     });
+  }
+
+  private emitToolResultSummary(item: CodexThreadItem | undefined): void {
+    if (!item || !this.params.onToolResult || !this.shouldEmitToolResult()) {
+      return;
+    }
+    const itemId = item.id;
+    if (this.toolResultSummaryItemIds.has(itemId)) {
+      return;
+    }
+    const toolName = itemName(item);
+    if (!toolName) {
+      return;
+    }
+    this.toolResultSummaryItemIds.add(itemId);
+    const meta = itemMeta(item);
+    this.emitToolResultMessage({
+      itemId,
+      text: formatToolSummary(toolName, meta),
+    });
+  }
+
+  private emitToolResultOutput(item: CodexThreadItem | undefined): void {
+    if (!item || !this.params.onToolResult || !this.shouldEmitToolOutput()) {
+      return;
+    }
+    const itemId = item.id;
+    if (this.toolResultOutputItemIds.has(itemId)) {
+      return;
+    }
+    if (this.toolResultOutputStreamedItemIds.has(itemId)) {
+      return;
+    }
+    const toolName = itemName(item);
+    const output = itemOutputText(item);
+    if (!toolName || !output) {
+      return;
+    }
+    this.emitToolResultMessage({
+      itemId,
+      text: formatToolOutput(toolName, itemMeta(item), output),
+      finalOutput: true,
+    });
+  }
+
+  private emitToolResultMessage(params: {
+    itemId: string;
+    text: string;
+    finalOutput?: boolean;
+  }): void {
+    if (params.finalOutput) {
+      this.toolResultOutputItemIds.add(params.itemId);
+    }
+    try {
+      void Promise.resolve(this.params.onToolResult?.({ text: params.text })).catch(() => {
+        // Tool progress delivery is best-effort and should not affect the turn.
+      });
+    } catch {
+      // Tool progress delivery is best-effort and should not affect the turn.
+    }
+  }
+
+  private shouldEmitToolResult(): boolean {
+    return typeof this.params.shouldEmitToolResult === "function"
+      ? this.params.shouldEmitToolResult()
+      : this.params.verboseLevel === "on" || this.params.verboseLevel === "full";
+  }
+
+  private shouldEmitToolOutput(): boolean {
+    return typeof this.params.shouldEmitToolOutput === "function"
+      ? this.params.shouldEmitToolOutput()
+      : this.params.verboseLevel === "full";
   }
 
   private recordToolMeta(item: CodexThreadItem | undefined): void {
@@ -429,6 +701,30 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
     });
+  }
+
+  private emitAgentEvent(
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+  ): void {
+    try {
+      emitGlobalAgentEvent({
+        runId: this.params.runId,
+        stream: event.stream,
+        data: event.data,
+        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+    }
+    try {
+      const maybePromise = this.params.onAgentEvent?.(event);
+      void Promise.resolve(maybePromise).catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+      });
+    } catch (error) {
+      // Downstream event consumers must not corrupt the canonical Codex turn projection.
+      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
+    }
   }
 
   private collectAssistantTexts(): string[] {
@@ -455,6 +751,14 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.assistantItemOrder.push(itemId);
+  }
+
+  private readMirroredSessionMessages(): AgentMessage[] {
+    try {
+      return SessionManager.open(this.params.sessionFile).buildSessionContext().messages;
+    } catch {
+      return [];
+    }
   }
 
   private createAssistantMessage(text: string): AssistantMessage {
@@ -501,9 +805,28 @@ export class CodexAppServerEventProjector {
 
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
-    const turnId = readString(params, "turnId");
-    return (!threadId || threadId === this.threadId) && (!turnId || turnId === this.turnId);
+    const turnId = readNotificationTurnId(params);
+    return threadId === this.threadId && turnId === this.turnId;
   }
+
+  private isHookNotificationForCurrentThread(params: JsonObject): boolean {
+    const threadId = readString(params, "threadId");
+    const turnId = params.turnId;
+    return threadId === this.threadId && (turnId === this.turnId || turnId === null);
+  }
+}
+
+function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
+  return method === "hook/started" || method === "hook/completed";
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readString(record, "turnId") ?? readNestedTurnId(record);
+}
+
+function readNestedTurnId(record: JsonObject): string | undefined {
+  const turn = record.turn;
+  return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -524,6 +847,90 @@ function readNumber(record: JsonObject, key: string): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = readBoolean(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
+  const error = record.error;
+  if (isJsonObject(error)) {
+    return readString(error, "message") ?? readString(error, "error");
+  }
+  return readString(record, "message");
+}
+
+function readHookOutputEntries(
+  value: JsonValue | undefined,
+): Array<{ kind?: string; text: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!isJsonObject(entry)) {
+      return [];
+    }
+    const text = readString(entry, "text");
+    if (!text) {
+      return [];
+    }
+    const kind = readString(entry, "kind");
+    return [{ ...(kind ? { kind } : {}), text }];
+  });
+}
+
+function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (isJsonObject(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readNumberAlias(record: JsonObject, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = readNumber(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
+  return normalizeUsage({
+    input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
+    output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
+    cacheRead: readNumberAlias(record, [
+      "cachedInputTokens",
+      "cached_input_tokens",
+      "cacheRead",
+      "cache_read",
+      "cache_read_input_tokens",
+      "cached_tokens",
+    ]),
+    cacheWrite: readNumberAlias(record, [
+      "cacheWrite",
+      "cache_write",
+      "cacheCreationInputTokens",
+      "cache_creation_input_tokens",
+    ]),
+    total: readNumberAlias(record, ["totalTokens", "total_tokens", "total"]),
+  });
+}
+
 function splitPlanText(text: string): string[] {
   return text
     .split(/\r?\n/)
@@ -533,6 +940,24 @@ function splitPlanText(text: string): string[] {
 
 function collectTextValues(map: Map<string, string>): string[] {
   return [...map.values()].filter((text) => text.trim().length > 0);
+}
+
+function extractRawAssistantText(item: JsonObject): string | undefined {
+  const content = Array.isArray(item.content) ? item.content : [];
+  const text = content
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const type = readString(entry, "type");
+      if (type !== "output_text" && type !== "text") {
+        return [];
+      }
+      const value = readString(entry, "text");
+      return value ? [value] : [];
+    })
+    .join("");
+  return text.trim() || undefined;
 }
 
 function itemKind(
@@ -610,12 +1035,94 @@ function itemName(item: CodexThreadItem): string | undefined {
 
 function itemMeta(item: CodexThreadItem): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
-    return item.command;
+    return inferToolMetaFromArgs("exec", {
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+    });
   }
   if (item.type === "webSearch" && typeof item.query === "string") {
     return item.query;
   }
-  return readItemString(item, "status");
+  const toolName = itemName(item);
+  if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && toolName) {
+    return inferToolMetaFromArgs(toolName, item.arguments);
+  }
+  return undefined;
+}
+
+function itemOutputText(item: CodexThreadItem): string | undefined {
+  if (item.type === "commandExecution") {
+    return item.aggregatedOutput?.trim() || undefined;
+  }
+  if (item.type === "dynamicToolCall") {
+    return collectDynamicToolContentText(item.contentItems).trim() || undefined;
+  }
+  if (item.type === "mcpToolCall") {
+    if (item.error) {
+      return stringifyJsonValue(item.error);
+    }
+    return item.result ? stringifyJsonValue(item.result) : undefined;
+  }
+  return undefined;
+}
+
+function collectDynamicToolContentText(
+  contentItems: Extract<CodexThreadItem, { type: "dynamicToolCall" }>["contentItems"],
+): string {
+  if (!Array.isArray(contentItems)) {
+    return "";
+  }
+  return contentItems
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const text = readString(entry, "text");
+      return text ? [text] : [];
+    })
+    .join("\n");
+}
+
+function stringifyJsonValue(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
+function formatToolSummary(toolName: string, meta?: string): string {
+  const trimmedMeta = meta?.trim();
+  return formatToolAggregate(toolName, trimmedMeta ? [trimmedMeta] : undefined, {
+    markdown: true,
+  });
+}
+
+function formatToolOutput(toolName: string, meta: string | undefined, output: string): string {
+  const formattedOutput = formatToolProgressOutput(output);
+  if (!formattedOutput) {
+    return formatToolSummary(toolName, meta);
+  }
+  const fence = markdownFenceForText(formattedOutput);
+  return `${formatToolSummary(toolName, meta)}\n${fence}txt\n${formattedOutput}\n${fence}`;
+}
+
+function markdownFenceForText(text: string): string {
+  return "`".repeat(Math.max(3, longestBacktickRun(text) + 1));
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
+  }
+  return longest;
 }
 
 function readItemString(item: CodexThreadItem, key: string): string | undefined {
@@ -636,28 +1143,5 @@ function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
 }
 
 function readTurn(value: JsonValue | undefined): CodexTurn | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  const id = typeof value.id === "string" ? value.id : undefined;
-  const status = typeof value.status === "string" ? value.status : undefined;
-  if (!id || !status) {
-    return undefined;
-  }
-  const items = Array.isArray(value.items)
-    ? value.items.flatMap((item) => {
-        const parsed = readItem(item);
-        return parsed ? [parsed] : [];
-      })
-    : undefined;
-  return {
-    id,
-    status: status as CodexTurn["status"],
-    error: isJsonObject(value.error)
-      ? {
-          message: typeof value.error.message === "string" ? value.error.message : undefined,
-        }
-      : null,
-    items,
-  };
+  return readCodexTurn(value);
 }

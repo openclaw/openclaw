@@ -41,34 +41,32 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
+  const keys = entryKeys(config);
+  return keys.includes("index") || keys.includes("runtime-api");
+}
+
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
 }
 
 function unifiedDistGraph(): TsdownConfigEntry | undefined {
-  return asConfigArray(tsdownConfig).find((config) => entryKeys(config).includes("index"));
+  return asConfigArray(tsdownConfig).find((config) =>
+    entryKeys(config).includes("plugins/runtime/index"),
+  );
 }
 
 describe("tsdown config", () => {
-  it("keeps core, plugin runtime, plugin-sdk, bundled plugins, and bundled hooks in one dist graph", () => {
-    const configs = asConfigArray(tsdownConfig);
-    const distGraphs = configs.filter((config) => {
-      const keys = entryKeys(config);
-      return (
-        keys.includes("index") ||
-        keys.includes("plugins/runtime/index") ||
-        keys.includes("plugin-sdk/index") ||
-        keys.includes(bundledEntry("openai")) ||
-        keys.includes("bundled/boot-md/handler")
-      );
-    });
+  it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
+    const distGraph = unifiedDistGraph();
 
-    expect(distGraphs).toHaveLength(1);
-    expect(entryKeys(distGraphs[0])).toEqual(
+    expect(distGraph).toBeDefined();
+    expect(entryKeys(distGraph as TsdownConfigEntry)).toEqual(
       expect.arrayContaining([
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
+        "subagent-registry.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
         "commands/status.summary.runtime",
@@ -78,12 +76,30 @@ describe("tsdown config", () => {
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("openai"),
-        bundledEntry("matrix"),
-        bundledEntry("msteams"),
-        bundledEntry("whatsapp"),
         "bundled/boot-md/handler",
       ]),
     );
+  });
+
+  it("emits staged bundled plugins as separate extension graphs", () => {
+    const stagedGraphs = asConfigArray(tsdownConfig).filter(
+      (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
+    );
+
+    expect(stagedGraphs.length).toBeGreaterThan(0);
+    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
+    expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
+      true,
+    );
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
+    expect(
+      stagedGraphs.some(
+        (config) =>
+          config.outDir === "dist/extensions/media-understanding-core" &&
+          entryKeys(config).includes("image-ops"),
+      ),
+    ).toBe(true);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {

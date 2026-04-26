@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
+import { codexProviderDiscovery } from "./provider-discovery.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
 import {
@@ -10,6 +12,25 @@ afterEach(() => {
   resetSharedCodexAppServerClientForTests();
   vi.restoreAllMocks();
 });
+
+function expectStaticFallbackCatalog(
+  result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
+) {
+  expect(result.provider.models.map((model) => model.id)).toEqual([
+    "gpt-5.5",
+    "gpt-5.4-mini",
+    "gpt-5.2",
+  ]);
+}
+
+function createFakeCodexClient(): CodexAppServerClient {
+  return {
+    initialize: vi.fn(async () => undefined),
+    request: vi.fn(async () => ({ data: [] })),
+    addCloseHandler: vi.fn(() => () => undefined),
+    close: vi.fn(),
+  } as unknown as CodexAppServerClient;
+}
 
 describe("codex provider", () => {
   it("maps Codex app-server models to a Codex provider catalog", async () => {
@@ -67,11 +88,113 @@ describe("codex provider", () => {
     });
 
     expect(listModels).not.toHaveBeenCalled();
-    expect(result.provider.models.map((model) => model.id)).toEqual([
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.2",
-    ]);
+    expectStaticFallbackCatalog(result);
+  });
+
+  it("uses live plugin config to re-enable discovery after startup disable", async () => {
+    const listModels = vi.fn(async () => ({
+      models: [
+        {
+          id: "gpt-5.4",
+          model: "gpt-5.4",
+          displayName: "gpt-5.4",
+          hidden: false,
+          inputModalities: ["text", "image"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        },
+      ],
+    }));
+    const provider = buildCodexProvider({
+      pluginConfig: { discovery: { enabled: false } },
+      listModels,
+    });
+
+    const result = await provider.catalog?.run({
+      config: {
+        plugins: {
+          entries: {
+            codex: {
+              config: {
+                discovery: {
+                  enabled: true,
+                  timeoutMs: 4321,
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    } as never);
+
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, timeoutMs: 4321, sharedClient: false }),
+    );
+    expect(result).toMatchObject({
+      provider: {
+        models: [{ id: "gpt-5.4" }],
+      },
+    });
+  });
+
+  it("pages through live discovery before building the provider catalog", async () => {
+    const listModels = vi
+      .fn()
+      .mockResolvedValueOnce({
+        models: [
+          {
+            id: "gpt-5.4",
+            model: "gpt-5.4",
+            hidden: false,
+            inputModalities: ["text", "image"],
+            supportedReasoningEfforts: ["medium"],
+          },
+        ],
+        nextCursor: "page-2",
+      })
+      .mockResolvedValueOnce({
+        models: [
+          {
+            id: "gpt-5.2",
+            model: "gpt-5.2",
+            hidden: false,
+            inputModalities: ["text"],
+            supportedReasoningEfforts: [],
+          },
+        ],
+      });
+
+    const result = await buildCodexProviderCatalog({
+      env: {},
+      listModels,
+    });
+
+    expect(listModels).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ cursor: undefined, limit: 100, sharedClient: false }),
+    );
+    expect(listModels).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cursor: "page-2", limit: 100, sharedClient: false }),
+    );
+    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+  });
+
+  it("reports discovery failures before using the fallback catalog", async () => {
+    const error = new Error("app-server down");
+    const onDiscoveryFailure = vi.fn();
+    const listModels = vi.fn(async () => {
+      throw error;
+    });
+
+    const result = await buildCodexProviderCatalog({
+      env: {},
+      listModels,
+      onDiscoveryFailure,
+    });
+
+    expect(onDiscoveryFailure).toHaveBeenCalledWith(error);
+    expectStaticFallbackCatalog(result);
   });
 
   it("keeps a static fallback catalog when live discovery is explicitly disabled by env", async () => {
@@ -83,20 +206,11 @@ describe("codex provider", () => {
     });
 
     expect(listModels).not.toHaveBeenCalled();
-    expect(result.provider.models.map((model) => model.id)).toEqual([
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.2",
-    ]);
+    expectStaticFallbackCatalog(result);
   });
 
   it("closes the transient app-server client after live discovery", async () => {
-    const client = {
-      initialize: vi.fn(async () => undefined),
-      request: vi.fn(async () => ({ data: [] })),
-      addCloseHandler: vi.fn(() => () => undefined),
-      close: vi.fn(),
-    } as unknown as CodexAppServerClient;
+    const client = createFakeCodexClient();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(client);
 
     await buildCodexProviderCatalog({
@@ -107,18 +221,8 @@ describe("codex provider", () => {
   });
 
   it("does not close an active shared app-server client during live discovery", async () => {
-    const activeClient = {
-      initialize: vi.fn(async () => undefined),
-      request: vi.fn(async () => ({ data: [] })),
-      addCloseHandler: vi.fn(() => () => undefined),
-      close: vi.fn(),
-    } as unknown as CodexAppServerClient;
-    const discoveryClient = {
-      initialize: vi.fn(async () => undefined),
-      request: vi.fn(async () => ({ data: [] })),
-      addCloseHandler: vi.fn(() => () => undefined),
-      close: vi.fn(),
-    } as unknown as CodexAppServerClient;
+    const activeClient = createFakeCodexClient();
+    const discoveryClient = createFakeCodexClient();
     vi.spyOn(CodexAppServerClient, "start")
       .mockReturnValueOnce(activeClient)
       .mockReturnValueOnce(discoveryClient);
@@ -132,7 +236,7 @@ describe("codex provider", () => {
     expect(discoveryClient.close).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves arbitrary Codex app-server model ids through the codex provider", () => {
+  it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {
     const provider = buildCodexProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -146,6 +250,21 @@ describe("codex provider", () => {
       provider: "codex",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+    });
+  });
+
+  it("keeps fallback Codex app-server models image-capable", () => {
+    const provider = buildCodexProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "codex",
+      modelId: "gpt-5.5",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.5",
       input: ["text", "image"],
     });
   });
@@ -164,7 +283,11 @@ describe("codex provider", () => {
       reasoning: true,
       compat: { supportsReasoningEffort: true },
     });
-    expect(provider.supportsXHighThinking?.({ provider: "codex", modelId: "o4-mini" })).toBe(true);
+    expect(
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId: "o4-mini" } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
   });
 
   it("declares synthetic auth because the harness owns Codex credentials", () => {
@@ -175,5 +298,53 @@ describe("codex provider", () => {
       source: "codex-app-server",
       mode: "token",
     });
+  });
+
+  it("exposes a lightweight provider-discovery entry for model list/status", async () => {
+    expect(codexProviderDiscovery.id).toBe("codex");
+    expect(codexProviderDiscovery.resolveSyntheticAuth?.({ provider: "codex" })).toEqual({
+      apiKey: "codex-app-server",
+      source: "codex-app-server",
+      mode: "token",
+    });
+
+    const result = await codexProviderDiscovery.staticCatalog?.run({
+      config: {},
+      env: {},
+      agentDir: "/tmp/openclaw-agent",
+    } as never);
+
+    expect(
+      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
+    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
+  });
+
+  it("adds the GPT-5 prompt overlay to Codex provider runs", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: expect.stringContaining(
+          "Quiet monitoring does not satisfy an explicit ongoing-work instruction.",
+        ),
+      },
+    });
+  });
+
+  it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "o4-mini",
+      } as never),
+    ).toBeUndefined();
   });
 });

@@ -4,10 +4,8 @@ read_when:
   - Explaining how streaming or chunking works on channels
   - Changing block streaming or channel chunking behavior
   - Debugging duplicate/early block replies or channel preview streaming
-title: "Streaming and Chunking"
+title: "Streaming and chunking"
 ---
-
-# Streaming + chunking
 
 OpenClaw has two separate streaming layers:
 
@@ -53,6 +51,19 @@ Legend:
 - `message_end`: wait until assistant message finishes, then flush buffered output.
 
 `message_end` still uses the chunker if the buffered text exceeds `maxChars`, so it can emit multiple chunks at the end.
+
+### Media delivery with block streaming
+
+`MEDIA:` directives are normal delivery metadata. When block streaming sends a
+media block early, OpenClaw remembers that delivery for the turn. If the final
+assistant payload repeats the same media URL, the final delivery strips the
+duplicate media instead of sending the attachment again.
+
+Exact duplicate final payloads are suppressed. If the final payload adds
+distinct text around media that was already streamed, OpenClaw still sends the
+new text while keeping the media single-delivery. This prevents duplicate voice
+notes or files on channels such as Telegram when an agent emits `MEDIA:` during
+streaming and the provider also includes it in the completed reply.
 
 ## Chunking algorithm (low/high bounds)
 
@@ -118,11 +129,12 @@ Modes:
 
 ### Channel mapping
 
-| Channel  | `off` | `partial` | `block` | `progress`        |
-| -------- | ----- | --------- | ------- | ----------------- |
-| Telegram | ✅    | ✅        | ✅      | maps to `partial` |
-| Discord  | ✅    | ✅        | ✅      | maps to `partial` |
-| Slack    | ✅    | ✅        | ✅      | ✅                |
+| Channel    | `off` | `partial` | `block` | `progress`        |
+| ---------- | ----- | --------- | ------- | ----------------- |
+| Telegram   | ✅    | ✅        | ✅      | maps to `partial` |
+| Discord    | ✅    | ✅        | ✅      | maps to `partial` |
+| Slack      | ✅    | ✅        | ✅      | ✅                |
+| Mattermost | ✅    | ✅        | ✅      | ✅                |
 
 Slack-only:
 
@@ -131,7 +143,7 @@ Slack-only:
 
 Legacy key migration:
 
-- Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
+- Telegram: legacy `streamMode` and scalar/boolean `streaming` values are detected and migrated by doctor/config compatibility paths to `streaming.mode`.
 - Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
 - Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
 
@@ -148,12 +160,55 @@ Discord:
 - Uses send + edit preview messages.
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly enabled.
+- Final media, error, and explicit-reply payloads cancel pending previews without flushing a new draft, then use normal delivery.
 
 Slack:
 
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+- Native and draft preview streaming suppress block replies for that turn, so a Slack reply is streamed by one delivery path only.
+- Final media/error payloads and progress finals do not create throwaway draft messages; only text/block finals that can edit the preview flush pending draft text.
+
+Mattermost:
+
+- Streams thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when the final answer is safe to send.
+- Falls back to sending a fresh final post if the preview post was deleted or is otherwise unavailable at finalize time.
+- Final media/error payloads cancel pending preview updates before normal delivery instead of flushing a temporary preview post.
+
+Matrix:
+
+- Draft previews finalize in place when the final text can reuse the preview event.
+- Media-only, error, and reply-target-mismatch finals cancel pending preview updates before normal delivery; an already-visible stale preview is redacted.
+
+### Tool-progress preview updates
+
+Preview streaming can also include **tool-progress** updates — short status lines like "searching the web", "reading file", or "calling tool" — that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+
+Supported surfaces:
+
+- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit by default when preview streaming is active.
+- Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
+- **Mattermost** already folds tool activity into its single draft preview post (see above).
+- Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message.
+- To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+
+Example:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": {
+        "mode": "partial",
+        "preview": {
+          "toolProgress": false
+        }
+      }
+    }
+  }
+}
+```
 
 ## Related
 

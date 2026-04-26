@@ -3,11 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { waitForAgentRun } from "./run-wait.js";
+import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -15,7 +16,10 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { emitSubagentEndedHookOnce, runOutcomesEqual } from "./subagent-registry-completion.js";
+import {
+  emitSubagentEndedHookOnce,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -26,10 +30,31 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
+const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
+
+export type RegisterSubagentRunParams = {
+  runId: string;
+  childSessionKey: string;
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  requesterDisplayKey: string;
+  task: string;
+  cleanup: "delete" | "keep";
+  label?: string;
+  model?: string;
+  workspaceDir?: string;
+  runTimeoutSeconds?: number;
+  expectsCompletionMessage?: boolean;
+  spawnMode?: "run" | "session";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
+};
 
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -51,6 +76,7 @@ export function createSubagentRunManager(params: {
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
+  scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -72,7 +98,11 @@ export function createSubagentRunManager(params: {
     triggerCleanup: boolean;
   }): Promise<void>;
 }) {
-  const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
+  const waitForSubagentCompletion = async (
+    runId: string,
+    waitTimeoutMs: number,
+    expectedEntry?: SubagentRunRecord,
+  ) => {
     try {
       const wait = await waitForAgentRun({
         runId,
@@ -80,10 +110,30 @@ export function createSubagentRunManager(params: {
         callGateway: params.callGateway,
       });
       const entry = params.runs.get(runId);
-      if (!entry) {
+      if (!entry || (expectedEntry && entry !== expectedEntry)) {
         return;
       }
       if (wait.status === "pending") {
+        return;
+      }
+      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+        log.info("subagent wait interrupted; scheduling recovery", {
+          runId,
+          childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
+          error: wait.error,
+        });
+        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+        const scheduledEntry = entry;
+        setTimeout(() => {
+          if (!scheduledEntry) {
+            return;
+          }
+          const current = params.runs.get(runId);
+          if (!current || current !== scheduledEntry || typeof current.endedAt === "number") {
+            return;
+          }
+          void waitForSubagentCompletion(runId, waitTimeoutMs, scheduledEntry);
+        }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
         return;
       }
       let mutated = false;
@@ -103,13 +153,17 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
-      const outcome: SubagentRunOutcome =
+      const baseOutcome: SubagentRunOutcome =
         wait.status === "error"
           ? { status: "error", error: waitError }
           : wait.status === "timeout"
             ? { status: "timeout" }
             : { status: "ok" };
-      if (!runOutcomesEqual(entry.outcome, outcome)) {
+      const outcome = withSubagentOutcomeTiming(baseOutcome, {
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+      });
+      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
         entry.outcome = outcome;
         mutated = true;
       }
@@ -253,29 +307,11 @@ export function createSubagentRunManager(params: {
     params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
-    void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
+    void waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
     return true;
   };
 
-  const registerSubagentRun = (registerParams: {
-    runId: string;
-    childSessionKey: string;
-    controllerSessionKey?: string;
-    requesterSessionKey: string;
-    requesterOrigin?: DeliveryContext;
-    requesterDisplayKey: string;
-    task: string;
-    cleanup: "delete" | "keep";
-    label?: string;
-    model?: string;
-    workspaceDir?: string;
-    runTimeoutSeconds?: number;
-    expectsCompletionMessage?: boolean;
-    spawnMode?: "run" | "session";
-    attachmentsDir?: string;
-    attachmentsRootDir?: string;
-    retainAttachmentsOnKeep?: boolean;
-  }) => {
+  const registerSubagentRun = (registerParams: RegisterSubagentRunParams) => {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
@@ -296,7 +332,7 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    params.runs.set(runId, {
+    const entry: SubagentRunRecord = {
       runId,
       childSessionKey,
       controllerSessionKey,
@@ -322,7 +358,8 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
-    });
+    };
+    params.runs.set(runId, entry);
     try {
       createRunningTaskRun({
         runtime: "subagent",
@@ -351,7 +388,7 @@ export function createSubagentRunManager(params: {
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(runId, waitTimeoutMs);
+    void waitForSubagentCompletion(runId, waitTimeoutMs, entry);
   };
 
   const releaseSubagentRun = (runId: string) => {
@@ -410,7 +447,13 @@ export function createSubagentRunManager(params: {
         continue;
       }
       entry.endedAt = now;
-      entry.outcome = { status: "error", error: reason };
+      entry.outcome = withSubagentOutcomeTiming(
+        { status: "error", error: reason },
+        {
+          startedAt: entry.startedAt,
+          endedAt: now,
+        },
+      );
       entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
       entry.cleanupHandled = true;
       entry.cleanupCompletedAt = now;

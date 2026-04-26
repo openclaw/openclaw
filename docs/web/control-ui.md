@@ -6,8 +6,6 @@ read_when:
 title: "Control UI"
 ---
 
-# Control UI (browser)
-
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
@@ -58,6 +56,11 @@ If the browser retries pairing with changed auth details (role/scopes/public
 key), the previous pending request is superseded and a new `requestId` is
 created. Re-run `openclaw devices list` before approval.
 
+If the browser is already paired and you change it from read access to
+write/admin access, this is treated as an approval upgrade, not a silent
+reconnect. OpenClaw keeps the old approval active, blocks the broader reconnect,
+and asks you to approve the new scope set explicitly.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
@@ -71,13 +74,36 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 
+## Personal identity (browser-local)
+
+The Control UI supports a per-browser personal identity (display name and
+avatar) attached to outgoing messages for attribution in shared sessions. It
+lives in browser storage, is scoped to the current browser profile, and is not
+synced to other devices or persisted server-side beyond the normal transcript
+authorship metadata on messages you actually send. Clearing site data or
+switching browsers resets it to empty.
+
+The same browser-local pattern applies to the assistant avatar override.
+Uploaded assistant avatars overlay the gateway-resolved identity on the local
+browser only and never round-trip through `config.patch`. The shared
+`ui.assistant.avatar` config field is still available for non-UI clients
+writing the field directly (such as scripted gateways or custom dashboards).
+
+## Runtime config endpoint
+
+The Control UI fetches its runtime settings from
+`/__openclaw/control-ui-config.json`. That endpoint is gated by the same
+gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot
+fetch it, and a successful fetch requires either an already valid gateway
+token/password, Tailscale Serve identity, or a trusted-proxy identity.
+
 ## Language support
 
 The Control UI can localize itself on first load based on your browser locale.
 To override it later, open **Overview -> Gateway Access -> Language**. The
 locale picker lives in the Gateway Access card, not under Appearance.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`, `th`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
@@ -85,6 +111,11 @@ locale picker lives in the Gateway Access card, not under Appearance.
 ## What it can do (today)
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
+- Talk to OpenAI Realtime directly from the browser via WebRTC. The Gateway
+  mints a short-lived Realtime client secret with `talk.realtime.session`; the
+  browser sends microphone audio directly to OpenAI and relays
+  `openclaw_agent_consult` tool calls back through `chat.send` for the larger
+  configured OpenClaw model.
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
@@ -104,6 +135,7 @@ locale picker lives in the Gateway Access card, not under Appearance.
   plus plugin + channel schemas when available); Raw JSON editor is
   available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
+- Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
@@ -126,17 +158,74 @@ Cron jobs panel notes:
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+- Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
 - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
+- During an active send and the final history refresh, the chat view keeps local
+  optimistic user/assistant messages visible if `chat.history` briefly returns
+  an older snapshot; the canonical transcript replaces those local messages once
+  the Gateway history catches up.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
+- When fresh Gateway session usage reports show high context pressure, the chat
+  composer area shows a context notice and, at recommended compaction levels, a
+  compact button that runs the normal session compaction path. Stale token
+  snapshots are hidden until the Gateway reports fresh usage again.
+- Talk mode uses a registered realtime voice provider that supports browser
+  WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus
+  `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider
+  config. The browser never receives the standard OpenAI API key; it receives
+  only the ephemeral Realtime client secret. Google Live realtime voice is
+  supported for backend Voice Call and Google Meet bridges, but not this browser
+  WebRTC path yet. The Realtime session prompt is assembled by the Gateway;
+  `talk.realtime.session` does not accept caller-provided instruction overrides.
+- In the Chat composer, the Talk control is the waves button next to the
+  microphone dictation button. When Talk starts, the composer status row shows
+  `Connecting Talk...`, then `Talk live` while audio is connected, or
+  `Asking OpenClaw...` while a realtime tool call is consulting the configured
+  larger model through `chat.send`.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
+  - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
   - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 - Abort partial retention:
   - When a run is aborted, partial assistant text can still be shown in the UI
   - Gateway persists aborted partial assistant text into transcript history when buffered output exists
   - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
+
+## PWA install and web push
+
+The Control UI ships a `manifest.webmanifest` and a service worker, so
+modern browsers can install it as a standalone PWA. Web Push lets the
+Gateway wake the installed PWA with notifications even when the tab or
+browser window is not open.
+
+| Surface                                               | What it does                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------------------ |
+| `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
+| `ui/public/sw.js`                                     | Service worker that handles `push` events and notification clicks. |
+| `push/vapid-keys.json` (under the OpenClaw state dir) | Auto-generated VAPID keypair used to sign Web Push payloads.       |
+| `push/web-push-subscriptions.json`                    | Persisted browser subscription endpoints.                          |
+
+Override the VAPID keypair through env vars on the Gateway process when
+you want to pin keys (for multi-host deployments, secrets rotation, or
+tests):
+
+- `OPENCLAW_VAPID_PUBLIC_KEY`
+- `OPENCLAW_VAPID_PRIVATE_KEY`
+- `OPENCLAW_VAPID_SUBJECT` (defaults to `mailto:openclaw@localhost`)
+
+The Control UI uses these scope-gated Gateway methods to register and
+test browser subscriptions:
+
+- `push.web.vapidPublicKey` — fetches the active VAPID public key.
+- `push.web.subscribe` — registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
+- `push.web.unsubscribe` — removes a registered endpoint.
+- `push.web.test` — sends a test notification to the caller's subscription.
+
+Web Push is independent of the iOS APNS relay path
+(see [Configuration](/gateway/configuration) for relay-backed push) and
+the existing `push.test` method, which target native mobile pairing.
 
 ## Hosted embeds
 
@@ -269,16 +358,39 @@ Trusted-proxy note:
   device identity
 - this does **not** extend to node-role Control UI sessions
 - same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
-  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+  [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
+
+## Content Security Policy
+
+The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
+
+What this means in practice:
+
+- Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes that the UI fetches and converts into local `blob:` URLs.
+- Inline `data:image/...` URLs still render (useful for in-protocol payloads).
+- Local `blob:` URLs created by the Control UI still render.
+- Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
+
+You do not need to change anything to get this behavior — it is always on and not configurable.
+
+## Avatar route auth
+
+When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API:
+
+- `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
+- Unauthenticated requests to either route are rejected (matching the sibling assistant-media route). This prevents the avatar route from leaking agent identity on hosts that are otherwise protected.
+- The Control UI itself forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
+
+If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
 
 ## Building the UI
 
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```
 
 Optional absolute base (when you want fixed asset URLs):
@@ -290,7 +402,7 @@ OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
 For local development (separate dev server):
 
 ```bash
-pnpm ui:dev # auto-installs UI deps on first run
+pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
@@ -325,6 +437,9 @@ Notes:
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
 - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
   explicitly (full origins). This includes remote dev setups.
+- Gateway startup may seed local origins such as `http://localhost:<port>` and
+  `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote
+  browser origins still need explicit entries.
 - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
   local testing. It means allow any browser origin, not “match whatever host I am
   using.”

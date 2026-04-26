@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+export {
+  isExternalHookSession,
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+  type HookExternalContentSource,
+} from "./external-content-source.js";
+import {
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+} from "./external-content-source.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -92,10 +101,6 @@ export type ExternalContentSource =
   | "web_fetch"
   | "unknown";
 
-// Hook-origin async runs need immutable ingress provenance because routed
-// session keys can be normalized outside the hook:* namespace.
-export type HookExternalContentSource = "gmail" | "webhook";
-
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
@@ -107,24 +112,44 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   unknown: "External",
 };
 
-export function resolveHookExternalContentSource(
-  sessionKey: string,
-): HookExternalContentSource | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (normalized.startsWith("hook:gmail:")) {
-    return "gmail";
-  }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return undefined;
-}
+const SPECIAL_TOKEN_REPLACEMENT = "[REMOVED_SPECIAL_TOKEN]";
 
-export function mapHookExternalContentSource(
-  source: HookExternalContentSource,
-): Extract<ExternalContentSource, "email" | "webhook"> {
-  return source === "gmail" ? "email" : "webhook";
-}
+const LLM_SPECIAL_TOKEN_LITERALS = [
+  // ChatML / Qwen
+  "<|im_start|>",
+  "<|im_end|>",
+  "<|endoftext|>",
+  // Llama 3.x / 4.x
+  "<|begin_of_text|>",
+  "<|end_of_text|>",
+  "<|start_header_id|>",
+  "<|end_header_id|>",
+  "<|eot_id|>",
+  "<|python_tag|>",
+  "<|eom_id|>",
+  // Mistral / Mixtral
+  "[INST]",
+  "[/INST]",
+  "<<SYS>>",
+  "<</SYS>>",
+  // Phi and other sentencepiece-style templates
+  "<s>",
+  "</s>",
+  // GPT-OSS / harmony
+  "<|channel|>",
+  "<|message|>",
+  "<|return|>",
+  "<|call|>",
+  // Gemma
+  "<start_of_turn>",
+  "<end_of_turn>",
+] as const;
+
+const LLM_SPECIAL_TOKEN_PATTERNS = [
+  // Many Hugging Face chat templates reserve token spellings in this form. Exact known
+  // literals above handle the common cases; this catches future reserved-token variants.
+  /<\|reserved_special_token_\d+\|>/g,
+] as const;
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -269,6 +294,21 @@ function replaceMarkers(content: string): string {
   return output;
 }
 
+function replaceLlmSpecialTokenLiterals(content: string): string {
+  let output = content;
+  for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
+    output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
+  }
+  for (const pattern of LLM_SPECIAL_TOKEN_PATTERNS) {
+    output = output.replace(pattern, SPECIAL_TOKEN_REPLACEMENT);
+  }
+  return output;
+}
+
+function sanitizeExternalContentText(content: string): string {
+  return replaceLlmSpecialTokenLiterals(replaceMarkers(content));
+}
+
 export type WrapExternalContentOptions = {
   /** Source of the external content */
   source: ExternalContentSource;
@@ -299,10 +339,11 @@ export type WrapExternalContentOptions = {
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
   const { source, sender, subject, includeWarning = true } = options;
 
-  const sanitized = replaceMarkers(content);
+  const sanitized = sanitizeExternalContentText(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
-  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
+  const sanitizeMetadataValue = (value: string) =>
+    sanitizeExternalContentText(value).replace(/[\r\n]+/g, " ");
 
   if (sender) {
     metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
@@ -361,13 +402,6 @@ export function buildSafeExternalPrompt(params: {
   const context = contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
 
   return `${context}${wrappedContent}`;
-}
-
-/**
- * Checks if a session key indicates an external hook source.
- */
-export function isExternalHookSession(sessionKey: string): boolean {
-  return resolveHookExternalContentSource(sessionKey) !== undefined;
 }
 
 /**

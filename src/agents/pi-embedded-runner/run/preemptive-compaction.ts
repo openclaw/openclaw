@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import {
+  MIN_PROMPT_BUDGET_RATIO,
+  MIN_PROMPT_BUDGET_TOKENS,
+} from "../../pi-compaction-constants.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -9,8 +13,6 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
-const MIN_PROMPT_BUDGET_TOKENS = 8_000;
-const MIN_PROMPT_BUDGET_RATIO = 0.5;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -38,10 +40,12 @@ export function estimatePrePromptTokens(params: {
 
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
+  unwindowedMessages?: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
   contextTokenBudget: number;
   reserveTokens: number;
+  toolResultMaxChars?: number;
 }): {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
@@ -51,7 +55,23 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   toolResultReducibleChars: number;
   effectiveReserveTokens: number;
 } {
-  const estimatedPromptTokens = estimatePrePromptTokens(params);
+  let messagesForPressure = params.messages;
+  let estimatedPromptTokens = estimatePrePromptTokens({
+    messages: params.messages,
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+  });
+  if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
+    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+      messages: params.unwindowedMessages,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+    });
+    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
+      messagesForPressure = params.unwindowedMessages;
+    }
+  }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
   const minPromptBudget = Math.min(
@@ -65,8 +85,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
-    messages: params.messages,
+    messages: messagesForPressure,
     contextWindowTokens: params.contextTokenBudget,
+    maxCharsOverride: params.toolResultMaxChars,
   });
   const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;

@@ -6,8 +6,6 @@ read_when:
 title: "Tailscale"
 ---
 
-# Tailscale (Gateway dashboard)
-
 OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the
 Gateway dashboard and WebSocket port. This keeps the Gateway bound to loopback while
 Tailscale provides HTTPS, routing, and (for Serve) identity headers.
@@ -17,6 +15,10 @@ Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 - `serve`: Tailnet-only Serve via `tailscale serve`. The gateway stays on `127.0.0.1`.
 - `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: Default (no Tailscale automation).
+
+Status and audit output use **Tailscale exposure** for this OpenClaw Serve/Funnel
+mode. `off` means OpenClaw is not managing Serve or Funnel; it does not mean the
+local Tailscale daemon is stopped or logged out.
 
 ## Auth
 
@@ -134,3 +136,9 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 - `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
 - Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
 - `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Discovery](/gateway/discovery)
+- [Authentication](/gateway/authentication)

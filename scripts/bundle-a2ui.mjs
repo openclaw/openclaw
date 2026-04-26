@@ -12,14 +12,10 @@ const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash"
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
-const inputPaths = [
-  path.join(rootDir, "package.json"),
-  path.join(rootDir, "pnpm-lock.yaml"),
-  a2uiRendererDir,
-  a2uiAppDir,
-];
+const uiPackageFile = path.join(rootDir, "ui", "package.json");
+const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
 const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
-const relativeInputPaths = inputPaths.map((inputPath) =>
+const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
 );
 
@@ -67,6 +63,18 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
+export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
+  return [
+    path.join(repoRoot, "ui", "package.json"),
+    path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"),
+    path.join(repoRoot, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI"),
+  ];
+}
+
+export function getBundleHashInputPaths(repoRoot = rootDir) {
+  return getBundleHashRepoInputPaths(repoRoot);
+}
+
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);
   const normalizedRight = normalizePath(right);
@@ -95,7 +103,7 @@ async function walkFiles(entryPath, files) {
 }
 
 function listTrackedInputFiles() {
-  const result = spawnSync("git", ["ls-files", "--", ...relativeInputPaths], {
+  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
     cwd: rootDir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -103,22 +111,23 @@ function listTrackedInputFiles() {
   if (result.status !== 0) {
     return null;
   }
-  return result.stdout
+  const trackedFiles = result.stdout
     .split("\n")
     .filter(Boolean)
     .map((filePath) => path.join(rootDir, filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
+  return trackedFiles;
 }
 
 async function computeHash() {
   let files = listTrackedInputFiles();
   if (!files) {
     files = [];
-    for (const inputPath of inputPaths) {
+    for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
       await walkFiles(inputPath, files);
     }
   }
-  files.sort(compareNormalizedPaths);
+  files = [...new Set(files)].toSorted(compareNormalizedPaths);
 
   const hash = createHash("sha256");
   for (const filePath of files) {
@@ -183,7 +192,7 @@ async function main() {
     }
   }
 
-  runPnpm(["-s", "exec", "tsc", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
+  runPnpm(["-s", "exec", "tsgo", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
 
   const localRolldownCliCandidates = getLocalRolldownCliCandidates(rootDir);
   const localRolldownCli = (

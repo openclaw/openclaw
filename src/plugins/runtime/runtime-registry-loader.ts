@@ -4,7 +4,7 @@ import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "../loader.js";
 import {
   hasExplicitPluginIdScope,
   hasNonEmptyPluginIdScope,
@@ -73,11 +73,22 @@ function shouldForwardChannelScope(params: {
   return !params.scopedLoad && params.scope === "configured-channels";
 }
 
+function resolveOrLoadRuntimePluginRegistry(
+  loadOptions: Parameters<typeof loadOpenClawPlugins>[0],
+): void {
+  // Prefer the runtime resolver so broad ensures can reuse compatible active
+  // registries, including gateway-bindable startup registries.
+  if (!resolveRuntimePluginRegistry(loadOptions)) {
+    loadOpenClawPlugins(loadOptions);
+  }
+}
+
 export function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   onlyPluginIds?: string[];
 }): void {
   const scope = options?.scope ?? "all";
@@ -131,23 +142,22 @@ export function ensurePluginRegistryLoaded(options?: {
           pluginIds: expectedChannelPluginIds,
         }) ?? context.activationSourceConfig)
       : context.activationSourceConfig;
-  loadOpenClawPlugins(
-    buildPluginRuntimeLoadOptionsFromValues(
-      {
-        ...context,
-        config: scopedConfig,
-        activationSourceConfig: scopedActivationSourceConfig,
-      },
-      {
-        throwOnLoadError: true,
-        ...(hasExplicitPluginIdScope(requestedPluginIds) ||
-        shouldForwardChannelScope({ scope, scopedLoad }) ||
-        hasNonEmptyPluginIdScope(expectedChannelPluginIds)
-          ? { onlyPluginIds: expectedChannelPluginIds }
-          : {}),
-      },
-    ),
+  const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
+    {
+      ...context,
+      config: scopedConfig,
+      activationSourceConfig: scopedActivationSourceConfig,
+    },
+    {
+      throwOnLoadError: true,
+      ...(hasExplicitPluginIdScope(requestedPluginIds) ||
+      shouldForwardChannelScope({ scope, scopedLoad }) ||
+      hasNonEmptyPluginIdScope(expectedChannelPluginIds)
+        ? { onlyPluginIds: expectedChannelPluginIds }
+        : {}),
+    },
   );
+  resolveOrLoadRuntimePluginRegistry(loadOptions);
   if (!scopedLoad) {
     pluginRegistryLoaded = scope;
   }

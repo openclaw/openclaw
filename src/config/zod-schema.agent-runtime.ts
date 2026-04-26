@@ -248,6 +248,23 @@ export const SandboxPruneSchema = z
   .strict()
   .optional();
 
+export const AgentContextLimitsSchema = z
+  .object({
+    memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
+    memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
+    toolResultMaxChars: z.number().int().min(1).max(250_000).optional(),
+    postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
+  })
+  .strict()
+  .optional();
+
+export const AgentSkillsLimitsSchema = z
+  .object({
+    maxSkillsPromptChars: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolPolicyBaseSchema = z
   .object({
     allow: z.array(z.string()).optional(),
@@ -485,6 +502,7 @@ const ToolLoopDetectionSchema = z
     enabled: z.boolean().optional(),
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
+    unknownToolThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
@@ -666,6 +684,7 @@ export const MemorySearchSchema = z
       .object({
         modelPath: z.string().optional(),
         modelCacheDir: z.string().optional(),
+        contextSize: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
       })
       .strict()
       .optional(),
@@ -703,6 +722,7 @@ export const MemorySearchSchema = z
         watch: z.boolean().optional(),
         watchDebounceMs: z.number().int().nonnegative().optional(),
         intervalMinutes: z.number().int().nonnegative().optional(),
+        embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),
         sessions: z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
@@ -801,13 +821,16 @@ export const AgentEntrySchema = z
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    skillsLimits: AgentSkillsLimitsSchema,
+    contextLimits: AgentContextLimitsSchema,
+    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

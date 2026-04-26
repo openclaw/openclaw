@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   hasPotentialConfiguredChannels,
@@ -99,6 +100,28 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
+function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return collectConfiguredAgentHarnessRuntimes(cfg, env).length > 0;
+}
+
+function resolveAgentHarnessOwnerPluginIds(
+  registry: PluginManifestRegistry,
+  runtime: string,
+): string[] {
+  const normalizedRuntime = normalizeOptionalLowercaseString(runtime);
+  if (!normalizedRuntime) {
+    return [];
+  }
+  return registry.plugins
+    .filter((plugin) =>
+      (plugin.activation?.onAgentHarnesses ?? []).some(
+        (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
+      ),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   const profiles = cfg.auth?.profiles;
@@ -196,27 +219,60 @@ function resolvePluginIdForConfiguredWebFetchProvider(
   });
 }
 
-function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
-  const map = new Map<string, string>();
+function normalizeManifestChannelId(channelId: string): string {
+  return normalizeChatChannelId(channelId) ?? channelId;
+}
+
+function getManifestChannelPreferOver(
+  plugin: PluginManifestRecord,
+  channelId: string,
+): readonly string[] {
+  return plugin.channelConfigs?.[channelId]?.preferOver ?? [];
+}
+
+function collectPluginIdsForConfiguredChannel(
+  channelId: string,
+  registry: PluginManifestRegistry,
+): string[] {
+  const normalizedChannelId = normalizeManifestChannelId(channelId);
+  const builtInId = normalizeChatChannelId(normalizedChannelId);
+  const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
   for (const record of registry.plugins) {
-    for (const channelId of record.channels ?? []) {
-      if (channelId && !map.has(channelId)) {
-        map.set(channelId, record.id);
+    if (
+      (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === normalizedChannelId)
+    ) {
+      claims.push({
+        plugin: record,
+        preferOver: getManifestChannelPreferOver(record, normalizedChannelId),
+      });
+    }
+  }
+
+  if (claims.length === 0) {
+    return [builtInId ?? normalizedChannelId];
+  }
+
+  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
+  if (builtInId) {
+    claimIds.add(builtInId);
+  }
+  const preferredIds = new Set<string>();
+  for (const claim of claims) {
+    for (const preferredOverId of claim.preferOver) {
+      if (claimIds.has(preferredOverId)) {
+        // Keep both sides as candidates. The preferOver filter later disables
+        // the lower-priority plugin unless the preferred plugin is explicitly
+        // disabled/denied, preserving fallback to bundled channel support.
+        preferredIds.add(claim.plugin.id);
+        preferredIds.add(preferredOverId);
       }
     }
   }
-  return map;
-}
 
-function resolvePluginIdForChannel(
-  channelId: string,
-  channelToPluginId: ReadonlyMap<string, string>,
-): string {
-  const builtInId = normalizeChatChannelId(channelId);
-  if (builtInId) {
-    return builtInId;
+  if (preferredIds.size > 0) {
+    return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
   }
-  return channelToPluginId.get(channelId) ?? channelId;
+  return [builtInId ?? claims[0]?.plugin.id ?? normalizedChannelId];
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
@@ -281,6 +337,37 @@ function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
     : false;
 }
 
+function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return [];
+  }
+  return Object.keys(entries)
+    .map((pluginId) => pluginId.trim())
+    .filter(Boolean);
+}
+
+function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
+  const pluginIds = new Set<string>(collectConfiguredPluginEntryIds(cfg));
+  if (
+    isRecord(cfg.browser) ||
+    isRecord(cfg.plugins?.entries?.browser) ||
+    hasBrowserToolReference(cfg)
+  ) {
+    pluginIds.add("browser");
+  }
+  if (isRecord(cfg.acp) || isRecord(cfg.plugins?.entries?.acpx)) {
+    pluginIds.add("acpx");
+  }
+  if (
+    isRecord(cfg.plugins?.entries?.xai) ||
+    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+  ) {
+    pluginIds.add("xai");
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   if (isRecord(cfg.browser) || isRecord(cfg.acp) || hasBrowserToolReference(cfg)) {
@@ -300,17 +387,11 @@ function hasPluginEntries(cfg: OpenClawConfig): boolean {
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
-function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
-  const pluginEntries = cfg.plugins?.entries;
-  if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
-    return true;
-  }
-  if (
-    pluginEntries &&
-    Object.values(pluginEntries).some((entry) => isRecord(entry) && isRecord(entry.config))
-  ) {
-    return true;
-  }
+function hasPluginAllowlistWithEntries(cfg: OpenClawConfig): boolean {
+  return Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg);
+}
+
+function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
     return true;
   }
@@ -318,6 +399,19 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
     return true;
   }
   if (collectModelRefs(cfg).length > 0) {
+    return true;
+  }
+  return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
+}
+
+function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasPluginAllowlistWithEntries(cfg)) {
+    return true;
+  }
+  if (hasConfiguredPluginConfigEntry(cfg)) {
+    return true;
+  }
+  if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
@@ -328,9 +422,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
     if (key === "defaults" || key === "modelByChannel") {
       continue;
     }
-    if (!normalizeChatChannelId(key)) {
-      return true;
-    }
+    return true;
   }
   return false;
 }
@@ -339,7 +431,7 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
+  if (hasPluginAllowlistWithEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
@@ -348,13 +440,7 @@ export function configMayNeedPluginAutoEnable(
   if (hasPotentialConfiguredChannels(cfg, env)) {
     return true;
   }
-  if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
-    return true;
-  }
-  if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
-    return true;
-  }
-  if (collectModelRefs(cfg).length > 0) {
+  if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
   if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {
@@ -367,6 +453,7 @@ export function configMayNeedPluginAutoEnable(
     resolvePluginSetupAutoEnableReasons({
       config: cfg,
       env,
+      pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
     }).length > 0
   );
 }
@@ -381,6 +468,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} auth configured`;
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
+    case "agent-harness-runtime-configured":
+      return `${candidate.runtime} agent harness runtime configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -401,11 +490,11 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   registry: PluginManifestRegistry;
 }): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
-  const channelToPluginId = buildChannelToPluginIdMap(params.registry);
   for (const channelId of collectCandidateChannelIds(params.config, params.env)) {
-    const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId);
     if (isChannelConfigured(params.config, channelId, params.env)) {
-      changes.push({ pluginId, kind: "channel-configured", channelId });
+      for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+        changes.push({ pluginId, kind: "channel-configured", channelId });
+      }
     }
   }
 
@@ -429,6 +518,17 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         pluginId: owningPluginIds[0],
         kind: "provider-model-configured",
         modelRef,
+      });
+    }
+  }
+
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env)) {
+    const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
+    for (const pluginId of pluginIds) {
+      changes.push({
+        pluginId,
+        kind: "agent-harness-runtime-configured",
+        runtime,
       });
     }
   }
@@ -471,9 +571,14 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   }
 
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
+    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
+      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
+    );
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,
+      pluginIds: setupPluginIds,
     })) {
       changes.push({
         pluginId: entry.pluginId,
@@ -506,6 +611,45 @@ function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): bool
 function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   const deny = cfg.plugins?.deny;
   return Array.isArray(deny) && deny.includes(pluginId);
+}
+
+function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
+  const allow = cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.includes(pluginId)) {
+    return true;
+  }
+  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
+}
+
+function disableImplicitPreferredOverPlugin(params: {
+  config: OpenClawConfig;
+  originalConfig: OpenClawConfig;
+  pluginId: string;
+  manifestRegistry: PluginManifestRegistry;
+}): OpenClawConfig {
+  if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
+    return params.config;
+  }
+  if (
+    !normalizeChatChannelId(params.pluginId) &&
+    !isKnownPluginId(params.pluginId, params.manifestRegistry)
+  ) {
+    return params.config;
+  }
+  const existingEntry = params.config.plugins?.entries?.[params.pluginId];
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config.plugins,
+      entries: {
+        ...params.config.plugins?.entries,
+        [params.pluginId]: {
+          ...(existingEntry && typeof existingEntry === "object" ? existingEntry : {}),
+          enabled: false,
+        },
+      },
+    },
+  };
 }
 
 function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
@@ -614,7 +758,7 @@ function resolveChannelAutoEnableDisplayLabel(
 ): string | undefined {
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
   if (builtInChannelId) {
-    return getChatChannelMeta(builtInChannelId).label;
+    return getChatChannelMeta(builtInChannelId)?.label;
   }
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
   return plugin?.channelConfigs?.[entry.channelId]?.label ?? plugin?.channelCatalogMeta?.label;
@@ -640,7 +784,7 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
 }): PluginManifestRegistry {
   return (
     params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config)
+    (configMayNeedPluginManifestRegistry(params.config, params.env)
       ? loadPluginManifestRegistry({ config: params.config, env: params.env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
@@ -660,6 +804,8 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 
+  const preferOverCache = new Map<string, string[]>();
+
   for (const entry of params.candidates) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
     if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
@@ -674,8 +820,15 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
         registry: params.manifestRegistry,
         isPluginDenied,
         isPluginExplicitlyDisabled,
+        preferOverCache,
       })
     ) {
+      next = disableImplicitPreferredOverPlugin({
+        config: next,
+        originalConfig: params.config ?? {},
+        pluginId: entry.pluginId,
+        manifestRegistry: params.manifestRegistry,
+      });
       continue;
     }
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { SessionSendPolicyConfig } from "../../config/types.base.js";
 import type {
@@ -12,6 +12,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CANONICAL_ROOT_MEMORY_FILENAME } from "../../memory/root-memory-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -89,9 +90,9 @@ const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
-  maxResults: 6,
-  maxSnippetChars: 700,
-  maxInjectedChars: 4_000,
+  maxResults: 4,
+  maxSnippetChars: 450,
+  maxInjectedChars: 2_200,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
@@ -244,14 +245,6 @@ function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefi
   return value ? value : undefined;
 }
 
-function normalizeQmdCommand(command: string): string {
-  const normalized = path.normalize(command);
-  if (normalized === "/opt/homebrew/bin/qmd" || normalized === "/usr/local/bin/qmd") {
-    return "qmd";
-  }
-  return command;
-}
-
 function resolveSessionConfig(
   cfg: MemoryQmdConfig["sessions"],
   workspaceDir: string,
@@ -343,7 +336,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
+    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -405,7 +398,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
-  const command = normalizeQmdCommand(parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd");
+  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

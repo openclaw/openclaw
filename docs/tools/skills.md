@@ -6,8 +6,6 @@ read_when:
 title: "Skills"
 ---
 
-# Skills (OpenClaw)
-
 OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
@@ -83,12 +81,34 @@ slash-command discovery, sandbox sync, and skill snapshots.
 
 Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
-when the plugin is enabled. Today those directories are merged into the same
-low-precedence path as `skills.load.extraDirs`, so a same-named bundled,
-managed, agent, or workspace skill overrides them.
+when the plugin is enabled. This is the right place for tool-specific operating
+guides that are too long for the tool description but should be available
+whenever the plugin is installed; for example, the browser plugin ships a
+`browser-automation` skill for multi-step browser control. Today those
+directories are merged into the same low-precedence path as
+`skills.load.extraDirs`, so a same-named bundled, managed, agent, or workspace
+skill overrides them.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
+
+## Skill Workshop
+
+The optional, experimental Skill Workshop plugin can create or update workspace
+skills from reusable procedures observed during agent work. It is disabled by
+default and must be explicitly enabled through
+`plugins.entries.skill-workshop`.
+
+Skill Workshop writes only to `<workspace>/skills`, scans generated content,
+supports pending approval or automatic safe writes, quarantines unsafe
+proposals, and refreshes the skill snapshot after successful writes so new
+skills can become available without a Gateway restart.
+
+Use it when you want corrections such as “next time, verify GIF attribution” or
+hard-won workflows such as media QA checklists to become durable procedural
+instructions. Start with pending approval; use automatic writes only in trusted
+workspaces after reviewing its proposals. Full guide:
+[Skill Workshop Plugin](/plugins/skill-workshop).
 
 ## ClawHub (install + sync)
 
@@ -182,6 +202,11 @@ Fields under `metadata.openclaw`:
 - `requires.config` — list of `openclaw.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv/download).
+
+Legacy `metadata.clawdbot` blocks are still accepted when
+`metadata.openclaw` is absent, so older installed skills keep their dependency
+gates and installer hints. New and updated skills should use
+`metadata.openclaw`.
 
 Note on sandboxing:
 
@@ -324,7 +349,7 @@ agent.
 
 If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `exec` tool with `host=node`.
 
-This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
+This relies on the node reporting its command support and on a bin probe via `system.which` or `system.run`. Offline nodes do not make remote-only skills visible. If a connected node stops answering bin probes, OpenClaw clears its cached bin matches so agents no longer see skills that cannot currently run there.
 
 ## Skills watcher (auto-refresh)
 

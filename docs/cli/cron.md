@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw cron` (schedule and run background jobs)"
 read_when:
   - You want scheduled jobs and wakeups
   - You’re debugging cron execution and logs
-title: "cron"
+title: "Cron"
 ---
 
 # `openclaw cron`
@@ -16,18 +16,27 @@ Related:
 
 Tip: run `openclaw cron --help` for the full command surface.
 
+Note: `openclaw cron list` and `openclaw cron show <job-id>` preview the
+resolved delivery route. For `channel: "last"`, the preview shows whether the
+route resolved from the main/current session or will fail closed.
+
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
-Note: cron-owned isolated runs expect a plain-text summary and the runner owns
-the final send path. `--no-deliver` keeps the run internal; it does not hand
-delivery back to the agent's message tool.
+Note: isolated cron chat delivery is shared. `--announce` is runner fallback
+delivery for the final reply; `--no-deliver` disables that fallback but does
+not remove the agent's `message` tool when a chat route is available.
 
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
 Note: `--session` supports `main`, `isolated`, `current`, and `session:<id>`.
 Use `current` to bind to the active session at creation time, or `session:<id>` for
 an explicit persistent session key.
+
+Note: `--session isolated` creates a fresh transcript/session id for each run.
+Safe preferences and explicit user-selected model/auth overrides can carry, but
+ambient conversation context does not: channel/group routing, send/queue policy,
+elevation, origin, and ACP runtime binding are reset for the new isolated run.
 
 Note: for one-shot CLI jobs, offset-less `--at` datetimes are treated as UTC unless you also pass
 `--tz <iana>`, which interprets that local wall-clock time in the given timezone.
@@ -55,17 +64,17 @@ model override with no explicit per-job fallback list no longer appends the
 agent primary as a hidden extra retry target.
 
 Note: isolated cron model precedence is Gmail-hook override first, then per-job
-`--model`, then any stored cron-session model override, then the normal
-agent/default selection.
+`--model`, then any user-selected stored cron-session model override, then the
+normal agent/default selection.
 
 Note: isolated cron fast mode follows the resolved live model selection. Model
 config `params.fastMode` applies by default, but a stored session `fastMode`
 override still wins over config.
 
 Note: if an isolated run throws `LiveSessionModelSwitchError`, cron persists the
-switched provider/model (and switched auth profile override when present) before
-retrying. The outer retry loop is bounded to 2 switch retries after the initial
-attempt, then aborts instead of looping forever.
+switched provider/model (and switched auth profile override when present) for
+the active run before retrying. The outer retry loop is bounded to 2 switch
+retries after the initial attempt, then aborts instead of looping forever.
 
 Note: failure notifications use `delivery.failureDestination` first, then
 global `cron.failureDestination`, and finally fall back to the job's primary
@@ -124,21 +133,30 @@ openclaw cron add \
 
 Delivery ownership note:
 
-- Cron-owned isolated jobs always route final user-visible delivery through the
-  cron runner (`announce`, `webhook`, or internal-only `none`).
-- If the task mentions messaging some external recipient, the agent should
-  describe the intended destination in its result instead of trying to send it
-  directly.
+- Isolated cron chat delivery is shared. The agent can send directly with the
+  `message` tool when a chat route is available.
+- `announce` fallback-delivers the final reply only when the agent did not send
+  directly to the resolved target. `webhook` posts the finished payload to a URL.
+  `none` disables runner fallback delivery.
+- Reminders created from an active chat preserve the live chat delivery target
+  for fallback announce delivery. Internal session keys may be lowercase; do not
+  use them as a source of truth for case-sensitive provider IDs such as Matrix
+  room IDs.
 
 ## Common admin commands
 
 Manual run:
 
 ```bash
+openclaw cron list
+openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
 openclaw cron runs --id <job-id> --limit 50
 ```
+
+`cron runs` entries include delivery diagnostics with the intended cron target,
+the resolved target, message-tool sends, fallback use, and delivered state.
 
 Agent/session retargeting:
 
@@ -165,3 +183,8 @@ Failure-delivery note:
   delivery mode is `webhook`.
 - If you do not set any failure destination and the job already announces to a
   channel, failure notifications reuse that same announce target.
+
+## Related
+
+- [CLI reference](/cli)
+- [Scheduled tasks](/automation/cron-jobs)

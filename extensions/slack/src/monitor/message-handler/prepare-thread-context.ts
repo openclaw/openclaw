@@ -10,12 +10,16 @@ import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
 import { readSessionUpdatedAt } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  resolveSlackMedia,
-  resolveSlackThreadHistory,
-  type SlackMediaResult,
-  type SlackThreadStarter,
-} from "../media.js";
+import type { SlackMediaResult } from "../media-types.js";
+import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
+
+type SlackMediaModule = typeof import("../media.js");
+let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
+
+function loadSlackMediaModule(): Promise<SlackMediaModule> {
+  slackMediaModulePromise ??= import("../media.js");
+  return slackMediaModulePromise;
+}
 
 export type SlackThreadContextData = {
   threadStarterBody: string | undefined;
@@ -64,6 +68,12 @@ export async function resolveSlackThreadContextData(params: {
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
 }): Promise<SlackThreadContextData> {
+  const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
+    Boolean(
+      (params.ctx.botUserId && author.userId && author.userId === params.ctx.botUserId) ||
+      (params.ctx.botId && author.botId && author.botId === params.ctx.botId),
+    );
+
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadSessionPreviousTimestamp: number | undefined;
@@ -85,28 +95,38 @@ export async function resolveSlackThreadContextData(params: {
     params.allowNameMatching && starter?.userId
       ? (await params.ctx.resolveUserName(starter.userId))?.name
       : undefined;
+  const starterIsCurrentBot = Boolean(
+    starter &&
+    isCurrentBotAuthor({
+      userId: starter.userId,
+      botId: starter.botId,
+    }),
+  );
   const starterAllowed =
     !starter ||
-    isSlackThreadContextSenderAllowed({
-      allowFromLower: params.allowFromLower,
-      allowNameMatching: params.allowNameMatching,
-      userId: starter.userId,
-      userName: starterSenderName,
-      botId: starter.botId,
-    });
+    (!starterIsCurrentBot &&
+      isSlackThreadContextSenderAllowed({
+        allowFromLower: params.allowFromLower,
+        allowNameMatching: params.allowNameMatching,
+        userId: starter.userId,
+        userName: starterSenderName,
+        botId: starter.botId,
+      }));
   const includeStarterContext =
     !starter ||
-    shouldIncludeSupplementalContext({
-      mode: params.contextVisibilityMode,
-      kind: "thread",
-      senderAllowed: starterAllowed,
-    });
+    (!starterIsCurrentBot &&
+      shouldIncludeSupplementalContext({
+        mode: params.contextVisibilityMode,
+        kind: "thread",
+        senderAllowed: starterAllowed,
+      }));
 
   if (starter?.text && includeStarterContext) {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
     if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
+      const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
         token: params.ctx.botToken,
@@ -120,7 +140,9 @@ export async function resolveSlackThreadContextData(params: {
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
-  if (starter?.text && !includeStarterContext) {
+  if (starter?.text && starterIsCurrentBot) {
+    logVerbose("slack: omitted current-bot thread starter from context");
+  } else if (starter?.text && !includeStarterContext) {
     logVerbose(
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
@@ -142,9 +164,21 @@ export async function resolveSlackThreadContextData(params: {
     });
 
     if (threadHistory.length > 0) {
+      const threadHistoryWithoutCurrentBot = threadHistory.filter(
+        (historyMsg) =>
+          !isCurrentBotAuthor({
+            userId: historyMsg.userId,
+            botId: historyMsg.botId,
+          }),
+      );
+      const omittedCurrentBotHistoryCount =
+        threadHistory.length - threadHistoryWithoutCurrentBot.length;
+
       const uniqueUserIds = [
         ...new Set(
-          threadHistory.map((item) => item.userId).filter((id): id is string => Boolean(id)),
+          threadHistoryWithoutCurrentBot
+            .map((item) => item.userId)
+            .filter((id): id is string => Boolean(id)),
         ),
       ];
       const userMap = new Map<string, { name?: string }>();
@@ -159,7 +193,7 @@ export async function resolveSlackThreadContextData(params: {
 
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         filterSupplementalContextItems({
-          items: threadHistory,
+          items: threadHistoryWithoutCurrentBot,
           mode: params.contextVisibilityMode,
           kind: "thread",
           isSenderAllowed: (historyMsg) => {
@@ -173,18 +207,17 @@ export async function resolveSlackThreadContextData(params: {
             });
           },
         });
-      if (omittedHistoryCount > 0) {
+      if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(
-          `slack: omitted ${omittedHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
+          `slack: omitted ${omittedHistoryCount + omittedCurrentBotHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
         );
       }
 
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const msgSenderName =
-          msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
         const isBot = Boolean(historyMsg.botId);
+        const msgSenderName = msgUser?.name ?? (isBot ? `Bot (${historyMsg.botId})` : "Unknown");
         const role = isBot ? "assistant" : "user";
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
