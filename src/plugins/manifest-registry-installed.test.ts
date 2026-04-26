@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  readPersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndex,
+} from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -133,6 +137,75 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         id: "claude-bundle",
         format: "bundle",
         bundleFormat: "claude",
+        skills: ["commands"],
+      }),
+    ]);
+  });
+
+  it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Bundle",
+        commands: "commands",
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    await writePersistedInstalledPluginIndex(
+      {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            pluginId: "claude-bundle",
+            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+            source: rootDir,
+            format: "bundle",
+            bundleFormat: "claude",
+            setupSource: path.join(rootDir, "setup-api.js"),
+          },
+        ],
+      },
+      { stateDir },
+    );
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    if (!persisted) {
+      throw new Error("expected persisted installed plugin index");
+    }
+    expect(persisted?.plugins[0]).toMatchObject({
+      pluginId: "claude-bundle",
+      source: rootDir,
+      format: "bundle",
+      bundleFormat: "claude",
+      setupSource: path.join(rootDir, "setup-api.js"),
+      rootDir,
+    });
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: persisted,
+      env: {
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toEqual([]);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: "claude-bundle",
+        format: "bundle",
+        bundleFormat: "claude",
+        rootDir,
         skills: ["commands"],
       }),
     ]);
