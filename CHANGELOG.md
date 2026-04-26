@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices while keeping shared provider credentials and preferences in the existing TTS config surface.
 - TTS/agents: make `/tts audio`, `/tts status`, and the `tts` agent tool honor the active `agents.list[].tts` voice/provider override.
 - Providers/Azure Speech: add Azure Speech as a bundled TTS provider with Speech-resource auth, voice listing, SSML escaping, native Ogg/Opus voice-note output, and telephony output. (#51776) Thanks @leonchui.
+- Browser automation: add a CDP-native role snapshot fallback with iframe-aware refs, cursor-clickable detection, target attach preparation, and `openclaw browser doctor --deep` live snapshot probing.
 - CLI/image generation: expose generic `--background` on `openclaw infer image generate` and `openclaw infer image edit`, keep `--openai-background` as an OpenAI alias, and let fal image generation honor `--output-format png|jpeg`. Thanks @steipete.
 - Browser/config: allow local managed Chrome launch discovery and post-launch CDP readiness timeouts to be raised for slower hosts such as Raspberry Pi. Fixes #66803. Thanks @beat843796.
 - Discord: allow `channels.discord.voice.model` to override the LLM used for voice channel responses while keeping STT and TTS on their existing media settings. (#64368) Thanks @mrdavey.
@@ -100,6 +101,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed model call instead of exporting a misleading `StreamAbandoned` error span. Thanks @vincentkoc.
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from being treated as empty state, preserving `paired.json` for repair instead of overwriting approved pairings. Fixes #71873. Thanks @iret77.
 - ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`, on the Gateway path inside ACP-bound threads so they are not consumed as ACP prompt text. Fixes #66298. Thanks @kindomLee.
+- ACPX: stop probing ACP agents during normal Gateway startup; the embedded backend now registers without spawning Codex/ACP child processes unless `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` is explicitly set.
 - CLI/image edit: accept `--size`, `--aspect-ratio`, and `--resolution` on `openclaw infer image edit` and report all supported edit flags from `capability inspect image.edit`. Thanks @Pinghuachiu.
 - ACP: wait for the configured runtime backend to become healthy before startup identity reconciliation, avoiding transient acpx warnings during Gateway boot. Fixes #40566.
 - Channels/ACP bindings: time out configured binding readiness checks instead of letting Discord preflight hang forever when an ACP target never settles. Fixes #68776.
