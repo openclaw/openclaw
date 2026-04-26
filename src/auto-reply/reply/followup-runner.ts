@@ -37,6 +37,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  buildThreadingToolContext,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -314,7 +315,7 @@ export function createFollowupRunner(params: {
                 agentId: run.agentId,
                 runtimeOverride: activeSessionEntry?.agentRuntimeOverride?.trim() || undefined,
               }) ?? provider;
-            const authProfile = resolveRunAuthProfile(run, cliExecutionProvider, {
+            const authProfile = resolveRunAuthProfile(run, provider, {
               config: runtimeConfig,
             });
             let attemptCompactionCount = 0;
@@ -324,6 +325,19 @@ export function createFollowupRunner(params: {
                   activeSessionEntry,
                   cliExecutionProvider,
                 );
+                const threadingContext = buildThreadingToolContext({
+                  sessionCtx: {
+                    OriginatingChannel: queued.originatingChannel,
+                    Provider: run.messageProvider,
+                    OriginatingTo: queued.originatingTo,
+                    To: queued.originatingTo,
+                    AccountId: run.agentAccountId,
+                    ChatType: queued.originatingChatType,
+                    MessageThreadId: queued.originatingThreadId,
+                  },
+                  config: runtimeConfig,
+                  hasRepliedRef: undefined,
+                });
                 const cliParams: Parameters<typeof runCliAgent>[0] = {
                   sessionId: run.sessionId,
                   sessionKey: run.sessionKey,
@@ -360,7 +374,7 @@ export function createFollowupRunner(params: {
                   agentAccountId: run.agentAccountId,
                   messageTo: queued.originatingTo,
                   messageThreadId: queued.originatingThreadId,
-                  currentChannelId: queued.originatingTo,
+                  currentChannelId: threadingContext.currentChannelId ?? queued.originatingTo,
                   senderIsOwner: run.senderIsOwner,
                 };
                 let cliResult: Awaited<ReturnType<typeof runCliAgent>>;
