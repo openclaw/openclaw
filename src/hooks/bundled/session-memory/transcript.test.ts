@@ -37,16 +37,17 @@ describe("sanitizeModelOutput", () => {
     expect(sanitizeModelOutput("Some text NO_REPLY more")).toBe("Some text  more");
   });
 
-  it("strips [AUDIO_AS_VOICE] metadata marker", () => {
-    expect(sanitizeModelOutput("Hello [AUDIO_AS_VOICE] world")).toBe("Hello  world");
+  it("strips [[audio_as_voice]] metadata marker", () => {
+    expect(sanitizeModelOutput("Hello [[audio_as_voice]] world")).toBe("Hello  world");
   });
 
-  it("strips [MEDIA:...] markers", () => {
-    expect(sanitizeModelOutput("See [MEDIA:image.png] attached")).toBe("See  attached");
+  it("strips MEDIA:... markers", () => {
+    expect(sanitizeModelOutput("See MEDIA:image.png attached")).toBe("See  attached");
   });
 
-  it("strips [reply_to:...] markers", () => {
-    expect(sanitizeModelOutput("Hello [reply_to:123] world")).toBe("Hello  world");
+  it("strips [[reply_to:...]] and [[reply_to_current]] markers", () => {
+    expect(sanitizeModelOutput("Hello [[reply_to:123]] world")).toBe("Hello  world");
+    expect(sanitizeModelOutput("Hello [[reply_to_current]] world")).toBe("Hello  world");
   });
 
   it("strips thinking blocks between XML-like tags", () => {
@@ -170,29 +171,31 @@ Let me know if you need more.`;
 describe("getRecentSessionContent", () => {
   it("sanitizes assistant transcript content before returning memory text", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-memory-"));
-    const sessionFile = path.join(tmpDir, "test.jsonl");
+    try {
+      const sessionFile = path.join(tmpDir, "test.jsonl");
 
-    const lines = [
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "hello" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content:
-            '<|im_start|>assistant\nHello <tool_call name="exec">rm -rf /</tool_call> NO_REPLY_TOKENS [PAD_TOKEN] world<|im_end|>',
-        },
-      }),
-    ];
+      const lines = [
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "hello" },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content:
+              '<|im_start|>assistant\nHello <tool_call name="exec">rm -rf /</tool_call> NO_REPLY_TOKENS [PAD_TOKEN] world<|im_end|>',
+          },
+        }),
+      ];
 
-    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+      await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
 
-    await expect(getRecentSessionContent(sessionFile, 10)).resolves.toBe(
-      "user: hello\nassistant: Hello    world",
-    );
-
-    await fs.rm(tmpDir, { recursive: true, force: true });
+      await expect(getRecentSessionContent(sessionFile, 10)).resolves.toBe(
+        "user: hello\nassistant: Hello    world",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

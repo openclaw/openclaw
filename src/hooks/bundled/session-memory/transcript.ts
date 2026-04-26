@@ -62,9 +62,9 @@ export function sanitizeModelOutput(rawText: string): string {
   // (NO_REPLY must not consume the _TOKENS suffix before the longer variant).
   text = text.replace(/\[NO_REPLY[_\s]*(TOKENS|COUNT)?[^\]]*\]/gi, "");
   text = text.replace(/NO_REPLY(?:_TOKENS)?/gi, "");
-  text = text.replace(/\[AUDIO_AS_VOICE\]/gi, "");
-  text = text.replace(/\[MEDIA:[^\]]*\]/g, "");
-  text = text.replace(/\[reply_to[_:]?(current|[\w-]+)\]/gi, "");
+  text = text.replace(/\[\[audio_as_voice\]\]/gi, "");
+  text = text.replace(/\bMEDIA:\s*[^\n]+/g, "");
+  text = text.replace(/\[\[reply_to[_:]?(current|[\w-]+)\]\]/gi, "");
 
   // ── 3. Thinking / reasoning blocks ─────────────────────────────────────────
   // Replace with "" (empty string) rather than " " so that runs of newlines
@@ -91,7 +91,7 @@ export function sanitizeModelOutput(rawText: string): string {
   text = text.replace(/<<\[Document[^\]]*\]>>/g, "");
   text = text.replace(/<retrieved_context[\s\S]*?<\/retrieved_context>/gi, "");
   text = text.replace(/<!--\.doc[^>]*-->/gi, "");
-  text = text.replace(/\[DOCUMENT\s*\([^\)]*\)\]/gi, "");
+  text = text.replace(/\[DOCUMENT\s*\([^)]*\)\]/gi, "");
 
   // ── 6. Orphaned role markers at line start ────────────────────────────────
   // Model sometimes drops role Begin/End markers but leaves a stray prefix.
@@ -122,12 +122,23 @@ export function sanitizeModelOutput(rawText: string): string {
   // like "**System requirements**" (reviewer feedback).
   text = text.replace(/^\*\*System\*\*\s*\n[\s\S]*?(?=^\*\*|$)/gim, "");
 
-  // ── 8. Collapse whitespace ────────────────────────────────────────────────
+  // ── 8. Common filler phrases ──────────────────────────────────────────────
+  text = text.replace(
+    /^(I have nothing (further |else )?to add\.?\s*|Nothing (further |else )?on my end\.?\s*|Nothing (further |else )?to (add|report|say)\.?\s*|Standing by\.?\s*)+/i,
+    "",
+  );
+  text = text.replace(
+    /^\s*(I (have |can )?nothing (further |else )?(to add|to (report|say|contribute|mention))|Nothing (further |else )?on my end\.?|Standing by\.?|That'?s? (is |was )?(all|it)\.?|End of (report|message|update)\.?)\s*$/gim,
+    "",
+  );
+
+  // ── 9. Normalize whitespace ──────────────────────────────────────────────
   text = text.replace(/[ \t]+\n/g, "\n");
   text = text.replace(/\n{3,}/g, "\n\n");
   // Note: consecutive spaces are preserved to avoid damaging indentation in
   // code blocks and other whitespace-sensitive content after token removal.
-  text = text.trim();
+  // Use trimEnd() instead of trim() to preserve leading whitespace/indentation.
+  text = text.trimEnd();
 
   return text;
 }
