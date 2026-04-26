@@ -185,6 +185,25 @@ function resolveBundledManifestContractPluginIds(contract: ManifestRegistryContr
   });
 }
 
+/**
+ * Look up which bundled plugin owns a specific secret-provider source id.
+ * Returns the plugin id if found, otherwise undefined. Source ids are expected
+ * to be unique across bundled plugins; if the same source is declared by
+ * multiple plugins, the first match (by plugin id sort order) wins.
+ */
+export function resolveBundledPluginIdForSecretProviderSource(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  for (const entry of resolveBundledManifestContracts()) {
+    if (entry.secretProviderIds.includes(trimmed)) {
+      return entry.pluginId;
+    }
+  }
+  return undefined;
+}
+
 function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKey): string[] {
   return uniqueStrings(
     resolveBundledManifestContracts()
