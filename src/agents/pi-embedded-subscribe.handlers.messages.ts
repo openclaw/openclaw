@@ -50,6 +50,14 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
+function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "openai-responses" || api === "azure-openai-responses";
+}
+
 function resolveAssistantStreamItemId(params: {
   contentIndex?: unknown;
   message: AgentMessage | undefined;
@@ -481,7 +489,12 @@ export function handleMessageUpdate(
     contentIndex: assistantRecord?.contentIndex,
     message: partialAssistant,
   });
-  if (deliveryPhase && streamItemId) {
+  const isPhasePendingOpenAiResponsesTextItem =
+    evtType !== "text_end" &&
+    !deliveryPhase &&
+    Boolean(streamItemId) &&
+    isOpenAiResponsesAssistantMessage(partialAssistant);
+  if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
     if (previousStreamItemId && previousStreamItemId !== streamItemId) {
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
@@ -491,6 +504,9 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (deliveryPhase === "commentary") {
+    return;
+  }
+  if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
   const phaseAwareVisibleText = coerceChatContentText(
@@ -584,7 +600,7 @@ export function handleMessageUpdate(
         delta: deltaText,
         replace,
         mediaUrls,
-        phase: assistantPhase,
+        phase: deliveryPhase ?? assistantPhase,
       });
       emitAgentEvent({
         runId: ctx.params.runId,

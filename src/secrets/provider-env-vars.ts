@@ -80,6 +80,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env,
+    preferPersisted: false,
     includeDisabled: true,
   });
   const candidates: Record<string, string[]> = {};
