@@ -495,6 +495,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       liveSelection: {
         provider: "anthropic",
         model: "claude-sonnet-4-6",
+        authProfileId: "anthropic:work",
       },
     });
 
@@ -515,6 +516,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expect.objectContaining({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
+        authProfileId: "anthropic:work",
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();

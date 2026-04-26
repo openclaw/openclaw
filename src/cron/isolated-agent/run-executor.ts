@@ -154,6 +154,7 @@ export function createCronPromptExecutor(params: {
             prompt: promptText,
             provider: cliExecutionProvider,
             model: modelOverride,
+            authProfileId: params.liveSelection.authProfileId,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
