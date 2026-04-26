@@ -112,6 +112,8 @@ export type TtsTestFacade = {
     channel: string | undefined;
     target: TtsSpeechTarget | undefined;
     voiceCompatible: boolean | undefined;
+    fileExtension?: string;
+    outputFormat?: string;
   }) => boolean;
   summarizeText: (...args: unknown[]) => Promise<SummarizeResult>;
   getResolvedSpeechProviderConfig: (

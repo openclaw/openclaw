@@ -150,6 +150,8 @@ Docs: https://docs.openclaw.ai
   same inbound audio twice. Fixes #70580.
 - TTS/BlueBubbles: deliver compatible auto-TTS audio as iMessage voice memo
   bubbles instead of plain MP3/CAF file attachments. Fixes #16848.
+- TTS: resolve voice-note and voice-memo routing from channel plugin
+  capabilities instead of speech-core-owned channel id lists.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.

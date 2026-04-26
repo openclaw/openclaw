@@ -30,6 +30,22 @@ const getSpeechProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
+  resolveChannelTtsVoiceDelivery: (channel: string | undefined) => {
+    const normalized = channel?.trim().toLowerCase();
+    if (normalized === "bluebubbles") {
+      return {
+        synthesisTarget: "audio-file",
+        audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+      };
+    }
+    if (normalized === "feishu" || normalized === "whatsapp") {
+      return { synthesisTarget: "voice-note", transcodesAudio: true };
+    }
+    if (normalized === "discord" || normalized === "matrix" || normalized === "telegram") {
+      return { synthesisTarget: "voice-note" };
+    }
+    return undefined;
+  },
 }));
 
 vi.mock("../api.js", async () => {
@@ -152,7 +168,7 @@ describe("speech-core native voice-note routing", () => {
     installSpeechProviders([createMockSpeechProvider()]);
   });
 
-  it("keeps native voice-note channel support centralized", () => {
+  it("resolves voice delivery support from channel capabilities", () => {
     for (const channel of nativeVoiceNoteChannels) {
       expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
       expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
