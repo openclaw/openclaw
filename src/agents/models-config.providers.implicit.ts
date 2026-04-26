@@ -1,3 +1,8 @@
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -7,7 +12,10 @@ import {
   resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import {
+  resolveOwningPluginIdsForModelRefs,
+  resolveOwningPluginIdsForProvider,
+} from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -71,6 +79,7 @@ function resolveProviderDiscoveryFilter(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  resolveModelOwners?: (models: readonly string[]) => readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -84,7 +93,14 @@ function resolveProviderDiscoveryFilter(params: {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
   if (!live) {
-    return undefined;
+    const configured = resolveConfiguredProviderDiscoveryPluginIds({
+      config,
+      workspaceDir,
+      env,
+      resolveOwners: params.resolveOwners,
+      resolveModelOwners: params.resolveModelOwners,
+    });
+    return configured.length > 0 ? configured : undefined;
   }
   const rawValues = [
     env.OPENCLAW_LIVE_PROVIDERS?.trim(),
@@ -124,11 +140,102 @@ function resolveProviderDiscoveryFilter(params: {
     : undefined;
 }
 
+function collectAgentModelRefs(model: AgentModelConfig | undefined, refs: Set<string>): void {
+  const primary = resolveAgentModelPrimaryValue(model)?.trim();
+  if (primary) {
+    refs.add(primary);
+  }
+  for (const fallback of resolveAgentModelFallbackValues(model)) {
+    const trimmed = fallback.trim();
+    if (trimmed) {
+      refs.add(trimmed);
+    }
+  }
+}
+
+function collectConfiguredModelRefs(config: OpenClawConfig | undefined): string[] {
+  const refs = new Set<string>();
+  const defaults = config?.agents?.defaults;
+  if (defaults) {
+    collectAgentModelRefs(defaults.model, refs);
+    collectAgentModelRefs(defaults.imageModel, refs);
+    collectAgentModelRefs(defaults.imageGenerationModel, refs);
+    collectAgentModelRefs(defaults.videoGenerationModel, refs);
+    collectAgentModelRefs(defaults.musicGenerationModel, refs);
+    collectAgentModelRefs(defaults.pdfModel, refs);
+    collectAgentModelRefs(defaults.subagents?.model, refs);
+    for (const key of Object.keys(defaults.models ?? {})) {
+      const trimmed = key.trim();
+      if (trimmed) {
+        refs.add(trimmed);
+      }
+    }
+  }
+  for (const agent of config?.agents?.list ?? []) {
+    collectAgentModelRefs(agent.model, refs);
+    collectAgentModelRefs(agent.subagents?.model, refs);
+  }
+  return [...refs].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveConfiguredProviderDiscoveryPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
+  resolveModelOwners?: (models: readonly string[]) => readonly string[];
+}): string[] {
+  const modelRefs = collectConfiguredModelRefs(params.config);
+  const providerIds = new Set(Object.keys(params.config?.models?.providers ?? {}));
+  for (const modelRef of modelRefs) {
+    const slash = modelRef.indexOf("/");
+    if (slash > 0) {
+      const provider = modelRef.slice(0, slash).trim();
+      if (provider) {
+        providerIds.add(provider);
+      }
+    }
+  }
+
+  const pluginIds = new Set<string>();
+  for (const providerId of providerIds) {
+    const owners =
+      params.resolveOwners?.(providerId) ??
+      resolveOwningPluginIdsForProvider({
+        provider: providerId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }) ??
+      [];
+    for (const owner of owners) {
+      pluginIds.add(owner);
+    }
+  }
+
+  if (modelRefs.length > 0) {
+    const modelOwners =
+      params.resolveModelOwners?.(modelRefs) ??
+      resolveOwningPluginIdsForModelRefs({
+        models: modelRefs,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    for (const owner of modelOwners) {
+      pluginIds.add(owner);
+    }
+  }
+
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  resolveModelOwners?: (models: readonly string[]) => readonly string[];
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
 }
