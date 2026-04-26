@@ -209,6 +209,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     isMessagePreviewLane(lane) && isLongLivedPreview(lane.stream?.visibleSinceMs?.(), readNow());
   const shouldUseFreshFinalForPreview = (lane: DraftLaneState, visibleSinceMs?: number) =>
     isMessagePreviewLane(lane) && isLongLivedPreview(visibleSinceMs, readNow());
+  const clearActivePreviewAfterFreshFinal = async (lane: DraftLaneState, laneName: LaneName) => {
+    try {
+      await lane.stream?.clear();
+    } catch (err) {
+      params.log(`telegram: ${laneName} fresh final preview cleanup failed: ${String(err)}`);
+    }
+  };
   const canMaterializeDraftFinal = (
     lane: DraftLaneState,
     previewButtons?: TelegramInlineButtons,
@@ -585,6 +592,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           await params.stopDraftLane(lane);
           const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
           if (delivered) {
+            await clearActivePreviewAfterFreshFinal(lane, laneName);
             return result("sent");
           }
         }

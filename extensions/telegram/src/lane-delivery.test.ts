@@ -369,6 +369,7 @@ describe("createLaneTextDeliverer", () => {
       expect.objectContaining({ text: HELLO_FINAL }),
     );
     expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.answer.stream?.clear).toHaveBeenCalledTimes(1);
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
@@ -397,6 +398,7 @@ describe("createLaneTextDeliverer", () => {
         text: HELLO_FINAL,
       }),
     );
+    expect(harness.answer.stream?.clear).not.toHaveBeenCalled();
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
