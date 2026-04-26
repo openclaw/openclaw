@@ -972,6 +972,14 @@ describe("bundled channel entry shape guards", () => {
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
       listChannelCatalogEntries: () => [],
     }));
+    // jiti-loader-cache prefers native require() for compiled .js before
+    // falling back to jiti. This test drives plugin loading via the jiti
+    // mock — disable the native-require fast path so the mocked jiti loader
+    // is exercised instead of loading the on-disk fixture directly.
+    vi.doMock("../../plugins/native-module-require.js", () => ({
+      isJavaScriptModulePath: () => false,
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
+    }));
 
     let reentered = false;
     vi.doMock("jiti", () => ({

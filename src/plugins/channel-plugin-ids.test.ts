@@ -419,26 +419,26 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["voice-call"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel", "browser", "voice-call"],
+      ["demo-channel", "browser", "voice-call", "memory-core"],
     ],
     [
       "keeps bundled startup sidecars with enabledByDefault at idle startup",
       {} as OpenClawConfig,
-      ["demo-channel", "browser"],
+      ["demo-channel", "browser", "memory-core"],
     ],
     [
       "keeps provider plugins out of idle startup when only provider config references them",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel", "browser"],
+      ["demo-channel", "browser", "memory-core"],
     ],
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
         enabledPluginIds: ["demo-global-sidecar", "voice-call"],
       }),
-      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
+      ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
     ],
     [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
@@ -453,7 +453,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       createStartupConfig({
         channelIds: ["demo-channel", "demo-other-channel"],
       }),
-      ["demo-channel", "demo-other-channel", "browser"],
+      ["demo-channel", "demo-other-channel", "browser", "memory-core"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
@@ -501,7 +501,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       env: {
         DEMO_CHANNEL_ANYTHING: "1",
       } as NodeJS.ProcessEnv,
-      expected: ["demo-channel", "browser"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
     expect(
       resolveConfiguredDeferredChannelPluginIds({
@@ -564,7 +564,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       env: {},
-      expected: ["browser"],
+      expected: ["browser", "memory-core"],
     });
   });
 
@@ -582,7 +582,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       env: {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
       } as NodeJS.ProcessEnv,
-      expected: ["browser"],
+      expected: ["browser", "memory-core"],
     });
   });
 
@@ -657,12 +657,22 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("includes the default memory slot plugin when the allowlist permits it", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["browser", "memory-core"],
+        noConfiguredChannels: true,
+      }),
+      expected: ["browser", "memory-core"],
+    });
+  });
+
   it("does not include non-selected memory plugins only because they are enabled", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["memory-lancedb"],
       }),
-      expected: ["demo-channel", "browser"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
@@ -672,7 +682,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         agentRuntimeId: "codex",
         enabledPluginIds: ["codex"],
       }),
-      expected: ["demo-channel", "browser", "codex"],
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });
 
@@ -682,7 +692,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         agentRuntimeIds: ["codex"],
         enabledPluginIds: ["codex"],
       }),
-      expected: ["demo-channel", "browser", "codex"],
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });
 
@@ -692,7 +702,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["codex"],
       }),
       env: { OPENCLAW_AGENT_RUNTIME: "codex" },
-      expected: ["demo-channel", "browser", "codex"],
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });
 
@@ -702,7 +712,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         agentRuntimeId: "demo-cli",
         enabledPluginIds: ["demo-provider-plugin"],
       }),
-      expected: ["demo-channel", "browser", "demo-provider-plugin"],
+      expected: ["demo-channel", "browser", "demo-provider-plugin", "memory-core"],
     });
   });
 
@@ -715,7 +725,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: createStartupConfig({
         agentRuntimeId: runtime,
       }),
-      expected: ["demo-channel", "browser", pluginId],
+      expected: ["demo-channel", "browser", pluginId, "memory-core"],
     });
   });
 
@@ -738,7 +748,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
@@ -761,7 +771,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 });
