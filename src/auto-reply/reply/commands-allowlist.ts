@@ -23,6 +23,7 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
+import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
@@ -559,6 +560,21 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return {
       shouldContinue: false,
       reply: { text: "⚠️ This channel does not support allowlist storage." },
+    };
+  }
+
+  const storeDeniedText = resolveConfigWriteDeniedText({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    channelId,
+    accountId,
+    gatewayClientScopes: params.ctx.GatewayClientScopes,
+    target: resolveExplicitConfigWriteTarget({ channelId, accountId }),
+  });
+  if (storeDeniedText) {
+    return {
+      shouldContinue: false,
+      reply: { text: storeDeniedText },
     };
   }
 
