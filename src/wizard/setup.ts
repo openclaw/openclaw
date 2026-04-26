@@ -557,7 +557,8 @@ export async function runSetupWizard(
           prompter,
           allowKeep: true,
           ignoreAllowlist: true,
-          includeProviderPluginSetups: true,
+          includeProviderPluginSetups: false,
+          loadCatalog: false,
           workspaceDir,
           runtime,
         });

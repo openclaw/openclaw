@@ -360,6 +360,40 @@ describe("promptDefaultModel", () => {
       expect.arrayContaining([expect.objectContaining({ value: "legacy-entry" })]),
     );
   });
+
+  it("keeps skip-auth model selection cold when catalog loading is disabled", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      includeProviderPluginSetups: true,
+      loadCatalog: false,
+      agentDir: "/tmp/openclaw-agent",
+      runtime: {} as never,
+    });
+
+    expect(result).toEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(resolveProviderModelPickerEntries).not.toHaveBeenCalled();
+    expect(providerModelPickerContributionRuntime.resolve).not.toHaveBeenCalled();
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({ value: "__keep__" }),
+      expect.objectContaining({ value: "__manual__" }),
+      expect.objectContaining({ value: "openai/gpt-5.5" }),
+    ]);
+  });
 });
 
 describe("promptModelAllowlist", () => {
@@ -605,6 +639,63 @@ describe("promptModelAllowlist", () => {
     expect(result).toEqual({
       models: ["openai/gpt-5.5"],
       scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+    });
+  });
+
+  it("uses configured provider-scoped seeds without loading the full catalog", async () => {
+    const multiselect = vi.fn(async (params) => params.initialValues ?? []);
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openai-codex",
+    });
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(multiselect.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({ value: "openai-codex/gpt-5.5" }),
+    ]);
+    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
+    expect(result).toEqual({
+      models: ["openai-codex/gpt-5.5"],
+      scopeKeys: ["openai-codex/gpt-5.5"],
+    });
+  });
+
+  it("uses explicit allowed model keys without loading the full catalog", async () => {
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      allowedKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
+      preferredProvider: "openai-codex",
+    });
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(
+      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+    ).toEqual(["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"]);
+    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
+    expect(result).toEqual({
+      models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
+      scopeKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
     });
   });
 });

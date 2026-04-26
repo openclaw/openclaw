@@ -45,6 +45,7 @@ export type PromptDefaultModelParams = {
   includeManual?: boolean;
   includeProviderPluginSetups?: boolean;
   ignoreAllowlist?: boolean;
+  loadCatalog?: boolean;
   preferredProvider?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -227,6 +228,45 @@ function addModelSelectOption(params: {
     hint: hints.length > 0 ? hints.join(" · ") : undefined,
   });
   params.seen.add(key);
+}
+
+function splitModelKey(key: string): { provider: string; id: string } | undefined {
+  const slashIndex = key.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= key.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: key.slice(0, slashIndex),
+    id: key.slice(slashIndex + 1),
+  };
+}
+
+function addModelKeySelectOption(params: {
+  key: string;
+  options: WizardSelectOption[];
+  seen: Set<string>;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  hasAuth: (provider: string) => boolean;
+  fallbackHint: string;
+}) {
+  const entry = splitModelKey(params.key);
+  if (!entry) {
+    return;
+  }
+  const before = params.seen.size;
+  addModelSelectOption({
+    entry,
+    options: params.options,
+    seen: params.seen,
+    aliasIndex: params.aliasIndex,
+    hasAuth: params.hasAuth,
+  });
+  if (params.seen.size > before) {
+    const option = params.options.at(-1);
+    if (option && !option.hint) {
+      option.hint = params.fallbackHint;
+    }
+  }
 }
 
 function createPreferredProviderMatcher(params: {
@@ -467,6 +507,7 @@ export async function promptDefaultModel(
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
+  const loadCatalog = params.loadCatalog ?? true;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
   const preferredProvider = preferredProviderRaw
@@ -481,10 +522,58 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
+  if (!loadCatalog) {
+    const options: WizardSelectOption[] = [];
+    if (allowKeep) {
+      options.push({
+        value: KEEP_VALUE,
+        label: configuredRaw
+          ? `Keep current (${configuredRaw})`
+          : `Keep current (default: ${resolvedKey})`,
+        hint:
+          configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+      });
+    }
+    if (includeManual) {
+      options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
+    }
+    if (configuredKey && !options.some((option) => option.value === configuredKey)) {
+      options.push({
+        value: configuredKey,
+        label: configuredKey,
+        hint: "current",
+      });
+    }
+    if (options.length === 0) {
+      return promptManualModel({
+        prompter: params.prompter,
+        allowBlank: allowKeep,
+        initialValue: configuredRaw || resolvedKey || undefined,
+      });
+    }
+    const selection = await params.prompter.select({
+      message: params.message ?? "Default model",
+      options,
+      initialValue: allowKeep ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
+      searchable: false,
+    });
+    if (selection === KEEP_VALUE) {
+      return {};
+    }
+    if (selection === MANUAL_VALUE) {
+      return promptManualModel({
+        prompter: params.prompter,
+        allowBlank: false,
+        initialValue: configuredRaw || resolvedKey || undefined,
+      });
+    }
+    return { model: selection };
+  }
+
   const catalogProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+    catalog = await loadModelCatalog({ config: cfg });
   } finally {
     catalogProgress.stop();
   }
@@ -650,6 +739,7 @@ export async function promptModelAllowlist(params: {
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const existingKeys = resolveConfiguredModelKeys(cfg);
+  const configuredRaw = resolveConfiguredModelRaw(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
@@ -685,11 +775,71 @@ export async function promptModelAllowlist(params: {
     ...fallbackKeys,
     ...(params.initialSelections ?? []),
   ]);
+  const hasRealSeed =
+    existingKeys.length > 0 ||
+    fallbackKeys.length > 0 ||
+    (params.initialSelections?.length ?? 0) > 0 ||
+    configuredRaw.length > 0;
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const matchesPreferredProvider = preferredProvider
+    ? createPreferredProviderMatcher({
+        preferredProvider,
+        cfg,
+      })
+    : undefined;
+
+  const scopedFastKeys =
+    allowedKeys.length > 0
+      ? allowedKeys
+      : preferredProvider && hasRealSeed
+        ? initialSeeds.filter((key) => {
+            const entry = splitModelKey(key);
+            return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
+          })
+        : [];
+  if (scopedFastKeys.length > 0) {
+    const scopeKeys = allowedKeys.length > 0 ? allowedKeys : scopedFastKeys;
+    const scopeKeySet = new Set(scopeKeys);
+    const initialKeys = normalizeModelKeys(initialSeeds.filter((key) => scopeKeySet.has(key)));
+    const options: WizardSelectOption[] = [];
+    const seen = new Set<string>();
+    for (const key of scopeKeys) {
+      addModelKeySelectOption({
+        key,
+        options,
+        seen,
+        aliasIndex,
+        hasAuth,
+        fallbackHint: allowedKeys.length > 0 ? "allowed" : "configured",
+      });
+    }
+    if (options.length === 0) {
+      return {};
+    }
+    const selection = await params.prompter.multiselect({
+      message: params.message ?? "Models in /model picker (multi-select)",
+      options,
+      initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+      searchable: true,
+    });
+    const selected = normalizeModelKeys(selection);
+    if (selected.length > 0) {
+      return { models: selected, scopeKeys };
+    }
+    const confirmScopedClear = await params.prompter.confirm({
+      message: "Remove these provider models from the /model picker?",
+      initialValue: false,
+    });
+    if (!confirmScopedClear) {
+      return {};
+    }
+    return { models: [], scopeKeys };
+  }
 
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+    catalog = await loadModelCatalog({ config: cfg });
   } finally {
     allowlistProgress.stop();
   }
@@ -712,14 +862,6 @@ export async function promptModelAllowlist(params: {
     }
     return { models: normalizeModelKeys(parsed) };
   }
-
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
-  const matchesPreferredProvider = preferredProvider
-    ? createPreferredProviderMatcher({
-        preferredProvider,
-        cfg,
-      })
-    : undefined;
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
