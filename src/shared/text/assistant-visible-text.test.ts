@@ -568,6 +568,20 @@ describe("stripDowngradedToolCallText", () => {
 
     expect(stripDowngradedToolCallText(input)).toBe(input);
   });
+
+  it("preserves unvalidated JSON candidates before stripping a later real tool call", () => {
+    const ordinaryJsonLines = Array.from(
+      { length: 51 },
+      (_, index) => `{"tool_calls":"example-${index}","type":"function"}`,
+    );
+    const toolCallJson =
+      '{"tool_calls":[{"function":{"arguments":"{}","name":"process"},"id":"call_1","type":"function"}]}';
+    const input = [...ordinaryJsonLines, toolCallJson].join("\n");
+    const expected = ordinaryJsonLines.join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(expected);
+    expect(sanitizeStreamingBareToolCallJsonText(input)).toBe(expected);
+  });
 });
 
 describe("sanitizeStreamingBareToolCallJsonText", () => {

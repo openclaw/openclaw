@@ -30,7 +30,6 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:function|invoke|parameters?|arguments?)\b/i;
 const BARE_TOOL_CALL_JSON_QUICK_RE = /"tool_calls"\s*:|"type"\s*:\s*"function(?:_call)?"/i;
-const MAX_BARE_TOOL_CALL_JSON_CANDIDATES = 50;
 const MAX_BARE_TOOL_CALL_JSON_PAYLOAD_CHARS = 50_000;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -245,7 +244,6 @@ function stripBareToolCallJsonPayloads(
   let result = "";
   let cursor = 0;
   let changed = false;
-  let parseAttempts = 0;
   let lineStart = 0;
   while (lineStart < input.length) {
     let index = lineStart;
@@ -291,15 +289,10 @@ function stripBareToolCallJsonPayloads(
     }
 
     let shouldStrip = false;
-    parseAttempts += 1;
-    if (parseAttempts > MAX_BARE_TOOL_CALL_JSON_CANDIDATES) {
-      shouldStrip = true;
-    } else {
-      try {
-        shouldStrip = isBareToolCallJsonPayload(JSON.parse(raw));
-      } catch {
-        shouldStrip = false;
-      }
+    try {
+      shouldStrip = isBareToolCallJsonPayload(JSON.parse(raw));
+    } catch {
+      shouldStrip = false;
     }
     if (!shouldStrip) {
       lineStart = findNextLineStart(input, end);
