@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { looksLikeUuid } from "./uuid.js";
+import { isStrictUuid as isStrictUuidValue, looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string }
@@ -13,13 +13,9 @@ type SignalAllowEntry =
 
 export { looksLikeUuid } from "./uuid.js";
 
-const UUID_HYPHENATED_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
-
 /** Strict UUID check: only accepts canonical 8-4-4-4-12 or compact 32-hex formats. */
 export function isStrictUuid(value: string): boolean {
-  return UUID_HYPHENATED_RE.test(value) || UUID_COMPACT_RE.test(value);
+  return isStrictUuidValue(value);
 }
 
 function stripSignalPrefix(value: string): string {

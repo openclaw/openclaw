@@ -265,7 +265,7 @@ export function canFinalizeMattermostPreviewInPlace(params: {
   kind: ChatType;
   previewRootId?: string;
   threadRootId?: string;
-  replyToId?: string;
+  replyToId?: string | null;
 }): boolean {
   return (
     resolveMattermostReplyRootId({

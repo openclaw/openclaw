@@ -23,7 +23,7 @@ export function readSlackReplyBlocks(payload: ReplyPayload) {
 
 export function resolveDeliveredSlackReplyThreadTs(params: {
   replyToMode: "off" | "first" | "all" | "batched";
-  payloadReplyToId?: string;
+  payloadReplyToId?: string | null;
   replyThreadTs?: string;
 }): string | undefined {
   // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
