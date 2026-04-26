@@ -45,7 +45,7 @@ export type PolicyRequest = {
 export type PolicyResult = {
   decision: PolicyDecision;
   policyId: string;
-  reasonCode: PolicyReasonCode | string;
+  reasonCode: PolicyReasonCode;
   reason: string;
   mode?: PolicyMode;
   correlationId?: string;
@@ -75,18 +75,28 @@ function truncateString(value: string): string {
 }
 
 function summarizeValue(value: unknown, depth: number): unknown {
-  if (depth > MAX_DEPTH) return "[max-depth]";
-  if (value == null) return value;
-  if (typeof value === "string") return truncateString(value);
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "bigint") return value.toString();
+  if (depth > MAX_DEPTH) {
+    return "[max-depth]";
+  }
+  if (value == null) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return truncateString(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
   if (Array.isArray(value)) {
     return value.slice(0, MAX_ARRAY_LENGTH).map((item) => summarizeValue(item, depth + 1));
   }
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>)
-      .sort()
+      .toSorted()
       .slice(0, MAX_OBJECT_KEYS)) {
       out[key] = SECRET_KEY_RE.test(key)
         ? "[redacted]"
@@ -149,9 +159,13 @@ export function evaluateActionSinkPolicy(
   const defaultMode = config.defaultMode ?? "enforce";
   for (const module of modules) {
     const mode = config.moduleModes?.[module.id] ?? defaultMode;
-    if (mode === "disabled") continue;
+    if (mode === "disabled") {
+      continue;
+    }
     const result = module.evaluate(request, config);
-    if (!result || result.decision === "allow") continue;
+    if (!result || result.decision === "allow") {
+      continue;
+    }
     return applyMode(
       { ...result, correlationId: result.correlationId ?? request.correlationId },
       mode,

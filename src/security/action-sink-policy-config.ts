@@ -30,7 +30,9 @@ export type ActionSinkPolicyConfig = {
 const MODES = new Set(["shadow", "enforce", "disabled"]);
 
 function asStringArray(value: unknown, field: string): string[] {
-  if (value === undefined) return [];
+  if (value === undefined) {
+    return [];
+  }
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     throw new Error(`${field} must be an array of strings`);
   }
@@ -38,7 +40,9 @@ function asStringArray(value: unknown, field: string): string[] {
 }
 
 function parseMode(value: unknown, field: string, fallback: PolicyMode): PolicyMode {
-  if (value === undefined) return fallback;
+  if (value === undefined) {
+    return fallback;
+  }
   if (typeof value !== "string" || !MODES.has(value)) {
     throw new Error(`${field} must be shadow, enforce, or disabled`);
   }

@@ -16,9 +16,12 @@ export function buildActionSinkShadowReport(records: ActionSinkAuditRecord[]): S
   };
   for (const record of records) {
     report.byReason[record.reasonCode] = (report.byReason[record.reasonCode] ?? 0) + 1;
-    if (record.mode === "shadow" && /would have block/i.test(record.reason)) report.wouldBlock += 1;
-    if (record.mode === "shadow" && /would have requireApproval/i.test(record.reason))
+    if (record.mode === "shadow" && /would have block/i.test(record.reason)) {
+      report.wouldBlock += 1;
+    }
+    if (record.mode === "shadow" && /would have requireApproval/i.test(record.reason)) {
       report.wouldRequireApproval += 1;
+    }
   }
   return report;
 }

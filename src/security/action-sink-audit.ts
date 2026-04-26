@@ -89,6 +89,7 @@ export async function auditPolicyDecision(params: {
     if (params.highRisk) {
       throw new Error(
         `Action sink audit append failed closed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
     console.warn(`Action sink audit append failed open: ${String(err)}`);
@@ -100,7 +101,9 @@ export async function readActionSinkAuditRecords(
   filePath: string,
 ): Promise<ActionSinkAuditRecord[]> {
   const text = await fs.readFile(filePath, "utf8").catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") return "";
+    if (err.code === "ENOENT") {
+      return "";
+    }
     throw err;
   });
   return text.trim()

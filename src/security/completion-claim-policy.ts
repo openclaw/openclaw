@@ -18,14 +18,20 @@ export function createEvidenceGatePolicyModule(expected: {
   return {
     id: "evidenceGate",
     evaluate(request: PolicyRequest) {
-      const text = String(request.payloadSummary ?? request.context?.text ?? "");
+      const text =
+        (typeof request.payloadSummary === "string" ? request.payloadSummary : undefined) ??
+        (typeof request.context?.text === "string" ? request.context.text : "");
       const isClaim =
         request.actionType === "completion_claim" ||
         (request.actionType === "message_send" && containsCompletionClaim(text));
       const isTransition =
         request.actionType === "status_transition" &&
-        /done|ready|complete|succeeded/.test(String(request.context?.status ?? ""));
-      if (!isClaim && !isTransition) return undefined;
+        /done|ready|complete|succeeded/.test(
+          typeof request.context?.status === "string" ? request.context.status : "",
+        );
+      if (!isClaim && !isTransition) {
+        return undefined;
+      }
       const evidence = request.context?.evidence as ActionSinkEvidenceArtifact | undefined;
       if (!evidence) {
         return policyResult({

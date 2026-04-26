@@ -15,14 +15,18 @@ export type ActionSinkEvidenceArtifact = {
 export type EvidenceVerificationResult = { ok: true } | { ok: false; reason: string };
 
 export function parseActionSinkEvidenceArtifact(value: unknown): ActionSinkEvidenceArtifact {
-  if (!value || typeof value !== "object") throw new Error("evidence artifact must be an object");
+  if (!value || typeof value !== "object") {
+    throw new Error("evidence artifact must be an object");
+  }
   const artifact = value as Partial<ActionSinkEvidenceArtifact>;
   for (const field of ["briefId", "repoRoot", "branch", "timestamp"] as const) {
-    if (typeof artifact[field] !== "string" || !artifact[field])
+    if (typeof artifact[field] !== "string" || !artifact[field]) {
       throw new Error(`evidence missing ${field}`);
+    }
   }
-  if (!artifact.commitSha && !artifact.commitRange)
+  if (!artifact.commitSha && !artifact.commitRange) {
     throw new Error("evidence missing commitSha or commitRange");
+  }
   for (const field of ["review", "qa"] as const) {
     const item = artifact[field];
     if (
@@ -57,18 +61,26 @@ export function verifyActionSinkEvidence(
 ): EvidenceVerificationResult {
   try {
     parseActionSinkEvidenceArtifact(artifact);
-    if (!fs.existsSync(artifact.repoRoot) || artifact.repoRoot !== expected.repoRoot)
+    if (!fs.existsSync(artifact.repoRoot) || artifact.repoRoot !== expected.repoRoot) {
       return { ok: false, reason: "wrong repo root" };
-    if (artifact.branch !== expected.branch) return { ok: false, reason: "wrong branch" };
-    if (expected.commitSha && artifact.commitSha !== expected.commitSha)
+    }
+    if (artifact.branch !== expected.branch) {
+      return { ok: false, reason: "wrong branch" };
+    }
+    if (expected.commitSha && artifact.commitSha !== expected.commitSha) {
       return { ok: false, reason: "wrong commit" };
-    if (expected.commitRange && artifact.commitRange !== expected.commitRange)
+    }
+    if (expected.commitRange && artifact.commitRange !== expected.commitRange) {
       return { ok: false, reason: "wrong commit range" };
+    }
     const currentBranch = git(artifact.repoRoot, ["branch", "--show-current"]);
-    if (currentBranch !== artifact.branch)
+    if (currentBranch !== artifact.branch) {
       return { ok: false, reason: "branch does not match repo" };
+    }
     const sha = artifact.commitSha ?? artifact.commitRange?.split("..").pop();
-    if (sha) git(artifact.repoRoot, ["cat-file", "-e", `${sha}^{commit}`]);
+    if (sha) {
+      git(artifact.repoRoot, ["cat-file", "-e", `${sha}^{commit}`]);
+    }
     const commitTime = sha
       ? new Date(git(artifact.repoRoot, ["show", "-s", "--format=%cI", sha])).getTime()
       : 0;
@@ -82,8 +94,9 @@ export function verifyActionSinkEvidence(
     ) {
       return { ok: false, reason: "stale evidence" };
     }
-    if (!fs.existsSync(artifact.review.path) || !fs.existsSync(artifact.qa.path))
+    if (!fs.existsSync(artifact.review.path) || !fs.existsSync(artifact.qa.path)) {
       return { ok: false, reason: "evidence file missing" };
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };

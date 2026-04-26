@@ -16,25 +16,30 @@ export function classifyExternalAction(input: {
     /payment|stripe|paypal|zoho|deploy|publish|production|kubectl|aws|gcloud|cloudflare/.test(
       haystack,
     )
-  )
+  ) {
     return "operator";
+  }
   if (
     /twitter|x\.com|linkedin|facebook|instagram|public|social|email|gmail|smtp|customer/.test(
       haystack,
     )
-  )
+  ) {
     return "customer";
+  }
   if (
     /telegram|discord|slack|linear|github|gh\b|comment|message|send|reply|react|pin|delete|edit/.test(
       haystack,
     )
-  )
+  ) {
     return "external";
+  }
   return "internal";
 }
 
 function matches(pattern: string, value: string): boolean {
-  if (pattern === value) return true;
+  if (pattern === value) {
+    return true;
+  }
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i").test(value);
 }
@@ -43,7 +48,9 @@ export function isExternalActionAllowlisted(
   config: Pick<ActionSinkPolicyConfig, "externalAllowlist">,
   request: PolicyRequest,
 ): boolean {
-  const target = String(request.targetResource ?? request.context?.target ?? "");
+  const target =
+    request.targetResource ??
+    (typeof request.context?.target === "string" ? request.context.target : "");
   return config.externalAllowlist.some(
     (rule) =>
       matches(rule.targetPattern, target) &&
@@ -57,14 +64,18 @@ export function createExternalActionFirewallModule(
   return {
     id: "externalActionFirewall",
     evaluate(request) {
-      if (!["message_send", "external_api_write"].includes(request.actionType)) return undefined;
+      if (!["message_send", "external_api_write"].includes(request.actionType)) {
+        return undefined;
+      }
       const tier = classifyExternalAction({
-        target: String(request.targetResource ?? ""),
-        channel: String(request.context?.channel ?? ""),
-        action: String(request.context?.action ?? ""),
+        target: request.targetResource ?? "",
+        channel: typeof request.context?.channel === "string" ? request.context.channel : "",
+        action: typeof request.context?.action === "string" ? request.context.action : "",
         toolName: request.toolName,
       });
-      if (tier === "internal" || isExternalActionAllowlisted(config, request)) return undefined;
+      if (tier === "internal" || isExternalActionAllowlisted(config, request)) {
+        return undefined;
+      }
       return policyResult({
         policyId: "externalActionFirewall",
         decision: "requireApproval",

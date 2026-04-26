@@ -31,19 +31,29 @@ export function evaluateProtectedWorktree(params: {
   config: Pick<ActionSinkPolicyConfig, "protectedRoots" | "assignedWorktrees">;
   realpath?: RealpathFn;
 }): PolicyResult | undefined {
-  const target = String(params.request.targetResource ?? params.request.context?.cwd ?? "");
+  const target =
+    params.request.targetResource ??
+    (typeof params.request.context?.cwd === "string" ? params.request.context.cwd : "");
   const normalizedTarget = target ? normalizePolicyPath(target, params.realpath) : "";
   const protectedRoot = params.config.protectedRoots.find((root) =>
     isPathInside(normalizePolicyPath(root, params.realpath), normalizedTarget),
   );
   const action = params.request.actionType;
   const isMutation = ["file_write", "git_mutation", "shell_exec"].includes(action);
-  if (!isMutation) return undefined;
+  if (!isMutation) {
+    return undefined;
+  }
 
   if (action === "shell_exec") {
-    const command = String(params.request.context?.command ?? params.request.payloadSummary ?? "");
+    const command =
+      (typeof params.request.context?.command === "string"
+        ? params.request.context.command
+        : undefined) ??
+      (typeof params.request.payloadSummary === "string" ? params.request.payloadSummary : "");
     const shell = classifyShellCommand({ command, cwd: target });
-    if (!shell.highRisk) return undefined;
+    if (!shell.highRisk) {
+      return undefined;
+    }
   }
 
   if (protectedRoot) {
@@ -68,7 +78,8 @@ export function evaluateProtectedWorktree(params: {
       assignment &&
       !isPathInside(
         normalizePolicyPath(assignment.worktreeRoot, params.realpath),
-        normalizedTarget || String(params.request.context?.cwd ?? ""),
+        normalizedTarget ||
+          (typeof params.request.context?.cwd === "string" ? params.request.context.cwd : ""),
       )
     ) {
       return policyResult({

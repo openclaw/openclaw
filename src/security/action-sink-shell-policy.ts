@@ -57,32 +57,60 @@ export function classifyShellCommand(input: {
 }): ShellClassification {
   const command = input.command.trim();
   const tags = new Set<ShellRiskTag>();
-  if (!command) add(tags, "unknown_command");
-  if (input.elevated || /(^|\s)sudo\b/.test(command)) add(tags, "privileged");
-  if (/[;&]|\|\||&&/.test(command)) add(tags, "compound");
-  if (/<<[-~]?\w+/.test(command)) add(tags, "heredoc");
-  if (/(^|[^<])>>?\s*[^&\s]/.test(command)) add(tags, "redirection");
-  if (/\|\s*(tee|xargs|sh|bash|zsh|python|node|perl|ruby)\b/.test(command))
+  if (!command) {
+    add(tags, "unknown_command");
+  }
+  if (input.elevated || /(^|\s)sudo\b/.test(command)) {
+    add(tags, "privileged");
+  }
+  if (/[;&]|\|\||&&/.test(command)) {
+    add(tags, "compound");
+  }
+  if (/<<[-~]?\w+/.test(command)) {
+    add(tags, "heredoc");
+  }
+  if (/(^|[^<])>>?\s*[^&\s]/.test(command)) {
+    add(tags, "redirection");
+  }
+  if (/\|\s*(tee|xargs|sh|bash|zsh|python|node|perl|ruby)\b/.test(command)) {
     add(tags, "pipe_to_mutator");
-  if (/\bfind\b.*\s-exec\s/.test(command)) add(tags, "find_exec");
-  if (/\bxargs\b/.test(command)) add(tags, "xargs");
-  if (INLINE_RE.test(command)) add(tags, "inline_script");
-  if (SHELL_WRAPPER_RE.test(command)) add(tags, "shell_wrapper");
-  if (NETWORK_RE.test(command)) add(tags, "network_write");
+  }
+  if (/\bfind\b.*\s-exec\s/.test(command)) {
+    add(tags, "find_exec");
+  }
+  if (/\bxargs\b/.test(command)) {
+    add(tags, "xargs");
+  }
+  if (INLINE_RE.test(command)) {
+    add(tags, "inline_script");
+  }
+  if (SHELL_WRAPPER_RE.test(command)) {
+    add(tags, "shell_wrapper");
+  }
+  if (NETWORK_RE.test(command)) {
+    add(tags, "network_write");
+  }
   if (
     /\bgit\s+(add|commit|push|reset|checkout|switch|merge|rebase|tag|clean|apply|am)\b/.test(
       command,
     )
-  )
+  ) {
     add(tags, "git_mutation");
-  if (MUTATOR_RE.test(command)) add(tags, "file_mutation");
+  }
+  if (MUTATOR_RE.test(command)) {
+    add(tags, "file_mutation");
+  }
 
   const first = command
     .split(/\s+/)
     .slice(0, command.startsWith("git ") ? 2 : 1)
     .join(" ");
-  if (tags.size === 0 && !SAFE_COMMANDS.has(first)) add(tags, "unknown_command");
-  if (tags.size === 0) add(tags, "safe_readonly");
+  if (tags.size === 0 && !SAFE_COMMANDS.has(first)) {
+    add(tags, "unknown_command");
+  }
+  if (tags.size === 0) {
+    add(tags, "safe_readonly");
+  }
 
   const riskTags = [...tags];
   const highRisk = riskTags.some((tag) => tag !== "safe_readonly");

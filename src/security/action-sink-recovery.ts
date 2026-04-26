@@ -16,7 +16,9 @@ function assertOperator(config: ActionSinkPolicyConfig, actorId: string): void {
 }
 
 async function logRecovery(filePath: string | undefined, message: string): Promise<void> {
-  if (!filePath) return;
+  if (!filePath) {
+    return;
+  }
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(
     filePath,
