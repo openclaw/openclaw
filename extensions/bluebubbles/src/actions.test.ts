@@ -44,7 +44,7 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
-const freshActionsModulePath = "./actions.js?actions-test";
+const freshActionsModulePath = "./actions.js";
 const { bluebubblesMessageActions } = await import(freshActionsModulePath);
 
 describe("bluebubblesMessageActions", () => {
