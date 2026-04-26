@@ -224,8 +224,8 @@ export function createSessionsSpawnTool(
           if (!tmpl) return "";
           const taskPreview = task.slice(0, 40).replace(/[\r\n]+/g, " ").trim();
           return tmpl
-            .replace("{agentId}", requestedAgentId ?? "")
-            .replace("{taskPreview}", taskPreview);
+            .replaceAll("{agentId}", requestedAgentId ?? "")
+            .replaceAll("{taskPreview}", taskPreview);
         })();
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
