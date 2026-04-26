@@ -107,13 +107,6 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
   }
 }
 
-function prependPathEntry(entry: string, currentPath = process.env.PATH): string {
-  if (!currentPath) {
-    return entry;
-  }
-  return `${entry}${path.delimiter}${currentPath}`;
-}
-
 function buildNodeInstallEnv(prefs: SkillsInstallPreferences): NodeJS.ProcessEnv {
   if (prefs.nodeManager !== "npm") {
     return {};
@@ -121,11 +114,9 @@ function buildNodeInstallEnv(prefs: SkillsInstallPreferences): NodeJS.ProcessEnv
 
   const prefix = path.join(resolveConfigDir(process.env), "tools", "node", "npm");
   fs.mkdirSync(prefix, { recursive: true });
-  const binDir = path.join(prefix, "bin");
   return {
     NPM_CONFIG_PREFIX: prefix,
     npm_config_prefix: prefix,
-    PATH: prependPathEntry(binDir),
   };
 }
 

@@ -206,7 +206,7 @@ describe("installSkill code safety scanning", () => {
         NPM_CONFIG_PREFIX: npmPrefix,
         npm_config_prefix: npmPrefix,
       });
-      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(path.join(npmPrefix, "bin"));
+      expect(options.env).not.toHaveProperty("PATH");
       const stat = await fs.stat(npmPrefix);
       expect(stat.isDirectory()).toBe(true);
     });

@@ -29,6 +29,8 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_SIGNAL_HTTP_RESPONSE_BYTES = 1_048_576;
+const MAX_SIGNAL_SSE_BUFFER_CHARS = 1_048_576;
 
 type SignalHttpResponse = {
   status: number;
@@ -51,6 +53,18 @@ function normalizeBaseUrl(url: string): string {
     return trimmed.replace(/\/+$/, "");
   }
   return `http://${trimmed}`.replace(/\/+$/, "");
+}
+
+function parseSignalBaseUrl(url: string): URL {
+  const parsed = new URL(normalizeBaseUrl(url));
+  if (parsed.username || parsed.password) {
+    throw new Error("Signal base URL must not include credentials");
+  }
+  return parsed;
+}
+
+function resolveSignalEndpointUrl(baseUrl: string, pathname: string): URL {
+  return new URL(pathname, parseSignalBaseUrl(baseUrl));
 }
 
 function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
@@ -120,8 +134,18 @@ function requestSignalHttpText(
       },
       (res) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
         res.on("data", (chunk: Buffer | string) => {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+          const next = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          totalBytes += next.byteLength;
+          if (totalBytes > MAX_SIGNAL_HTTP_RESPONSE_BYTES) {
+            const error = new Error("Signal HTTP response exceeded size limit");
+            request?.destroy(error);
+            res.destroy(error);
+            rejectOnce(error);
+            return;
+          }
+          chunks.push(next);
         });
         res.on("error", rejectOnce);
         res.on("end", () => {
@@ -149,7 +173,6 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -157,7 +180,7 @@ export async function signalRpcRequest<T = unknown>(
     params,
     id,
   });
-  const res = await requestSignalHttpText(new URL(`${baseUrl}/api/v1/rpc`), {
+  const res = await requestSignalHttpText(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -185,9 +208,8 @@ export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const normalized = normalizeBaseUrl(baseUrl);
   try {
-    const res = await requestSignalHttpText(new URL(`${normalized}/api/v1/check`), {
+    const res = await requestSignalHttpText(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
     });
@@ -270,8 +292,7 @@ export async function streamSignalEvents(params: {
   abortSignal?: AbortSignal;
   onEvent: (event: SignalSseEvent) => void;
 }): Promise<void> {
-  const baseUrl = normalizeBaseUrl(params.baseUrl);
-  const url = new URL(`${baseUrl}/api/v1/events`);
+  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
     url.searchParams.set("account", params.account);
   }
@@ -331,9 +352,15 @@ export async function streamSignalEvents(params: {
     for await (const chunk of response as AsyncIterable<Buffer | string>) {
       const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_SIGNAL_SSE_BUFFER_CHARS) {
+        throw new Error("Signal SSE buffer exceeded size limit");
+      }
       drainCompleteLines();
     }
     buffer += decoder.decode();
+    if (buffer.length > MAX_SIGNAL_SSE_BUFFER_CHARS) {
+      throw new Error("Signal SSE buffer exceeded size limit");
+    }
     drainCompleteLines();
   } finally {
     cleanup();

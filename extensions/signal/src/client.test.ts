@@ -117,6 +117,27 @@ describe("signalRpcRequest", () => {
       }),
     ).rejects.toThrow("Signal RPC returned invalid response envelope (status 200)");
   });
+
+  it("rejects credentialed base URLs", async () => {
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl: "http://user:pass@127.0.0.1:8080",
+      }),
+    ).rejects.toThrow("Signal base URL must not include credentials");
+  });
+
+  it("rejects oversized RPC responses", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("x".repeat(1_048_577));
+    });
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl,
+      }),
+    ).rejects.toThrow("Signal HTTP response exceeded size limit");
+  });
 });
 
 describe("signalCheck", () => {
@@ -176,5 +197,19 @@ describe("streamSignalEvents", () => {
         onEvent: () => {},
       }),
     ).rejects.toThrow("Signal SSE failed (503 Unavailable)");
+  });
+
+  it("rejects oversized SSE buffers", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(`data: ${"x".repeat(1_048_577)}`);
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        onEvent: () => {},
+      }),
+    ).rejects.toThrow("Signal SSE buffer exceeded size limit");
   });
 });
