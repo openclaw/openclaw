@@ -99,6 +99,7 @@ Docs: https://docs.openclaw.ai
   Thanks @Kobe9312 and @vincentkoc.
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
 - Plugins/update: restore previous plugin index records if core update or channel setup hits a concurrent config write conflict after plugin metadata changes. Thanks @shakkernerd.
+- Plugins/onboarding: defer channel/provider plugin install records until the owning config write commits, keeping setup failures from advancing the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Sessions: keep embedded runtime context out of the visible user prompt by
   sending it as a hidden next-turn custom message, and teach doctor to repair
   affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.

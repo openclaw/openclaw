@@ -314,7 +314,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.installed).toBe(true);
     expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
     expect(result.cfg.plugins?.allow).toContain("bundled-chat");
-    expect(result.cfg.plugins?.installs).toBeUndefined();
+    expect(result.cfg.plugins?.installs).toEqual({
+      "bundled-chat": expect.objectContaining({
+        source: "npm",
+        spec: bundledChatNpmSpec,
+        installPath: "/tmp/bundled-chat",
+      }),
+    });
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedIntegrity: bundledChatIntegrity,
