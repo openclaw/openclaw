@@ -2093,6 +2093,84 @@ describe("AcpSessionManager", () => {
     expect(states).not.toContain("error");
   });
 
+  it("drops cached runtime handles when active-turn cancel sees a stale gateway disconnect", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.cancel.mockRejectedValueOnce(
+      new Error("Gateway disconnected: 1006: connection lost"),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    let enteredRun = false;
+    runtimeState.runTurn.mockImplementationOnce(async function* (input: { signal?: AbortSignal }) {
+      enteredRun = true;
+      await new Promise<void>((resolve) => {
+        if (input.signal?.aborted) {
+          resolve();
+          return;
+        }
+        input.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done" as const, stopReason: "cancel" };
+    });
+
+    const manager = new AcpSessionManager();
+    const runPromise = manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "long task",
+      mode: "prompt",
+      requestId: "r1",
+    });
+    await vi.waitFor(
+      () => {
+        expect(enteredRun).toBe(true);
+      },
+      { interval: 1 },
+    );
+
+    await expect(
+      manager.cancelSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-cancel",
+      }),
+    ).resolves.toBeUndefined();
+    await runPromise;
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(extractStatesFromUpserts()).toContain("error");
+  });
+
   it("treats stale gateway disconnect errors as recoverable during cancel", async () => {
     const runtimeState = createRuntime();
     runtimeState.cancel.mockRejectedValueOnce(
