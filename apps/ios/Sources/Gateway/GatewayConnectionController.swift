@@ -256,10 +256,25 @@ final class GatewayConnectionController {
                   appModel.gatewayAutoReconnectEnabled,
                   let latestConfig = appModel.activeGatewayConnectConfig,
                   latestConfig.effectiveStableID == cfg.effectiveStableID,
-                  latestConfig.url == cfg.url
+                  latestConfig.url == cfg.url,
+                  Self.sameTLSParams(latestConfig.tls, cfg.tls)
             else { return }
 
             appModel.applyGatewayConnectConfig(refreshedConfig)
+        }
+    }
+
+    private static func sameTLSParams(_ lhs: GatewayTLSParams?, _ rhs: GatewayTLSParams?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case let (lhs?, rhs?):
+            return lhs.required == rhs.required
+                && lhs.expectedFingerprint == rhs.expectedFingerprint
+                && lhs.allowTOFU == rhs.allowTOFU
+                && lhs.storeKey == rhs.storeKey
+        default:
+            return false
         }
     }
 
