@@ -29,6 +29,7 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:function|invoke|parameters?|arguments?)\b/i;
+const BARE_TOOL_CALL_JSON_QUICK_RE = /"tool_calls"\s*:|"type"\s*:\s*"function(?:_call)?"/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
 
@@ -329,7 +330,10 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
+  const hasDowngradedMarkers =
+    /\[Tool (?:Call|Result)/i.test(text) || /\[Historical context/i.test(text);
+  const mayHaveBareToolCallJson = BARE_TOOL_CALL_JSON_QUICK_RE.test(text);
+  if (!hasDowngradedMarkers && !mayHaveBareToolCallJson) {
     return text;
   }
 
@@ -415,6 +419,131 @@ export function stripDowngradedToolCallText(text: string): string {
     return end;
   };
 
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+  const isToolCallObject = (value: unknown): boolean => {
+    if (!isRecord(value)) {
+      return false;
+    }
+    const functionValue = value.function;
+    if (
+      isRecord(functionValue) &&
+      (value.type === "function" || typeof value.id === "string") &&
+      (typeof functionValue.name === "string" ||
+        typeof functionValue.arguments === "string" ||
+        isRecord(functionValue.arguments))
+    ) {
+      return true;
+    }
+    return (
+      value.type === "function_call" &&
+      typeof value.name === "string" &&
+      (typeof value.arguments === "string" || isRecord(value.arguments) || "call_id" in value)
+    );
+  };
+
+  const hasToolCallsArray = (value: unknown): boolean =>
+    Array.isArray(value) && value.some((item) => isToolCallObject(item));
+
+  const isBareToolCallJsonPayload = (value: unknown): boolean => {
+    if (hasToolCallsArray(value) || isToolCallObject(value)) {
+      return true;
+    }
+    if (!isRecord(value)) {
+      return false;
+    }
+    if (hasToolCallsArray(value.tool_calls)) {
+      return true;
+    }
+    if (isRecord(value.message) && hasToolCallsArray(value.message.tool_calls)) {
+      return true;
+    }
+    if (Array.isArray(value.choices)) {
+      return value.choices.some((choice) => {
+        if (!isRecord(choice)) {
+          return false;
+        }
+        return (
+          (isRecord(choice.message) && hasToolCallsArray(choice.message.tool_calls)) ||
+          (isRecord(choice.delta) && hasToolCallsArray(choice.delta.tool_calls))
+        );
+      });
+    }
+    return false;
+  };
+
+  const looksLikeBareToolCallJsonFragment = (value: string): boolean =>
+    /^\s*\{[\s\S]*"tool_calls"\s*:\s*\[/i.test(value);
+
+  const skipOneRedundantNewline = (input: string, start: number, result: string): number => {
+    let index = start;
+    while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+      index += 1;
+    }
+    if (
+      (input[index] === "\n" || input[index] === "\r") &&
+      (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
+    ) {
+      if (input[index] === "\r") {
+        index += 1;
+      }
+      if (input[index] === "\n") {
+        index += 1;
+      }
+    }
+    return index;
+  };
+
+  const stripBareToolCallJsonPayloads = (input: string): string => {
+    if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(input)) {
+      return input;
+    }
+
+    const codeRegions = findCodeRegions(input);
+    let result = "";
+    let cursor = 0;
+    for (let index = 0; index < input.length; index += 1) {
+      const ch = input[index];
+      if ((ch !== "{" && ch !== "[") || index < cursor || isInsideCode(index, codeRegions)) {
+        continue;
+      }
+
+      const end = consumeJsonish(input, index);
+      let shouldStrip = false;
+      let stripEnd = end ?? input.length;
+      if (end !== null) {
+        const raw = input.slice(index, end);
+        if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(raw)) {
+          index = Math.max(index, end - 1);
+          continue;
+        }
+        try {
+          shouldStrip = isBareToolCallJsonPayload(JSON.parse(raw));
+        } catch {
+          shouldStrip = false;
+        }
+        if (!shouldStrip) {
+          index = Math.max(index, end - 1);
+          continue;
+        }
+      } else {
+        shouldStrip = looksLikeBareToolCallJsonFragment(input.slice(index));
+      }
+
+      if (!shouldStrip) {
+        continue;
+      }
+
+      result += input.slice(cursor, index);
+      stripEnd = skipOneRedundantNewline(input, stripEnd, result);
+      cursor = stripEnd;
+      index = Math.max(index, cursor - 1);
+    }
+    result += input.slice(cursor);
+    return result;
+  };
+
   const stripToolCalls = (input: string): string => {
     const toolCallRe = /\[Tool Call:[^\]]*\]/gi;
     let result = "";
@@ -470,8 +599,10 @@ export function stripDowngradedToolCallText(text: string): string {
     return result;
   };
 
+  let cleaned = stripBareToolCallJsonPayloads(text);
+
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
+  cleaned = stripToolCalls(cleaned);
 
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
