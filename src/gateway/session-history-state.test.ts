@@ -293,6 +293,23 @@ describe("SessionHistorySseState", () => {
     expect(state.snapshot().messages).toHaveLength(1);
   });
 
+  test("omits quote-wrapped new session startup prompts from history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        userTextMessage(
+          [
+            "\u201cA new session was started via /new or /reset. Execute your Session Startup sequence now - read the required files before responding to the user. If BOOTSTRAP.md exists in the provided Project Context, read it and follow its instructions first. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.",
+            "Current time: Sunday, April 26th, 2026 - 9:40 AM (Asia/Shanghai) / 2026-04-26 01:40 UTC\u201d",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(historyText(snapshot)).toEqual([]);
+    expect(snapshot.history.messages).toEqual([]);
+    expect(snapshot.rawTranscriptSeq).toBe(1);
+  });
+
   test("omits legacy quote-wrapped failed ACP runtime wrappers from history", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [
