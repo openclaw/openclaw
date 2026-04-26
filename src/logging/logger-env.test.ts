@@ -89,3 +89,90 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
   });
 });
+
+describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
+  let originalEnv: string | undefined;
+  let testLogPath = "";
+
+  beforeAll(async () => {
+    await logPathTracker.setup();
+  });
+
+  beforeEach(() => {
+    originalEnv = process.env.OPENCLAW_LOG_MAX_FILE_BYTES;
+    testLogPath = logPathTracker.nextPath();
+    delete process.env.OPENCLAW_LOG_MAX_FILE_BYTES;
+    resetLogger();
+    setLoggerOverride(null);
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.OPENCLAW_LOG_MAX_FILE_BYTES;
+    } else {
+      process.env.OPENCLAW_LOG_MAX_FILE_BYTES = originalEnv;
+    }
+    resetLogger();
+    setLoggerOverride(null);
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
+    await logPathTracker.cleanup();
+    testLogPath = "";
+  });
+
+  it("env override beats config-load race so plist/launchd unit values apply at first log write", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = "1073741824";
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(1073741824);
+  });
+
+  it("ignores empty / whitespace-only env values and falls back to config / default", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = "   ";
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
+  });
+
+  it("ignores non-numeric / zero / negative / non-finite env values", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    for (const bad of ["one-gig", "0", "-1", "Infinity", "NaN"]) {
+      process.env.OPENCLAW_LOG_MAX_FILE_BYTES = bad;
+      resetLogger();
+      expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
+    }
+  });
+
+  it("floors fractional env values", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = "1024.7";
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(1024);
+  });
+});

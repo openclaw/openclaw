@@ -455,7 +455,26 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   return logger;
 }
 
+function resolveMaxLogFileBytesFromEnv(): number | undefined {
+  // Env override mirrors OPENCLAW_LOG_LEVEL: read at logger init so plist /
+  // launchd / systemd unit overrides apply even when the on-disk config has
+  // not finished loading by the first log write. (#71800)
+  const raw = process.env.OPENCLAW_LOG_MAX_FILE_BYTES?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
 function resolveMaxLogFileBytes(raw: unknown): number {
+  const fromEnv = resolveMaxLogFileBytesFromEnv();
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
