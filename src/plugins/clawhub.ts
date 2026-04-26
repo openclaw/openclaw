@@ -746,6 +746,7 @@ export async function installPluginFromClawHub(
     token?: string;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
+    extensionsDir?: string;
     dryRun?: boolean;
     expectedPluginId?: string;
   },
@@ -862,6 +863,7 @@ export async function installPluginFromClawHub(
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       mode: params.mode,
+      extensionsDir: params.extensionsDir,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
     });

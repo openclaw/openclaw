@@ -5,7 +5,7 @@ import {
   refreshPluginRegistry,
   resetPluginsCliTestState,
   writeConfigFile,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 describe("persistPluginInstall", () => {
@@ -46,7 +46,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith({
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       alpha: expect.objectContaining({
         source: "npm",
         spec: "alpha@1.0.0",
@@ -56,6 +56,13 @@ describe("persistPluginInstall", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
+      installRecords: {
+        alpha: expect.objectContaining({
+          source: "npm",
+          spec: "alpha@1.0.0",
+          installPath: "/tmp/alpha",
+        }),
+      },
       reason: "source-changed",
     });
   });

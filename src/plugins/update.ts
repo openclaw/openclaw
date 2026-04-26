@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -114,10 +115,6 @@ type InstallIntegrityDrift = {
   };
 };
 
-function stringFieldMatches(recorded: string | undefined, resolved: string | undefined): boolean {
-  return !recorded || (resolved !== undefined && recorded === resolved);
-}
-
 function shouldSkipUnchangedNpmInstall(params: {
   currentVersion?: string;
   record: {
@@ -135,12 +132,28 @@ function shouldSkipUnchangedNpmInstall(params: {
   if (params.currentVersion !== params.metadata.version) {
     return false;
   }
+  if (
+    !params.record.resolvedName ||
+    !params.record.resolvedSpec ||
+    !params.record.resolvedVersion
+  ) {
+    return false;
+  }
+  if (!params.metadata.name || !params.metadata.resolvedSpec) {
+    return false;
+  }
+  if (params.metadata.integrity && !params.record.integrity) {
+    return false;
+  }
+  if (params.metadata.shasum && !params.record.shasum) {
+    return false;
+  }
   return (
-    stringFieldMatches(params.record.integrity, params.metadata.integrity) &&
-    stringFieldMatches(params.record.shasum, params.metadata.shasum) &&
-    stringFieldMatches(params.record.resolvedName, params.metadata.name) &&
-    stringFieldMatches(params.record.resolvedSpec, params.metadata.resolvedSpec) &&
-    stringFieldMatches(params.record.resolvedVersion, params.metadata.version)
+    (!params.metadata.integrity || params.record.integrity === params.metadata.integrity) &&
+    (!params.metadata.shasum || params.record.shasum === params.metadata.shasum) &&
+    params.record.resolvedName === params.metadata.name &&
+    params.record.resolvedSpec === params.metadata.resolvedSpec &&
+    params.record.resolvedVersion === params.metadata.version
   );
 }
 
@@ -153,6 +166,19 @@ function pathsEqual(
     return false;
   }
   return resolveUserPath(left, env) === resolveUserPath(right, env);
+}
+
+function resolveRecordedExtensionsDir(params: {
+  pluginId: string;
+  installPath: string;
+}): string | undefined {
+  const parentDir = path.dirname(params.installPath);
+  try {
+    const canonicalInstallPath = resolvePluginInstallDir(params.pluginId, parentDir);
+    return canonicalInstallPath === params.installPath ? parentDir : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
@@ -535,6 +561,10 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
+    const extensionsDir = resolveRecordedExtensionsDir({
+      pluginId,
+      installPath,
+    });
 
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       const metadataResult = await resolveNpmSpecMetadata({ spec: effectiveSpec! });
@@ -573,6 +603,7 @@ export async function updateNpmInstalledPlugins(params: {
             ? await installPluginFromNpmSpec({
                 spec: effectiveSpec!,
                 mode: "update",
+                extensionsDir,
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
@@ -590,6 +621,7 @@ export async function updateNpmInstalledPlugins(params: {
                   spec: effectiveSpec ?? `clawhub:${record.clawhubPackage!}`,
                   baseUrl: record.clawhubUrl,
                   mode: "update",
+                  extensionsDir,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -599,6 +631,7 @@ export async function updateNpmInstalledPlugins(params: {
                   marketplace: record.marketplaceSource!,
                   plugin: record.marketplacePlugin!,
                   mode: "update",
+                  extensionsDir,
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
@@ -674,6 +707,7 @@ export async function updateNpmInstalledPlugins(params: {
           ? await installPluginFromNpmSpec({
               spec: effectiveSpec!,
               mode: "update",
+              extensionsDir,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               expectedPluginId: pluginId,
               expectedIntegrity,
@@ -690,6 +724,7 @@ export async function updateNpmInstalledPlugins(params: {
                 spec: effectiveSpec ?? `clawhub:${record.clawhubPackage!}`,
                 baseUrl: record.clawhubUrl,
                 mode: "update",
+                extensionsDir,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,
@@ -698,6 +733,7 @@ export async function updateNpmInstalledPlugins(params: {
                 marketplace: record.marketplaceSource!,
                 plugin: record.marketplacePlugin!,
                 mode: "update",
+                extensionsDir,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
                 logger,

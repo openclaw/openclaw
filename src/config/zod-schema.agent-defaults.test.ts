@@ -140,6 +140,25 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
+  it("accepts per-agent TTS overrides", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "reader",
+      tts: {
+        provider: "openai",
+        auto: "always",
+        providers: {
+          openai: {
+            voice: "nova",
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+    });
+
+    expect(agent.tts?.provider).toBe("openai");
+    expect(agent.tts?.providers?.openai?.voice).toBe("nova");
+  });
+
   it("rejects zero heartbeat timeoutSeconds", () => {
     expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();

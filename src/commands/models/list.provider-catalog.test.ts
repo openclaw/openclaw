@@ -16,6 +16,7 @@ const providerDiscoveryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: providerDiscoveryMocks.loadPluginRegistrySnapshot,
   resolvePluginContributionOwners: providerDiscoveryMocks.resolvePluginContributionOwners,
   resolveProviderOwners: providerDiscoveryMocks.resolveProviderOwners,
@@ -203,7 +204,7 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
 
-  it("does not fall back to legacy manifest ownership for disabled installed-index owners", async () => {
+  it("does not fall back to legacy manifest ownership for disabled persisted plugin owners", async () => {
     providerDiscoveryMocks.resolveProviderOwners
       .mockReturnValueOnce([])
       .mockReturnValueOnce(["moonshot"]);

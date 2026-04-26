@@ -12,6 +12,7 @@ import {
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import {
+  DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
   FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
@@ -38,7 +39,12 @@ function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
+function createCandidate(
+  rootDir: string,
+  id = "demo",
+  origin: PluginCandidate["origin"] = "global",
+  options: { enabledByDefault?: boolean } = {},
+): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while migrating plugin registry');\n",
@@ -49,6 +55,7 @@ function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
     JSON.stringify({
       id,
       name: id,
+      ...(options.enabledByDefault ? { enabledByDefault: true } : {}),
       configSchema: { type: "object" },
       providers: [id],
     }),
@@ -58,7 +65,7 @@ function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
     idHint: id,
     source: path.join(rootDir, "index.ts"),
     rootDir,
-    origin: "global",
+    origin,
   };
 }
 
@@ -67,9 +74,10 @@ function createCurrentIndex(): InstalledPluginIndex {
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [],
     diagnostics: [],
   };
@@ -78,7 +86,7 @@ function createCurrentIndex(): InstalledPluginIndex {
 describe("plugin registry install migration", () => {
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installed-index.json");
+    const filePath = path.join(stateDir, "plugins", "installs.json");
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
@@ -101,11 +109,11 @@ describe("plugin registry install migration", () => {
 
   it("migrates when an existing registry file is not current", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installed-index.json");
+    const filePath = path.join(stateDir, "plugins", "installs.json");
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, migrationVersion: 1 }), "utf8");
+    fs.writeFileSync(filePath, JSON.stringify({ version: 1, migrationVersion: 0 }), "utf8");
 
     await expect(
       migratePluginRegistryForInstall({
@@ -122,24 +130,27 @@ describe("plugin registry install migration", () => {
     });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
-      migrationVersion: 2,
+      migrationVersion: 1,
       plugins: [expect.objectContaining({ pluginId: "demo" })],
     });
   });
 
-  it("persists only plugins enabled by the central config policy", async () => {
+  it("persists migration-relevant plugin records without dropping explicit disabled state", async () => {
     const stateDir = makeTempDir();
     const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
     const disabledDir = path.join(stateDir, "plugins", "disabled-demo");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
     fs.mkdirSync(enabledDir, { recursive: true });
     fs.mkdirSync(disabledDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
 
     await expect(
       migratePluginRegistryForInstall({
         stateDir,
         candidates: [
           createCandidate(enabledDir, "enabled-demo"),
-          createCandidate(disabledDir, "disabled-demo"),
+          createCandidate(disabledDir, "disabled-demo", "bundled"),
+          createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
         ],
         readConfig: async () => ({
           plugins: {
@@ -155,15 +166,52 @@ describe("plugin registry install migration", () => {
     ).resolves.toMatchObject({
       status: "migrated",
       current: {
-        plugins: [expect.objectContaining({ pluginId: "enabled-demo" })],
+        plugins: [
+          expect.objectContaining({ pluginId: "enabled-demo", enabled: true }),
+          expect.objectContaining({ pluginId: "disabled-demo", enabled: false }),
+        ],
       },
     });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
-      plugins: [expect.objectContaining({ pluginId: "enabled-demo" })],
+      plugins: [
+        expect.objectContaining({ pluginId: "enabled-demo", enabled: true }),
+        expect.objectContaining({ pluginId: "disabled-demo", enabled: false }),
+      ],
     });
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["enabled-demo"]);
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "enabled-demo",
+      "disabled-demo",
+    ]);
+  });
+
+  it("keeps enabled-by-default bundled provider plugins discoverable for setup", async () => {
+    const stateDir = makeTempDir();
+    const openaiDir = path.join(stateDir, "plugins", "openai");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(openaiDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [
+          createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
+          createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+        ],
+        readConfig: async () => ({}),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "openai", enabledByDefault: true })],
+      },
+    });
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {
@@ -185,10 +233,10 @@ describe("plugin registry install migration", () => {
       },
     });
     expect(readConfig).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(stateDir, "plugins", "installed-index.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
 
-  it("migrates missing registry state from legacy discovery and config inputs", async () => {
+  it("builds missing registry state from discovered plugin manifests", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -198,17 +246,7 @@ describe("plugin registry install migration", () => {
       migratePluginRegistryForInstall({
         stateDir,
         candidates: [candidate],
-        readConfig: async () => ({
-          plugins: {
-            installs: {
-              demo: {
-                source: "npm",
-                resolvedName: "@vendor/demo",
-                resolvedVersion: "1.0.0",
-              },
-            },
-          },
-        }),
+        readConfig: async () => ({}),
         env: hermeticEnv(),
       }),
     ).resolves.toMatchObject({
@@ -216,15 +254,10 @@ describe("plugin registry install migration", () => {
       migrated: true,
       current: {
         refreshReason: "migration",
-        migrationVersion: 2,
+        migrationVersion: 1,
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            installRecord: expect.objectContaining({
-              source: "npm",
-              resolvedName: "@vendor/demo",
-              resolvedVersion: "1.0.0",
-            }),
           }),
         ],
       },
@@ -233,6 +266,121 @@ describe("plugin registry install migration", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       refreshReason: "migration",
       plugins: [expect.objectContaining({ pluginId: "demo" })],
+    });
+  });
+
+  it("seeds first-run install records from shipped plugins.installs config", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [createCandidate(pluginDir)],
+        readConfig: async () => ({
+          plugins: {
+            entries: {
+              demo: {
+                enabled: true,
+              },
+            },
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        installRecords: {
+          demo: {
+            source: "npm",
+            spec: "demo@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+        plugins: [
+          expect.objectContaining({
+            pluginId: "demo",
+            installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          }),
+        ],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+          installPath: pluginDir,
+        },
+      },
+      plugins: [
+        expect.objectContaining({
+          pluginId: "demo",
+          installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        }),
+      ],
+    });
+  });
+
+  it("preserves shipped install records when the plugin manifest cannot be discovered", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "missing");
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [],
+        readConfig: async () => ({
+          plugins: {
+            entries: {
+              missing: {
+                enabled: true,
+              },
+            },
+            installs: {
+              missing: {
+                source: "npm",
+                spec: "missing-plugin@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: pluginDir,
+        },
+      },
+      plugins: [],
     });
   });
 
@@ -250,6 +398,25 @@ describe("plugin registry install migration", () => {
       deprecationWarnings: [
         expect.stringContaining(`${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated`),
       ],
+    });
+  });
+
+  it("treats falsey env flag strings as unset", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    expect(
+      preflightPluginRegistryInstallMigration({
+        stateDir,
+        env: hermeticEnv({
+          [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "0",
+          [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "false",
+        }),
+      }),
+    ).toMatchObject({
+      action: "skip-existing",
+      force: false,
+      deprecationWarnings: [],
     });
   });
 });

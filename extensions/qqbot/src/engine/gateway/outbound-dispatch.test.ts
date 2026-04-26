@@ -185,6 +185,7 @@ describe("dispatchOutbound", () => {
       text: "read this aloud",
       cfg: {},
       channel: "qqbot",
+      accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
     expect(sendVoiceMessageMock).toHaveBeenCalledWith(

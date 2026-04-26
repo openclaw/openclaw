@@ -1784,17 +1784,56 @@ async function maybeResolveActiveRecall(params: {
   }
 
   const controller = new AbortController();
+  const TIMEOUT_SENTINEL = Symbol("timeout");
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${params.config.timeoutMs}ms`));
   }, params.config.timeoutMs);
   timeoutId.unref?.();
 
+  const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        resolve(TIMEOUT_SENTINEL);
+      },
+      { once: true },
+    );
+  });
+
   try {
-    const { rawReply, transcriptPath, searchDebug } = await runRecallSubagent({
+    const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
     });
+    // Silently catch late rejections after timeout so they don't become
+    // unhandled promise rejections.
+    subagentPromise.catch(() => undefined);
+
+    const raceResult = await Promise.race([subagentPromise, timeoutPromise]);
+
+    if (raceResult === TIMEOUT_SENTINEL) {
+      const result: ActiveRecallResult = {
+        status: "timeout",
+        elapsedMs: Date.now() - startedAt,
+        summary: null,
+      };
+      if (params.config.logging) {
+        params.api.logger.info?.(
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+        );
+      }
+      await persistPluginStatusLines({
+        api: params.api,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        statusLine: buildPluginStatusLine({ result, config: params.config }),
+        searchDebug: result.searchDebug,
+      });
+      return result;
+    }
+
+    const { rawReply, transcriptPath, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,

@@ -18,6 +18,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
 }));
@@ -67,7 +68,7 @@ describe("listManifestInstalledChannelIds", () => {
       },
     });
     loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+      plugins: [{ pluginId: "slack" }],
       diagnostics: [],
     });
     listPluginContributionIds.mockReturnValue(["slack"]);
@@ -89,11 +90,13 @@ describe("listManifestInstalledChannelIds", () => {
     });
     expect(listPluginContributionIds).toHaveBeenCalledWith({
       index: {
-        plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+        plugins: [{ pluginId: "slack" }],
         diagnostics: [],
       },
       contribution: "channels",
       config: autoEnabledConfig,
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" },
     });
     expect(installedIds).toEqual(new Set(["slack"]));
   });

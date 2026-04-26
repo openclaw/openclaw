@@ -8,12 +8,6 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
-import {
-  loadPluginInstallRecords,
-  recordPluginInstallInRecords,
-  withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../plugins/install-ledger-store.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
@@ -141,14 +135,6 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
   return undefined;
 }
 
-async function persistOnboardingPluginInstallRecord(params: {
-  cfg: OpenClawConfig;
-  install: Parameters<typeof recordPluginInstallInRecords>[1];
-}) {
-  const records = await loadPluginInstallRecords({ config: params.cfg });
-  await writePersistedPluginInstallLedger(recordPluginInstallInRecords(records, params.install));
-}
-
 async function recordLocalPluginInstall(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -163,11 +149,7 @@ async function recordLocalPluginInstall(params: {
     ...(sourcePath ? { sourcePath } : {}),
     ...(params.npmSpec ? { spec: params.npmSpec } : {}),
   } as const;
-  await persistOnboardingPluginInstallRecord({
-    cfg: params.cfg,
-    install,
-  });
-  return withoutPluginInstallRecords(recordPluginInstall(params.cfg, install));
+  return recordPluginInstall(params.cfg, install);
 }
 
 function resolveLocalPath(params: {
@@ -571,11 +553,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       version: result.version,
       ...buildNpmResolutionInstallFields(result.npmResolution),
     } as const;
-    await persistOnboardingPluginInstallRecord({
-      cfg: next,
-      install,
-    });
-    next = withoutPluginInstallRecords(recordPluginInstall(next, install));
+    next = recordPluginInstall(next, install);
     return {
       cfg: next,
       installed: true,

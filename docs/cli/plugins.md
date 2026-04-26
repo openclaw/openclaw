@@ -109,7 +109,8 @@ visibility and per-hook enablement, not package installation.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+installs run project-local with `--ignore-scripts` for safety, even when your
+shell has global npm install settings.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
 those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
@@ -121,6 +122,9 @@ installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at
+the extracted plugin root; archives that only contain `package.json` are
+rejected before OpenClaw writes install records.
 
 Claude marketplace installs are also supported.
 
@@ -218,7 +222,8 @@ For runtime hook debugging:
   from a module-loaded inspection pass.
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway,
   service/process hints, config path, and RPC health.
-- Non-bundled conversation hooks (`llm_input`, `llm_output`, `agent_end`) require
+- Non-bundled conversation hooks (`llm_input`, `llm_output`,
+  `before_agent_finalize`, `agent_end`) require
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
@@ -231,19 +236,20 @@ openclaw plugins install -l ./my-plugin
 source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
-the managed install ledger while keeping the default behavior unpinned.
+the managed plugin index while keeping the default behavior unpinned.
 
-### Install Ledger
+### Plugin Index
 
-Plugin install metadata is machine-managed state, not user config. New installs
+Plugin install metadata is machine-managed state, not user config. Installs
 and updates write it to `plugins/installs.json` under the active OpenClaw state
-directory. The file includes a do-not-edit warning and is used by
-`openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
-
-Legacy `plugins.installs` entries in `openclaw.json` remain readable as a
-deprecated compatibility fallback. When install/update/uninstall paths rewrite
-plugin install state, OpenClaw writes the ledger file and removes
-`plugins.installs` from the persisted config payload.
+directory. Its top-level `installRecords` map is the durable source of install
+metadata, including records for broken or missing plugin manifests. The
+`plugins` array is the manifest-derived cold registry cache. The file includes a
+do-not-edit warning and is used by `openclaw plugins update`, uninstall,
+diagnostics, and the cold plugin registry.
+When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves
+them into the plugin index and removes the config key; if either write fails,
+the config records are kept so the install metadata is not lost.
 
 ### Uninstall
 
@@ -253,14 +259,11 @@ openclaw plugins uninstall <id> --dry-run
 openclaw plugins uninstall <id> --keep-files
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, the managed install
-ledger, the plugin allowlist, and linked `plugins.load.paths` entries when
-applicable.
+`uninstall` removes plugin records from `plugins.entries`, the persisted plugin
+index, the plugin allowlist, and linked `plugins.load.paths` entries when
+applicable. Unless `--keep-files` is set, uninstall also removes the tracked
+managed install directory when it is inside OpenClaw's plugin extensions root.
 For active memory plugins, the memory slot resets to `memory-core`.
-
-By default, uninstall also removes the plugin install directory under the active
-state-dir plugin root. Use
-`--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
 
@@ -274,7 +277,7 @@ openclaw plugins update @openclaw/voice-call@beta
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked plugin installs in the managed install ledger and
+Updates apply to tracked plugin installs in the managed plugin index and
 tracked hook-pack installs in `hooks.internal.installs`.
 
 When you pass a plugin id, OpenClaw reuses the recorded install spec for that
@@ -364,8 +367,8 @@ Normal startup, provider owner lookup, channel setup classification, and plugin
 inventory can read it without importing plugin runtime modules.
 
 Use `plugins registry` to inspect whether the persisted registry is present,
-current, or stale. Use `--refresh` to rebuild it from the durable install
-ledger, config policy, and manifest/package metadata. This is a repair path, not
+current, or stale. Use `--refresh` to rebuild it from the persisted plugin
+index, config policy, and manifest/package metadata. This is a repair path, not
 a runtime activation path.
 
 `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass

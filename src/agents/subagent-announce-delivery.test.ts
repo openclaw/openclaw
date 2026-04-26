@@ -10,8 +10,10 @@ import {
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
 afterEach(() => {
+  resetAnnounceQueuesForTests();
   __testing.setDepsForTest();
 });
 
@@ -223,6 +225,138 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
       channel: "topicchat",
       to: "topicchat:room-a",
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement queued delivery", () => {
+  async function deliverQueuedAnnouncement(params: {
+    requesterOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
+  }) {
+    const callGateway = createGatewayMock();
+    let activityChecks = 0;
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: activityChecks++ === 0,
+      }),
+      loadConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "followup",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: params.requesterOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-external-route",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "queued",
+      }),
+    );
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
+    return callGateway;
+  }
+
+  it("keeps queued announces with no external route session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({});
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:eng:paperclip:issue:123",
+          deliver: false,
+          channel: undefined,
+          accountId: undefined,
+          to: undefined,
+          threadId: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("keeps queued announces with channel-only origins session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "slack",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: false,
+          channel: undefined,
+          to: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("keeps queued announces with internal origins session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "webchat",
+        to: "internal:room",
+        accountId: "acct-1",
+        threadId: "thread-1",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: false,
+          channel: undefined,
+          accountId: undefined,
+          to: undefined,
+          threadId: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("preserves queued external route fields when channel and target are present", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "171.222",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: "171.222",
+        }),
+      }),
+    );
   });
 });
 

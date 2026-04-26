@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  formatDiagnosticTraceparentForPropagation,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -147,6 +148,32 @@ describe("diagnostic-events", () => {
     ]);
   });
 
+  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    const traceparents: Array<string | undefined> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+      trace,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 1 },
+      trace,
+    });
+
+    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
+    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
+  });
+
   it("shares diagnostic state across duplicate module instances", async () => {
     const events: string[] = [];
     onDiagnosticEvent((event) => {
@@ -154,8 +181,9 @@ describe("diagnostic-events", () => {
     });
 
     vi.resetModules();
-    const specifier = "./diagnostic-events.js";
-    const duplicateModule = (await import(specifier)) as typeof import("./diagnostic-events.js");
+    const duplicateModule = (await import(
+      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
+    )) as typeof import("./diagnostic-events.js");
     duplicateModule.emitDiagnosticEvent({
       type: "message.queued",
       source: "plugin",

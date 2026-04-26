@@ -18,6 +18,8 @@ import {
   type PluginInspectShape,
 } from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
@@ -155,22 +157,30 @@ type PluginReportParams = {
 
 function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
+  manifest?: PluginManifestRecord,
 ): PluginRecord {
+  const format = plugin.format ?? manifest?.format ?? "openclaw";
+  const bundleFormat = plugin.bundleFormat ?? manifest?.bundleFormat;
   return {
     id: plugin.pluginId,
-    name: plugin.pluginId,
-    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
-    format: "openclaw",
-    source: plugin.manifestPath,
+    name: manifest?.name ?? plugin.packageName ?? plugin.pluginId,
+    ...(plugin.packageVersion || manifest?.version
+      ? { version: plugin.packageVersion ?? manifest?.version }
+      : {}),
+    ...(manifest?.description ? { description: manifest.description } : {}),
+    format,
+    ...(bundleFormat ? { bundleFormat } : {}),
+    ...(manifest?.kind ? { kind: manifest.kind } : {}),
+    source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
     status: plugin.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
-    channelIds: [...plugin.contributions.channels],
-    cliBackendIds: [...plugin.contributions.cliBackends],
-    providerIds: [...plugin.contributions.providers],
+    channelIds: [...(manifest?.channels ?? [])],
+    cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
+    providerIds: [...(manifest?.providers ?? [])],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
@@ -186,7 +196,7 @@ function buildPluginRecordFromInstalledIndex(
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
-    commands: [...plugin.contributions.commandAliases],
+    commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],
     httpRoutes: 0,
     hookCount: 0,
     configSchema: false,
@@ -203,10 +213,20 @@ export function buildPluginRegistrySnapshotReport(
     env: params?.env,
     workspaceDir: params?.workspaceDir,
   });
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: result.snapshot,
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+    includeDisabled: true,
+  });
+  const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   return {
     workspaceDir: params?.workspaceDir,
     ...createEmptyPluginRegistry(),
-    plugins: result.snapshot.plugins.map(buildPluginRecordFromInstalledIndex),
+    plugins: result.snapshot.plugins.map((plugin) =>
+      buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
+    ),
     diagnostics: [...result.snapshot.diagnostics],
     registrySource: result.source,
     registryDiagnostics: result.diagnostics,

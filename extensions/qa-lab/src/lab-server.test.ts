@@ -85,6 +85,7 @@ const captureMock = vi.hoisted(() => {
     readBlob() {
       return null;
     },
+    close: vi.fn(),
     deleteSessions(sessionIds: string[]) {
       const ids = new Set(sessionIds);
       for (let index = sessions.length - 1; index >= 0; index -= 1) {
@@ -106,11 +107,16 @@ const captureMock = vi.hoisted(() => {
     reset() {
       sessions.splice(0);
       events.splice(0);
+      store.close.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStore: () => ({
+    store: captureMock.store,
+    release: captureMock.store.close,
+  }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",

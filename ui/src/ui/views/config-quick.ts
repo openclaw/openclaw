@@ -994,9 +994,9 @@ export function renderQuickSettings(props: QuickSettingsProps) {
 
       <div class="qs-grid">
         ${renderStack(renderModelCard(props), renderSecurityCard(props))}
-        ${renderChannelsCard(props)}
+        ${renderChannelsCard(props)} ${renderPersonalCard(props)}
         ${renderStack(renderAppearanceCard(props), renderAutomationsCard(props))}
-        ${renderPersonalCard(props)} ${renderPresetsCard(props)}
+        ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}

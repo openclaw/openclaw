@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
-import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import {
+  readPersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndex,
+} from "./installed-plugin-index-store.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -21,6 +24,9 @@ import {
   refreshPluginRegistry,
   resolveChannelOwners,
   resolveCliBackendOwners,
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+  resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
   resolveProviderOwners,
   resolveSetupProviderOwners,
@@ -82,6 +88,10 @@ function createCandidate(rootDir: string): PluginCandidate {
       commandAliases: [{ name: "demo-command" }],
       contracts: {
         tools: ["demo-tool"],
+        webSearchProviders: ["demo-search"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.demo-search.apiKey"],
       },
     }),
     "utf8",
@@ -102,9 +112,10 @@ function createIndex(
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [
       {
         pluginId,
@@ -113,16 +124,6 @@ function createIndex(
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
-        contributions: {
-          providers: [pluginId],
-          channels: [],
-          channelConfigs: [],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: false,
           memory: false,
@@ -165,6 +166,23 @@ describe("plugin registry facade", () => {
       }),
     ).toEqual(["demo"]);
     expect(resolveSetupProviderOwners({ index, setupProviderId: "demo-setup" })).toEqual(["demo"]);
+    expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
+      "demo",
+    ]);
+    expect(
+      resolveManifestContractOwnerPluginId({
+        index,
+        contract: "webSearchProviders",
+        value: "demo-search",
+      }),
+    ).toBe("demo");
+    expect(
+      resolveManifestContractPluginIdsByCompatibilityRuntimePath({
+        index,
+        contract: "webSearchProviders",
+        path: "tools.web.search.demo-search.apiKey",
+      }),
+    ).toEqual(["demo"]);
   });
 
   it("keeps disabled records inspectable while excluding owners by default", () => {
@@ -206,17 +224,25 @@ describe("plugin registry facade", () => {
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
-    const baseIndex = createIndex("openai");
-    const plugin = baseIndex.plugins[0];
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "", "utf8");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        configSchema: { type: "object" },
+        providers: ["openai", "openai-codex"],
+        channels: ["openai-chat"],
+      }),
+      "utf8",
+    );
     const index = createIndex("openai", {
       plugins: [
         {
-          ...plugin,
-          contributions: {
-            ...plugin.contributions,
-            providers: ["openai", "openai-codex"],
-            channels: ["openai-chat"],
-          },
+          ...createIndex("openai").plugins[0],
+          manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+          source: path.join(rootDir, "index.ts"),
+          rootDir,
         },
       ],
     });
@@ -382,6 +408,41 @@ describe("plugin registry facade", () => {
       persisted: {
         plugins: [expect.objectContaining({ pluginId: "demo" })],
       },
+    });
+  });
+
+  it("preserves install records when refreshing the persisted registry", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(
+      createIndex("missing", {
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "missing"),
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    await refreshPluginRegistry({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: hermeticEnv(),
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
     });
   });
 });

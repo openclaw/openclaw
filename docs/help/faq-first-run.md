@@ -597,7 +597,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     `openai-codex/gpt-5.5` for Codex OAuth through the default PI runner. Use
     `openai/gpt-5.5` for direct OpenAI API-key access. GPT-5.5 can also use
     subscription/OAuth via `openai-codex/gpt-5.5` or native Codex app-server
-    runs with `openai/gpt-5.5` and `embeddedHarness.runtime: "codex"`.
+    runs with `openai/gpt-5.5` and `agentRuntime.id: "codex"`.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
@@ -607,7 +607,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     - `openai/gpt-5.5` = current direct OpenAI API-key route in PI
     - `openai-codex/gpt-5.5` = Codex OAuth route in PI
-    - `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` = native Codex app-server route
+    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = native Codex app-server route
     - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set

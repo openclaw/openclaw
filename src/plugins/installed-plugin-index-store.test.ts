@@ -27,9 +27,10 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [
       {
         pluginId: "demo",
@@ -38,16 +39,6 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         rootDir: "/plugins/demo",
         origin: "global",
         enabled: true,
-        contributions: {
-          providers: ["demo"],
-          channels: ["demo-chat"],
-          channelConfigs: ["demo-chat"],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: false,
           memory: false,
@@ -91,7 +82,7 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
 
     expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "plugins", "installed-index.json"),
+      path.join(stateDir, "plugins", "installs.json"),
     );
   });
 
@@ -220,7 +211,6 @@ describe("installed plugin index persistence", () => {
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            contributions: expect.objectContaining({ providers: ["demo", "demo-next"] }),
           }),
         ],
       },
@@ -251,6 +241,57 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       refreshReason: "manual",
       plugins: [expect.objectContaining({ pluginId: "demo" })],
+    });
+  });
+
+  it("preserves existing install records when refreshing the manifest cache", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "missing"),
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const index = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    expect(index).toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
+    });
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
     });
   });
 });

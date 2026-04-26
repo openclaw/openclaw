@@ -658,7 +658,8 @@ vi.mock("./compaction-timeout.js", () => ({
 }));
 
 vi.mock("./history-image-prune.js", () => ({
-  pruneProcessedHistoryImages: <T>(messages: T) => messages,
+  installHistoryImagePruneContextTransform: () => () => {},
+  pruneProcessedHistoryImages: () => null,
 }));
 
 export type MutableSession = {
@@ -675,6 +676,15 @@ export type MutableSession = {
     };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  sendCustomMessage: (
+    message: {
+      customType: string;
+      content: string;
+      display: boolean;
+      details?: Record<string, unknown>;
+    },
+    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
+  ) => Promise<void>;
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
@@ -798,6 +808,19 @@ export function createDefaultEmbeddedSession(params?: {
         ...session.messages,
         { role: "assistant", content: "done", timestamp: 2 },
       ];
+    },
+    sendCustomMessage: async (message, options) => {
+      if (options?.deliverAs === "nextTurn") {
+        session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
+        return;
+      }
+      if (options?.triggerTurn) {
+        session.messages = [
+          ...session.messages,
+          { role: "custom", timestamp: 1, ...message },
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      }
     },
     abort: async () => {},
     dispose: () => {},

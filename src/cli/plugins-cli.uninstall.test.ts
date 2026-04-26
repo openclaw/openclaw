@@ -6,13 +6,15 @@ import {
   loadConfig,
   promptYesNo,
   refreshPluginRegistry,
+  replaceConfigFile,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   uninstallPlugin,
   writeConfigFile,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -76,6 +78,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
     buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
@@ -103,7 +106,7 @@ describe("plugins cli uninstall", () => {
         deleteFiles: false,
       }),
     );
-    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
     expect(writeConfigFile).toHaveBeenCalledWith({
       plugins: {
         entries: {},
@@ -115,8 +118,65 @@ describe("plugins cli uninstall", () => {
           entries: {},
         },
       },
+      installRecords: {},
       reason: "source-changed",
     });
+  });
+
+  it("restores install records when the config write rejects during uninstall", async () => {
+    const installRecords = {
+      alpha: {
+        source: "path",
+        sourcePath: ALPHA_INSTALL_PATH,
+        installPath: ALPHA_INSTALL_PATH,
+      },
+    } as const;
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: installRecords,
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      plugins: {
+        entries: {},
+        installs: {},
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    uninstallPlugin.mockResolvedValue({
+      ok: true,
+      config: nextConfig,
+      warnings: [],
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        loadPath: false,
+        memorySlot: false,
+        directory: false,
+      },
+    });
+    replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    await expect(
+      runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]),
+    ).rejects.toThrow("config changed");
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(1, {});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      installRecords,
+    );
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("exits when uninstall target is not managed by plugin install records", async () => {

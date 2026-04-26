@@ -57,7 +57,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## GitHub / CI
 
 - Triage: list first, hydrate few. Use bounded `gh --json --jq`; avoid repeated full comment scans.
+- Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without Peter asking.
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
+- GitHub search boolean text is fussy. If `OR` queries return empty, split exact terms and search title/body/comments separately before concluding no hits.
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
 - GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
@@ -84,6 +86,13 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   - public SDK/plugin contract: extension prod/test too
   - unknown root/config: all lanes
 - Before handoff/push: `pnpm check:changed`. Tests-only: `pnpm test:changed`. Full prod sweep: `pnpm check`.
+- Rebase sanity: after a green `pnpm check:changed`, a clean rebase onto current
+  `origin/main` does not require rerunning the full changed gate when the rebase
+  has no conflicts and the branch diff is materially unchanged. Do a quick
+  `git status`, `git diff --check`, and diff/stat sanity check; rerun targeted or
+  full checks only if conflict resolution, upstream overlap, generated drift,
+  dependency/config changes, or touched-file content changes make the prior
+  result stale.
 - Landing on `main`: verify touched surface near landing. Default feasible bar: `pnpm check` + `pnpm test`.
 - Hard build gate: `pnpm build` before push if build output, packaging, lazy/module boundaries, or published surfaces can change.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -123,13 +132,16 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Changelog user-facing only; pure test/internal usually no entry.
 - Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @steipete`.
+- Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git
 
 - Commit via `scripts/committer "<msg>" <file...>`; stage intended files only. It formats staged files; still run gates.
 - Commits: conventional-ish, concise, grouped.
 - No manual stash/autostash unless explicit. No branch/worktree changes unless requested.
-- `main`: no merge commits; rebase on latest `origin/main` before push.
+- `main`: no merge commits; rebase on latest `origin/main` before push. Do not
+  keep chasing `main` with repeated full gates after one green run plus a clean
+  rebase sanity pass.
 - User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
 - Bulk PR close/reopen >5: ask with count/scope.

@@ -202,9 +202,15 @@ Before tagging or publishing, run:
 pnpm check:architecture
 pnpm build
 pnpm ui:build
+pnpm qa:otel:smoke
 pnpm release:check
 pnpm test:install:smoke
 ```
+
+- Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
+  It starts a local OTLP/HTTP trace receiver, runs QA-lab's
+  `otel-trace-smoke`, and checks span names plus content/identifier redaction
+  without external Opik or Langfuse credentials.
 
 For a non-root smoke path:
 
