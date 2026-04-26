@@ -122,6 +122,9 @@ installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at
+the extracted plugin root; archives that only contain `package.json` are
+rejected before OpenClaw writes install records.
 
 Claude marketplace installs are also supported.
 
