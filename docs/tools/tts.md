@@ -53,20 +53,20 @@ OpenClaw picks the first configured provider in registry auto-select order.
 
 | Provider          | Auth                                                                                                             | Notes                                                                   |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **OpenAI**        | `OPENAI_API_KEY`                                                                                                 | Also used for auto-summary; supports persona `instructions`.            |
+| **Azure Speech**  | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` (also `AZURE_SPEECH_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`)          | Native Ogg/Opus voice-note output and telephony.                        |
 | **ElevenLabs**    | `ELEVENLABS_API_KEY` or `XI_API_KEY`                                                                             | Voice cloning, multilingual, deterministic via `seed`.                  |
 | **Google Gemini** | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                             | Gemini API TTS; persona-aware via `promptTemplate: "audio-profile-v1"`. |
-| **Azure Speech**  | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` (also `AZURE_SPEECH_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`)          | Native Ogg/Opus voice-note output and telephony.                        |
+| **Gradium**       | `GRADIUM_API_KEY`                                                                                                | Voice-note and telephony output.                                        |
+| **Inworld**       | `INWORLD_API_KEY`                                                                                                | Streaming TTS API. Native Opus voice-note and PCM telephony.            |
+| **Local CLI**     | none                                                                                                             | Runs a configured local TTS command.                                    |
 | **Microsoft**     | none                                                                                                             | Public Edge neural TTS via `node-edge-tts`. Best-effort, no SLA.        |
 | **MiniMax**       | `MINIMAX_API_KEY` (or Token Plan: `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`)      | T2A v2 API. Defaults to `speech-2.8-hd`.                                |
-| **Inworld**       | `INWORLD_API_KEY`                                                                                                | Streaming TTS API. Native Opus voice-note and PCM telephony.            |
-| **xAI**           | `XAI_API_KEY`                                                                                                    | xAI batch TTS. Native Opus voice-note is **not** supported.             |
-| **Volcengine**    | `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY` (legacy AppID/token: `VOLCENGINE_TTS_APPID`/`_TOKEN`) | BytePlus Seed Speech HTTP API.                                          |
-| **Xiaomi MiMo**   | `XIAOMI_API_KEY`                                                                                                 | MiMo TTS through Xiaomi chat completions.                               |
+| **OpenAI**        | `OPENAI_API_KEY`                                                                                                 | Also used for auto-summary; supports persona `instructions`.            |
 | **OpenRouter**    | `OPENROUTER_API_KEY` (can reuse `models.providers.openrouter.apiKey`)                                            | Default model `hexgrad/kokoro-82m`.                                     |
-| **Gradium**       | `GRADIUM_API_KEY`                                                                                                | Voice-note and telephony output.                                        |
+| **Volcengine**    | `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY` (legacy AppID/token: `VOLCENGINE_TTS_APPID`/`_TOKEN`) | BytePlus Seed Speech HTTP API.                                          |
 | **Vydra**         | `VYDRA_API_KEY`                                                                                                  | Shared image, video, and speech provider.                               |
-| **Local CLI**     | none                                                                                                             | Runs a configured local TTS command.                                    |
+| **xAI**           | `XAI_API_KEY`                                                                                                    | xAI batch TTS. Native Opus voice-note is **not** supported.             |
+| **Xiaomi MiMo**   | `XIAOMI_API_KEY`                                                                                                 | MiMo TTS through Xiaomi chat completions.                               |
 
 If multiple providers are configured, the selected one is used first and the
 others are fallback options. Auto-summary uses `summaryModel` (or
@@ -87,28 +87,21 @@ TTS config lives under `messages.tts` in `~/.openclaw/openclaw.json`. Pick a
 preset and adapt the provider block:
 
 <Tabs>
-  <Tab title="OpenAI + ElevenLabs">
+  <Tab title="Azure Speech">
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "openai",
-      summaryModel: "openai/gpt-4.1-mini",
-      modelOverrides: { enabled: true },
+      provider: "azure-speech",
       providers: {
-        openai: {
-          apiKey: "${OPENAI_API_KEY}",
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
-        },
-        elevenlabs: {
-          apiKey: "${ELEVENLABS_API_KEY}",
-          model: "eleven_multilingual_v2",
-          voiceId: "EXAVITQu4vr4xnSDxMaL",
-          voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
-          applyTextNormalization: "auto",
-          languageCode: "en",
+        "azure-speech": {
+          apiKey: "${AZURE_SPEECH_KEY}",
+          region: "eastus",
+          voice: "en-US-JennyNeural",
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
         },
       },
     },
@@ -116,7 +109,7 @@ preset and adapt the provider block:
 }
 ```
   </Tab>
-  <Tab title="ElevenLabs only">
+  <Tab title="ElevenLabs">
 ```json5
 {
   messages: {
@@ -157,21 +150,57 @@ preset and adapt the provider block:
 }
 ```
   </Tab>
-  <Tab title="Azure Speech">
+  <Tab title="Gradium">
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "azure-speech",
+      provider: "gradium",
       providers: {
-        "azure-speech": {
-          apiKey: "${AZURE_SPEECH_KEY}",
-          region: "eastus",
-          voice: "en-US-JennyNeural",
-          lang: "en-US",
-          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-          voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+        gradium: {
+          apiKey: "${GRADIUM_API_KEY}",
+          voiceId: "YTpq7expH9539ERJ",
+        },
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Inworld">
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "inworld",
+      providers: {
+        inworld: {
+          apiKey: "${INWORLD_API_KEY}",
+          modelId: "inworld-tts-1.5-max",
+          voiceId: "Sarah",
+          temperature: 0.7,
+        },
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Local CLI">
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "tts-local-cli",
+      providers: {
+        "tts-local-cli": {
+          command: "say",
+          args: ["-o", "{{OutputPath}}", "{{Text}}"],
+          outputFormat: "wav",
+          timeoutMs: 120000,
         },
       },
     },
@@ -223,78 +252,28 @@ preset and adapt the provider block:
 }
 ```
   </Tab>
-  <Tab title="Inworld">
+  <Tab title="OpenAI + ElevenLabs">
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "inworld",
+      provider: "openai",
+      summaryModel: "openai/gpt-4.1-mini",
+      modelOverrides: { enabled: true },
       providers: {
-        inworld: {
-          apiKey: "${INWORLD_API_KEY}",
-          modelId: "inworld-tts-1.5-max",
-          voiceId: "Sarah",
-          temperature: 0.7,
+        openai: {
+          apiKey: "${OPENAI_API_KEY}",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
         },
-      },
-    },
-  },
-}
-```
-  </Tab>
-  <Tab title="xAI">
-```json5
-{
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "xai",
-      providers: {
-        xai: {
-          apiKey: "${XAI_API_KEY}",
-          voiceId: "eve",
-          language: "en",
-          responseFormat: "mp3",
-        },
-      },
-    },
-  },
-}
-```
-  </Tab>
-  <Tab title="Volcengine">
-```json5
-{
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "volcengine",
-      providers: {
-        volcengine: {
-          apiKey: "${VOLCENGINE_TTS_API_KEY}",
-          resourceId: "seed-tts-1.0",
-          voice: "en_female_anna_mars_bigtts",
-        },
-      },
-    },
-  },
-}
-```
-  </Tab>
-  <Tab title="Xiaomi MiMo">
-```json5
-{
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "xiaomi",
-      providers: {
-        xiaomi: {
-          apiKey: "${XIAOMI_API_KEY}",
-          model: "mimo-v2.5-tts",
-          voice: "mimo_default",
-          format: "mp3",
+        elevenlabs: {
+          apiKey: "${ELEVENLABS_API_KEY}",
+          model: "eleven_multilingual_v2",
+          voiceId: "EXAVITQu4vr4xnSDxMaL",
+          voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
+          applyTextNormalization: "auto",
+          languageCode: "en",
         },
       },
     },
@@ -322,17 +301,18 @@ preset and adapt the provider block:
 }
 ```
   </Tab>
-  <Tab title="Gradium">
+  <Tab title="Volcengine">
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "gradium",
+      provider: "volcengine",
       providers: {
-        gradium: {
-          apiKey: "${GRADIUM_API_KEY}",
-          voiceId: "YTpq7expH9539ERJ",
+        volcengine: {
+          apiKey: "${VOLCENGINE_TTS_API_KEY}",
+          resourceId: "seed-tts-1.0",
+          voice: "en_female_anna_mars_bigtts",
         },
       },
     },
@@ -340,19 +320,39 @@ preset and adapt the provider block:
 }
 ```
   </Tab>
-  <Tab title="Local CLI">
+  <Tab title="xAI">
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "tts-local-cli",
+      provider: "xai",
       providers: {
-        "tts-local-cli": {
-          command: "say",
-          args: ["-o", "{{OutputPath}}", "{{Text}}"],
-          outputFormat: "wav",
-          timeoutMs: 120000,
+        xai: {
+          apiKey: "${XAI_API_KEY}",
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Xiaomi MiMo">
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "xiaomi",
+      providers: {
+        xiaomi: {
+          apiKey: "${XIAOMI_API_KEY}",
+          model: "mimo-v2.5-tts",
+          voice: "mimo_default",
+          format: "mp3",
         },
       },
     },
@@ -735,14 +735,14 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     </ParamField>
   </Accordion>
 
-  <Accordion title="OpenAI">
-    <ParamField path="apiKey" type="string">Falls back to `OPENAI_API_KEY`.</ParamField>
-    <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
-    <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
-    <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
-    <ParamField path="baseUrl" type="string">
-      Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
-    </ParamField>
+  <Accordion title="Azure Speech">
+    <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
+    <ParamField path="region" type="string">Azure Speech region (e.g. `eastus`). Env: `AZURE_SPEECH_REGION` or `SPEECH_REGION`.</ParamField>
+    <ParamField path="endpoint" type="string">Optional Azure Speech endpoint override (alias `baseUrl`).</ParamField>
+    <ParamField path="voice" type="string">Azure voice ShortName. Default `en-US-JennyNeural`.</ParamField>
+    <ParamField path="lang" type="string">SSML language code. Default `en-US`.</ParamField>
+    <ParamField path="outputFormat" type="string">Azure `X-Microsoft-OutputFormat` for standard audio. Default `audio-24khz-48kbitrate-mono-mp3`.</ParamField>
+    <ParamField path="voiceNoteOutputFormat" type="string">Azure `X-Microsoft-OutputFormat` for voice-note output. Default `ogg-24khz-16bit-mono-opus`.</ParamField>
   </Accordion>
 
   <Accordion title="ElevenLabs">
@@ -769,14 +769,27 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="baseUrl" type="string">Only `https://generativelanguage.googleapis.com` is accepted.</ParamField>
   </Accordion>
 
-  <Accordion title="Azure Speech">
-    <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
-    <ParamField path="region" type="string">Azure Speech region (e.g. `eastus`). Env: `AZURE_SPEECH_REGION` or `SPEECH_REGION`.</ParamField>
-    <ParamField path="endpoint" type="string">Optional Azure Speech endpoint override (alias `baseUrl`).</ParamField>
-    <ParamField path="voice" type="string">Azure voice ShortName. Default `en-US-JennyNeural`.</ParamField>
-    <ParamField path="lang" type="string">SSML language code. Default `en-US`.</ParamField>
-    <ParamField path="outputFormat" type="string">Azure `X-Microsoft-OutputFormat` for standard audio. Default `audio-24khz-48kbitrate-mono-mp3`.</ParamField>
-    <ParamField path="voiceNoteOutputFormat" type="string">Azure `X-Microsoft-OutputFormat` for voice-note output. Default `ogg-24khz-16bit-mono-opus`.</ParamField>
+  <Accordion title="Gradium">
+    <ParamField path="apiKey" type="string">Env: `GRADIUM_API_KEY`.</ParamField>
+    <ParamField path="baseUrl" type="string">Default `https://api.gradium.ai`.</ParamField>
+    <ParamField path="voiceId" type="string">Default Emma (`YTpq7expH9539ERJ`).</ParamField>
+  </Accordion>
+
+  <Accordion title="Inworld">
+    <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
+    <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
+    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
+    <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
+    <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+  </Accordion>
+
+  <Accordion title="Local CLI (tts-local-cli)">
+    <ParamField path="command" type="string">Local executable or command string for CLI TTS.</ParamField>
+    <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}` placeholders.</ParamField>
+    <ParamField path="outputFormat" type='"mp3" | "opus" | "wav"'>Expected CLI output format. Default `mp3` for audio attachments.</ParamField>
+    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
+    <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
+    <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
   </Accordion>
 
   <Accordion title="Microsoft (no API key)">
@@ -801,20 +814,22 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="pitch" type="number">Integer `-12..12`. Default `0`. Fractional values are truncated before the request.</ParamField>
   </Accordion>
 
-  <Accordion title="Inworld">
-    <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
-    <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
-    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
-    <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
-    <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+  <Accordion title="OpenAI">
+    <ParamField path="apiKey" type="string">Falls back to `OPENAI_API_KEY`.</ParamField>
+    <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
+    <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
+    <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
+    <ParamField path="baseUrl" type="string">
+      Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
+    </ParamField>
   </Accordion>
 
-  <Accordion title="xAI">
-    <ParamField path="apiKey" type="string">Env: `XAI_API_KEY`.</ParamField>
-    <ParamField path="baseUrl" type="string">Default `https://api.x.ai/v1`. Env: `XAI_BASE_URL`.</ParamField>
-    <ParamField path="voiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`.</ParamField>
-    <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
-    <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
+  <Accordion title="OpenRouter">
+    <ParamField path="apiKey" type="string">Env: `OPENROUTER_API_KEY`. Can reuse `models.providers.openrouter.apiKey`.</ParamField>
+    <ParamField path="baseUrl" type="string">Default `https://openrouter.ai/api/v1`. Legacy `https://openrouter.ai/v1` is normalized.</ParamField>
+    <ParamField path="model" type="string">Default `hexgrad/kokoro-82m`. Alias: `modelId`.</ParamField>
+    <ParamField path="voice" type="string">Default `af_alloy`. Alias: `voiceId`.</ParamField>
+    <ParamField path="responseFormat" type='"mp3" | "pcm"'>Default `mp3`.</ParamField>
     <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
   </Accordion>
 
@@ -829,6 +844,15 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="appId / token / cluster" type="string" deprecated>Legacy Volcengine Speech Console fields. Env: `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOLCENGINE_TTS_CLUSTER` (default `volcano_tts`).</ParamField>
   </Accordion>
 
+  <Accordion title="xAI">
+    <ParamField path="apiKey" type="string">Env: `XAI_API_KEY`.</ParamField>
+    <ParamField path="baseUrl" type="string">Default `https://api.x.ai/v1`. Env: `XAI_BASE_URL`.</ParamField>
+    <ParamField path="voiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`.</ParamField>
+    <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
+    <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
+    <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
+  </Accordion>
+
   <Accordion title="Xiaomi MiMo">
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
@@ -836,30 +860,6 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="voice" type="string">Default `mimo_default`. Env: `XIAOMI_TTS_VOICE`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken.</ParamField>
-  </Accordion>
-
-  <Accordion title="OpenRouter">
-    <ParamField path="apiKey" type="string">Env: `OPENROUTER_API_KEY`. Can reuse `models.providers.openrouter.apiKey`.</ParamField>
-    <ParamField path="baseUrl" type="string">Default `https://openrouter.ai/api/v1`. Legacy `https://openrouter.ai/v1` is normalized.</ParamField>
-    <ParamField path="model" type="string">Default `hexgrad/kokoro-82m`. Alias: `modelId`.</ParamField>
-    <ParamField path="voice" type="string">Default `af_alloy`. Alias: `voiceId`.</ParamField>
-    <ParamField path="responseFormat" type='"mp3" | "pcm"'>Default `mp3`.</ParamField>
-    <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
-  </Accordion>
-
-  <Accordion title="Gradium">
-    <ParamField path="apiKey" type="string">Env: `GRADIUM_API_KEY`.</ParamField>
-    <ParamField path="baseUrl" type="string">Default `https://api.gradium.ai`.</ParamField>
-    <ParamField path="voiceId" type="string">Default Emma (`YTpq7expH9539ERJ`).</ParamField>
-  </Accordion>
-
-  <Accordion title="Local CLI (tts-local-cli)">
-    <ParamField path="command" type="string">Local executable or command string for CLI TTS.</ParamField>
-    <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}` placeholders.</ParamField>
-    <ParamField path="outputFormat" type='"mp3" | "opus" | "wav"'>Expected CLI output format. Default `mp3` for audio attachments.</ParamField>
-    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
-    <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
-    <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
   </Accordion>
 </AccordionGroup>
 

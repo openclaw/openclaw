@@ -1238,6 +1238,7 @@
                   "tools/tokenjuice",
                   "tools/loop-detection",
                   "tools/trajectory",
+                  "tools/tts",
                   "tools/video-generation",
                   {
                     "group": "Web browser",
