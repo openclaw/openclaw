@@ -27,6 +27,7 @@ import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { enforceActionSinkPolicy } from "../../security/action-sink-runtime.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -39,6 +40,7 @@ import {
 } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { buildMessageActionPolicyRequest } from "./action-sink-policy.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
@@ -929,6 +931,20 @@ export async function runMessageAction(
   }
 
   const gateway = resolveGateway(input);
+
+  await enforceActionSinkPolicy(
+    buildMessageActionPolicyRequest({
+      channel,
+      action,
+      to: typeof params.to === "string" ? params.to : undefined,
+      accountId,
+      args: params,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
+      agentId: resolvedAgentId,
+      requesterSenderId: input.requesterSenderId,
+    }),
+  );
 
   if (action === "send") {
     return handleSendAction({

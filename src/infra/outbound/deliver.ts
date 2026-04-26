@@ -28,10 +28,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { enforceActionSinkPolicy } from "../../security/action-sink-runtime.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { buildOutboundDeliveryPolicyRequest } from "./action-sink-policy.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
   ackDelivery,
@@ -758,6 +760,8 @@ export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+
+  await enforceActionSinkPolicy(buildOutboundDeliveryPolicyRequest(params));
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
