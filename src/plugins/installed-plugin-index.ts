@@ -106,7 +106,6 @@ export type InstalledPluginIndexRecord = {
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
-  syntheticAuthRefs?: readonly string[];
 };
 
 export type InstalledPluginIndex = {
