@@ -165,6 +165,7 @@ export type PluginManifestContractListKey =
   | "mediaUnderstandingProviders"
   | "meetingNotesSourceProviders"
   | "documentExtractors"
+  | "secretProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"
