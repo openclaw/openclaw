@@ -1,22 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/install.sh";
 
-function runInstallShell(script: string) {
+function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
       ...process.env,
       OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      ...env,
     },
   });
 }
 
-describe("install.sh apt behavior", () => {
+describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
   it("runs apt-get through noninteractive wrappers", () => {
@@ -40,6 +41,71 @@ describe("install.sh apt behavior", () => {
     expect(script).toContain(
       'run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
     );
+  });
+
+  it("loads nvm before checking Node.js so stale system Node does not win", () => {
+    expect(script).toMatch(
+      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+    );
+
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
+    const home = join(tmp, "home");
+    const systemBin = join(tmp, "system-bin");
+    const nvmBin = join(home, ".nvm/versions/node/v22.22.1/bin");
+    mkdirSync(systemBin, { recursive: true });
+    mkdirSync(nvmBin, { recursive: true });
+    mkdirSync(join(home, ".nvm"), { recursive: true });
+
+    const systemNode = join(systemBin, "node");
+    const nvmNode = join(nvmBin, "node");
+    writeFileSync(systemNode, "#!/bin/sh\necho v8.11.3\n");
+    writeFileSync(nvmNode, "#!/bin/sh\necho v22.22.1\n");
+    chmodSync(systemNode, 0o755);
+    chmodSync(nvmNode, 0o755);
+    writeFileSync(
+      join(home, ".nvm/nvm.sh"),
+      [
+        'NVM_DIR="${NVM_DIR:-$HOME/.nvm}"',
+        "export NVM_DIR",
+        "nvm() {",
+        '  if [ "$1" = "use" ]; then',
+        '    export PATH="$NVM_DIR/versions/node/v22.22.1/bin:$PATH"',
+        "    return 0",
+        "  fi",
+        "  return 0",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          "load_nvm_for_node_detection",
+          "check_node",
+          "status=$?",
+          'printf "status=%s\\npath=%s\\nversion=%s\\n" "$status" "$(command -v node)" "$(node -v)"',
+          "exit $status",
+        ].join("\n"),
+        {
+          HOME: home,
+          PATH: `${systemBin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    const output = result?.stdout ?? "";
+    expect(output).toContain("status=0");
+    expect(output).toContain(`path=${nvmNode}`);
+    expect(output).toContain("version=v22.22.1");
   });
 });
 

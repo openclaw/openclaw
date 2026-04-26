@@ -1413,6 +1413,24 @@ ensure_default_node_active_shell() {
     return 1
 }
 
+load_nvm_for_node_detection() {
+    local nvm_dir="${NVM_DIR:-}"
+    if [[ -z "$nvm_dir" && -s "$HOME/.nvm/nvm.sh" ]]; then
+        nvm_dir="$HOME/.nvm"
+    fi
+    if [[ -z "$nvm_dir" || ! -s "$nvm_dir/nvm.sh" ]]; then
+        return 0
+    fi
+
+    export NVM_DIR="$nvm_dir"
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1 || . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+    if command -v nvm >/dev/null 2>&1; then
+        nvm use default --silent >/dev/null 2>&1 || nvm use node --silent >/dev/null 2>&1 || true
+    fi
+    refresh_shell_command_cache
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
@@ -2369,6 +2387,7 @@ main() {
     install_homebrew
 
     # Step 2: Node.js
+    load_nvm_for_node_detection
     if ! check_node; then
         install_node
     fi
