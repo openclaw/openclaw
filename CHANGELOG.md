@@ -122,6 +122,7 @@ Docs: https://docs.openclaw.ai
 - CLI/agents: keep `openclaw agents list --json` on the config-only path by default, avoiding bundled plugin loading unless callers request `--bindings`. Fixes #71739. Thanks @kaloster.
 - Plugins/install: force plugin dependency installs to stay project-local even when inherited npm config requests global installs, so successful installs still materialize the plugin's staged `node_modules`.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so WhatsApp and other native voice-note replies can play as voice messages.
+- TTS/WhatsApp: mark non-Opus provider output as voice-note intent so channel delivery transcodes MP3/WebM replies to Ogg/Opus PTT audio.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when mirrored plugin roots are inspected again, avoiding second-generation `openclaw-unknown-*` stages and repeated first-turn restaging. Fixes #71599.
 - iOS/macOS Talk Mode: allow `talk.speechLocale` to set the speech recognition locale for non-English voice conversations. Fixes #44688.
 - Plugins/providers: honor explicit plugin candidate lists instead of reading a persisted registry snapshot from local state, keeping candidate-scoped provider discovery hermetic.
