@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { signalCheck, signalRpcRequest } from "./client.js";
+import { signalCheck, signalRpcRequest } from "./client-adapter.js";
 
 export type SignalProbe = BaseProbeResult & {
   status?: number | null;
