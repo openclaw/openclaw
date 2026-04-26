@@ -40,11 +40,18 @@ export function isCompactionCheckpointTranscriptFileName(fileName: string): bool
   return parseCompactionCheckpointTranscriptFileName(fileName) !== null;
 }
 
+export function isTrajectoryJournalFileName(fileName: string): boolean {
+  return fileName.endsWith(".trajectory.jsonl");
+}
+
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
   }
   if (!fileName.endsWith(".jsonl")) {
+    return false;
+  }
+  if (isTrajectoryJournalFileName(fileName)) {
     return false;
   }
   if (isCompactionCheckpointTranscriptFileName(fileName)) {

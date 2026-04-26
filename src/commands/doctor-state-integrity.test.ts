@@ -302,6 +302,20 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it("does not flag trajectory sidecar files as orphan transcripts", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(
+      path.join(sessionsDir, "active-session.trajectory.jsonl"),
+      '{"type":"trajectory"}\n',
+    );
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    expect(stateIntegrityText()).not.toContain("orphan transcript");
+    expect(stateIntegrityText()).not.toContain("trajectory");
+  });
+
   it.skipIf(process.platform === "win32")(
     "does not archive referenced transcripts when the state dir path resolves through a symlink",
     async () => {

@@ -4,6 +4,7 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isTrajectoryJournalFileName,
   isUsageCountedSessionTranscriptFileName,
   parseCompactionCheckpointTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
@@ -32,6 +33,15 @@ describe("session artifact helpers", () => {
       false,
     );
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
+    expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
+  });
+
+  it("classifies trajectory journal files", () => {
+    expect(isTrajectoryJournalFileName("abc.trajectory.jsonl")).toBe(true);
+    expect(isTrajectoryJournalFileName("some-session-id.trajectory.jsonl")).toBe(true);
+    expect(isTrajectoryJournalFileName("abc.jsonl")).toBe(false);
+    expect(isTrajectoryJournalFileName("abc.trajectory.json")).toBe(false);
+    expect(isTrajectoryJournalFileName("trajectory.jsonl")).toBe(false);
   });
 
   it("classifies usage-counted transcript files", () => {
