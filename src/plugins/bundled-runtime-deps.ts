@@ -684,6 +684,19 @@ function hasDependencySentinel(
   });
 }
 
+function assertBundledRuntimeDepsInstalled(rootDir: string, specs: readonly string[]): void {
+  const missingSpecs = specs.filter((spec) => {
+    const dep = parseInstallableRuntimeDepSpec(spec);
+    return !hasDependencySentinel([rootDir], dep);
+  });
+  if (missingSpecs.length === 0) {
+    return;
+  }
+  throw new Error(
+    `npm install did not place bundled runtime deps in ${rootDir}: ${missingSpecs.join(", ")}`,
+  );
+}
+
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
   const parentDir = path.dirname(targetDir);
   const tempDir = fs.mkdtempSync(path.join(parentDir, ".openclaw-runtime-deps-copy-"));
@@ -1223,6 +1236,7 @@ export function installBundledRuntimeDeps(params: {
         .trim();
       throw new Error(output || "npm install failed");
     }
+    assertBundledRuntimeDepsInstalled(installExecutionRoot, params.missingSpecs);
     if (isolatedExecutionRoot) {
       const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
       if (!fs.existsSync(stagedNodeModulesDir)) {
@@ -1234,6 +1248,7 @@ export function installBundledRuntimeDeps(params: {
       } else {
         replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
       }
+      assertBundledRuntimeDepsInstalled(params.installRoot, params.missingSpecs);
     }
   } finally {
     if (cleanInstallExecutionRoot) {

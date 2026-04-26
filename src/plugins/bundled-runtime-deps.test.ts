@@ -31,6 +31,16 @@ function makeTempDir(): string {
   return dir;
 }
 
+function writeInstalledPackage(rootDir: string, packageName: string, version: string): void {
+  const packageDir = path.join(rootDir, "node_modules", ...packageName.split("/"));
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: packageName, version }),
+    "utf8",
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
@@ -182,13 +192,16 @@ describe("installBundledRuntimeDeps", () => {
     vi.spyOn(fs, "existsSync").mockImplementation(
       (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
     );
-    spawnSyncMock.mockReturnValue({
-      pid: 123,
-      output: [],
-      stdout: "",
-      stderr: "",
-      signal: null,
-      status: 0,
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
     });
 
     installBundledRuntimeDeps({
@@ -235,6 +248,7 @@ describe("installBundledRuntimeDeps", () => {
         name: "openclaw-runtime-deps-install",
         private: true,
       });
+      writeInstalledPackage(cwd, "@grammyjs/runner", "2.0.3");
       return {
         pid: 123,
         output: [],
@@ -317,13 +331,16 @@ describe("installBundledRuntimeDeps", () => {
 
   it("uses an OpenClaw-owned npm cache for runtime dependency installs", () => {
     const installRoot = makeTempDir();
-    spawnSyncMock.mockReturnValue({
-      pid: 123,
-      output: [],
-      stdout: "",
-      stderr: "",
-      signal: null,
-      status: 0,
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "tokenjuice", "0.6.1");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
     });
 
     installBundledRuntimeDeps({
@@ -372,6 +389,26 @@ describe("installBundledRuntimeDeps", () => {
         }),
       }),
     );
+  });
+
+  it("fails when npm exits cleanly without installing requested packages", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockReturnValue({
+      pid: 123,
+      output: [],
+      stdout: "",
+      stderr: "",
+      signal: null,
+      status: 0,
+    });
+
+    expect(() =>
+      installBundledRuntimeDeps({
+        installRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        env: {},
+      }),
+    ).toThrow(`npm install did not place bundled runtime deps in ${installRoot}: tokenjuice@0.6.1`);
   });
 
   it("cleans an owned isolated execution root after copying node_modules back", () => {
