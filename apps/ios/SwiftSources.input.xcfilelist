@@ -1,3 +1,4 @@
+Sources/Buddy/BuddyModels.swift
 Sources/Gateway/GatewayConnectionController.swift
 Sources/Gateway/GatewayDiscoveryDebugLogView.swift
 Sources/Gateway/GatewayDiscoveryModel.swift
