@@ -516,6 +516,15 @@ describe("stripDowngradedToolCallText", () => {
     expect(stripDowngradedToolCallText(input)).toBe("Aku submit issue-nya sekarang.");
   });
 
+  it("strips bare function_call-style tool_calls JSON", () => {
+    const input = [
+      "Aku submit issue-nya sekarang.",
+      '{"tool_calls":[{"function":{"arguments":"{}","name":"process"},"type":"function_call"}]}',
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("Aku submit issue-nya sekarang.");
+  });
+
   it("strips incomplete bare tool_calls JSON fragments as defense in depth", () => {
     const input = 'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}';
 
@@ -562,10 +571,20 @@ describe("stripDowngradedToolCallText", () => {
 });
 
 describe("sanitizeStreamingBareToolCallJsonText", () => {
+  it("preserves trailing whitespace when no JSON was sanitized", () => {
+    expect(sanitizeStreamingBareToolCallJsonText("Hello\n\n")).toBe("Hello\n\n");
+  });
+
   it("withholds incomplete standalone JSON during partial preview streaming", () => {
     const input = 'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}';
 
     expect(sanitizeStreamingBareToolCallJsonText(input)).toBe("Before");
+  });
+
+  it("does not withhold incomplete ordinary JSON without a tool-call marker", () => {
+    const input = 'Prose\n{"ordinary":"value"\nMore prose';
+
+    expect(sanitizeStreamingBareToolCallJsonText(input)).toBe(input);
   });
 
   it("drops complete standalone tool_calls JSON during partial preview streaming", () => {

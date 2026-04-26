@@ -131,8 +131,9 @@ function isToolCallObject(value: unknown): boolean {
     return false;
   }
   const functionValue = value.function;
+  const type = value.type;
   return (
-    value.type === "function" &&
+    (type === "function" || type === "function_call") &&
     isRecord(functionValue) &&
     typeof functionValue.name === "string" &&
     (typeof functionValue.arguments === "string" || isRecord(functionValue.arguments))
@@ -216,11 +217,27 @@ function isStandaloneJsonCandidateStart(input: string, index: number): boolean {
   return (ch === "{" || ch === "[") && hasOnlyLineWhitespaceBefore(input, index);
 }
 
+function findNextLineStart(input: string, start: number): number {
+  const nextNewline = input.indexOf("\n", start);
+  const nextCarriage = input.indexOf("\r", start);
+  if (nextNewline === -1 && nextCarriage === -1) {
+    return input.length;
+  }
+  if (nextNewline === -1) {
+    return input[nextCarriage + 1] === "\n" ? nextCarriage + 2 : nextCarriage + 1;
+  }
+  if (nextCarriage === -1 || nextNewline < nextCarriage) {
+    return nextNewline + 1;
+  }
+  return input[nextCarriage + 1] === "\n" ? nextCarriage + 2 : nextCarriage + 1;
+}
+
 function stripBareToolCallJsonPayloads(
   input: string,
   options?: BareToolCallJsonSanitizeOptions,
 ): { text: string; changed: boolean } {
-  if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(input) && !options?.withholdIncomplete) {
+  const mayHaveBareToolCallJson = BARE_TOOL_CALL_JSON_QUICK_RE.test(input);
+  if (!mayHaveBareToolCallJson || (!input.includes("{") && !input.includes("["))) {
     return { text: input, changed: false };
   }
 
@@ -228,27 +245,25 @@ function stripBareToolCallJsonPayloads(
   let result = "";
   let cursor = 0;
   let changed = false;
-  let candidates = 0;
-  for (let index = 0; index < input.length; index += 1) {
-    if (
-      index < cursor ||
-      !isStandaloneJsonCandidateStart(input, index) ||
-      isInsideCode(index, codeRegions)
-    ) {
-      continue;
+  let parseAttempts = 0;
+  let lineStart = 0;
+  while (lineStart < input.length) {
+    let index = lineStart;
+    while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+      index += 1;
     }
 
-    candidates += 1;
-    if (candidates > MAX_BARE_TOOL_CALL_JSON_CANDIDATES) {
-      break;
+    if (!isStandaloneJsonCandidateStart(input, index) || isInsideCode(index, codeRegions)) {
+      lineStart = findNextLineStart(input, lineStart);
+      continue;
     }
 
     const end = consumeJsonish(input, index);
     if (end === null) {
       const tail = input.slice(index);
+      const looksLikeToolCall = BARE_TOOL_CALL_JSON_QUICK_RE.test(tail);
       const shouldStripTail =
-        options?.withholdIncomplete ||
-        (options?.stripIncompleteToolCalls && BARE_TOOL_CALL_JSON_QUICK_RE.test(tail));
+        looksLikeToolCall && (options?.withholdIncomplete || options?.stripIncompleteToolCalls);
       if (!shouldStripTail) {
         break;
       }
@@ -259,30 +274,35 @@ function stripBareToolCallJsonPayloads(
     }
 
     if (!hasOnlyLineWhitespaceAfter(input, end)) {
-      index = Math.max(index, end - 1);
+      lineStart = findNextLineStart(input, end);
       continue;
     }
 
     const rawLength = end - index;
     if (rawLength > MAX_BARE_TOOL_CALL_JSON_PAYLOAD_CHARS) {
-      index = Math.max(index, end - 1);
+      lineStart = findNextLineStart(input, end);
       continue;
     }
 
     const raw = input.slice(index, end);
     if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(raw)) {
-      index = Math.max(index, end - 1);
+      lineStart = findNextLineStart(input, end);
       continue;
     }
 
     let shouldStrip = false;
-    try {
-      shouldStrip = isBareToolCallJsonPayload(JSON.parse(raw));
-    } catch {
-      shouldStrip = false;
+    parseAttempts += 1;
+    if (parseAttempts > MAX_BARE_TOOL_CALL_JSON_CANDIDATES) {
+      shouldStrip = true;
+    } else {
+      try {
+        shouldStrip = isBareToolCallJsonPayload(JSON.parse(raw));
+      } catch {
+        shouldStrip = false;
+      }
     }
     if (!shouldStrip) {
-      index = Math.max(index, end - 1);
+      lineStart = findNextLineStart(input, end);
       continue;
     }
 
@@ -290,7 +310,7 @@ function stripBareToolCallJsonPayloads(
     const stripEnd = skipOneRedundantNewline(input, end, result);
     cursor = stripEnd;
     changed = true;
-    index = Math.max(index, cursor - 1);
+    lineStart = cursor;
   }
   if (!changed) {
     return { text: input, changed: false };
@@ -303,10 +323,11 @@ export function sanitizeStreamingBareToolCallJsonText(
   text: string,
   options?: { final?: boolean },
 ): string {
-  return stripBareToolCallJsonPayloads(text, {
+  const result = stripBareToolCallJsonPayloads(text, {
     stripIncompleteToolCalls: options?.final,
     withholdIncomplete: !options?.final,
-  }).text.trimEnd();
+  });
+  return result.changed ? result.text.trimEnd() : result.text;
 }
 
 function endsInsideQuotedString(text: string, start: number, end: number): boolean {
