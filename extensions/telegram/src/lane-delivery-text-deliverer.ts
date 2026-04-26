@@ -12,6 +12,8 @@ const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_NOT_FOUND_RE =
   /400:\s*Bad Request:\s*message to edit not found|MESSAGE_ID_INVALID|message can't be edited/i;
+const PREVIEW_AFFINITY_BOUNDARY_RE = /[\s,.;:!?()[\]{}"'`“”‘’，。！？；：]/u;
+const MIN_MEANINGFUL_SHARED_PREFIX = 8;
 
 function extractErrorText(err: unknown): string {
   return typeof err === "string"
@@ -142,6 +144,17 @@ type PreviewTargetResolution = {
   stopCreatesFirstPreview: boolean;
 };
 
+type AnswerPreviewSelection =
+  | {
+      source: "active";
+      staleArchivedPreviews: ArchivedPreview[];
+    }
+  | {
+      source: "archived";
+      archivedIndex: number;
+      staleArchivedPreviews: ArchivedPreview[];
+    };
+
 function result(
   kind: LaneDeliveryResult["kind"],
   delivery?: Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"],
@@ -185,6 +198,52 @@ function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTarget
   };
 }
 
+function commonPrefixLength(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length);
+  let index = 0;
+  while (index < limit && a[index] === b[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function hasMeaningfulSharedPrefix(candidate: string, target: string): boolean {
+  const sharedPrefix = commonPrefixLength(candidate, target);
+  if (sharedPrefix === 0) {
+    return false;
+  }
+  if (sharedPrefix >= MIN_MEANINGFUL_SHARED_PREFIX) {
+    return true;
+  }
+  if (sharedPrefix === candidate.length && sharedPrefix === target.length) {
+    return true;
+  }
+  const nextCandidateChar = candidate[sharedPrefix];
+  const nextTargetChar = target[sharedPrefix];
+  return (
+    PREVIEW_AFFINITY_BOUNDARY_RE.test(nextCandidateChar ?? "") ||
+    PREVIEW_AFFINITY_BOUNDARY_RE.test(nextTargetChar ?? "")
+  );
+}
+
+function scorePreviewAffinity(previewText: string | undefined, finalText: string): number {
+  const candidate = previewText?.trim();
+  const target = finalText.trim();
+  if (!candidate || !target || !hasMeaningfulSharedPrefix(candidate, target)) {
+    return 0;
+  }
+  return commonPrefixLength(candidate, target);
+}
+
+function shouldConsumeBoundaryPreview(previewText: string | undefined, finalText: string): boolean {
+  const candidate = previewText?.trim();
+  const target = finalText.trim();
+  if (!candidate || !target) {
+    return false;
+  }
+  return candidate.startsWith(target) || target.startsWith(candidate);
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
   const markActivePreviewComplete = (laneName: LaneName) => {
@@ -202,6 +261,70 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       !hasPreviewButtons &&
       typeof lane.stream?.materialize === "function"
     );
+  };
+
+  const deleteArchivedPreviewBatch = async (previews: ArchivedPreview[]) => {
+    for (const preview of previews) {
+      try {
+        await params.deletePreviewMessage(preview.messageId);
+      } catch (err) {
+        params.log(
+          `telegram: archived answer preview cleanup failed (${preview.messageId}): ${String(err)}`,
+        );
+      }
+    }
+  };
+
+  const consumeArchivedPreviewBatch = async (previews: ArchivedPreview[], finalText: string) => {
+    if (previews.length === 0) {
+      return;
+    }
+    const staleIds = new Set(previews.map((preview) => preview.messageId));
+    params.archivedAnswerPreviews.splice(
+      0,
+      params.archivedAnswerPreviews.length,
+      ...params.archivedAnswerPreviews.filter((preview) => !staleIds.has(preview.messageId)),
+    );
+    await deleteArchivedPreviewBatch(previews);
+  };
+
+  const resolveAnswerPreviewSelection = (
+    lane: DraftLaneState,
+    text: string,
+  ): AnswerPreviewSelection | undefined => {
+    if (params.archivedAnswerPreviews.length === 0) {
+      return undefined;
+    }
+    const isStaleForFinal = (preview: ArchivedPreview) =>
+      preview.deleteIfUnused === false
+        ? shouldConsumeBoundaryPreview(preview.textSnapshot, text)
+        : scorePreviewAffinity(preview.textSnapshot, text) > 0;
+    const bestArchived = params.archivedAnswerPreviews.reduce<
+      { index: number; score: number } | undefined
+    >((best, preview, index) => {
+      const score = scorePreviewAffinity(preview.textSnapshot, text);
+      if (!best || score > best.score) {
+        return { index, score };
+      }
+      return best;
+    }, undefined);
+    const activePreviewScore = scorePreviewAffinity(getLanePreviewText(lane), text);
+    if (activePreviewScore > 0 && activePreviewScore >= (bestArchived?.score ?? 0)) {
+      return {
+        source: "active",
+        staleArchivedPreviews: params.archivedAnswerPreviews.filter(isStaleForFinal),
+      };
+    }
+    if (!bestArchived) {
+      return undefined;
+    }
+    return {
+      source: "archived",
+      archivedIndex: bestArchived.index,
+      staleArchivedPreviews: params.archivedAnswerPreviews
+        .slice(0, bestArchived.index)
+        .filter(isStaleForFinal),
+    };
   };
 
   const tryMaterializeDraftPreviewForFinal = async (args: {
@@ -440,10 +563,62 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewButtons,
     canEditViaPreview,
   }: ConsumeArchivedAnswerPreviewParams): Promise<LaneDeliveryResult | undefined> => {
-    const archivedPreview = params.archivedAnswerPreviews.shift();
+    const selection = resolveAnswerPreviewSelection(lane, text);
+    if (selection?.source === "active") {
+      if (!canEditViaPreview) {
+        return undefined;
+      }
+      const finalized = await tryUpdatePreviewForLane({
+        lane,
+        laneName: "answer",
+        text,
+        previewButtons,
+        stopBeforeEdit: false,
+        skipRegressive: "existingOnly",
+        context: "final",
+      });
+      if (finalized === "edited") {
+        markActivePreviewComplete("answer");
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
+        const messageId = lane.stream?.messageId();
+        return result("preview-finalized", {
+          content: text,
+          messageId: typeof messageId === "number" ? messageId : undefined,
+        });
+      }
+      if (finalized === "regressive-skipped") {
+        markActivePreviewComplete("answer");
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
+        const messageId = lane.stream?.messageId();
+        return result("preview-finalized", {
+          content: getLanePreviewText(lane),
+          messageId: typeof messageId === "number" ? messageId : undefined,
+        });
+      }
+      if (finalized === "retained") {
+        params.retainPreviewOnCleanupByLane.answer = true;
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
+        return result("preview-retained");
+      }
+      if (finalized === "fallback") {
+        await params.stopDraftLane(lane);
+        const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
+        return delivered ? result("sent") : result("skipped");
+      }
+      return undefined;
+    }
+    if (selection?.source !== "archived") {
+      return undefined;
+    }
+    const archivedPreview = params.archivedAnswerPreviews[selection.archivedIndex];
     if (!archivedPreview) {
       return undefined;
     }
+    const consumeArchivedSelection = async () => {
+      params.archivedAnswerPreviews.splice(0, selection.archivedIndex + 1);
+      await deleteArchivedPreviewBatch(selection.staleArchivedPreviews);
+    };
     if (canEditViaPreview) {
       const finalized = await tryUpdatePreviewForLane({
         lane,
@@ -457,12 +632,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         previewTextSnapshot: archivedPreview.textSnapshot,
       });
       if (finalized === "edited") {
+        await consumeArchivedSelection();
         return result("preview-finalized", {
           content: text,
           messageId: archivedPreview.messageId,
         });
       }
       if (finalized === "regressive-skipped") {
+        await consumeArchivedSelection();
         return result("preview-finalized", {
           content: archivedPreview.textSnapshot,
           messageId: archivedPreview.messageId,
@@ -470,6 +647,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
+        await consumeArchivedSelection();
         return result("preview-retained");
       }
     }
@@ -487,6 +665,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         );
       }
     }
+    await consumeArchivedSelection();
     return delivered ? result("sent") : result("skipped");
   };
 

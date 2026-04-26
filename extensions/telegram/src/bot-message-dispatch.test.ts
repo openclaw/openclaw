@@ -1010,7 +1010,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       return { queuedFinal: false };
     });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    const bot = createBot();
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
 
     expect(seenReasoningCallback).toBeUndefined();
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
@@ -2034,6 +2036,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.any(Object),
     );
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("cleans up stale partial previews from failed attempts once a later attempt finalizes", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Attempt C" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Attempt C fin" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Attempt C final" });
+        await dispatcherOptions.deliver({ text: "Attempt C final complete" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1003" });
+    const bot = createBot();
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1003,
+      "Attempt C final complete",
+      expect.any(Object),
+    );
+    expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toEqual(
+      expect.arrayContaining([
+        [123, 1001],
+        [123, 1002],
+      ]),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

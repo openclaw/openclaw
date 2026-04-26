@@ -531,6 +531,23 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("consumes retained archived previews so final cleanup does not delete them later", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Complete final answer",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: ambiguous post-connect error"));
+
+    const result = await deliverFinalAnswer(harness, "Complete final answer");
+
+    expect(result.kind).toBe("preview-retained");
+    expect(harness.archivedAnswerPreviews).toEqual([]);
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("keeps the archived preview when the final text regresses", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({
@@ -547,6 +564,131 @@ describe("createLaneTextDeliverer", () => {
     });
     expect(harness.editPreview).not.toHaveBeenCalled();
     expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("prefers the active preview and clears stale archived previews from failed attempts", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Attempt A partial",
+        deleteIfUnused: true,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: true,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt C final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt C final",
+      messageId: 1003,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1003,
+        text: "Attempt C final",
+        context: "final",
+      }),
+    );
+    expect(harness.deletePreviewMessage.mock.calls).toEqual([
+      [1001],
+      [1002],
+    ]);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("does not finalize the active preview when the final payload cannot be edited", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 1001,
+      textSnapshot: "Attempt A partial",
+      deleteIfUnused: true,
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Attempt C final",
+      payload: { text: "Attempt C final", mediaUrl: "file:///tmp/example.png" },
+      infoKind: "final",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Attempt C final",
+        mediaUrl: "file:///tmp/example.png",
+      }),
+    );
+  });
+
+  it("preserves boundary previews while deleting stale superseded previews", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Earlier finalized segment",
+        deleteIfUnused: false,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: true,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt C final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt C final",
+      messageId: 1003,
+    });
+    expect(harness.deletePreviewMessage.mock.calls).toEqual([[1002]]);
+  });
+
+  it("does not delete boundary previews that only share a loose prefix with the current final", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Shared intro beta final",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Shared intro alpha",
+        deleteIfUnused: false,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Shared intro beta partial",
+        deleteIfUnused: true,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Shared intro beta final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Shared intro beta final",
+      messageId: 1003,
+    });
+    expect(harness.deletePreviewMessage.mock.calls).toEqual([[1002]]);
   });
 
   it("falls back on 4xx client rejection with error_code during final", async () => {
