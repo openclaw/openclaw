@@ -80,6 +80,9 @@ Docs: https://docs.openclaw.ai
 - Models/LM Studio: preserve `@iq*` quant suffixes in model refs and provider
   matching so `/model lmstudio/...@iq3_xxs` keeps the exact LM Studio variant.
   Fixes #71474. (#71486) Thanks @Bartok9, @XinwuC, and @Sanjays2402.
+- Matrix/cron: preserve the live Matrix delivery target when creating implicit
+  announce reminder jobs so mixed-case room IDs are not reconstructed from
+  lowercased session keys. Fixes #71798.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
