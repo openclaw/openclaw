@@ -385,9 +385,33 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       functionResponses: [
         {
           id: "call-1",
+          name: "lookup",
           response: { result: "ok" },
         },
       ],
     });
+  });
+
+  it("does not send malformed Live API tool responses without a matching call name", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    await bridge.connect();
+
+    bridge.submitToolResult("missing-call", { result: "ok" });
+
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Google Live function response is missing a matching function call for missing-call",
+      }),
+    );
   });
 });

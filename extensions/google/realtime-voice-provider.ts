@@ -314,6 +314,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
+  private pendingFunctionNames = new Map<string, string>();
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {}
 
@@ -323,6 +324,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
 
     const ai = createGoogleGenAI({
       apiKey: this.config.apiKey,
@@ -375,6 +377,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         onclose: () => {
           this.connected = false;
           this.sessionConfigured = false;
+          this.pendingFunctionNames.clear();
           const reason = this.intentionallyClosed ? "completed" : "error";
           this.session = null;
           this.config.onClose?.(reason);
@@ -449,10 +452,21 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.session) {
       return;
     }
+    const name = this.pendingFunctionNames.get(callId);
+    if (!name) {
+      this.config.onError?.(
+        new Error(
+          `Google Live function response is missing a matching function call for ${callId}`,
+        ),
+      );
+      return;
+    }
+    this.pendingFunctionNames.delete(callId);
     this.session.sendToolResponse({
       functionResponses: [
         {
           id: callId,
+          name,
           response:
             result && typeof result === "object"
               ? (result as Record<string, unknown>)
@@ -471,6 +485,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingAudio = [];
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
     const session = this.session;
     this.session = null;
     session?.close();
@@ -557,6 +572,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       const callId = call.id?.trim() || `google-live-${randomUUID()}`;
+      this.pendingFunctionNames.set(callId, name);
       this.config.onToolCall?.({
         itemId: callId,
         callId,
