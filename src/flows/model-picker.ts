@@ -3,6 +3,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
@@ -770,7 +771,7 @@ export async function promptDefaultModel(
   // for providers that set preserveLiteralProviderPrefix, so the user sees the
   // same ref they'll pick from the catalog rows. Config itself stays canonical.
   const configuredLabel = literalPrefixProviders.has(normalizeProviderId(resolved.provider))
-    ? `${resolved.provider}/${resolved.model}`
+    ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
     : configuredRaw || resolvedKey;
 
   const options: WizardSelectOption[] = [];

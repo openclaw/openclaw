@@ -5,6 +5,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -58,14 +59,7 @@ function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): s
   if (!provider.preserveLiteralProviderPrefix) {
     return modelRef;
   }
-  // Parse the canonical ref and show the literal form.
-  const slashIdx = modelRef.indexOf("/");
-  if (slashIdx < 0) {
-    return modelRef;
-  }
-  const providerPart = modelRef.slice(0, slashIdx);
-  const modelPart = modelRef.slice(slashIdx + 1);
-  return `${providerPart}/${modelPart}`;
+  return formatLiteralProviderPrefixedModelRef(provider.id, modelRef);
 }
 
 function restoreConfiguredPrimaryModel(

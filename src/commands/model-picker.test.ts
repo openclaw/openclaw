@@ -293,6 +293,54 @@ describe("promptDefaultModel", () => {
     );
   });
 
+  it("shows literal double-prefix labels for providers that preserve literal prefixes", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "Nemotron",
+      },
+    ]);
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "nvidia",
+        preserveLiteralProviderPrefix: true,
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "__keep__",
+          label: "Keep current (nvidia/nvidia/nemotron-3-super-120b-a12b)",
+        }),
+        expect.objectContaining({
+          value: "nvidia/nemotron-3-super-120b-a12b",
+          label: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        }),
+      ]),
+    );
+  });
+
   it("keeps current preferred-provider models cold until browsing is requested", async () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
