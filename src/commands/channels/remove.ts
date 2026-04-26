@@ -4,10 +4,9 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
-import { withoutPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -177,27 +176,30 @@ export async function channelsRemoveCommand(
   const shouldMovePluginInstalls = Boolean(
     next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
   );
-  const nextInstallRecords = next.plugins?.installs ?? {};
   if (shouldMovePluginInstalls) {
-    next = withoutPluginInstallRecords(next);
-    await commitPluginInstallRecordsWithConfig({
-      nextInstallRecords,
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: next,
       ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    next = committed.config;
+    await refreshPluginRegistryAfterConfigMutation({
+      config: next,
+      reason: "source-changed",
+      installRecords: committed.installRecords,
+      logger: { warn: (message) => runtime.log(message) },
     });
   } else {
     await replaceConfigFile({
       nextConfig: next,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
-  }
-  if (shouldMovePluginInstalls || resolvedPluginState?.pluginInstalled) {
-    await refreshPluginRegistryAfterConfigMutation({
-      config: next,
-      reason: "source-changed",
-      ...(shouldMovePluginInstalls ? { installRecords: nextInstallRecords } : {}),
-      logger: { warn: (message) => runtime.log(message) },
-    });
+    if (resolvedPluginState?.pluginInstalled) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: next,
+        reason: "source-changed",
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
   }
   if (useWizard && prompter) {
     await prompter.outro(

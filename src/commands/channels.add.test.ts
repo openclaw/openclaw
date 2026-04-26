@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -36,7 +37,7 @@ const registryRefreshMocks = vi.hoisted(() => ({
 }));
 
 const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
-  commitPluginInstallRecordsWithConfig: vi.fn(),
+  commitConfigWithPendingPluginInstalls: vi.fn(),
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({
@@ -263,10 +264,15 @@ describe("channelsAddCommand", () => {
       .mockImplementation(async (params: { nextConfig: unknown }) => {
         await configMocks.writeConfigFile(params.nextConfig);
       });
-    pluginInstallRecordCommitMocks.commitPluginInstallRecordsWithConfig.mockReset();
-    pluginInstallRecordCommitMocks.commitPluginInstallRecordsWithConfig.mockImplementation(
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
       async (params: { nextConfig: unknown }) => {
         await configMocks.writeConfigFile(params.nextConfig);
+        return {
+          config: params.nextConfig,
+          installRecords: {},
+          movedInstallRecords: false,
+        };
       },
     );
     lifecycleMocks.onAccountConfigChanged.mockClear();
@@ -553,6 +559,18 @@ describe("channelsAddCommand", () => {
         spec: "@vendor/external-chat@1.2.3",
       },
     };
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
+      async (params: { nextConfig: OpenClawConfig }) => {
+        const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
+        const writtenConfig = { ...params.nextConfig, plugins };
+        await configMocks.writeConfigFile(writtenConfig);
+        return {
+          config: writtenConfig,
+          installRecords,
+          movedInstallRecords: true,
+        };
+      },
+    );
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg: {
         ...cfg,
@@ -577,11 +595,10 @@ describe("channelsAddCommand", () => {
     );
 
     expect(
-      pluginInstallRecordCommitMocks.commitPluginInstallRecordsWithConfig,
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
     ).toHaveBeenCalledWith({
-      nextInstallRecords: installRecords,
-      nextConfig: expect.not.objectContaining({
-        plugins: expect.objectContaining({ installs: expect.anything() }),
+      nextConfig: expect.objectContaining({
+        plugins: expect.objectContaining({ installs: installRecords }),
       }),
       baseHash: "config-1",
     });
