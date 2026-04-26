@@ -398,12 +398,12 @@ describe("handshake auth helpers", () => {
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
-        locality: "direct_local",
+        locality: "remote",
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
         authMethod: "device-token",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
