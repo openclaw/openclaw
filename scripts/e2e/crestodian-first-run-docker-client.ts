@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   runCli,
   shouldStartCrestodianForModernOnboard,
+  shouldStartOnboardingForFreshInstall,
 } from "../../dist/cli/run-main.js";
 import { clearConfigCache } from "../../dist/config/config.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
@@ -76,6 +77,10 @@ async function main() {
   await fs.mkdir(stateDir, { recursive: true });
   clearConfigCache();
 
+  assert(
+    await shouldStartOnboardingForFreshInstall(["node", "openclaw"]),
+    "fresh bare OpenClaw invocation did not route to onboarding",
+  );
   assert(
     shouldStartCrestodianForModernOnboard(["node", "openclaw", "onboard", "--modern"]),
     "modern onboard invocation did not route to Crestodian",
