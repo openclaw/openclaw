@@ -15,6 +15,7 @@
 
 #include "connection_mode_resolver.h"
 #include "display_model.h"
+#include "exec_approval_store.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "gateway_remote_config.h"
@@ -40,6 +41,10 @@ static GtkWidget *gen_connection_mode_dropdown = NULL;
 static GtkStringList *gen_connection_mode_dropdown_model = NULL;
 static GtkWidget *gen_connection_mode_detail_row = NULL;
 static gboolean gen_connection_mode_programmatic_change = FALSE;
+static GtkWidget *gen_approval_mode_dropdown = NULL;
+static GtkStringList *gen_approval_mode_dropdown_model = NULL;
+static GtkWidget *gen_approval_mode_detail_row = NULL;
+static gboolean gen_approval_mode_programmatic_change = FALSE;
 static GtkWidget *gen_endpoint_label = NULL;
 static GtkWidget *gen_version_label = NULL;
 static GtkWidget *gen_auth_mode_label = NULL;
@@ -184,6 +189,81 @@ static void on_gen_connection_mode_selected_notify(GObject *object,
     if (!product_coordinator_request_set_connection_mode(gen_connection_mode_for_selection(selected))) {
         refresh_general_connection_mode_controls();
     }
+}
+
+/* ── Exec approval quick-mode picker ── */
+
+static guint gen_approval_mode_selection_for_mode(OcExecQuickMode mode) {
+    switch (mode) {
+    case OC_EXEC_QUICK_MODE_DENY:  return 0u;
+    case OC_EXEC_QUICK_MODE_ALLOW: return 2u;
+    case OC_EXEC_QUICK_MODE_ASK:
+    default:                       return 1u;
+    }
+}
+
+static OcExecQuickMode gen_approval_mode_for_selection(guint selected) {
+    switch (selected) {
+    case 0u:  return OC_EXEC_QUICK_MODE_DENY;
+    case 2u:  return OC_EXEC_QUICK_MODE_ALLOW;
+    case 1u:
+    default:  return OC_EXEC_QUICK_MODE_ASK;
+    }
+}
+
+static const gchar* gen_approval_mode_detail_text(OcExecQuickMode mode) {
+    switch (mode) {
+    case OC_EXEC_QUICK_MODE_DENY:
+        return "Automatically deny every command without prompting.";
+    case OC_EXEC_QUICK_MODE_ALLOW:
+        return "Automatically allow every command without prompting. Use with care.";
+    case OC_EXEC_QUICK_MODE_ASK:
+    default:
+        return "Show a prompt for each command and decide per request.";
+    }
+}
+
+static void refresh_general_approval_mode_controls(void) {
+    OcExecQuickMode mode = exec_approval_store_get_quick_mode();
+    guint selected = gen_approval_mode_selection_for_mode(mode);
+
+    if (gen_approval_mode_dropdown && ADW_IS_COMBO_ROW(gen_approval_mode_dropdown)) {
+        gen_approval_mode_programmatic_change = TRUE;
+        adw_combo_row_set_selected(ADW_COMBO_ROW(gen_approval_mode_dropdown), selected);
+        gen_approval_mode_programmatic_change = FALSE;
+    }
+
+    if (gen_approval_mode_detail_row && ADW_IS_ACTION_ROW(gen_approval_mode_detail_row)) {
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_approval_mode_detail_row),
+                                    gen_approval_mode_detail_text(mode));
+    }
+}
+
+static void on_gen_approval_mode_selected_notify(GObject *object,
+                                                 GParamSpec *pspec,
+                                                 gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+
+    if (gen_approval_mode_programmatic_change || !ADW_IS_COMBO_ROW(object)) {
+        return;
+    }
+
+    guint selected = adw_combo_row_get_selected(ADW_COMBO_ROW(object));
+    if (selected == GTK_INVALID_LIST_POSITION) {
+        refresh_general_approval_mode_controls();
+        return;
+    }
+
+    OcExecQuickMode mode = gen_approval_mode_for_selection(selected);
+    /*
+     * `set_quick_mode` returns FALSE when the value was buffered (no
+     * state dir resolved yet) or when disk I/O failed. Both are
+     * non-fatal: the in-memory cache is updated either way and the
+     * gateway-client refresh will flush buffered values to disk.
+     */
+    (void)exec_approval_store_set_quick_mode(mode);
+    refresh_general_approval_mode_controls();
 }
 
 static void general_resolve_effective_paths(RuntimeEffectivePaths *out) {
@@ -694,6 +774,36 @@ static GtkWidget* general_build(void) {
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(connection_group), gen_connection_mode_detail_row);
     refresh_general_connection_mode_controls();
 
+    /* ── Exec approvals quick-mode picker ── */
+    GtkWidget *approvals_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(approvals_group), "Approvals");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(approvals_group),
+        "Default policy applied to inbound exec approval requests.");
+    adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(approvals_group));
+
+    gen_approval_mode_dropdown = adw_combo_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_approval_mode_dropdown),
+                                  "Approval Mode");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(approvals_group), gen_approval_mode_dropdown);
+
+    GtkStringList *approval_mode_model = gtk_string_list_new(NULL);
+    /* Order matches gen_approval_mode_for_selection: 0 deny, 1 ask, 2 allow. */
+    gtk_string_list_append(approval_mode_model, "Deny (auto-deny)");
+    gtk_string_list_append(approval_mode_model, "Ask (prompt for each command)");
+    gtk_string_list_append(approval_mode_model, "Allow (auto-allow)");
+    ui_combo_row_replace_model(gen_approval_mode_dropdown,
+                               (gpointer *)&gen_approval_mode_dropdown_model,
+                               G_LIST_MODEL(approval_mode_model),
+                               0);
+    g_signal_connect(gen_approval_mode_dropdown,
+                     "notify::selected",
+                     G_CALLBACK(on_gen_approval_mode_selected_notify),
+                     NULL);
+
+    gen_approval_mode_detail_row = general_note_row("Behavior");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(approvals_group), gen_approval_mode_detail_row);
+    refresh_general_approval_mode_controls();
+
     /* ── Remote settings group (visible only in remote mode) ── */
     gen_remote_group = adw_preferences_group_new();
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(gen_remote_group), "Remote Settings");
@@ -946,6 +1056,7 @@ static void general_refresh(void) {
     runtime_effective_paths_clear(&effective_paths);
 
     refresh_general_connection_mode_controls();
+    refresh_general_approval_mode_controls();
     gen_remote_refresh_group_visibility();
     gen_remote_refresh_status_row();
 
@@ -964,6 +1075,11 @@ static void general_destroy(void) {
     gen_connection_mode_dropdown_model = NULL;
     gen_connection_mode_detail_row = NULL;
     gen_connection_mode_programmatic_change = FALSE;
+    ui_combo_row_detach_model(gen_approval_mode_dropdown, (gpointer *)&gen_approval_mode_dropdown_model);
+    gen_approval_mode_dropdown = NULL;
+    gen_approval_mode_dropdown_model = NULL;
+    gen_approval_mode_detail_row = NULL;
+    gen_approval_mode_programmatic_change = FALSE;
     gen_endpoint_label = NULL;
     gen_version_label = NULL;
     gen_auth_mode_label = NULL;

@@ -14,6 +14,8 @@
 
 #include "device_pair_prompter.h"
 #include "display_model.h"
+#include "exec_approval_prompter.h"
+#include "exec_approval_store.h"
 #include "gateway_client.h"
 #include "onboarding.h"
 #include "product_state.h"
@@ -45,6 +47,8 @@ static void product_coordinator_boot_runtime_lanes(void) {
     systemd_refresh();
     gateway_client_init();
     device_pair_prompter_init(NULL);
+    exec_approval_store_init();
+    exec_approval_prompter_init(NULL);
 }
 
 static ProductStartupPresentationAction product_coordinator_decide_startup_presentation(

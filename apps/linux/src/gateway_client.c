@@ -22,6 +22,7 @@
 #include "json_access.h"
 #include "runtime_paths.h"
 #include "device_pair_prompter.h"
+#include "exec_approval_store.h"
 #include "display_model.h"        /* model_catalog_entry_matches_configured_default */
 #include "state.h"
 #include "log.h"
@@ -1027,6 +1028,14 @@ static void apply_runtime_paths_from_current_config(void) {
                                     &paths);
     gateway_ws_set_identity_context(paths.effective_state_dir);
     remote_tunnel_set_state_dir(paths.effective_state_dir);
+    /*
+     * Refresh the exec-approval policy store's state-dir alongside the
+     * other state-dir-rooted singletons. The store buffers any pending
+     * mutation made before this point (e.g. operator toggled the quick
+     * mode while the runtime context was still being resolved) and
+     * flushes it here. Idempotent on repeat calls with the same path.
+     */
+    exec_approval_store_set_state_dir(paths.effective_state_dir);
     runtime_effective_paths_clear(&paths);
     g_free(derived_profile);
     g_free(derived_state_dir);
