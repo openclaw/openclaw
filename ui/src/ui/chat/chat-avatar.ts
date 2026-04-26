@@ -10,7 +10,7 @@ import {
   isRenderableControlUiAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../views/agents-utils.ts";
-import { normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 export function renderChatAvatar(
   role: string,

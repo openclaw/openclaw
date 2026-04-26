@@ -245,12 +245,8 @@ describe("web outbound", () => {
       cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.ogg",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "voice note",
-      buf,
-      "audio/ogg; codecs=opus",
-    );
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it.each([
@@ -274,12 +270,14 @@ describe("web outbound", () => {
     expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
       expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
     );
-    expect(sendMessage).toHaveBeenLastCalledWith(
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
       "+1555",
-      "voice note",
+      "",
       Buffer.from("opus-output"),
       "audio/ogg; codecs=opus",
     );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it("maps video with caption", async () => {

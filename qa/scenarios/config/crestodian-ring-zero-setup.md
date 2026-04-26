@@ -24,40 +24,47 @@ docsRefs:
   - docs/help/testing.md
 codeRefs:
   - src/crestodian/operations.ts
+  - scripts/e2e/crestodian-first-run-spec.json
   - scripts/e2e/crestodian-first-run-docker-client.ts
   - extensions/qa-lab/src/suite-runtime-agent-process.ts
 execution:
   kind: flow
   summary: Drive the public Crestodian CLI in an isolated fresh state dir and verify setup/model/agent/Discord/audit results.
   config:
-    stateDirName: crestodian-ring-zero-state
-    defaultWorkspaceName: crestodian-main-workspace
-    agentWorkspaceName: crestodian-reef-workspace
-    agentId: reef
-    model: openai/gpt-5.2
-    discordEnv: DISCORD_BOT_TOKEN
-    discordToken: openclaw-crestodian-qa-discord-token
+    specPath: scripts/e2e/crestodian-first-run-spec.json
 ```
 
 ```yaml qa-flow
 steps:
   - name: bootstraps config through Crestodian CLI
     actions:
+      - set: setupSpec
+        value:
+          expr: "JSON.parse(await fs.readFile(path.join(env.repoRoot, config.specPath), 'utf8'))"
       - set: stateDir
         value:
-          expr: "path.join(env.gateway.tempRoot, config.stateDirName)"
+          expr: "path.join(env.gateway.tempRoot, setupSpec.stateDirName)"
       - set: configPath
         value:
           expr: "path.join(stateDir, 'openclaw.json')"
       - set: defaultWorkspace
         value:
-          expr: "path.join(env.gateway.tempRoot, config.defaultWorkspaceName)"
+          expr: "path.join(env.gateway.tempRoot, setupSpec.defaultWorkspaceName)"
       - set: agentWorkspace
         value:
-          expr: "path.join(env.gateway.tempRoot, config.agentWorkspaceName)"
+          expr: "path.join(env.gateway.tempRoot, setupSpec.agentWorkspaceName)"
+      - set: commandVars
+        value:
+          expr: "({ defaultWorkspace, agentWorkspace, agentId: setupSpec.agentId, model: setupSpec.model, discordEnv: setupSpec.discordEnv })"
+      - set: renderCommand
+        value:
+          lambda:
+            params:
+              - template
+            expr: "String(template).replace(/\\{([A-Za-z0-9_]+)\\}/g, (match, key) => String(commandVars[key] ?? match))"
       - set: crestodianEnv
         value:
-          expr: "({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(env.repoRoot, 'dist', 'extensions'), [config.discordEnv]: config.discordToken })"
+          expr: "({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(env.repoRoot, 'dist', 'extensions'), [setupSpec.discordEnv]: setupSpec.discordToken })"
       - call: fs.rm
         args:
           - ref: stateDir
@@ -85,141 +92,39 @@ steps:
           expr: 'String(overviewOutput).includes(''Next: run "setup" to create a starter config'')'
           message:
             expr: "`fresh Crestodian overview did not recommend setup: ${overviewOutput}`"
-      - call: runQaCli
-        saveAs: setupOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - expr: "`setup workspace ${defaultWorkspace} model ${config.model}`"
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(setupOutput).includes('[crestodian] done: crestodian.setup')"
-          message:
-            expr: "`Crestodian setup did not apply: ${setupOutput}`"
-      - call: runQaCli
-        saveAs: modelOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - expr: "`set default model ${config.model}`"
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(modelOutput).includes('[crestodian] done: config.setDefaultModel')"
-          message:
-            expr: "`Crestodian model update did not apply: ${modelOutput}`"
-      - call: runQaCli
-        saveAs: agentOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - expr: "`create agent ${config.agentId} workspace ${agentWorkspace} model ${config.model}`"
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(agentOutput).includes('[crestodian] done: agents.create')"
-          message:
-            expr: "`Crestodian agent creation did not apply: ${agentOutput}`"
-      - call: runQaCli
-        saveAs: discordPluginAllowOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - config set plugins.allow ["discord"]
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(discordPluginAllowOutput).includes('[crestodian] done: config.set')"
-          message:
-            expr: "`Crestodian Discord plugin allowlist did not apply: ${discordPluginAllowOutput}`"
-      - call: runQaCli
-        saveAs: discordPluginEntryOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - config set plugins.entries.discord.enabled true
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(discordPluginEntryOutput).includes('[crestodian] done: config.set')"
-          message:
-            expr: "`Crestodian Discord plugin entry did not apply: ${discordPluginEntryOutput}`"
-      - call: runQaCli
-        saveAs: discordTokenOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - expr: "`config set-ref channels.discord.token env ${config.discordEnv}`"
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(discordTokenOutput).includes('[crestodian] done: config.setRef')"
-          message:
-            expr: "`Crestodian Discord SecretRef did not apply: ${discordTokenOutput}`"
-      - call: runQaCli
-        saveAs: discordEnabledOutput
-        args:
-          - ref: env
-          - - crestodian
-            - --yes
-            - -m
-            - config set channels.discord.enabled true
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(discordEnabledOutput).includes('[crestodian] done: config.set')"
-          message:
-            expr: "`Crestodian Discord enable did not apply: ${discordEnabledOutput}`"
-      - call: runQaCli
-        saveAs: validationOutput
-        args:
-          - ref: env
-          - - crestodian
-            - -m
-            - validate config
-          - timeoutMs: 60000
-            env:
-              ref: crestodianEnv
-      - assert:
-          expr: "String(validationOutput).includes('Config valid:')"
-          message:
-            expr: "`Crestodian config validation did not pass: ${validationOutput}`"
+      - forEach:
+          items:
+            ref: setupSpec.commands
+          item: commandStep
+          actions:
+            - call: runQaCli
+              saveAs: commandOutput
+              args:
+                - ref: env
+                - expr: "['crestodian', ...(commandStep.approve ? ['--yes'] : []), '-m', renderCommand(commandStep.message)]"
+                - timeoutMs: 60000
+                  env:
+                    ref: crestodianEnv
+            - assert:
+                expr: "String(commandOutput).includes(commandStep.expectOutput)"
+                message:
+                  expr: "`Crestodian command ${commandStep.id} did not produce ${commandStep.expectOutput}: ${commandOutput}`"
       - set: writtenConfig
         value:
           expr: "JSON.parse(await fs.readFile(configPath, 'utf8'))"
       - set: agent
         value:
-          expr: "writtenConfig.agents?.list?.find((candidate) => candidate.id === config.agentId)"
+          expr: "writtenConfig.agents?.list?.find((candidate) => candidate.id === setupSpec.agentId)"
       - assert:
           expr: "writtenConfig.agents?.defaults?.workspace === defaultWorkspace"
           message:
             expr: "`default workspace mismatch: ${JSON.stringify(writtenConfig.agents?.defaults)}`"
       - assert:
-          expr: "writtenConfig.agents?.defaults?.model?.primary === config.model"
+          expr: "writtenConfig.agents?.defaults?.model?.primary === setupSpec.model"
           message:
             expr: "`default model mismatch: ${JSON.stringify(writtenConfig.agents?.defaults?.model)}`"
       - assert:
-          expr: "agent?.workspace === agentWorkspace && agent?.model === config.model"
+          expr: "agent?.workspace === agentWorkspace && agent?.model === setupSpec.model"
           message:
             expr: "`agent config mismatch: ${JSON.stringify(agent)}`"
       - assert:
@@ -231,22 +136,18 @@ steps:
           message:
             expr: "`Discord was not enabled: ${JSON.stringify(writtenConfig.channels?.discord)}`"
       - assert:
-          expr: "writtenConfig.channels?.discord?.token?.source === 'env' && writtenConfig.channels?.discord?.token?.id === config.discordEnv"
+          expr: "writtenConfig.channels?.discord?.token?.source === 'env' && writtenConfig.channels?.discord?.token?.id === setupSpec.discordEnv"
           message:
             expr: "`Discord token was not an env SecretRef: ${JSON.stringify(writtenConfig.channels?.discord?.token)}`"
       - assert:
-          expr: "!JSON.stringify(writtenConfig.channels?.discord ?? {}).includes(config.discordToken)"
+          expr: "!JSON.stringify(writtenConfig.channels?.discord ?? {}).includes(setupSpec.discordToken)"
           message: Crestodian persisted the raw Discord token.
       - set: auditText
         value:
           expr: "await fs.readFile(path.join(stateDir, 'audit', 'crestodian.jsonl'), 'utf8')"
       - forEach:
           items:
-            - crestodian.setup
-            - config.setDefaultModel
-            - agents.create
-            - config.setRef
-            - config.set
+            ref: setupSpec.auditOperations
           item: operation
           actions:
             - assert:

@@ -67,7 +67,7 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelectorAll(".qs-stack")).toHaveLength(3);
+    expect(container.querySelectorAll(".qs-stack")).toHaveLength(2);
     expect(container.querySelector(".qs-card--personal")).not.toBeNull();
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });

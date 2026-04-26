@@ -156,12 +156,14 @@ export async function deliverWebReply(params: {
                 audio: media.buffer,
                 ptt: true,
                 mimetype: media.mimetype,
-                caption,
               },
               quote,
             ),
           "media:audio",
         );
+        if (caption) {
+          await sendWithRetry(() => msg.reply(caption, quote), "media:audio-text");
+        }
       } else if (media.kind === "video") {
         const quote = getQuote();
         await sendWithRetry(

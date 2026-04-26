@@ -4,47 +4,33 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderChatAvatar } from "./chat-avatar.ts";
 
-vi.mock("../views/agents-utils.ts", () => {
-  const isRenderableControlUiAvatarUrl = (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-
-  return {
-    assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
-    isRenderableControlUiAvatarUrl,
-    resolveAssistantTextAvatar: (value: string | null | undefined) => {
-      const trimmed = value?.trim();
-      if (!trimmed || trimmed === "A") {
-        return null;
-      }
-      if (trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed)) {
-        return null;
-      }
-      if (
-        trimmed.length > 8 ||
-        /\s/.test(trimmed) ||
-        /[\\/.:]/.test(trimmed) ||
-        /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(trimmed)
-      ) {
-        return null;
-      }
-      return trimmed;
-    },
-    resolveChatAvatarRenderUrl: (
-      candidate: string | null | undefined,
-      agent: { identity?: { avatar?: string; avatarUrl?: string } },
-    ) => {
-      if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-        return candidate;
-      }
-      for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-        if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-          return value;
-        }
-      }
+vi.mock("../views/agents-utils.ts", () => ({
+  isRenderableControlUiAvatarUrl: (value: string) =>
+    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
+  assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
+  resolveAssistantTextAvatar: (value: string | null | undefined) => {
+    if (!value) {
       return null;
-    },
-  };
-});
+    }
+    return value.length <= 3 ? value : null;
+  },
+  resolveChatAvatarRenderUrl: (
+    candidate: string | null | undefined,
+    agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  ) => {
+    const isRenderableControlUiAvatarUrl = (value: string) =>
+      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
+    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
+      return candidate;
+    }
+    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
+      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
+        return value;
+      }
+    }
+    return null;
+  },
+}));
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
@@ -53,19 +39,16 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
 }
 
 describe("renderChatAvatar", () => {
-  it("uses the assistant fallback when no assistant avatar is configured", () => {
-    const avatar = renderAvatar(["assistant"]);
-
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/openclaw-molty.png");
-  });
-
   it("renders assistant fallback, blob image, and text avatars", () => {
+    const defaultAvatar = renderAvatar(["assistant"]);
+    expect(defaultAvatar).not.toBeNull();
+    expect(defaultAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+
     const remoteAvatar = renderAvatar([
       "assistant",
       { avatar: "https://example.com/avatar.png", name: "Val" },
     ]);
-    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-molty.png");
+    expect(remoteAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
 
     const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
     expect(blobAvatar?.tagName).toBe("IMG");
@@ -86,7 +69,7 @@ describe("renderChatAvatar", () => {
       "session-token",
     ]);
 
-    expect(avatar?.getAttribute("src")).toBe("/openclaw-molty.png");
+    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
   });
 
   it("renders local user image and text avatars", () => {

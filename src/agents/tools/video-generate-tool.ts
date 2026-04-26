@@ -350,6 +350,7 @@ function validateVideoGenerationCapabilities(params: {
   });
   const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
     provider,
+    model: params.model,
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });

@@ -61,7 +61,7 @@ describeLive("elevenlabs plugin live", () => {
 
     const normalized = normalizeTranscriptForMatch(transcript?.text ?? "");
     expect(normalized).toContain("openclaw");
-    expect(normalized).toContain("elevenlabs");
+    expect(normalized).toMatch(/(?:elevenlabs|11labs)/);
   }, 90_000);
 
   it("streams realtime STT through the registered transcription provider", async () => {

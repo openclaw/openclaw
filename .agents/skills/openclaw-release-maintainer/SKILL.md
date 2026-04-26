@@ -28,12 +28,17 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - Do not delete or rewrite beta tags after they leave the machine. If a
   published or pushed beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
-- For a beta release train, run the full pre-npm test roster before publishing
-  each beta. After a beta is published, run the smaller published-install roster
-  focused on install/update/Docker/Parallels. If anything fails, fix it on the
-  release branch, commit/push/pull, increment beta number, and repeat. Operators
-  may authorize up to 4 autonomous beta attempts; after 4 failed beta attempts,
-  stop and report.
+- For a beta release train, run the fast local preflight first, publish the
+  beta to npm `beta`, then run the expensive published-package roster focused
+  on install/update/Docker/Parallels/NPM Telegram. If anything fails, fix it on
+  the release branch, commit/push/pull, increment beta number, and repeat. Run
+  the full expensive roster at least once before stable/latest promotion; for
+  later beta attempts, rerun only lanes whose evidence changed unless the fix
+  touches broad release, install/update, plugin, Docker, Parallels, or live QA
+  behavior. After each beta is published, scan current `main` once for critical
+  fixes that landed after the release branch cut and backport only important
+  low-risk fixes. Operators may authorize up to 4 autonomous beta attempts;
+  after 4 failed beta attempts, stop and report.
 - Use `/changelog` before version/tag preparation so the top changelog section
   is deduped and ordered by user impact.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
@@ -75,6 +80,10 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   parallel, publish npm from the successful npm preflight, then start published
   npm install/update, Docker, and Parallels verification while mac artifacts
   continue.
+- After a beta is published, run the expensive Docker, Parallels, and QA-Lab
+  release rosters in parallel instead of serializing them. Use selective reruns
+  after failures or fixes, but keep proof that Docker, Parallels, and QA-Lab
+  each passed at least once before stable/latest promotion.
 - Mac packaging may be built from a slight release-branch variation of the
   tagged commit when the delta is mac packaging, signing, workflow, or
   validation-only release machinery. If mac packaging needs release-branch-only
@@ -202,9 +211,15 @@ Before tagging or publishing, run:
 pnpm check:architecture
 pnpm build
 pnpm ui:build
+pnpm qa:otel:smoke
 pnpm release:check
 pnpm test:install:smoke
 ```
+
+- Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
+  It starts a local OTLP/HTTP trace receiver, runs QA-lab's
+  `otel-trace-smoke`, and checks span names plus content/identifier redaction
+  without external Opik or Langfuse credentials.
 
 For a non-root smoke path:
 
@@ -485,8 +500,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 6. Create `release/YYYY.M.D` from that post-changelog `main` commit.
 7. Make every repo version location match the beta tag before creating it.
 8. Commit release preparation changes on the release branch and push the branch.
-9. Run the local build, Docker, and Parallels parts of the full pre-npm beta
-   test roster from the release branch before any npm preflight or publish.
+9. Run the fast local beta preflight from the release branch before any npm
+   preflight or publish. Keep expensive Docker, Parallels, and published-package
+   install/update lanes for after the beta is live unless the operator asks to
+   run them before beta publication.
 10. For beta releases, skip mac app build/sign/notarize unless beta scope or a
     release blocker specifically requires it. For stable releases, include the
     mac app, signing, notarization, and appcast path.
@@ -523,10 +540,15 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 21. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 22. Run postpublish verification:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
-23. Run the post-published beta verification roster. If any lane fails after
-    the beta tag/package is pushed or published, fix, commit/push/pull,
-    increment to the next beta tag, and restart at the full pre-npm beta test
-    roster for the new beta. The roster includes the manual Actions >
+23. Run the post-published beta verification roster. First scan current `main`
+    for critical fixes that landed after the release branch cut; backport only
+    important low-risk fixes before starting expensive lanes, or increment to
+    the next beta if the fix must change the already-published package. If any
+    lane fails after the beta tag/package is pushed or published, fix,
+    commit/push/pull, increment to the next beta tag, and rerun the affected
+    beta evidence. Start Docker, Parallels, and QA-Lab in parallel once the
+    beta is live. Ensure the full expensive roster has passed at least once
+    before stable/latest promotion. The roster includes the manual Actions >
     `NPM Telegram Beta E2E` workflow against the exact published beta package.
     If a pre-npm lane fails before any tag/package leaves the machine, fix and
     rerun the same intended beta attempt. Repeat up to the operator's

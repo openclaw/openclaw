@@ -10,8 +10,10 @@ import {
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
 afterEach(() => {
+  resetAnnounceQueuesForTests();
   __testing.setDepsForTest();
 });
 
@@ -109,6 +111,48 @@ async function deliverDiscordDirectMessageCompletion(params: {
     expectsCompletionMessage: true,
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-dm-fallback-empty",
+    internalEvents: params.internalEvents,
+  });
+}
+
+async function deliverTelegramDirectMessageCompletion(params: {
+  callGateway: typeof runtimeCallGateway;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
+  isActive?: boolean;
+  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+}) {
+  const origin = {
+    channel: "telegram",
+    to: "123456789",
+    accountId: "bot-1",
+  };
+  __testing.setDepsForTest({
+    callGateway: params.callGateway,
+    getRequesterSessionActivity: () => ({
+      sessionId: "requester-session-telegram",
+      isActive: params.isActive === true,
+    }),
+    loadConfig: () => ({}) as never,
+    ...(params.queueEmbeddedPiMessage
+      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+      : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
+  });
+
+  return deliverSubagentAnnouncement({
+    requesterSessionKey: "agent:main:telegram:123456789",
+    targetRequesterSessionKey: "agent:main:telegram:123456789",
+    triggerMessage: "child done",
+    steerMessage: "child done",
+    requesterOrigin: origin,
+    requesterSessionOrigin: origin,
+    completionDirectOrigin: origin,
+    directOrigin: origin,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: true,
+    bestEffortDeliver: true,
+    directIdempotencyKey: "announce-telegram-dm-fallback",
     internalEvents: params.internalEvents,
   });
 }
@@ -223,6 +267,138 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
       channel: "topicchat",
       to: "topicchat:room-a",
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement queued delivery", () => {
+  async function deliverQueuedAnnouncement(params: {
+    requesterOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
+  }) {
+    const callGateway = createGatewayMock();
+    let activityChecks = 0;
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: activityChecks++ === 0,
+      }),
+      loadConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "followup",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: params.requesterOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-external-route",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "queued",
+      }),
+    );
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
+    return callGateway;
+  }
+
+  it("keeps queued announces with no external route session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({});
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:eng:paperclip:issue:123",
+          deliver: false,
+          channel: undefined,
+          accountId: undefined,
+          to: undefined,
+          threadId: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("keeps queued announces with channel-only origins session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "slack",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: false,
+          channel: undefined,
+          to: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("keeps queued announces with internal origins session-only", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "webchat",
+        to: "internal:room",
+        accountId: "acct-1",
+        threadId: "thread-1",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: false,
+          channel: undefined,
+          accountId: undefined,
+          to: undefined,
+          threadId: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("preserves queued external route fields when channel and target are present", async () => {
+    const callGateway = await deliverQueuedAnnouncement({
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "171.222",
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: "171.222",
+        }),
+      }),
+    );
   });
 });
 
@@ -372,6 +548,92 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
         bestEffort: true,
         idempotencyKey: "announce-thread-fallback-1",
+      }),
+    );
+  });
+
+  it("uses direct fallback for Telegram DMs when announce-agent delivery fails", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("UNAVAILABLE: requester wake failed");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "123456789",
+        threadId: undefined,
+        content: "child completion output",
+        requesterSessionKey: "agent:main:telegram:123456789",
+        bestEffort: true,
+        idempotencyKey: "announce-telegram-dm-fallback",
+      }),
+    );
+  });
+
+  it("uses direct fallback when an active Telegram requester cannot be woken", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessage = vi.fn(() => false);
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedPiMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram wake smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-telegram", "child done");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456789",
+        content: "child completion output",
       }),
     );
   });

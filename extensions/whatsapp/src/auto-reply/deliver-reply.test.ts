@@ -91,6 +91,12 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
   });
 }
 
+function expectFirstSendMediaPayload(msg: WebInboundMsg) {
+  const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
+  expect(payload).toBeDefined();
+  return payload;
+}
+
 function mockSecondReplySuccess(msg: WebInboundMsg) {
   (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
     undefined,
@@ -524,14 +530,14 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "caption",
       }),
       undefined,
     );
-    expect(msg.reply).not.toHaveBeenCalled();
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("caption", undefined);
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends audio media as ptt voice note with visible text separately", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -555,10 +561,11 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "cap",
       }),
       undefined,
     );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("transcodes mp3 audio media before sending a ptt voice note", async () => {
@@ -594,10 +601,11 @@ describe("deliverWebReply", () => {
         audio: Buffer.from("opus-output"),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "cap",
       }),
       undefined,
     );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("sends video media", async () => {

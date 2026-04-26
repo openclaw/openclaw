@@ -7,12 +7,14 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import {
+  isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
 } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { hashText } from "./hash.js";
 
@@ -58,13 +60,11 @@ type SessionTranscriptStoreEntry = {
   sessionId?: unknown;
 };
 
-function isCheckpointTranscriptFileName(fileName: string): boolean {
-  return fileName.endsWith(".jsonl") && fileName.includes(".checkpoint.");
-}
-
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   const fileName = path.basename(absPath);
-  return isSessionArchiveArtifactName(fileName) || isCheckpointTranscriptFileName(fileName);
+  return (
+    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
+  );
 }
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
@@ -221,18 +221,18 @@ export function loadSessionTranscriptClassificationForAgent(
   );
 }
 
-function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
+function classifySessionTranscriptFromSessionStore(absPath: string): {
+  generatedByDreamingNarrative: boolean;
+  generatedByCronRun: boolean;
+} {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath);
-}
-
-function isCronRunTranscriptFromSessionStore(absPath: string): boolean {
-  const sessionsDir = path.dirname(absPath);
-  const normalizedAbsPath = normalizeComparablePath(absPath);
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.cronRunTranscriptPaths.has(normalizedAbsPath);
+  return {
+    generatedByDreamingNarrative:
+      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath),
+    generatedByCronRun: classification.cronRunTranscriptPaths.has(normalizedAbsPath),
+  };
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -473,10 +473,16 @@ export async function buildSessionEntry(
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
+    const sessionStoreClassification =
+      opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
+        ? classifySessionTranscriptFromSessionStore(absPath)
+        : null;
     let generatedByDreamingNarrative =
-      opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+      opts.generatedByDreamingNarrative ??
+      sessionStoreClassification?.generatedByDreamingNarrative ??
+      false;
     const generatedByCronRun =
-      opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
+      opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -499,12 +505,15 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }
       if (message.role !== "user" && message.role !== "assistant") {
+        continue;
+      }
+      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
       const rawText = collectRawSessionText(message.content);

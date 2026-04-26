@@ -230,6 +230,29 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
+  it("explains attachOnly for externally managed loopback CDP services", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+      setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    isChromeReachable.mockResolvedValue(true);
+    isChromeCdpReady.mockResolvedValue(false);
+
+    const promise = profile.ensureBrowserAvailable();
+    await expect(promise).rejects.toThrow(
+      'Port 18800 is in use for profile "openclaw" but not by openclaw.',
+    );
+    await expect(promise).rejects.toThrow(
+      "set browser.profiles.openclaw.attachOnly=true so OpenClaw attaches without trying to manage the local process",
+    );
+    await expect(promise).rejects.toThrow(
+      "For Browserless Docker, set EXTERNAL to the same WebSocket endpoint OpenClaw can reach via browser.profiles.<name>.cdpUrl.",
+    );
+
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
   it("retries remote CDP websocket reachability once before failing", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady } =
       setupEnsureBrowserAvailableHarness();

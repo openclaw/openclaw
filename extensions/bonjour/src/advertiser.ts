@@ -1,6 +1,6 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
-import { classifyCiaoUnhandledRejection } from "./ciao.js";
+import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
 export type GatewayBonjourAdvertiser = {
@@ -50,6 +50,7 @@ type CiaoModule = {
 type BonjourCycle = {
   responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
+  cleanupUncaughtException?: () => void;
   cleanupUnhandledRejection?: () => void;
 };
 
@@ -59,16 +60,19 @@ type ServiceStateTracker = {
 };
 
 type ConsoleLogFn = (...args: unknown[]) => void;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
+  registerUncaughtExceptionHandler?: (handler: UncaughtExceptionHandler) => () => void;
   registerUnhandledRejectionHandler?: (handler: UnhandledRejectionHandler) => () => void;
 };
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const STUCK_ANNOUNCING_MS = 8_000;
+const MAX_CONSECUTIVE_RESTARTS = 3;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
@@ -174,19 +178,22 @@ export async function startGatewayBonjourAdvertiser(
   };
   const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
+  let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
 
-  const handleCiaoUnhandledRejection = (reason: unknown): boolean => {
-    const classification = classifyCiaoUnhandledRejection(reason);
+  const handleCiaoProcessError = (reason: unknown): boolean => {
+    const classification = classifyCiaoProcessError(reason);
     if (!classification) {
       return false;
     }
 
-    if (classification.kind === "interface-assertion") {
-      logger.warn(`bonjour: suppressing ciao interface assertion: ${classification.formatted}`);
-      return true;
+    if (classification.kind === "cancellation") {
+      logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+    } else {
+      const label =
+        classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+      logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
+      requestCiaoRecovery?.(classification);
     }
-
-    logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
     return true;
   };
 
@@ -233,8 +240,9 @@ export async function startGatewayBonjourAdvertiser(
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }
 
+    const responder = getResponder();
+
     function createCycle(): BonjourCycle {
-      const responder = getResponder();
       const services: Array<{ label: string; svc: BonjourService }> = [];
 
       const gateway = responder.createService({
@@ -253,13 +261,17 @@ export async function startGatewayBonjourAdvertiser(
 
       const cleanupUnhandledRejection =
         services.length > 0 && deps.registerUnhandledRejectionHandler
-          ? deps.registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
+          ? deps.registerUnhandledRejectionHandler(handleCiaoProcessError)
+          : undefined;
+      const cleanupUncaughtException =
+        services.length > 0 && deps.registerUncaughtExceptionHandler
+          ? deps.registerUncaughtExceptionHandler(handleCiaoProcessError)
           : undefined;
 
-      return { responder, services, cleanupUnhandledRejection };
+      return { responder, services, cleanupUncaughtException, cleanupUnhandledRejection };
     }
 
-    async function stopCycle(cycle: BonjourCycle | null) {
+    async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
       if (!cycle) {
         return;
       }
@@ -271,10 +283,13 @@ export async function startGatewayBonjourAdvertiser(
         }
       }
       try {
-        await cycle.responder.shutdown();
+        if (opts?.shutdownResponder) {
+          await cycle.responder.shutdown();
+        }
       } catch {
         /* ignore */
       } finally {
+        cycle.cleanupUncaughtException?.();
         cycle.cleanupUnhandledRejection?.();
       }
     }
@@ -329,7 +344,9 @@ export async function startGatewayBonjourAdvertiser(
 
     let stopped = false;
     let recreatePromise: Promise<void> | null = null;
-    let cycle = createCycle();
+    let disabled = false;
+    let consecutiveRestarts = 0;
+    let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
     attachConflictListeners(cycle.services);
     startAdvertising(cycle.services);
@@ -350,13 +367,26 @@ export async function startGatewayBonjourAdvertiser(
     };
 
     const recreateAdvertiser = async (reason: string) => {
-      if (stopped) {
+      if (stopped || disabled) {
         return;
       }
       if (recreatePromise) {
         return recreatePromise;
       }
       recreatePromise = (async () => {
+        consecutiveRestarts += 1;
+        if (consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS) {
+          disabled = true;
+          logger.warn(
+            `bonjour: disabling advertiser after ${MAX_CONSECUTIVE_RESTARTS} failed restarts (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
+          );
+          const previous = cycle;
+          cycle = null;
+          stateTracker.clear();
+          await stopCycle(previous, { shutdownResponder: true });
+          restoreConsoleLog();
+          return;
+        }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
         const previous = cycle;
         await stopCycle(previous);
@@ -369,10 +399,16 @@ export async function startGatewayBonjourAdvertiser(
       });
       return recreatePromise;
     };
+    requestCiaoRecovery = (classification) => {
+      void recreateAdvertiser(`ciao ${classification.kind}: ${classification.formatted}`);
+    };
 
     const lastRepairAttempt = new Map<string, number>();
     const watchdog = setInterval(() => {
       if (stopped || recreatePromise) {
+        return;
+      }
+      if (disabled || !cycle) {
         return;
       }
       updateStateTrackers(cycle.services);
@@ -380,6 +416,9 @@ export async function startGatewayBonjourAdvertiser(
         const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
         if (typeof stateUnknown !== "string") {
           continue;
+        }
+        if (stateUnknown === "announced") {
+          consecutiveRestarts = 0;
         }
         const tracked = stateTracker.get(label);
         if (
@@ -442,7 +481,7 @@ export async function startGatewayBonjourAdvertiser(
         } catch {
           // ignore
         }
-        await stopCycle(cycle);
+        await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
       },
     };
