@@ -25,6 +25,12 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - Before release branching, commit any dirty files in coherent groups, push,
   pull/rebase, then run `/changelog` on `main` and commit/push/pull that
   changelog rewrite immediately before creating the release branch.
+- During release planning, inspect `src/plugins/compat/registry.ts` before
+  branching and again before final publish. For every deprecated or
+  removal-pending compatibility record whose `removeAfter` date is on or before
+  the release date, either remove the compatibility path where safe and
+  validate the affected tests, or write down why removal is blocked and get
+  explicit maintainer approval before shipping the expired compatibility path.
 - Do not delete or rewrite beta tags after they leave the machine. If a
   published or pushed beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
@@ -116,6 +122,12 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.D` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- When preparing release notes, scan `src/plugins/compat/registry.ts` for
+  plugin compatibility records with `warningStarts` or `removeAfter` within 7
+  days after the release date. Add an `Upcoming deprecations` note to the
+  release notes when any exist, including the compatibility code, target date,
+  replacement, and a link to the record's `docsPath` or `/plugins/compatibility`
+  when no more specific deprecation page exists.
 - When cutting a mac release with a beta GitHub prerelease:
   - tag `vYYYY.M.D-beta.N` from the release commit
   - create a prerelease titled `openclaw YYYY.M.D-beta.N`
