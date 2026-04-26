@@ -789,7 +789,7 @@ async function resolvePluginSecretRefs(params: {
   providerConfig: SecretProviderConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<Map<string, unknown>> {
-  const sourceId = String((params.providerConfig as { source?: unknown }).source);
+  const sourceId = params.providerConfig.source;
   const { resolveBundledSecretProviderForSource } =
     await import("../plugins/secret-provider-resolver.js");
   const entry = await resolveBundledSecretProviderForSource(sourceId);
@@ -797,7 +797,7 @@ async function resolvePluginSecretRefs(params: {
     throw providerResolutionError({
       source: params.source,
       provider: params.providerName,
-      message: `Unknown secret provider source "${sourceId}". Install a plugin that provides it (for example a bundled extension or a third-party openclaw-secrets-${sourceId} package).`,
+      message: `Unknown secret provider source "${sourceId}". Install or enable a plugin that registers this source. See docs/plugins/sdk-overview.md for how plugins declare secret-provider sources.`,
     });
   }
   entry.validateConfig?.(params.providerConfig);

@@ -187,9 +187,13 @@ function resolveBundledManifestContractPluginIds(contract: ManifestRegistryContr
 
 /**
  * Look up which bundled plugin owns a specific secret-provider source id.
- * Returns the plugin id if found, otherwise undefined. Source ids are expected
- * to be unique across bundled plugins; if the same source is declared by
- * multiple plugins, the first match (by plugin id sort order) wins.
+ * Returns the plugin id if found, otherwise undefined.
+ *
+ * Source ids are required to be unique across bundled plugins — that invariant
+ * is enforced by `bundled-capability-metadata.test.ts` so a future bundled
+ * plugin cannot silently collide. If a collision were ever introduced (third-
+ * party plugin shipping the same source as a bundled one), the first match in
+ * iteration order wins; behavior is otherwise unspecified.
  */
 export function resolveBundledPluginIdForSecretProviderSource(source: string): string | undefined {
   const trimmed = source.trim();

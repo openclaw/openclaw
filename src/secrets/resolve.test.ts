@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import {
@@ -574,49 +574,108 @@ describe("secret ref resolver", () => {
   });
 });
 
-describe("plugin-owned secret provider dispatch", () => {
-  it("dispatches a plugin-owned source through the public-artifact resolver", async () => {
-    const fakeEntry = {
-      id: "fakecloud",
-      pluginId: "secrets-fakecloud",
-      label: "Fake Cloud",
-      resolve: vi.fn(async () => new Map<string, unknown>([["MY_KEY", "the-value"]])),
-    };
-    vi.doMock("../plugins/secret-provider-resolver.js", () => ({
-      resolveBundledSecretProviderForSource: vi.fn(async () => fakeEntry),
-    }));
+// `secret-provider-resolver` is dynamically imported by resolvePluginSecretRefs,
+// so vi.mock() at the top of the file is what the dispatch path picks up.
+// Per-test fakes are wired via `resolveBundledSecretProviderForSourceMock` (a vi.fn
+// hoisted via vi.hoisted) so individual cases can stub a specific source.
+const { resolveBundledSecretProviderForSourceMock } = vi.hoisted(() => ({
+  resolveBundledSecretProviderForSourceMock: vi.fn(),
+}));
+vi.mock("../plugins/secret-provider-resolver.js", () => ({
+  resolveBundledSecretProviderForSource: resolveBundledSecretProviderForSourceMock,
+}));
 
-    const { resolveSecretRefValues } = await import("./resolve.js");
+describe("plugin-owned secret provider dispatch", () => {
+  beforeEach(() => {
+    resolveBundledSecretProviderForSourceMock.mockReset();
+  });
+
+  it("dispatches a plugin-owned source through the public-artifact resolver", async () => {
+    const resolveSpy = vi.fn(async () => new Map<string, unknown>([["MY_KEY", "the-value"]]));
+    resolveBundledSecretProviderForSourceMock.mockImplementation(async (source: string) => {
+      if (source !== "fakecloud") return undefined;
+      return {
+        id: "fakecloud",
+        pluginId: "secrets-fakecloud",
+        label: "Fake Cloud",
+        resolve: resolveSpy,
+      };
+    });
+
     const config = {
       secrets: {
         providers: {
-          myFc: { source: "fakecloud", project: "p" },
+          myfc: { source: "fakecloud", project: "p" },
         },
       },
     } as unknown as OpenClawConfig;
 
     const out = await resolveSecretRefValues(
-      [{ source: "fakecloud", provider: "myFc", id: "MY_KEY" }],
+      [{ source: "fakecloud", provider: "myfc", id: "MY_KEY" }],
       { config },
     );
-    expect(out.get("fakecloud:myFc:MY_KEY")).toBe("the-value");
-    expect(fakeEntry.resolve).toHaveBeenCalledOnce();
-    vi.doUnmock("../plugins/secret-provider-resolver.js");
+    expect(out.get("fakecloud:myfc:MY_KEY")).toBe("the-value");
+    expect(resolveSpy).toHaveBeenCalledOnce();
   });
 
   it("returns an actionable error for an unknown plugin source", async () => {
-    vi.doMock("../plugins/secret-provider-resolver.js", () => ({
-      resolveBundledSecretProviderForSource: vi.fn(async () => undefined),
-    }));
+    resolveBundledSecretProviderForSourceMock.mockResolvedValue(undefined);
 
-    const { resolveSecretRefValues } = await import("./resolve.js");
     const config = {
       secrets: { providers: { foo: { source: "unknownsrc" } } },
     } as unknown as OpenClawConfig;
 
     await expect(
       resolveSecretRefValues([{ source: "unknownsrc", provider: "foo", id: "X" }], { config }),
-    ).rejects.toThrow(/Install a plugin that provides it/);
-    vi.doUnmock("../plugins/secret-provider-resolver.js");
+    ).rejects.toThrow(/Install or enable a plugin that registers this source/);
+  });
+
+  it("resolves env, file, and a plugin-owned source in the same batch (integration smoke)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-mixed-"));
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(
+      filePath,
+      JSON.stringify({ providers: { openai: { apiKey: "sk-file-123" } } }),
+    );
+    try {
+      const fakeResolve = vi.fn(async () => new Map<string, unknown>([["MY_KEY", "plugin-value"]]));
+      resolveBundledSecretProviderForSourceMock.mockImplementation(async (source: string) => {
+        if (source !== "fakecloud") return undefined;
+        return {
+          id: "fakecloud",
+          pluginId: "secrets-fakecloud",
+          label: "Fake Cloud",
+          resolve: fakeResolve,
+        };
+      });
+
+      const config = {
+        secrets: {
+          providers: {
+            default: { source: "env" },
+            filemain: { source: "file", path: filePath, mode: "json" },
+            myfc: { source: "fakecloud" },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const refs = [
+        { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
+        { source: "file" as const, provider: "filemain", id: "/providers/openai/apiKey" },
+        { source: "fakecloud", provider: "myfc", id: "MY_KEY" },
+      ];
+
+      const out = await resolveSecretRefValues(refs, {
+        config,
+        env: { OPENAI_API_KEY: "sk-env-456" }, // pragma: allowlist secret
+      });
+
+      expect(out.get("env:default:OPENAI_API_KEY")).toBe("sk-env-456");
+      expect(out.get("file:filemain:/providers/openai/apiKey")).toBe("sk-file-123");
+      expect(out.get("fakecloud:myfc:MY_KEY")).toBe("plugin-value");
+      expect(fakeResolve).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
