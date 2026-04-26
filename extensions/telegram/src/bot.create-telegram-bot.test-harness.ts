@@ -241,6 +241,10 @@ const systemEventsHoisted = vi.hoisted(() => ({
 }));
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
+const heartbeatWakeHoisted = vi.hoisted(() => ({
+  requestHeartbeatSpy: vi.fn(),
+}));
+export const requestHeartbeatSpy = heartbeatWakeHoisted.requestHeartbeatSpy;
 const execApprovalHoisted = vi.hoisted(() => ({
   resolveExecApprovalSpy: vi.fn(async () => undefined),
 }));
@@ -373,6 +377,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   upsertChannelPairingRequest:
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
   enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
+  requestHeartbeat: requestHeartbeatSpy as TelegramBotDeps["requestHeartbeat"],
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
@@ -521,6 +526,8 @@ beforeEach(() => {
   editMessageReplyMarkupSpy.mockReset();
   editMessageReplyMarkupSpy.mockResolvedValue({ message_id: 88 });
   enqueueSystemEventSpy.mockReset();
+  enqueueSystemEventSpy.mockReturnValue(false);
+  requestHeartbeatSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
   listSkillCommandsForAgents.mockReset();

@@ -81,6 +81,21 @@ export type TelegramCapabilitiesConfig =
       inlineButtons?: TelegramInlineButtonsScope;
     };
 
+export type TelegramReactionSemanticAction = "wake" | "queue" | "ignore";
+
+export type TelegramReactionSemantic =
+  | string
+  | {
+      /** Product-level meaning attached to this reaction key. */
+      meaning?: string;
+      /** Instruction appended to the queued system event. */
+      instruction?: string;
+      /** Handling behavior. Defaults to "wake" for mapped reactions. */
+      action?: TelegramReactionSemanticAction;
+    };
+
+export type TelegramReactionSemanticsConfig = Record<string, TelegramReactionSemantic>;
+
 /** Custom command definition for Telegram bot menu. */
 export type TelegramCustomCommand = {
   /** Command name (without leading /). */
@@ -181,6 +196,14 @@ export type TelegramAccountConfig = {
    * - "all": notify agent of all reactions
    */
   reactionNotifications?: "off" | "own" | "all";
+  /**
+   * Optional reaction-key map for first-class reaction meanings.
+   *
+   * Keys accept raw emoji shorthand (e.g. "👍" or "emoji:👍") and Telegram
+   * custom emoji ids (`custom_emoji:<id>`). Mapped reactions default to waking
+   * the routed session unless action is set to "queue" or "ignore".
+   */
+  reactionSemantics?: TelegramReactionSemanticsConfig;
   /**
    * Controls agent's reaction capability:
    * - "off": agent cannot react

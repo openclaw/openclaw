@@ -23,6 +23,7 @@ export {
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
   resolveThreadSessionKeys,
+  scopedHeartbeatWakeOptions,
   sanitizeAgentId,
 } from "../routing/session-key.js";
 export { resolveAccountEntry } from "../routing/account-lookup.js";

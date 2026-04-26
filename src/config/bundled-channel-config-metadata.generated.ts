@@ -14352,6 +14352,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["off", "own", "all"],
         },
+        reactionSemantics: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "object",
+                properties: {
+                  meaning: {
+                    type: "string",
+                  },
+                  instruction: {
+                    type: "string",
+                  },
+                  action: {
+                    type: "string",
+                    enum: ["wake", "queue", "ignore"],
+                  },
+                },
+                additionalProperties: false,
+              },
+            ],
+          },
+        },
         reactionLevel: {
           type: "string",
           enum: ["off", "ack", "minimal", "extensive"],
@@ -15420,6 +15449,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               reactionNotifications: {
                 type: "string",
                 enum: ["off", "own", "all"],
+              },
+              reactionSemantics: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        meaning: {
+                          type: "string",
+                        },
+                        instruction: {
+                          type: "string",
+                        },
+                        action: {
+                          type: "string",
+                          enum: ["wake", "queue", "ignore"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  ],
+                },
               },
               reactionLevel: {
                 type: "string",
