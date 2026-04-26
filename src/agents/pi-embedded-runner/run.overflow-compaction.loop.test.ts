@@ -397,6 +397,60 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("logs context-overflow-hint pointing at toolResultMaxChars after a prior compaction", async () => {
+    const overflowError = makeOverflowError();
+
+    // First overflow compacts, retry overflows again, second compact succeeds.
+    // The hint should fire on the second overflow (compactionAttempts > 0),
+    // not on the first.
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 1",
+          firstKeptEntryId: "entry-3",
+          tokensBefore: 180000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 2",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 160000,
+        }),
+      );
+
+    await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("[context-overflow-hint]"));
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("toolResultMaxChars"));
+  });
+
+  it("does not log context-overflow-hint on the first overflow before any compaction", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted 1",
+        firstKeptEntryId: "entry-3",
+        tokensBefore: 180000,
+      }),
+    );
+
+    await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("[context-overflow-hint]"),
+    );
+  });
+
   it("does not attempt compaction for compaction_failure errors", async () => {
     const compactionFailureError = new Error(
       "request_too_large: summarization failed - Request size exceeds model context window",
