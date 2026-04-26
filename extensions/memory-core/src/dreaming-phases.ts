@@ -1648,9 +1648,11 @@ function buildRemReflections(
       const thematicBoost = REM_POSITIVE_TAGS.has(tag.toLowerCase()) ? 0.16 : 0;
       const evidenceBoost = Math.min(
         0.18,
-        [...stat.evidence]
-          .map((evidence) => (/(?:^|,)memory\/\d{4}-\d{2}-\d{2}\.md:/i.test(evidence) ? 0.06 : 0))
-          .reduce((sum, value) => sum + value, 0),
+        [...stat.evidence].reduce<number>(
+          (sum, evidence) =>
+            sum + (/(?:^|,)memory\/\d{4}-\d{2}-\d{2}\.md:/i.test(evidence) ? 0.06 : 0),
+          0,
+        ),
       );
       const strength = Math.min(1, baseStrength + thematicBoost + evidenceBoost);
       return { tag, strength, stat };

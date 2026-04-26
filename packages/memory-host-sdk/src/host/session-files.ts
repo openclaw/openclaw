@@ -23,15 +23,26 @@ export type SessionFileEntry = {
   generatedByDreamingNarrative?: boolean;
 };
 
+type SessionRecordLike = {
+  type?: unknown;
+  customType?: unknown;
+  data?: unknown;
+  message?: unknown;
+  runId?: unknown;
+  role?: unknown;
+  content?: unknown;
+  text?: unknown;
+};
+
+function isRecordObject(value: unknown): value is SessionRecordLike {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+  if (!isRecordObject(record)) {
     return false;
   }
-  const candidate = record as {
-    type?: unknown;
-    customType?: unknown;
-    data?: unknown;
-  };
+  const candidate = record;
   if (
     candidate.type !== "custom" ||
     candidate.customType !== "openclaw:bootstrap-context:full" ||
@@ -41,7 +52,7 @@ function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   ) {
     return false;
   }
-  const runId = (candidate.data as { runId?: unknown }).runId;
+  const runId = isRecordObject(candidate.data) ? candidate.data.runId : undefined;
   return typeof runId === "string" && runId.startsWith("dreaming-narrative-");
 }
 
@@ -141,10 +152,10 @@ function collectRawSessionText(content: unknown): string | null {
   }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    if (!isRecordObject(block)) {
       continue;
     }
-    const record = block as { type?: unknown; text?: unknown };
+    const record = block;
     if (record.type === "text" && typeof record.text === "string") {
       parts.push(record.text);
     }
@@ -187,16 +198,10 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (!generatedByDreamingNarrative && isDreamingNarrativeBootstrapRecord(record)) {
         generatedByDreamingNarrative = true;
       }
-      if (
-        !record ||
-        typeof record !== "object" ||
-        (record as { type?: unknown }).type !== "message"
-      ) {
+      if (!isRecordObject(record) || record.type !== "message") {
         continue;
       }
-      const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
-        | undefined;
+      const message = isRecordObject(record.message) ? record.message : undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }

@@ -830,10 +830,22 @@ describe("short-term promotion", () => {
         nowMs,
       });
       expect(explainRank).toHaveLength(1);
-      const key = explainRank[0]!.key;
+      const [firstExplainCandidate] = explainRank;
+      const key = firstExplainCandidate?.key;
+      expect(key).toBeTruthy();
 
-      await recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys: [key], nowMs });
-      await recordDreamingPhaseSignals({ workspaceDir, phase: "rem", keys: [key], nowMs });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: key ? [key] : [],
+        nowMs,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: key ? [key] : [],
+        nowMs,
+      });
 
       ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
@@ -843,8 +855,9 @@ describe("short-term promotion", () => {
         nowMs,
       });
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]!.signalCount).toBeGreaterThanOrEqual(3);
-      expect(ranked[0]!.uniqueQueries).toBeGreaterThanOrEqual(3);
+      const [topRanked] = ranked;
+      expect(topRanked?.signalCount ?? 0).toBeGreaterThanOrEqual(3);
+      expect(topRanked?.uniqueQueries ?? 0).toBeGreaterThanOrEqual(3);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,

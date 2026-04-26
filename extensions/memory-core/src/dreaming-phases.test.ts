@@ -242,11 +242,12 @@ describe("previewRemDreaming", () => {
     expect(preview.reflections.join("\n")).toContain("`cadence`");
     expect(preview.reflections.join("\n")).not.toContain("`assistant`");
     expect(preview.candidateTruths).toHaveLength(2);
-    expect(preview.candidateTruths[0]?.snippet).toContain("Vicente decided Husky should publish");
-    expect(preview.candidateTruths[0]!.confidence).toBeGreaterThan(
-      preview.candidateTruths[1]!.confidence,
+    const [topTruth, secondTruth] = preview.candidateTruths;
+    expect(topTruth?.snippet).toContain("Vicente decided Husky should publish");
+    expect(topTruth && secondTruth ? topTruth.confidence > secondTruth.confidence : false).toBe(
+      true,
     );
-    expect(preview.candidateTruths[0]?.snippet).not.toContain("wrapper/prompt pollution");
+    expect(topTruth?.snippet).not.toContain("wrapper/prompt pollution");
   });
 
   it("filters direct assistant/user transcript lines from lasting truths", () => {
