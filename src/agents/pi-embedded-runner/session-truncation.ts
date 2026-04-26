@@ -6,7 +6,11 @@ import readline from "node:readline";
 import { finished } from "node:stream/promises";
 import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
+
+const MAX_SESSION_TRUNCATION_LINE_BYTES = 64 * 1024 * 1024;
+const MAX_SESSION_TRUNCATION_ENTRIES = 250_000;
 
 /**
  * Truncate a session JSONL file after compaction by removing only the
@@ -35,6 +39,22 @@ import { log } from "./logger.js";
  * kept ancestor (or become roots).
  */
 export async function truncateSessionAfterCompaction(params: {
+  sessionFile: string;
+  /** Optional path to archive the pre-truncation file. */
+  archivePath?: string;
+}): Promise<TruncationResult> {
+  const sessionLock = await acquireSessionWriteLock({
+    sessionFile: params.sessionFile,
+    allowReentrant: true,
+  });
+  try {
+    return await truncateSessionAfterCompactionLocked(params);
+  } finally {
+    await sessionLock.release();
+  }
+}
+
+async function truncateSessionAfterCompactionLocked(params: {
   sessionFile: string;
   /** Optional path to archive the pre-truncation file. */
   archivePath?: string;
@@ -247,6 +267,12 @@ async function forEachJsonlLine(
       if (!line.trim()) {
         continue;
       }
+      const lineBytes = Buffer.byteLength(line, "utf-8");
+      if (lineBytes > MAX_SESSION_TRUNCATION_LINE_BYTES) {
+        throw new Error(
+          `Session JSONL line ${lineNumber} exceeds ${MAX_SESSION_TRUNCATION_LINE_BYTES} bytes`,
+        );
+      }
       await callback(line, lineNumber);
     }
   } finally {
@@ -274,6 +300,11 @@ async function scanSessionFile(sessionFile: string): Promise<SessionFileScanResu
       const meta = normalizeEntryMeta(parsed);
       if (!meta) {
         return;
+      }
+      if (entries.length >= MAX_SESSION_TRUNCATION_ENTRIES) {
+        throw new Error(
+          `Session transcript exceeds ${MAX_SESSION_TRUNCATION_ENTRIES} entries during truncation scan`,
+        );
       }
       entries.push(meta);
       entryById.set(meta.id, meta);

@@ -354,7 +354,33 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-const preOpenTruncationCheckedSessionFiles = new Set<string>();
+const MAX_PRE_OPEN_TRUNCATION_CHECKED_SESSION_FILES = 4096;
+const preOpenTruncationCheckedSessionFiles = new Map<string, number>();
+
+function hasPreOpenTruncationCheckedSessionFile(sessionFile: string): boolean {
+  const normalized = path.resolve(sessionFile);
+  if (!preOpenTruncationCheckedSessionFiles.has(normalized)) {
+    return false;
+  }
+  preOpenTruncationCheckedSessionFiles.delete(normalized);
+  preOpenTruncationCheckedSessionFiles.set(normalized, Date.now());
+  return true;
+}
+
+function markPreOpenTruncationCheckedSessionFile(sessionFile: string): void {
+  const normalized = path.resolve(sessionFile);
+  preOpenTruncationCheckedSessionFiles.delete(normalized);
+  preOpenTruncationCheckedSessionFiles.set(normalized, Date.now());
+  while (
+    preOpenTruncationCheckedSessionFiles.size > MAX_PRE_OPEN_TRUNCATION_CHECKED_SESSION_FILES
+  ) {
+    const oldest = preOpenTruncationCheckedSessionFiles.keys().next().value;
+    if (!oldest) {
+      break;
+    }
+    preOpenTruncationCheckedSessionFiles.delete(oldest);
+  }
+}
 
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
@@ -1221,9 +1247,8 @@ export async function runEmbeddedAttempt(
         hadSessionFile &&
         params.config &&
         params.config?.agents?.defaults?.compaction?.truncateAfterCompaction !== false &&
-        !preOpenTruncationCheckedSessionFiles.has(path.resolve(params.sessionFile))
+        !hasPreOpenTruncationCheckedSessionFile(params.sessionFile)
       ) {
-        const preOpenTruncationSessionFile = path.resolve(params.sessionFile);
         try {
           const truncResult = await truncateSessionAfterCompaction({
             sessionFile: params.sessionFile,
@@ -1240,7 +1265,7 @@ export async function runEmbeddedAttempt(
             errorStack: err instanceof Error ? err.stack : undefined,
           });
         } finally {
-          preOpenTruncationCheckedSessionFiles.add(preOpenTruncationSessionFile);
+          markPreOpenTruncationCheckedSessionFile(params.sessionFile);
         }
       }
 
