@@ -381,12 +381,12 @@ export async function executeCronRun(params: {
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
         await loadCronSubagentRegistryRuntime();
-      hasFreshDescendants = listDescendantRunsForRequester(params.agentSessionKey).some((entry) => {
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
         return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
       });
-      hasActiveDescendants = countActiveDescendantRuns(params.agentSessionKey) > 0;
+      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
     }
 
     if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
