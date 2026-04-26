@@ -73,6 +73,14 @@ function getRequestedTransportAlias(rawServer: unknown): HttpMcpTransportType | 
   return resolveOpenClawMcpTransportAlias((rawServer as { type?: string }).type) ?? "";
 }
 
+function hasNonEmptyStringField(rawServer: unknown, field: "command" | "url"): boolean {
+  if (!rawServer || typeof rawServer !== "object") {
+    return false;
+  }
+  const value = (rawServer as Record<string, unknown>)[field];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function resolveHttpTransportConfig(
   serverName: string,
   rawServer: unknown,
@@ -112,6 +120,12 @@ export function resolveMcpTransportConfig(
   const requestedTransport = getRequestedTransport(rawServer);
   const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
   const effectiveTransport = requestedTransport || requestedTransportAlias;
+  if (hasNonEmptyStringField(rawServer, "command") && hasNonEmptyStringField(rawServer, "url")) {
+    logWarn(
+      `bundle-mcp: skipped server "${logServerName}" because both "command" and "url" are set; pick one transport (stdio via "command" or HTTP via "url"${effectiveTransport ? ` with transport "${sanitizeForLog(effectiveTransport)}"` : ""}).`,
+    );
+    return null;
+  }
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
     onDroppedEnv: (key) => {
       logWarn(
