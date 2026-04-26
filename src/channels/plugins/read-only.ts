@@ -11,7 +11,7 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { getBundledChannelSetupPlugin } from "./bundled.js";
+import { getBundledChannelPlugin, getBundledChannelSetupPlugin } from "./bundled.js";
 import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -597,7 +597,9 @@ export function resolveReadOnlyChannelPluginsForConfig(
       if (byId.has(channelId)) {
         continue;
       }
-      addChannelPlugins(byId, [getBundledChannelSetupPlugin(channelId)]);
+      addChannelPlugins(byId, [
+        getBundledChannelPlugin(channelId) ?? getBundledChannelSetupPlugin(channelId),
+      ]);
     }
   }
 

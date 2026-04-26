@@ -712,7 +712,7 @@ function buildAssistantText(
   if (/hot install marker/i.test(prompt)) {
     return "HOT-INSTALL-OK";
   }
-  if (/memory tools check/i.test(prompt) && orbitCode) {
+  if (/memory tools check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
   if (/silent snack recall check/i.test(prompt) && snackPreference) {
@@ -741,10 +741,10 @@ function buildAssistantText(
       "Status: blocked",
     ].join("\n");
   }
-  if (/session memory ranking check/i.test(prompt) && orbitCode) {
+  if (/session memory ranking check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (/thread memory check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
@@ -1323,7 +1323,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
+  if (/memory tools check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
@@ -1393,7 +1393,7 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("NONE");
   }
-  if (/session memory ranking check/i.test(prompt)) {
+  if (/session memory ranking check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
@@ -1428,7 +1428,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (/thread memory check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
