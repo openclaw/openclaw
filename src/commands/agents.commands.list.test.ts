@@ -32,7 +32,6 @@ vi.mock("./agents.command-shared.js", () => ({
 }));
 
 vi.mock("./agents.providers.js", () => ({
-  buildProviderSummaryMetadataIndex: () => new Map(),
   buildProviderStatusIndex: buildProviderStatusIndexMock,
   buildProviderSummaryMetadataIndex: buildProviderSummaryMetadataIndexMock,
   listProvidersForAgent: listProvidersForAgentMock,
