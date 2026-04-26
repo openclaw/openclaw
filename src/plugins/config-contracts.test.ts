@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 
-const mocks = vi.hoisted(() => ({
-  findBundledPluginMetadataById: vi.fn(),
-  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-}));
+const mocks = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn();
+  return {
+    findBundledPluginMetadataById: vi.fn(),
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
 
 vi.mock("./bundled-plugin-metadata.js", () => ({
   findBundledPluginMetadataById: mocks.findBundledPluginMetadataById,
@@ -16,6 +20,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 

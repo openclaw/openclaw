@@ -55,6 +55,15 @@ When debugging real providers/models (requires real creds):
     Slack DM with `/codex bind`, exercises `/codex fast` and
     `/codex permissions`, then verifies a plain reply and an image attachment
     route through the native plugin binding instead of ACP.
+- Codex app-server harness smoke: `pnpm test:docker:live-codex-harness`
+  - Runs gateway agent turns through the plugin-owned Codex app-server harness,
+    verifies `/codex status` and `/codex models`, and by default exercises image,
+    cron MCP, sub-agent, and Guardian probes. Disable the sub-agent probe with
+    `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when isolating other Codex
+    app-server failures. For a focused sub-agent check, disable the other probes:
+    `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 pnpm test:docker:live-codex-harness`.
+    This exits after the sub-agent probe unless
+    `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY=0` is set.
 - Crestodian rescue command smoke: `pnpm test:live:crestodian-rescue-channel`
   - Opt-in belt-and-suspenders check for the message-channel rescue command
     surface. It exercises `/crestodian status`, queues a persistent model

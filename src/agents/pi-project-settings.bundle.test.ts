@@ -45,9 +45,39 @@ vi.mock("../plugins/manifest-registry-installed.js", async () => {
   };
 });
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: () => ({ plugins: [] }),
-}));
+vi.mock("../plugins/plugin-registry.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const loadRegistry = (params: { workspaceDir?: string }) => {
+    const rootDir = path.join(
+      params.workspaceDir ?? "",
+      ".openclaw",
+      "extensions",
+      "claude-bundle",
+    );
+    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+      return { plugins: [], diagnostics: [] };
+    }
+    const resolvedRootDir = fs.realpathSync(rootDir);
+    return {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "claude-bundle",
+          origin: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          settingsFiles: ["settings.json"],
+          rootDir: resolvedRootDir,
+        },
+      ],
+    };
+  };
+  return {
+    loadPluginManifestRegistryForPluginRegistry: loadRegistry,
+    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  };
+});
 
 vi.mock("./embedded-pi-mcp.js", async () => {
   const fs = await import("node:fs");

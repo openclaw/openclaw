@@ -5,7 +5,9 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import {
+  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
+  refreshPersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
@@ -59,6 +61,11 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
+};
+
+export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
+  includeDisabled?: boolean;
+  pluginIds?: readonly string[];
 };
 
 export type GetPluginRecordParams = LoadPluginRegistryParams & {
@@ -187,6 +194,20 @@ function loadContributionManifestRegistry(
       config: params.config,
     }),
     includeDisabled: true,
+  });
+}
+
+export function loadPluginManifestRegistryForPluginRegistry(
+  params: LoadPluginRegistryManifestParams = {},
+): PluginManifestRegistry {
+  const index = resolveSnapshot(params);
+  return loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    pluginIds: params.pluginIds,
+    includeDisabled: params.includeDisabled,
   });
 }
 
@@ -422,15 +443,11 @@ export function resolveSetupProviderOwners(
 export function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<PluginRegistryInspection> {
-  return import("./installed-plugin-index-store.js").then((store) =>
-    store.inspectPersistedInstalledPluginIndex(params),
-  );
+  return inspectPersistedInstalledPluginIndex(params);
 }
 
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  return import("./installed-plugin-index-store.js").then((store) =>
-    store.refreshPersistedInstalledPluginIndex(params),
-  );
+  return refreshPersistedInstalledPluginIndex(params);
 }

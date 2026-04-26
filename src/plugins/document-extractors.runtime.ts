@@ -7,9 +7,8 @@ import {
 } from "./config-state.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 function compareExtractors(
   left: PluginDocumentExtractorEntry,
@@ -31,13 +30,7 @@ function resolveBundledDocumentExtractorCompatPluginIds(params: {
 }): string[] {
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return loadPluginManifestRegistryForInstalledIndex({
-    index,
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -82,13 +75,7 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
   });
   const onlyPluginIdSet =
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  const index = loadPluginRegistrySnapshot({
-    config: activation.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return loadPluginManifestRegistryForInstalledIndex({
-    index,
+  return loadPluginManifestRegistryForPluginRegistry({
     config: activation.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
