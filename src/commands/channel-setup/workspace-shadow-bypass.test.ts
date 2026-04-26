@@ -39,6 +39,8 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
 }));
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    loadPluginManifestRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
 }));
