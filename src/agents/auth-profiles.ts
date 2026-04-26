@@ -29,6 +29,7 @@ export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
+  hasDirectAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,

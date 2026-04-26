@@ -8,6 +8,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  hasDirectAuthProfileStoreSource,
   loadAuthProfileStoreForRuntime,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
@@ -212,9 +213,12 @@ export async function noteAuthProfileHealth(params: {
 }): Promise<void> {
   const configuredAuthProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
   const agentIds = listAgentIds(params.cfg);
+  const directTargets = agentIds
+    .map((agentId) => ({ agentId, agentDir: resolveAgentDir(params.cfg, agentId) }))
+    .filter((target) => hasDirectAuthProfileStoreSource(target.agentDir));
   const targets =
-    agentIds.length > 1
-      ? agentIds.map((agentId) => ({ agentId, agentDir: resolveAgentDir(params.cfg, agentId) }))
+    agentIds.length > 1 && directTargets.length > 0
+      ? directTargets
       : [{ agentId: undefined, agentDir: undefined }];
 
   for (const target of targets) {
@@ -324,7 +328,7 @@ async function noteAuthProfileHealthForStore(params: {
       }
     }
     if (errors.length > 0) {
-      note(errors.join("\n"), "OAuth refresh errors");
+      note(errors.join("\n"), `OAuth refresh errors${titleSuffix}`);
     }
     summary = buildAuthHealthSummary({
       store: loadAuthProfileStoreForRuntime(params.agentDir, {

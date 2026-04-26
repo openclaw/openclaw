@@ -10,6 +10,7 @@ const authProfileMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntime: vi.fn((_agentDir?: string): AuthProfileStore => {
     throw new Error("unexpected auth profile load");
   }),
+  hasDirectAuthProfileStoreSource: vi.fn(() => false),
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
   resolveApiKeyForProfile: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
@@ -18,6 +19,7 @@ const authProfileMocks = vi.hoisted(() => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: authProfileMocks.ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime: authProfileMocks.loadAuthProfileStoreForRuntime,
+  hasDirectAuthProfileStoreSource: authProfileMocks.hasDirectAuthProfileStoreSource,
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay: authProfileMocks.resolveProfileUnusableUntilForDisplay,
@@ -62,6 +64,7 @@ describe("noteAuthProfileHealth", () => {
         throw new Error("unexpected auth profile load");
       },
     );
+    authProfileMocks.hasDirectAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
   });
 
@@ -78,7 +81,9 @@ describe("noteAuthProfileHealth", () => {
 
   it("labels auth warnings with the agent when multiple agent stores diverge", async () => {
     agentScopeMocks.listAgentIds.mockReturnValue(["main", "coder"]);
+    authProfileMocks.hasDirectAuthProfileStoreSource.mockReturnValue(true);
     authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveApiKeyForProfile.mockRejectedValue(new Error("refresh failed"));
     authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation((agentDir?: string) => ({
       version: 1,
       profiles: {
@@ -94,14 +99,37 @@ describe("noteAuthProfileHealth", () => {
 
     await noteAuthProfileHealth({
       cfg: { agents: { list: [{ id: "main" }, { id: "coder" }] } } as OpenClawConfig,
-      prompter: { confirmAutoFix: vi.fn(async () => false) } as unknown as DoctorPrompter,
+      prompter: { confirmAutoFix: vi.fn(async () => true) } as unknown as DoctorPrompter,
       allowKeychainPrompt: false,
     });
 
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("- openai-codex:user@example.com: refresh failed"),
+      "OAuth refresh errors (agent: main)",
+    );
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("- openai-codex:user@example.com: expired"),
       "Model auth (agent: main)",
     );
     expect(noteMock).not.toHaveBeenCalledWith(expect.any(String), "Model auth");
+  });
+
+  it("does not duplicate inherited-only auth stores across agents", async () => {
+    agentScopeMocks.listAgentIds.mockReturnValue(["main", "coder"]);
+    authProfileMocks.hasDirectAuthProfileStoreSource.mockReturnValue(false);
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({ version: 1, profiles: {} });
+
+    await noteAuthProfileHealth({
+      cfg: { agents: { list: [{ id: "main" }, { id: "coder" }] } } as OpenClawConfig,
+      prompter: { confirmAutoFix: vi.fn(async () => false) } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(authProfileMocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledOnce();
+    expect(authProfileMocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
   });
 });

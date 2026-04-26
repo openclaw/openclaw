@@ -4,7 +4,10 @@ import {
   resolveAuthStorePath,
   resolveLegacyAuthStorePath,
 } from "./path-resolve.js";
-import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreSnapshot,
+  hasAnyRuntimeAuthProfileStoreSource,
+} from "./runtime-snapshots.js";
 
 function hasStoredAuthProfileFiles(agentDir?: string): boolean {
   return (
@@ -28,4 +31,12 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     return true;
   }
   return false;
+}
+
+export function hasDirectAuthProfileStoreSource(agentDir?: string): boolean {
+  const store = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  return (
+    (store !== undefined && Object.keys(store.profiles).length > 0) ||
+    hasStoredAuthProfileFiles(agentDir)
+  );
 }

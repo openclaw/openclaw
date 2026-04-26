@@ -359,7 +359,7 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
   return mergeAuthProfileStores(mainStore, store);
 }
 
-export { hasAnyAuthProfileStoreSource } from "./source-check.js";
+export { hasAnyAuthProfileStoreSource, hasDirectAuthProfileStoreSource } from "./source-check.js";
 
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
