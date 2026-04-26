@@ -246,6 +246,7 @@ describe("resolveContextTokensForModel", () => {
         models: {
           providers: {
             "claude-cli": {
+              baseUrl: "https://api.anthropic.com",
               models: [testModelContextWindow("claude-opus-4-7", 200_000)],
             },
           },
