@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isCommandFlagEnabled,
   isRestartEnabled,
@@ -6,6 +8,69 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
+          },
+        },
+      },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack" }),
+          commands: {
+            nativeCommandsAutoEnabled: false,
+            nativeSkillsAutoEnabled: false,
+          },
+        },
+      },
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "whatsapp" }),
+          commands: {
+            nativeCommandsAutoEnabled: false,
+            nativeSkillsAutoEnabled: false,
+          },
+        },
+      },
+      {
+        pluginId: "demo-channel",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "demo-channel" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
+          },
+        },
+      },
+    ]),
+  );
+});
 
 describe("resolveNativeSkillsEnabled", () => {
   it("uses provider defaults for auto", () => {
@@ -51,6 +116,15 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -64,6 +138,15 @@ describe("resolveNativeCommandsEnabled", () => {
     expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
       false,
     );
+  });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -130,5 +213,19 @@ describe("isCommandFlagEnabled", () => {
         "bash",
       ),
     ).toBe(false);
+  });
+});
+
+describe("deprecated commands compatibility", () => {
+  it("ignores legacy modelsWrite during validation", () => {
+    const result = validateConfigObjectWithPlugins({
+      commands: { text: true, modelsWrite: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.commands).toMatchObject({ text: true });
+      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
+    }
   });
 });

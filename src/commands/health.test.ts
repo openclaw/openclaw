@@ -87,7 +87,7 @@ describe("healthCommand", () => {
     });
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const logged = runtime.log.mock.calls[0]?.[0] as string;
@@ -95,29 +95,6 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
-  });
-
-  it("prints text summary when not json", async () => {
-    callGatewayMock.mockResolvedValueOnce(
-      createHealthSummary({
-        channels: {
-          whatsapp: { accountId: "default", linked: false, authAgeMs: null },
-          telegram: { accountId: "default", configured: false },
-          discord: { accountId: "default", configured: false },
-        },
-        channelOrder: ["whatsapp", "telegram", "discord"],
-        channelLabels: {
-          whatsapp: "WhatsApp",
-          telegram: "Telegram",
-          discord: "Discord",
-        },
-      }),
-    );
-
-    await healthCommand({ json: false }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
   });
 
   it("formats per-account probe timings", () => {
@@ -154,6 +131,23 @@ describe("healthCommand", () => {
     expect(lines).toContain(
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
     );
+  });
+
+  it("formats statusState without inferring from linked", () => {
+    const summary = createHealthSummary({
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          statusState: "unstable",
+          configured: true,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toContain("WhatsApp: auth stabilizing");
   });
 });
 

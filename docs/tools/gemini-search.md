@@ -4,10 +4,8 @@ read_when:
   - You want to use Gemini for web_search
   - You need a GEMINI_API_KEY
   - You want Google Search grounding
-title: "Gemini Search"
+title: "Gemini search"
 ---
-
-# Gemini Search
 
 OpenClaw supports Gemini models with built-in
 [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -76,7 +74,12 @@ URLs.
 
 ## Supported parameters
 
-Gemini search supports the standard `query` and `count` parameters.
+Gemini search supports `query`.
+
+`count` is accepted for shared `web_search` compatibility, but Gemini grounding
+still returns one synthesized answer with citations rather than an N-result
+list.
+
 Provider-specific filters like `country`, `language`, `freshness`, and
 `domain_filter` are not supported.
 

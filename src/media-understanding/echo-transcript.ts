@@ -1,6 +1,7 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
 let deliverRuntimePromise: Promise<typeof import("../infra/outbound/deliver-runtime.js")> | null =
@@ -38,11 +39,11 @@ export async function sendTranscriptEcho(params: {
     return;
   }
 
-  const normalizedChannel = channel.trim().toLowerCase();
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
   if (!isDeliverableMessageChannel(normalizedChannel)) {
     if (shouldLogVerbose()) {
       logVerbose(
-        `media: echo-transcript skipped (channel "${String(normalizedChannel)}" is not deliverable)`,
+        `media: echo-transcript skipped (channel "${normalizedChannel}" is not deliverable)`,
       );
     }
     return;

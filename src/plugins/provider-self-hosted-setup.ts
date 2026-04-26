@@ -5,7 +5,13 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -21,6 +27,72 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
+
+const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
+
+type OpenAICompatModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
+function isReasoningModelHeuristic(modelId: string): boolean {
+  return /r1|reasoning|think|reason/i.test(modelId);
+}
+
+export async function discoverOpenAICompatibleLocalModels(params: {
+  baseUrl: string;
+  apiKey?: string;
+  label: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ModelDefinitionConfig[]> {
+  const env = params.env ?? process.env;
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = normalizeOptionalString(params.apiKey);
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover ${params.label} models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as OpenAICompatModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      log.warn(`No ${params.label} models found on local instance`);
+      return [];
+    }
+
+    return models
+      .map((model) => ({ id: normalizeOptionalString(model.id) ?? "" }))
+      .filter((model) => Boolean(model.id))
+      .map((model) => {
+        const modelId = model.id;
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoningModelHeuristic(modelId),
+          input: ["text"],
+          cost: SELF_HOSTED_DEFAULT_COST,
+          contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
+    return [];
+  }
+}
 
 export function applyProviderDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
   const existingModel = cfg.agents?.defaults?.model;
@@ -147,11 +219,9 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = String(baseUrlRaw ?? "")
-    .trim()
-    .replace(/\/+$/, "");
-  const apiKey = String(apiKeyRaw ?? "").trim();
-  const modelId = String(modelIdRaw ?? "").trim();
+  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
+  const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
+  const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {
     type: "api_key",
     provider: params.providerId,

@@ -1,5 +1,6 @@
 import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getGateway } from "../monitor/gateway-registry.js";
 import {
   type ActionGate,
@@ -65,7 +66,7 @@ export async function handleDiscordPresenceAction(
           `Valid types: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
       );
     }
-    const typeNum = ACTIVITY_TYPE_MAP[activityTypeRaw.toLowerCase()];
+    const typeNum = ACTIVITY_TYPE_MAP[normalizeLowercaseStringOrEmpty(activityTypeRaw)];
     if (typeNum === undefined) {
       throw new Error(
         `Invalid activityType "${activityTypeRaw}". Must be one of: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
@@ -105,11 +106,12 @@ export async function handleDiscordPresenceAction(
   return jsonResult({
     ok: true,
     status,
-    activities: activities.map((a) => ({
-      type: a.type,
-      name: a.name,
-      ...(a.url ? { url: a.url } : {}),
-      ...(a.state ? { state: a.state } : {}),
-    })),
+    activities: activities.map((a) =>
+      Object.assign(
+        { type: a.type, name: a.name },
+        a.url ? { url: a.url } : {},
+        a.state ? { state: a.state } : {},
+      ),
+    ),
   });
 }

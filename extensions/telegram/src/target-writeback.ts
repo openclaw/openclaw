@@ -10,12 +10,17 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
 } from "./targets.js";
 
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
+const TELEGRAM_ADMIN_SCOPE = "operator.admin";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -29,7 +34,7 @@ function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined 
   if (!normalized) {
     return undefined;
   }
-  return normalized.startsWith("@") ? normalized.toLowerCase() : normalized;
+  return normalized.startsWith("@") ? normalizeLowercaseStringOrEmpty(normalized) : normalized;
 }
 
 function normalizeTelegramTargetForMatch(raw: string): string | undefined {
@@ -87,7 +92,7 @@ function rewriteTargetIfMatch(params: {
   if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
     return null;
   }
-  const value = String(params.rawValue).trim();
+  const value = normalizeOptionalString(String(params.rawValue)) ?? "";
   if (!value) {
     return null;
   }
@@ -141,6 +146,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   rawTarget: string;
   resolvedChatId: string;
   verbose?: boolean;
+  gatewayClientScopes?: readonly string[];
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -154,6 +160,15 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
+  if (
+    Array.isArray(params.gatewayClientScopes) &&
+    !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
+  ) {
+    writebackLogger.warn(
+      `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
+    );
+    return;
+  }
 
   try {
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();

@@ -1,5 +1,5 @@
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveChannelGroupPolicy } from "../../../src/config/group-policy.js";
 import {
   resolveIrcGroupAccessGate,
   resolveIrcGroupMatch,

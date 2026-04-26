@@ -1,4 +1,5 @@
 import type { User } from "@buape/carbon";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -21,6 +22,11 @@ type DiscordWebhookMessageLike = {
   webhook_id?: string | null;
 };
 
+type DiscordMemberLike = {
+  nickname?: string | null;
+  nick?: string | null;
+};
+
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
   const candidate = message.webhookId ?? message.webhook_id;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
@@ -28,8 +34,7 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  // oxlint-disable-next-line typescript/no-explicit-any
-  member?: any;
+  member?: DiscordMemberLike | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;
@@ -44,13 +49,13 @@ export function resolveDiscordSenderIdentity(params: {
     return {
       id: memberId,
       name: memberName,
-      tag: pkMember?.name?.trim() || undefined,
+      tag: normalizeOptionalString(pkMember?.name),
       label,
       isPluralKit: true,
       pluralkit: {
         memberId,
         memberName,
-        systemId: pkSystem?.id?.trim() || undefined,
+        systemId: normalizeOptionalString(pkSystem?.id),
         systemName,
       },
     };
@@ -58,7 +63,10 @@ export function resolveDiscordSenderIdentity(params: {
 
   const senderTag = formatDiscordUserTag(params.author);
   const senderDisplay =
-    params.member?.nickname ?? params.author.globalName ?? params.author.username;
+    params.member?.nickname ??
+    params.member?.nick ??
+    params.author.globalName ??
+    params.author.username;
   const senderLabel =
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
@@ -74,8 +82,7 @@ export function resolveDiscordSenderIdentity(params: {
 
 export function resolveDiscordSenderLabel(params: {
   author: User;
-  // oxlint-disable-next-line typescript/no-explicit-any
-  member?: any;
+  member?: DiscordMemberLike | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): string {
   return resolveDiscordSenderIdentity(params).label;

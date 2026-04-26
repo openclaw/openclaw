@@ -47,6 +47,35 @@ function requireEvent<T>(event: T | undefined, message: string): T {
   return event;
 }
 
+type TwilioApiRequest = (
+  endpoint: string,
+  params: Record<string, string | string[]>,
+  options?: { allowNotFound?: boolean },
+) => Promise<unknown>;
+
+function createApiRequestMock() {
+  return vi.fn<TwilioApiRequest>(async () => ({}));
+}
+
+function configureTelephonyTwiMlFallback(params: { providerCallId: string; streamSid?: string }) {
+  const provider = createProvider();
+  const apiRequest = createApiRequestMock();
+  (
+    provider as unknown as {
+      apiRequest: TwilioApiRequest;
+    }
+  ).apiRequest = apiRequest;
+  (
+    provider as unknown as {
+      callWebhookUrls: Map<string, string>;
+    }
+  ).callWebhookUrls.set(params.providerCallId, "https://example.ngrok.app/voice/twilio");
+  if (params.streamSid) {
+    provider.registerCallStream(params.providerCallId, params.streamSid);
+  }
+  return { provider, apiRequest };
+}
+
 describe("TwilioProvider", () => {
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
@@ -216,29 +245,10 @@ describe("TwilioProvider", () => {
   });
 
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-stream", "https://example.ngrok.app/voice/twilio");
-    provider.registerCallStream("CA-stream", "MZ-stream");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-stream",
+      streamSid: "MZ-stream",
+    });
 
     await expect(
       provider.playTts({
@@ -251,28 +261,9 @@ describe("TwilioProvider", () => {
   });
 
   it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-nostream", "https://example.ngrok.app/voice/twilio");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-nostream",
+    });
 
     await expect(
       provider.playTts({
@@ -282,11 +273,34 @@ describe("TwilioProvider", () => {
       }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const call = apiRequest.mock.calls[0]!;
+    const call = apiRequest.mock.calls[0];
     const endpoint = call[0];
     const params = call[1] as { Twiml?: string };
     expect(endpoint).toBe("/Calls/CA-nostream.json");
     expect(params.Twiml).toContain("<Say");
+  });
+
+  it("sends DTMF by updating the call and redirecting back to the webhook", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf",
+    });
+
+    await expect(
+      provider.sendDtmf({
+        callId: "call-dtmf",
+        providerCallId: "CA-dtmf",
+        digits: "ww123#",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const call = apiRequest.mock.calls[0];
+    const endpoint = call[0];
+    const params = call[1] as { Twiml?: string };
+    expect(endpoint).toBe("/Calls/CA-dtmf.json");
+    expect(params.Twiml).toContain('<Play digits="ww123#"');
+    expect(params.Twiml).toContain("<Redirect");
+    expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
   });
 
   it("ignores stale stream unregister requests that do not match current stream SID", () => {
@@ -321,6 +335,7 @@ describe("TwilioProvider", () => {
 
       provider.setMediaStreamHandler(mediaStreamHandler as never);
       provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
         synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
       });
 
@@ -330,8 +345,8 @@ describe("TwilioProvider", () => {
           providerCallId: "CA-timeout",
           text: "Timeout me",
         }),
-      ).rejects.toThrow("Telephony TTS synthesis timed out");
-      await vi.advanceTimersByTimeAsync(8_100);
+      ).rejects.toThrow("Telephony TTS synthesis timed out after 5000ms");
+      await vi.advanceTimersByTimeAsync(5_100);
       await playExpectation;
       expect(sendAudio).toHaveBeenCalled();
       expect(sendMark).not.toHaveBeenCalled();
@@ -359,6 +374,7 @@ describe("TwilioProvider", () => {
 
     provider.setMediaStreamHandler(mediaStreamHandler as never);
     provider.setTTSProvider({
+      synthesisTimeoutMs: 5000,
       synthesizeForTelephony: async () => Buffer.alloc(320),
     });
 
@@ -371,5 +387,39 @@ describe("TwilioProvider", () => {
     ).rejects.toThrow("Telephony stream playback failed");
     expect(sendAudio).toHaveBeenCalled();
     expect(sendMark).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails stream playback when telephony synthesis returns empty audio", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-empty", "MZ-empty");
+
+    const sendAudio = vi.fn();
+    const sendMark = vi.fn();
+    const mediaStreamHandler = {
+      queueTts: async (
+        _streamSid: string,
+        playFn: (signal: AbortSignal) => Promise<void>,
+      ): Promise<void> => {
+        await playFn(new AbortController().signal);
+      },
+      sendAudio,
+      sendMark,
+    };
+
+    provider.setMediaStreamHandler(mediaStreamHandler as never);
+    provider.setTTSProvider({
+      synthesisTimeoutMs: 5000,
+      synthesizeForTelephony: async () => Buffer.alloc(0),
+    });
+
+    await expect(
+      provider.playTts({
+        callId: "call-empty",
+        providerCallId: "CA-empty",
+        text: "Empty audio",
+      }),
+    ).rejects.toThrow("Telephony TTS produced no audio");
+    expect(sendAudio).toHaveBeenCalled();
+    expect(sendMark).not.toHaveBeenCalled();
   });
 });

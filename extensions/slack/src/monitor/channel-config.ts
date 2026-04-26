@@ -5,6 +5,7 @@ import {
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import type { SlackReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
@@ -21,7 +22,6 @@ export type SlackChannelConfigResolved = {
 
 export type SlackChannelConfigEntry = {
   enabled?: boolean;
-  allow?: boolean;
   requireMention?: boolean;
   allowBots?: boolean;
   users?: Array<string | number>;
@@ -33,7 +33,7 @@ export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") {
+    if (value !== undefined) {
       return value;
     }
   }
@@ -109,7 +109,7 @@ export function resolveSlackChannelConfig(params: {
   // operators commonly write them in lowercase in their config. Add both
   // case variants so the lookup is case-insensitive without requiring a full
   // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
-  const channelIdLower = channelId.toLowerCase();
+  const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
   const channelIdUpper = channelId.toUpperCase();
   const candidates = buildChannelKeyCandidates(
     channelId,
@@ -135,9 +135,7 @@ export function resolveSlackChannelConfig(params: {
   }
 
   const resolved = matched ?? fallback ?? {};
-  const allowed =
-    firstDefined(resolved.enabled, resolved.allow, fallback?.enabled, fallback?.allow, true) ??
-    true;
+  const allowed = firstDefined(resolved.enabled, fallback?.enabled, true) ?? true;
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;

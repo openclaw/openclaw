@@ -1,10 +1,53 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { buildPluginCompatibilityWarnings } from "../plugins/status.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildPluginCompatibilityWarnings, buildPluginSnapshotReport } from "../plugins/status.js";
+import { listTasksForFlowId } from "../tasks/runtime-internal.js";
+import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
+
+function noteFlowRecoveryHints() {
+  const suspicious = listTaskFlowRecords().flatMap((flow) => {
+    const tasks = listTasksForFlowId(flow.flowId);
+    const findings: string[] = [];
+    if (
+      flow.syncMode === "managed" &&
+      flow.status === "running" &&
+      tasks.length === 0 &&
+      flow.waitJson === undefined
+    ) {
+      findings.push(
+        `${flow.flowId}: running managed TaskFlow has no linked tasks or wait state; inspect or cancel it manually.`,
+      );
+    }
+    if (
+      flow.status === "blocked" &&
+      flow.blockedTaskId &&
+      !tasks.some((task) => task.taskId === flow.blockedTaskId)
+    ) {
+      findings.push(
+        `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
+      );
+    }
+    return findings;
+  });
+  if (suspicious.length === 0) {
+    return;
+  }
+  note(
+    [
+      ...suspicious.slice(0, 5),
+      suspicious.length > 5 ? `...and ${suspicious.length - 5} more.` : null,
+      `Inspect: ${formatCliCommand("openclaw tasks flow show <flow-id>")}`,
+      `Cancel: ${formatCliCommand("openclaw tasks flow cancel <flow-id>")}`,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
+    "TaskFlow recovery",
+  );
+}
 
 export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
@@ -26,23 +69,19 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     "Skills status",
   );
 
-  const pluginRegistry = loadOpenClawPlugins({
+  const pluginRegistry = buildPluginSnapshotReport({
     config: cfg,
     workspaceDir,
-    logger: {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    },
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
     const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
     const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
+    const imported = pluginRegistry.plugins.filter((p) => p.imported);
 
     const lines = [
       `Loaded: ${loaded.length}`,
+      `Imported: ${imported.length}`,
       `Disabled: ${disabled.length}`,
       `Errors: ${errored.length}`,
       errored.length > 0
@@ -66,10 +105,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const compatibilityWarnings = buildPluginCompatibilityWarnings({
     config: cfg,
     workspaceDir,
-    report: {
-      workspaceDir,
-      ...pluginRegistry,
-    },
+    report: pluginRegistry,
   });
   if (compatibilityWarnings.length > 0) {
     note(compatibilityWarnings.map((line) => `- ${line}`).join("\n"), "Plugin compatibility");
@@ -83,6 +119,8 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     });
     note(lines.join("\n"), "Plugin diagnostics");
   }
+
+  noteFlowRecoveryHints();
 
   return { workspaceDir };
 }

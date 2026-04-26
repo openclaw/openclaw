@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
-import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
-import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
@@ -35,12 +38,14 @@ type FallbackGatewayContextState = {
   resolveContext: (() => GatewayRequestContext | undefined) | undefined;
 };
 
-const fallbackGatewayContextState = resolveGlobalSingleton<FallbackGatewayContextState>(
-  FALLBACK_GATEWAY_CONTEXT_STATE_KEY,
-  () => ({ context: undefined, resolveContext: undefined }),
-);
+const getFallbackGatewayContextState = () =>
+  resolveGlobalSingleton<FallbackGatewayContextState>(FALLBACK_GATEWAY_CONTEXT_STATE_KEY, () => ({
+    context: undefined,
+    resolveContext: undefined,
+  }));
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
   fallbackGatewayContextState.resolveContext = undefined;
 }
@@ -48,10 +53,12 @@ export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
 export function setFallbackGatewayContextResolver(
   resolveContext: () => GatewayRequestContext | undefined,
 ): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.resolveContext = resolveContext;
 }
 
 function getFallbackGatewayContext(): GatewayRequestContext | undefined {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
   const resolved = fallbackGatewayContextState.resolveContext?.();
   return resolved ?? fallbackGatewayContextState.context;
 }
@@ -71,12 +78,10 @@ const PLUGIN_SUBAGENT_POLICY_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginSubagentOverridePolicyState",
 );
 
-const pluginSubagentPolicyState = resolveGlobalSingleton<PluginSubagentPolicyState>(
-  PLUGIN_SUBAGENT_POLICY_STATE_KEY,
-  () => ({
+const getPluginSubagentPolicyState = () =>
+  resolveGlobalSingleton<PluginSubagentPolicyState>(PLUGIN_SUBAGENT_POLICY_STATE_KEY, () => ({
     policies: {},
-  }),
-);
+  }));
 
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -99,7 +104,8 @@ function normalizeAllowedModelRef(raw: string): string | null {
   return `${normalized.provider}/${normalized.model}`;
 }
 
-function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+export function setPluginSubagentOverridePolicies(cfg: OpenClawConfig): void {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const normalized = normalizePluginsConfig(cfg.plugins);
   const policies: PluginSubagentPolicyState["policies"] = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
@@ -142,6 +148,7 @@ function authorizeFallbackModelOverride(params: {
   provider?: string;
   model?: string;
 }): { allowed: true } | { allowed: false; reason: string } {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
     return {
@@ -290,7 +297,7 @@ async function dispatchGatewayMethod<T>(
   return result.payload as T;
 }
 
-function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
+export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
@@ -331,7 +338,12 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(allowOverride && params.model && { model: params.model }),
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.lane && { lane: params.lane }),
-          ...(params.idempotencyKey && { idempotencyKey: params.idempotencyKey }),
+          ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
+          // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
+          // so fall back to a generated UUID when the caller omits it. Without
+          // this, plugin subagent runs (for example memory-core dreaming
+          // narrative) silently fail schema validation at the gateway.
+          idempotencyKey: params.idempotencyKey || randomUUID(),
         },
         {
           allowSyntheticModelOverride,
@@ -365,24 +377,64 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod(
-        "sessions.delete",
-        {
-          key: params.sessionKey,
-          deleteTranscript: params.deleteTranscript ?? true,
-        },
-        {
-          syntheticScopes: [ADMIN_SCOPE],
-        },
-      );
+      await dispatchGatewayMethod("sessions.delete", {
+        key: params.sessionKey,
+        deleteTranscript: params.deleteTranscript ?? true,
+      });
+    },
+  };
+}
+
+export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
+  return {
+    async list(params) {
+      const payload = await dispatchGatewayMethod<{ nodes?: unknown[] }>("node.list", {});
+      const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+      const filteredNodes =
+        params?.connected === true
+          ? nodes.filter(
+              (node) =>
+                node !== null &&
+                typeof node === "object" &&
+                (node as { connected?: unknown }).connected === true,
+            )
+          : nodes;
+      return {
+        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+      };
+    },
+    async invoke(params) {
+      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
+        nodeId: params.nodeId,
+        command: params.command,
+        ...(params.params !== undefined && { params: params.params }),
+        timeoutMs: params.timeoutMs,
+        idempotencyKey: params.idempotencyKey || randomUUID(),
+      });
+      return payload;
     },
   };
 }
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
+function createGatewayPluginRegistrationLogger(params?: {
+  suppressInfoLogs?: boolean;
+}): PluginLogger {
+  const logger = createPluginRuntimeLoaderLogger();
+  if (params?.suppressInfoLogs !== true) {
+    return logger;
+  }
+  return {
+    ...logger,
+    info: (_message: string) => undefined,
+  };
+}
+
 export function loadGatewayPlugins(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir: string;
   log: {
     info: (msg: string) => void;
@@ -392,57 +444,68 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
-  logDiagnostics?: boolean;
+  suppressPluginInfoLogs?: boolean;
 }) {
-  setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
-  // Gateway-owned registries may already exist from schema loads, so the
-  // gateway path opts those runtimes into late binding rather than changing
-  // the default subagent behavior for every plugin runtime in the process.
-  const gatewaySubagent = createGatewaySubagentRuntime();
-  setGatewaySubagentRuntime(gatewaySubagent);
-
-  const pluginRegistry = loadOpenClawPlugins({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: resolveGatewayStartupPluginIds({
-      config: params.cfg,
+  const activationAutoEnabled =
+    params.activationSourceConfig !== undefined
+      ? applyPluginAutoEnable({
+          config: params.activationSourceConfig,
+          env: process.env,
+        })
+      : undefined;
+  const autoEnabled =
+    params.activationSourceConfig !== undefined
+      ? {
+          config: params.cfg,
+          changes: activationAutoEnabled?.changes ?? [],
+          autoEnabledReasons:
+            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
+        }
+      : params.autoEnabledReasons !== undefined
+        ? {
+            config: params.cfg,
+            changes: [],
+            autoEnabledReasons: params.autoEnabledReasons,
+          }
+        : applyPluginAutoEnable({
+            config: params.cfg,
+            env: process.env,
+          });
+  const resolvedConfig = autoEnabled.config;
+  const pluginIds =
+    params.pluginIds ??
+    resolveGatewayStartupPluginIds({
+      config: resolvedConfig,
+      activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
+    });
+  if (pluginIds.length === 0) {
+    const pluginRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    return {
+      pluginRegistry,
+      gatewayMethods: [...params.baseMethods],
+    };
+  }
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: pluginIds,
+    logger: createGatewayPluginRegistrationLogger({
+      suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
-    logger: {
-      info: (msg) => params.log.info(msg),
-      warn: (msg) => params.log.warn(msg),
-      error: (msg) => params.log.error(msg),
-      debug: (msg) => params.log.debug(msg),
-    },
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
-  primeConfiguredBindingRegistry({ cfg: params.cfg });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
-    for (const diag of pluginRegistry.diagnostics) {
-      const details = [
-        diag.pluginId ? `plugin=${diag.pluginId}` : null,
-        diag.source ? `source=${diag.source}` : null,
-      ]
-        .filter((entry): entry is string => Boolean(entry))
-        .join(", ");
-      const message = details
-        ? `[plugins] ${diag.message} (${details})`
-        : `[plugins] ${diag.message}`;
-      if (diag.level === "error") {
-        params.log.error(message);
-      } else {
-        params.log.info(message);
-      }
-    }
-  }
   return { pluginRegistry, gatewayMethods };
 }

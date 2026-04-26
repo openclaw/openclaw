@@ -25,6 +25,10 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
+    });
+
     afterAll(async () => {
       await server.close();
     });
@@ -53,8 +57,14 @@ export function registerAuthModesSuite(): void {
     beforeAll(async () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
       port = await getFreePort();
       server = await startGatewayServer(port);
+    });
+
+    beforeEach(() => {
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
     });
 
     afterAll(async () => {
@@ -114,6 +124,11 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = { mode: "none" };
+    });
+
     afterAll(async () => {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -142,6 +157,7 @@ export function registerAuthModesSuite(): void {
     });
 
     beforeEach(() => {
+      testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 
@@ -151,18 +167,19 @@ export function registerAuthModesSuite(): void {
 
     test("requires device identity when only tailscale auth is available", async () => {
       const ws = await openTailscaleWs(port);
-      const res = await connectReq(ws, { token: "dummy", device: null });
+      const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
       ws.close();
     });
 
-    test("allows shared token to skip device when tailscale auth is enabled", async () => {
+    test("connects with shared token but clears scopes when tailscale auth skips device", async () => {
       const ws = await openTailscaleWs(port);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(true);
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
       ws.close();

@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
@@ -122,8 +122,9 @@ const GroupSessionScopeSchema = z
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
  *
- * Topic routing uses `root_id` when present to keep session continuity and
- * falls back to `thread_id` when `root_id` is unavailable.
+ * Topic routing uses Feishu topic-group `thread_id` when the event identifies a
+ * native topic group, and keeps `root_id` precedence for normal groups so
+ * reply-created threads stay on the initiating message session.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
@@ -221,7 +222,7 @@ export const FeishuConfigSchema = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    requireMention: z.boolean().optional().default(true),
+    requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users

@@ -23,7 +23,10 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   const port = await getFreePort();
-  const server = await startGatewayServer(port);
+  const server = await startGatewayServer(port, {
+    auth: { mode: "none" },
+    controlUiEnabled: false,
+  });
 
   const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);

@@ -32,11 +32,19 @@ const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
 
 function releaseAllLocksSync(): void {
   for (const [normalizedFile, held] of HELD_LOCKS) {
-    // Let the OS close live descriptors on process exit. On Linux/macOS this
-    // avoids Node's unmanaged-fd warnings while still unlinking the stale
-    // lock path before the process is fully gone.
+    // Kick off best-effort async closes before dropping references so tests
+    // don't leave FileHandle objects for GC to close later.
+    void held.handle.close().catch(() => undefined);
     rmLockPathSync(held.lockPath);
     HELD_LOCKS.delete(normalizedFile);
+  }
+}
+
+async function drainAllLocks(): Promise<void> {
+  for (const [normalizedFile, held] of Array.from(HELD_LOCKS.entries())) {
+    HELD_LOCKS.delete(normalizedFile);
+    await held.handle.close().catch(() => undefined);
+    await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -115,6 +123,24 @@ export type FileLockHandle = {
   release: () => Promise<void>;
 };
 
+export const FILE_LOCK_TIMEOUT_ERROR_CODE = "file_lock_timeout";
+
+export type FileLockTimeoutError = Error & {
+  code: typeof FILE_LOCK_TIMEOUT_ERROR_CODE;
+  lockPath: string;
+};
+
+function createFileLockTimeoutError(
+  normalizedFile: string,
+  lockPath: string,
+): FileLockTimeoutError {
+  const error = new Error(`file lock timeout for ${normalizedFile}`);
+  return Object.assign(error, {
+    code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    lockPath,
+  }) as FileLockTimeoutError;
+}
+
 async function releaseHeldLock(normalizedFile: string): Promise<void> {
   const current = HELD_LOCKS.get(normalizedFile);
   if (!current) {
@@ -131,6 +157,10 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
 
 export function resetFileLockStateForTest(): void {
   releaseAllLocksSync();
+}
+
+export async function drainFileLockStateForTest(): Promise<void> {
+  await drainAllLocks();
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
@@ -150,8 +180,7 @@ export async function acquireFileLock(
     };
   }
 
-  const attempts = Math.max(1, options.retries.retries + 1);
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  for (let attempt = 0; attempt <= options.retries.retries; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
@@ -172,14 +201,14 @@ export async function acquireFileLock(
         await fs.rm(lockPath, { force: true }).catch(() => undefined);
         continue;
       }
-      if (attempt >= attempts - 1) {
+      if (attempt >= options.retries.retries) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, computeDelayMs(options.retries, attempt)));
     }
   }
 
-  throw new Error(`file lock timeout for ${normalizedFile}`);
+  throw createFileLockTimeoutError(normalizedFile, lockPath);
 }
 
 /** Run an async callback while holding a file lock, always releasing the lock afterward. */

@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug, logWarn } from "../logger.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -36,6 +38,12 @@ export type BundleLspToolRuntime = {
   dispose: () => Promise<void>;
 };
 
+type LspPositionParams = {
+  uri: string;
+  line: number;
+  character: number;
+};
+
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
@@ -58,7 +66,7 @@ function parseLspMessages(buffer: string): { messages: unknown[]; remaining: str
       continue;
     }
 
-    const contentLength = parseInt(match[1], 10);
+    const contentLength = Number.parseInt(match[1], 10);
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + contentLength;
 
@@ -168,59 +176,67 @@ async function disposeSession(session: LspSession) {
   session.process.kill();
 }
 
+function createLspPositionTool(params: {
+  session: LspSession;
+  toolName: string;
+  label: string;
+  description: string;
+  method: string;
+  resultLabel: string;
+}): AnyAgentTool {
+  return {
+    name: params.toolName,
+    label: params.label,
+    description: params.description,
+    parameters: {
+      type: "object",
+      properties: {
+        uri: { type: "string", description: "File URI (file:///path/to/file)" },
+        line: { type: "number", description: "Zero-based line number" },
+        character: { type: "number", description: "Zero-based character offset" },
+      },
+      required: ["uri", "line", "character"],
+    },
+    execute: async (_toolCallId, input) => {
+      const position = input as LspPositionParams;
+      const result = await sendRequest(params.session, params.method, {
+        textDocument: { uri: position.uri },
+        position: { line: position.line, character: position.character },
+      });
+      return formatLspResult(params.session.serverName, params.resultLabel, result);
+    },
+  };
+}
+
 function buildLspTools(session: LspSession): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [];
   const caps = session.capabilities;
   const serverLabel = session.serverName;
 
   if (caps.hoverProvider) {
-    tools.push({
-      name: `lsp_hover_${serverLabel}`,
-      label: `LSP Hover (${serverLabel})`,
-      description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input) => {
-        const params = input as { uri: string; line: number; character: number };
-        const result = await sendRequest(session, "textDocument/hover", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-        });
-        return formatLspResult(serverLabel, "hover", result);
-      },
-    });
+    tools.push(
+      createLspPositionTool({
+        session,
+        toolName: `lsp_hover_${serverLabel}`,
+        label: `LSP Hover (${serverLabel})`,
+        description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
+        method: "textDocument/hover",
+        resultLabel: "hover",
+      }),
+    );
   }
 
   if (caps.definitionProvider) {
-    tools.push({
-      name: `lsp_definition_${serverLabel}`,
-      label: `LSP Go to Definition (${serverLabel})`,
-      description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
-      parameters: {
-        type: "object",
-        properties: {
-          uri: { type: "string", description: "File URI (file:///path/to/file)" },
-          line: { type: "number", description: "Zero-based line number" },
-          character: { type: "number", description: "Zero-based character offset" },
-        },
-        required: ["uri", "line", "character"],
-      },
-      execute: async (_toolCallId, input) => {
-        const params = input as { uri: string; line: number; character: number };
-        const result = await sendRequest(session, "textDocument/definition", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-        });
-        return formatLspResult(serverLabel, "definition", result);
-      },
-    });
+    tools.push(
+      createLspPositionTool({
+        session,
+        toolName: `lsp_definition_${serverLabel}`,
+        label: `LSP Go to Definition (${serverLabel})`,
+        description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
+        method: "textDocument/definition",
+        resultLabel: "definition",
+      }),
+    );
   }
 
   if (caps.referencesProvider) {
@@ -294,7 +310,9 @@ export async function createBundleLspToolRuntime(params: {
   }
 
   const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) => name.trim().toLowerCase()).filter(Boolean),
+    Array.from(params.reservedToolNames ?? [], (name) =>
+      normalizeOptionalLowercaseString(name),
+    ).filter(Boolean),
   );
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
@@ -340,7 +358,10 @@ export async function createBundleLspToolRuntime(params: {
 
         const serverTools = buildLspTools(session);
         for (const tool of serverTools) {
-          const normalizedName = tool.name.trim().toLowerCase();
+          const normalizedName = normalizeOptionalLowercaseString(tool.name);
+          if (!normalizedName) {
+            continue;
+          }
           if (reservedNames.has(normalizedName)) {
             logWarn(
               `bundle-lsp: skipped tool "${tool.name}" from server "${serverName}" because the name already exists.`,
@@ -348,6 +369,10 @@ export async function createBundleLspToolRuntime(params: {
             continue;
           }
           reservedNames.add(normalizedName);
+          setPluginToolMeta(tool, {
+            pluginId: "bundle-lsp",
+            optional: false,
+          });
           tools.push(tool);
         }
 

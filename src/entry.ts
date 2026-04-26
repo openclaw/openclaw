@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
+import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -41,9 +43,6 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
-  const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
-
-  await installGaxiosFetchCompat();
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -98,33 +97,25 @@ if (
     return true;
   }
 
-  function tryHandleRootVersionFastPath(argv: string[]): boolean {
-    if (!isRootVersionInvocation(argv)) {
-      return false;
-    }
-    Promise.all([import("./version.js"), import("./infra/git-commit.js")])
-      .then(([{ VERSION }, { resolveCommitHash }]) => {
-        const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to resolve version:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
-    return true;
-  }
-
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureCliRespawnReady()) {
-    const parsed = parseCliProfileArgs(process.argv);
+    const parsedContainer = parseCliContainerArgs(process.argv);
+    if (!parsedContainer.ok) {
+      console.error(`[openclaw] ${parsedContainer.error}`);
+      process.exit(2);
+    }
+
+    const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
       // Keep it simple; Commander will handle rich help/errors after we strip flags.
       console.error(`[openclaw] ${parsed.error}`);
+      process.exit(2);
+    }
+
+    const containerTargetName = resolveCliContainerTarget(process.argv);
+    if (containerTargetName && parsed.profile) {
+      console.error("[openclaw] --container cannot be combined with --profile/--dev");
       process.exit(2);
     }
 
@@ -143,10 +134,14 @@ if (
 export function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
-    outputRootHelp?: () => void;
+    outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): boolean {
+  if (resolveCliContainerTarget(argv, deps.env)) {
+    return false;
+  }
   if (!isRootHelpInvocation(argv)) {
     return false;
   }
@@ -160,16 +155,18 @@ export function tryHandleRootHelpFastPath(
       process.exitCode = 1;
     });
   if (deps.outputRootHelp) {
-    try {
-      deps.outputRootHelp();
-    } catch (error) {
-      handleError(error);
-    }
+    Promise.resolve()
+      .then(() => deps.outputRootHelp?.())
+      .catch(handleError);
     return true;
   }
-  import("./cli/program/root-help.js")
-    .then(({ outputRootHelp }) => {
-      outputRootHelp();
+  import("./cli/root-help-metadata.js")
+    .then(async ({ outputPrecomputedRootHelpText }) => {
+      if (outputPrecomputedRootHelpText()) {
+        return;
+      }
+      const { outputRootHelp } = await import("./cli/program/root-help.js");
+      await outputRootHelp();
     })
     .catch(handleError);
   return true;

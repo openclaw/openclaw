@@ -1,5 +1,7 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
+import { resolveProviderEndpoint } from "../../provider-attribution.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -8,15 +10,20 @@ export function composeSystemPromptWithHookContext(params: {
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem = params.prependSystemContext?.trim();
-  const appendSystem = params.appendSystemContext?.trim();
+  const prependSystem =
+    typeof params.prependSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.prependSystemContext)
+      : "";
+  const appendSystem =
+    typeof params.appendSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.appendSystemContext)
+      : "";
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
-  return joinPresentTextSegments(
-    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
-    { trim: true },
-  );
+  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
+    trim: true,
+  });
 }
 
 export function resolveAttemptSpawnWorkspaceDir(params: {
@@ -31,20 +38,38 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     : undefined;
 }
 
+export function shouldUseOpenAIWebSocketTransport(params: {
+  provider: string;
+  modelApi?: string | null;
+  modelBaseUrl?: string | null;
+}): boolean {
+  if (params.modelApi !== "openai-responses" || params.provider !== "openai") {
+    return false;
+  }
+
+  // openai-codex normalizes to the ChatGPT backend HTTP path, not the public
+  // OpenAI Responses websocket endpoint. Local mocks, proxies, and custom
+  // baseUrls must stay on HTTP because the websocket runtime targets the
+  // native api.openai.com endpoint directly.
+  const endpointClass = resolveProviderEndpoint(params.modelBaseUrl).endpointClass;
+  return endpointClass === "default" || endpointClass === "openai-public";
+}
+
 export function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string) => boolean;
+  modelApi?: string;
+  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
 }): boolean {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
   return (
     params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(params.provider, params.modelId)
+    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
   );
 }
 
@@ -57,7 +82,8 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string) => boolean;
+  modelApi?: string;
+  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
   now?: number;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {
@@ -68,5 +94,21 @@ export function appendAttemptCacheTtlIfNeeded(params: {
     provider: params.provider,
     modelId: params.modelId,
   });
+  return true;
+}
+
+export function shouldPersistCompletedBootstrapTurn(params: {
+  shouldRecordCompletedBootstrapTurn: boolean;
+  promptError: unknown;
+  aborted: boolean;
+  timedOutDuringCompaction: boolean;
+  compactionOccurredThisAttempt: boolean;
+}): boolean {
+  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
+    return false;
+  }
+  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
+    return false;
+  }
   return true;
 }
