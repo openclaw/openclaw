@@ -27,6 +27,7 @@ describe("after_tools_resolved hook runner", () => {
       },
       {
         runId: "run-1",
+        jobId: "cron-job-1",
         agentId: "main",
         sessionId: "session-1",
         channelId: "discord",
@@ -40,6 +41,7 @@ describe("after_tools_resolved hook runner", () => {
       }),
       expect.objectContaining({
         runId: "run-1",
+        jobId: "cron-job-1",
         agentId: "main",
         sessionId: "session-1",
         channelId: "discord",

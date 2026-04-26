@@ -381,6 +381,29 @@ export function buildAfterToolsResolvedToolMetadata(
     })
     .filter((tool): tool is PluginHookAfterToolsResolvedEvent["tools"][number] => tool !== null);
 }
+
+export function buildAfterToolsResolvedSessionToolMetadata(
+  tools: Array<{ name?: string; label?: string; description?: string; parameters?: unknown }>,
+): PluginHookAfterToolsResolvedEvent["tools"] {
+  const toolByName = new Map<
+    string,
+    { name?: string; label?: string; description?: string; parameters?: unknown }
+  >();
+  for (const tool of tools) {
+    const name = typeof tool.name === "string" ? tool.name.trim() : "";
+    if (name) {
+      toolByName.set(name, { ...tool, name });
+    }
+  }
+
+  const sessionOrder = toSessionToolAllowlist(toolByName.keys());
+  return buildAfterToolsResolvedToolMetadata(
+    sessionOrder.flatMap((name) => {
+      const tool = toolByName.get(name);
+      return tool ? [tool] : [];
+    }),
+  );
+}
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
@@ -1408,8 +1431,8 @@ export async function runEmbeddedAttempt(
       );
 
       if (hookRunner?.hasHooks("after_tools_resolved")) {
-        // `allCustomTools` is already the final provider-facing registration set.
-        const resolvedTools = buildAfterToolsResolvedToolMetadata(allCustomTools);
+        // Mirror Pi's name-keyed session registry so duplicates report the active definition.
+        const resolvedTools = buildAfterToolsResolvedSessionToolMetadata(allCustomTools);
         void hookRunner
           .runAfterToolsResolved(
             {
@@ -1419,6 +1442,7 @@ export async function runEmbeddedAttempt(
             },
             {
               runId: params.runId,
+              jobId: params.jobId,
               trace: freezeDiagnosticTraceContext(diagnosticTrace),
               agentId: hookAgentId,
               sessionKey: params.sessionKey,

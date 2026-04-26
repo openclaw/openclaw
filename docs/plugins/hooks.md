@@ -166,10 +166,11 @@ The event includes:
   `description`, and optional JSON Schema `parameters`
 
 The hook context includes the standard agent fields such as `ctx.runId`,
-`ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`, `ctx.workspaceDir`,
-`ctx.modelProviderId`, `ctx.modelId`, `ctx.messageProvider`, `ctx.trigger`, and
-`ctx.channelId`. Tool `parameters` are passed as the provider-facing schema
-object; treat them as read-only.
+`ctx.jobId` (set on cron-driven runs), `ctx.agentId`, `ctx.sessionKey`,
+`ctx.sessionId`, `ctx.workspaceDir`, `ctx.modelProviderId`, `ctx.modelId`,
+`ctx.messageProvider`, `ctx.trigger`, and `ctx.channelId`. Tool `parameters`
+are passed by reference as the provider-facing schema object; trusted hook
+handlers must treat them as read-only.
 
 ### Tool result persistence
 

@@ -5,6 +5,7 @@ import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
+  buildAfterToolsResolvedSessionToolMetadata,
   buildAfterToolsResolvedToolMetadata,
   buildContextEnginePromptCacheInfo,
   buildAfterTurnRuntimeContext,
@@ -49,6 +50,31 @@ describe("buildAfterToolsResolvedToolMetadata", () => {
     expect(metadata).toHaveLength(1);
     expect(metadata[0]).toMatchObject({ name: "client_tool" });
     expect(metadata[0]?.parameters).toBeUndefined();
+  });
+});
+
+describe("buildAfterToolsResolvedSessionToolMetadata", () => {
+  it("mirrors Pi session tool registration order and duplicate last-wins semantics", () => {
+    const firstParameters = {
+      type: "object",
+      properties: { first: { type: "string" } },
+    };
+    const lastParameters = {
+      type: "object",
+      properties: { last: { type: "string" } },
+    };
+
+    const metadata = buildAfterToolsResolvedSessionToolMetadata([
+      { name: "z_tool", description: "first z", parameters: firstParameters },
+      { name: "a_tool", description: "a" },
+      { name: "z_tool", description: "last z", parameters: lastParameters },
+    ]);
+
+    expect(metadata).toEqual([
+      { name: "a_tool", description: "a" },
+      { name: "z_tool", description: "last z", parameters: lastParameters },
+    ]);
+    expect(metadata[1]?.parameters).toBe(lastParameters);
   });
 });
 
