@@ -268,7 +268,7 @@ export function createMemorySearchTool(options: {
           const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
           let surfacedMemoryResults: Array<
-            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+            Record<string, unknown> & { corpus: MemorySource; score: number; path: string }
           > = [];
           let provider: string | undefined;
           let model: string | undefined;
@@ -326,7 +326,7 @@ export function createMemorySearchTool(options: {
                 : decorated;
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
-              corpus: "memory" as const,
+              corpus: result.source,
             }));
             const sleepTimezone = resolveMemoryDeepDreamingConfig({
               pluginConfig: resolveMemoryCorePluginConfig(cfg),
