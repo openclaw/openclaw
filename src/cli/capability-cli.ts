@@ -583,6 +583,8 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        modelRun: true,
+        promptMode: "none",
         cleanupBundleMcpOnRunEnd: true,
       },
       {
@@ -619,6 +621,8 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      modelRun: true,
+      promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
