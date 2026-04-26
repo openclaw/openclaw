@@ -149,7 +149,7 @@ export type SessionEntry = {
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
-  pluginExtensions?: Record<string, Record<string, unknown>>;
+  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;

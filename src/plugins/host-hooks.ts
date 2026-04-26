@@ -37,9 +37,7 @@ export type PluginSessionExtensionProjectionContext = {
 export type PluginSessionExtensionRegistration = {
   namespace: string;
   description: string;
-  project?: (
-    ctx: PluginSessionExtensionProjectionContext,
-  ) => PluginJsonValue | undefined | Promise<PluginJsonValue | undefined>;
+  project?: (ctx: PluginSessionExtensionProjectionContext) => PluginJsonValue | undefined;
   cleanup?: (ctx: { reason: PluginHostCleanupReason; sessionKey?: string }) => void | Promise<void>;
 };
 

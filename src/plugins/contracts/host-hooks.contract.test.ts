@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -15,6 +14,7 @@ import {
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
 import {
@@ -30,6 +30,7 @@ import {
 import {
   drainPluginNextTurnInjections,
   enqueuePluginNextTurnInjection,
+  patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
@@ -282,6 +283,129 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("rejects async session extension projectors because gateway rows are synchronous", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "async-projector-fixture",
+        name: "Async Projector Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Async workflow state",
+          project: (async () => ({ state: "late" })) as unknown as () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "async-projector-fixture",
+          message: "session extension projector must be synchronous",
+        }),
+      ]),
+    );
+  });
+
+  it("requires explicit unset to remove plugin session extension state", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "patch-fixture",
+        name: "Patch Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Patch workflow state",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-patch-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: storePath },
+        },
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              pluginExtensions: {
+                "patch-fixture": { workflow: { state: "waiting" } },
+              },
+            };
+            return undefined;
+          });
+
+          await expect(
+            patchPluginSessionExtension({
+              sessionKey: "agent:main:main",
+              pluginId: "patch-fixture",
+              namespace: "workflow",
+            }),
+          ).resolves.toEqual({
+            ok: false,
+            error: "plugin session extension value is required unless unset is true",
+          });
+          expect(
+            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
+              ?.workflow,
+          ).toEqual({ state: "waiting" });
+
+          await expect(
+            patchPluginSessionExtension({
+              sessionKey: "agent:main:main",
+              pluginId: "patch-fixture",
+              namespace: "workflow",
+              value: { state: "approved" },
+            }),
+          ).resolves.toEqual({
+            ok: true,
+            key: "agent:main:main",
+            value: { state: "approved" },
+          });
+
+          await expect(
+            patchPluginSessionExtension({
+              sessionKey: "agent:main:main",
+              pluginId: "patch-fixture",
+              namespace: "workflow",
+              unset: true,
+            }),
+          ).resolves.toEqual({
+            ok: true,
+            key: "agent:main:main",
+            value: undefined,
+          });
+          expect(loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions).toBeUndefined();
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -330,7 +454,9 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("reports duplicate next-turn injections as not newly enqueued", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-injection-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-"),
+    );
     const storePath = path.join(stateDir, "sessions.json");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
@@ -407,7 +533,9 @@ describe("host-hook fixture plugin contract", () => {
       }),
     );
     setActivePluginRegistry(registry);
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-stale-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-stale-"),
+    );
     const storePath = path.join(stateDir, "sessions.json");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
@@ -824,7 +952,9 @@ describe("host-hook fixture plugin contract", () => {
       ],
     });
 
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-state-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-state-"),
+    );
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -1063,7 +1193,9 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-store-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-store-"),
+    );
     const storePath = path.join(stateDir, "sessions.json");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
@@ -1154,7 +1286,7 @@ describe("host-hook fixture plugin contract", () => {
       }),
     );
     const stateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-host-hooks-injection-only-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-only-"),
     );
     const storePath = path.join(stateDir, "sessions.json");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;

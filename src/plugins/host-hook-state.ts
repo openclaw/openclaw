@@ -308,6 +308,10 @@ export async function patchPluginSessionExtension(params: {
   if (params.value !== undefined && !isPluginJsonValue(params.value)) {
     return { ok: false, error: "plugin session extension value must be JSON-compatible" };
   }
+  if (params.unset !== true && params.value === undefined) {
+    return { ok: false, error: "plugin session extension value is required unless unset is true" };
+  }
+  const nextPluginValue = params.value as PluginJsonValue;
   const registry = getActivePluginRegistry();
   const registered = (registry?.sessionExtensions ?? []).some(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
@@ -327,10 +331,10 @@ export async function patchPluginSessionExtension(params: {
     }
     const pluginExtensions = { ...entry.pluginExtensions };
     const pluginState = { ...pluginExtensions[pluginId] };
-    if (params.unset || params.value === undefined) {
+    if (params.unset === true) {
       delete pluginState[namespace];
     } else {
-      pluginState[namespace] = copyJsonValue(params.value);
+      pluginState[namespace] = copyJsonValue(nextPluginValue);
     }
     if (Object.keys(pluginState).length > 0) {
       pluginExtensions[pluginId] = pluginState;
@@ -366,7 +370,7 @@ export async function projectPluginSessionExtensions(params: {
       continue;
     }
     const projected = registration.extension.project
-      ? await registration.extension.project({
+      ? registration.extension.project({
           sessionKey: params.sessionKey,
           sessionId: params.entry.sessionId,
           state,
