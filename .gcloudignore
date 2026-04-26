@@ -1,0 +1,4 @@
+#!include:.dockerignore
+.git
+.gitignore
+.github/

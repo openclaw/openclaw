@@ -1,0 +1,63 @@
+# Cloud Build pipeline for the openclaw fork.
+# Builds the Docker image from the upstream Dockerfile and publishes it to
+# Artifact Registry repos in us-central1 and asia-east2 (Hong Kong).
+#
+# Triggered by pushes to the `dev` branch. The image is tagged with the
+# upstream version from package.json, the short commit SHA, and the branch
+# name so consumers can pin to whichever level of stability they want.
+
+steps:
+  - id: read-version
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        VERSION=$(grep -m1 '"version"' package.json | sed -E 's/.*"version": "([^"]+)".*/\1/')
+        if [ -z "$$VERSION" ]; then
+          echo "Failed to read version from package.json" >&2
+          exit 1
+        fi
+        echo "VERSION=$$VERSION" > /workspace/env.sh
+        echo "Building openclaw v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - -ceu
+      - |
+        source /workspace/env.sh
+        docker build \
+          --platform=linux/amd64 \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
+          -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
+          -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
+          -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
+          -f Dockerfile \
+          .
+
+  - id: push-us-central1
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw
+
+  - id: push-asia-east2
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 7200s
