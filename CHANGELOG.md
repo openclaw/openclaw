@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: export existing tool-loop diagnostics as `openclaw.tool.loop` counters and spans without loop messages, session identifiers, params, or tool output. Thanks @vincentkoc.
 - Diagnostics/OTEL: export diagnostic memory samples and pressure as bounded memory histograms, counters, and pressure spans to help spot leak regressions without session or payload data. Thanks @vincentkoc.
 - Diagnostics/OTEL: add the GenAI `gen_ai.client.token.usage` histogram for input/output model usage while keeping session identifiers and aggregate cache counters out of the semantic metric. Thanks @vincentkoc.
+- Diagnostics/OTEL: add a bounded `openclaw.agent` label to OpenClaw token metrics so per-agent Grafana dashboards can group usage without exporting session identifiers. Thanks @oc-factus.
 - Plugins/install: consolidate managed plugin install metadata into the state-managed plugin index at `plugins/installs.json`, replacing the temporary `plugins/installed-index.json` path and removing `plugins.installs` as an authored config surface. Thanks @vincentkoc and @shakkernerd.
 - Diagnostics/OTEL: add the GenAI `gen_ai.client.operation.duration` histogram for model-call latency in seconds with bounded provider/model/API and error attributes. Thanks @vincentkoc.
 - Diagnostics/OTEL: add GenAI usage token attributes to model-usage spans, including cache read/write input token counts without session identifiers or prompt/response content. Thanks @vincentkoc.
