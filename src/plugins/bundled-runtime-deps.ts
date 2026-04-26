@@ -910,7 +910,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
     if (channelConfig && typeof channelConfig === "object" && !Array.isArray(channelConfig)) {
       const enabled = (channelConfig as { enabled?: unknown }).enabled;
       if (enabled === false) {
-        continue;
+        return false;
       }
       if (params.includeConfiguredChannels || enabled === true) {
         return true;
