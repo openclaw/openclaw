@@ -1,3 +1,4 @@
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -7,6 +8,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  loadAuthProfileStoreForRuntime,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -208,15 +210,42 @@ export async function noteAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
+  const configuredAuthProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
+  const agentIds = listAgentIds(params.cfg);
+  const targets =
+    agentIds.length > 1
+      ? agentIds.map((agentId) => ({ agentId, agentDir: resolveAgentDir(params.cfg, agentId) }))
+      : [{ agentId: undefined, agentDir: undefined }];
+
+  for (const target of targets) {
+    if (configuredAuthProfiles || hasAnyAuthProfileStoreSource(target.agentDir)) {
+      await noteAuthProfileHealthForStore({
+        ...params,
+        agentId: target.agentId,
+        agentDir: target.agentDir,
+      });
+    }
+  }
+}
+
+async function noteAuthProfileHealthForStore(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+  allowKeychainPrompt: boolean;
+  agentId?: string;
+  agentDir?: string;
+}): Promise<void> {
   if (
     Object.keys(params.cfg.auth?.profiles ?? {}).length === 0 &&
-    !hasAnyAuthProfileStoreSource()
+    !hasAnyAuthProfileStoreSource(params.agentDir)
   ) {
     return;
   }
-  const store = ensureAuthProfileStore(undefined, {
+  const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+    readOnly: true,
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+  const titleSuffix = params.agentId ? ` (agent: ${params.agentId})` : "";
   const unusable = (() => {
     const now = Date.now();
     const out: string[] = [];
@@ -241,7 +270,7 @@ export async function noteAuthProfileHealth(params: {
   })();
 
   if (unusable.length > 0) {
-    note(unusable.join("\n"), "Auth profile cooldowns");
+    note(unusable.join("\n"), `Auth profile cooldowns${titleSuffix}`);
   }
 
   let summary = buildAuthHealthSummary({
@@ -281,6 +310,7 @@ export async function noteAuthProfileHealth(params: {
           cfg: params.cfg,
           store,
           profileId: profile.profileId,
+          agentDir: params.agentDir,
         });
       } catch (err) {
         const message = formatErrorMessage(err);
@@ -297,7 +327,8 @@ export async function noteAuthProfileHealth(params: {
       note(errors.join("\n"), "OAuth refresh errors");
     }
     summary = buildAuthHealthSummary({
-      store: ensureAuthProfileStore(undefined, {
+      store: loadAuthProfileStoreForRuntime(params.agentDir, {
+        readOnly: true,
         allowKeychainPrompt: false,
       }),
       cfg: params.cfg,
@@ -322,6 +353,6 @@ export async function noteAuthProfileHealth(params: {
         ),
       ),
     );
-    note(issueLines.join("\n"), "Model auth");
+    note(issueLines.join("\n"), `Model auth${titleSuffix}`);
   }
 }
