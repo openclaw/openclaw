@@ -125,6 +125,22 @@ describe("resolveNativeSkillsEnabled", () => {
         env,
       }),
     ).toBe(false);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "discord",
+        globalSetting: "auto",
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("honors explicit provider settings", () => {
