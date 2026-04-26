@@ -20,6 +20,7 @@ To switch channels or target a specific version:
 
 ```bash
 openclaw update --channel beta
+openclaw update --channel dev
 openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
@@ -30,13 +31,41 @@ if you want the raw npm beta dist-tag for a one-off package update.
 
 See [Development channels](/install/development-channels) for channel semantics.
 
+## Switch between npm and git installs
+
+Use channels when you want to change the install type. The updater keeps your
+state, config, credentials, and workspace in `~/.openclaw`; it only changes
+which OpenClaw code install the CLI and gateway use.
+
+```bash
+# npm package install -> editable git checkout
+openclaw update --channel dev
+
+# git checkout -> npm package install
+openclaw update --channel stable
+```
+
+Run with `--dry-run` first to preview the exact install-mode switch:
+
+```bash
+openclaw update --channel dev --dry-run
+openclaw update --channel stable --dry-run
+```
+
+The `dev` channel ensures a git checkout, builds it, and installs the global CLI
+from that checkout. The `stable` and `beta` channels use package installs. If the
+gateway is already installed, `openclaw update` refreshes the service metadata
+and restarts it unless you pass `--no-restart`.
+
 ## Alternative: re-run the installer
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-Add `--no-onboard` to skip onboarding. For source installs, pass `--install-method git --no-onboard`.
+Add `--no-onboard` to skip onboarding. To force a specific install type through
+the installer, pass `--install-method git --no-onboard` or
+`--install-method npm --no-onboard`.
 
 ## Alternative: manual npm, pnpm, or bun
 
