@@ -304,8 +304,7 @@ export function registerModelsCli(program: Command) {
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts, command) => {
-      const agent =
-        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
@@ -366,8 +365,7 @@ export function registerModelsCli(program: Command) {
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts, command) => {
-      const agent =
-        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
