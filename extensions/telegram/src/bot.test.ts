@@ -1502,7 +1502,9 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
         quote: {
-          text: "summarize this",
+          text: " summarize this\n",
+          position: 8,
+          entities: [{ type: "bold", offset: 1, length: 9 }],
         },
       },
       me: { username: "openclaw_bot" },
@@ -1516,6 +1518,10 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    const telegramPayload = payload as Record<string, unknown>;
+    expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
+    expect(telegramPayload.ReplyToQuotePosition).toBe(8);
+    expect(telegramPayload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 1, length: 9 }]);
   });
 
   it("keeps reply linkage while omitting filtered binary reply captions", async () => {
@@ -1815,6 +1821,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9002");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {

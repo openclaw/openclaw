@@ -113,7 +113,10 @@ async function deliverTextReply(params: {
   chunkText: ChunkTextFn;
   replyText: string;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+  replyQuoteMessageId?: number;
   replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
   linkPreview?: boolean;
   silent?: boolean;
   replyToId?: number;
@@ -138,7 +141,10 @@ async function deliverTextReply(params: {
         params.runtime,
         {
           replyToMessageId,
+          replyQuoteMessageId: params.replyQuoteMessageId,
           replyQuoteText,
+          replyQuotePosition: params.replyQuotePosition,
+          replyQuoteEntities: params.replyQuoteEntities,
           thread: params.thread,
           textMode: "html",
           plainText: chunk.text,
@@ -212,6 +218,9 @@ async function sendTelegramVoiceFallbackText(opts: {
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
   replyToId?: number;
+  replyQuoteMessageId?: number;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   silent?: boolean;
@@ -225,9 +234,13 @@ async function sendTelegramVoiceFallbackText(opts: {
     const chunk = chunks[i];
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
+    const applyQuoteForChunk = !appliedReplyTo;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
+      replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
+      replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
+      replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
+      replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
@@ -259,7 +272,10 @@ async function deliverMediaReply(params: {
   onVoiceRecording?: () => Promise<void> | void;
   linkPreview?: boolean;
   silent?: boolean;
+  replyQuoteMessageId?: number;
   replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -303,6 +319,10 @@ async function deliverMediaReply(params: {
       ...(shouldAttachButtonsToMedia ? { reply_markup: params.replyMarkup } : {}),
       ...buildTelegramSendParams({
         replyToMessageId,
+        replyQuoteMessageId: params.replyQuoteMessageId,
+        replyQuoteText: params.replyQuoteText,
+        replyQuotePosition: params.replyQuotePosition,
+        replyQuoteEntities: params.replyQuoteEntities,
         thread: params.thread,
         silent: params.silent,
       }),
@@ -396,6 +416,9 @@ async function deliverMediaReply(params: {
               text: fallbackText,
               chunkText: params.chunkText,
               replyToId: voiceFallbackReplyTo,
+              replyQuoteMessageId: params.replyQuoteMessageId,
+              replyQuotePosition: params.replyQuotePosition,
+              replyQuoteEntities: params.replyQuoteEntities,
               thread: params.thread,
               linkPreview: params.linkPreview,
               silent: params.silent,
@@ -612,8 +635,14 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** When true, messages are sent with disable_notification. */
   silent?: boolean;
+  /** Message id that the optional quote text belongs to. */
+  replyQuoteMessageId?: number;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** UTF-16 position of the selected quote in the original Telegram message. */
+  replyQuotePosition?: number;
+  /** Telegram entities that belong to the selected quote text. */
+  replyQuoteEntities?: unknown[];
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
@@ -721,7 +750,10 @@ export async function deliverReplies(params: {
           chunkText,
           replyText: reply.text || "",
           replyMarkup,
+          replyQuoteMessageId: params.replyQuoteMessageId,
           replyQuoteText: params.replyQuoteText,
+          replyQuotePosition: params.replyQuotePosition,
+          replyQuoteEntities: params.replyQuoteEntities,
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
@@ -743,7 +775,10 @@ export async function deliverReplies(params: {
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
           silent: params.silent,
+          replyQuoteMessageId: params.replyQuoteMessageId,
           replyQuoteText: params.replyQuoteText,
+          replyQuotePosition: params.replyQuotePosition,
+          replyQuoteEntities: params.replyQuoteEntities,
           replyMarkup,
           replyToId,
           replyToMode: params.replyToMode,

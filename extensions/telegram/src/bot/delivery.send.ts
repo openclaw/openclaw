@@ -10,6 +10,7 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
+const QUOTE_PARAM_RE = /\bquote not found\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -18,6 +19,13 @@ function isTelegramThreadNotFoundError(err: unknown): boolean {
     return THREAD_NOT_FOUND_RE.test(err.description);
   }
   return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramQuoteParamError(err: unknown): boolean {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+    return QUOTE_PARAM_RE.test(err.description);
+  }
+  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params: Record<string, unknown> | undefined): boolean {
@@ -37,6 +45,30 @@ function removeMessageThreadIdParam(
   return rest;
 }
 
+function getNativeQuoteReplyMessageId(params: Record<string, unknown> | undefined) {
+  const replyParameters = params?.reply_parameters;
+  if (!replyParameters || typeof replyParameters !== "object") {
+    return undefined;
+  }
+  const messageId = (replyParameters as { message_id?: unknown }).message_id;
+  return typeof messageId === "number" && Number.isFinite(messageId) ? messageId : undefined;
+}
+
+function removeNativeQuoteParam(
+  params: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!params) {
+    return {};
+  }
+  const replyMessageId = getNativeQuoteReplyMessageId(params);
+  const { reply_parameters: _ignored, ...rest } = params;
+  if (replyMessageId != null) {
+    rest.reply_to_message_id = replyMessageId;
+    rest.allow_sending_without_reply = true;
+  }
+  return rest;
+}
+
 export async function sendTelegramWithThreadFallback<T>(params: {
   operation: string;
   runtime: RuntimeEnv;
@@ -47,8 +79,10 @@ export async function sendTelegramWithThreadFallback<T>(params: {
 }): Promise<T> {
   const allowThreadlessRetry = params.thread?.scope === "dm";
   const hasThreadId = hasMessageThreadIdParam(params.requestParams);
+  const hasNativeQuote = getNativeQuoteReplyMessageId(params.requestParams) != null;
   const shouldSuppressFirstErrorLog = (err: unknown) =>
-    allowThreadlessRetry && hasThreadId && isTelegramThreadNotFoundError(err);
+    (allowThreadlessRetry && hasThreadId && isTelegramThreadNotFoundError(err)) ||
+    (hasNativeQuote && isTelegramQuoteParamError(err));
   const mergedShouldLog = params.shouldLog
     ? (err: unknown) => params.shouldLog!(err) && !shouldSuppressFirstErrorLog(err)
     : (err: unknown) => !shouldSuppressFirstErrorLog(err);
@@ -61,6 +95,16 @@ export async function sendTelegramWithThreadFallback<T>(params: {
       fn: () => params.send(params.requestParams),
     });
   } catch (err) {
+    if (hasNativeQuote && isTelegramQuoteParamError(err)) {
+      params.runtime.log?.(
+        `telegram ${params.operation}: native quote rejected; retrying with legacy reply_to_message_id`,
+      );
+      return await sendTelegramWithThreadFallback({
+        ...params,
+        operation: `${params.operation} (legacy reply retry)`,
+        requestParams: removeNativeQuoteParam(params.requestParams),
+      });
+    }
     if (!allowThreadlessRetry || !hasThreadId || !isTelegramThreadNotFoundError(err)) {
       throw err;
     }
@@ -78,13 +122,36 @@ export async function sendTelegramWithThreadFallback<T>(params: {
 
 export function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
+  replyQuoteMessageId?: number;
+  replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
   thread?: TelegramThreadSpec | null;
   silent?: boolean;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
   const replyToMessageId = normalizeTelegramReplyToMessageId(opts?.replyToMessageId);
-  if (replyToMessageId != null) {
+  const replyQuoteMessageId = normalizeTelegramReplyToMessageId(opts?.replyQuoteMessageId);
+  const replyQuoteTextRaw =
+    replyToMessageId != null && replyToMessageId === replyQuoteMessageId
+      ? opts?.replyQuoteText
+      : undefined;
+  const replyQuoteText = replyQuoteTextRaw?.trim() ? replyQuoteTextRaw : undefined;
+  if (replyQuoteText) {
+    const replyParameters: Record<string, unknown> = {
+      message_id: replyQuoteMessageId,
+      quote: replyQuoteText,
+      allow_sending_without_reply: true,
+    };
+    if (typeof opts?.replyQuotePosition === "number" && Number.isFinite(opts.replyQuotePosition)) {
+      replyParameters.quote_position = Math.trunc(opts.replyQuotePosition);
+    }
+    if (Array.isArray(opts?.replyQuoteEntities) && opts.replyQuoteEntities.length > 0) {
+      replyParameters.quote_entities = opts.replyQuoteEntities;
+    }
+    params.reply_parameters = replyParameters;
+  } else if (replyToMessageId != null) {
     params.reply_to_message_id = replyToMessageId;
     params.allow_sending_without_reply = true;
   }
@@ -104,7 +171,10 @@ export async function sendTelegramText(
   runtime: RuntimeEnv,
   opts?: {
     replyToMessageId?: number;
+    replyQuoteMessageId?: number;
     replyQuoteText?: string;
+    replyQuotePosition?: number;
+    replyQuoteEntities?: unknown[];
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
@@ -115,6 +185,10 @@ export async function sendTelegramText(
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
+    replyQuoteMessageId: opts?.replyQuoteMessageId,
+    replyQuoteText: opts?.replyQuoteText,
+    replyQuotePosition: opts?.replyQuotePosition,
+    replyQuoteEntities: opts?.replyQuoteEntities,
     thread: opts?.thread,
     silent: opts?.silent,
   });
