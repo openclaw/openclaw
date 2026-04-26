@@ -255,6 +255,32 @@ Related:
 - [Remote access](/gateway/remote)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
+## Local dashboard cannot connect after update
+
+Use this when Safari/Chrome says it cannot connect to `127.0.0.1:18789`, especially after an OpenClaw or Codex/model update where the macOS LaunchAgent may need to be reloaded before the browser works again. One signature is `openclaw gateway restart` reporting that the Gateway LaunchAgent was installed but not loaded, then re-bootstrapping the launchd service.
+
+Recover the LaunchAgent/service state, then confirm the gateway is listening and serving the local dashboard:
+
+```bash
+openclaw gateway restart
+lsof -i :18789
+curl http://127.0.0.1:18789
+```
+
+If restart does not leave the service running, start it explicitly:
+
+```bash
+openclaw gateway start
+```
+
+If `curl http://127.0.0.1:18789` returns the OpenClaw HTML, the gateway is working. Open the root dashboard URL first:
+
+```bash
+open http://127.0.0.1:18789
+```
+
+A browser-only failure after that usually means browser cache, a stale session URL, or old tab state. If an old deep chat URL still fails, use the root URL first and navigate from inside OpenClaw.
+
 ## Gateway service not running
 
 Use this when service is installed but process does not stay up.
