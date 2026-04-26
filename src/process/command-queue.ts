@@ -28,10 +28,28 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when an active task exceeds its execution
+ * timeout. The lane is unblocked so queued work behind the timed-out task can
+ * proceed.
+ */
+export class CommandLaneTaskTimeoutError extends Error {
+  constructor(lane: string, timeoutMs: number) {
+    super(`Task in lane "${lane}" timed out after ${timeoutMs}ms`);
+    this.name = "CommandLaneTaskTimeoutError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
+
+/**
+ * Last-resort lane recovery guard. Keep this above the current default agent
+ * runtime budget (48h) so caller-owned runtime timeouts fire first.
+ */
+const DEFAULT_TASK_TIMEOUT_MS = 49 * 60 * 60 * 1000;
 
 type QueueEntry = {
   task: () => Promise<unknown>;
@@ -40,6 +58,7 @@ type QueueEntry = {
   enqueuedAt: number;
   warnAfterMs: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  taskTimeoutMs?: number;
 };
 
 type LaneState = {
@@ -113,11 +132,21 @@ function getLaneState(lane: string): LaneState {
 }
 
 function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
-  if (taskGeneration !== state.generation) {
+  if (taskGeneration !== state.generation || !state.activeTaskIds.has(taskId)) {
     return false;
   }
   state.activeTaskIds.delete(taskId);
   return true;
+}
+
+function resolveTaskTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_TASK_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.floor(value));
 }
 
 function hasPendingActiveTasks(taskIds: Set<number>): boolean {
@@ -185,8 +214,25 @@ function drainLane(lane: string) {
         state.activeTaskIds.add(taskId);
         void (async () => {
           const startTime = Date.now();
+          const taskTimeoutMs = resolveTaskTimeoutMs(entry.taskTimeoutMs);
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
           try {
-            const result = await entry.task();
+            const taskPromise = entry.task();
+            const result =
+              taskTimeoutMs > 0
+                ? await Promise.race([
+                    taskPromise,
+                    new Promise<never>((_, reject) => {
+                      timeoutHandle = setTimeout(() => {
+                        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+                      }, taskTimeoutMs);
+                      timeoutHandle.unref?.();
+                    }),
+                  ])
+                : await taskPromise;
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
@@ -197,9 +243,23 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
+            const activeBeforeComplete = state.activeTaskIds.size;
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+            if (err instanceof CommandLaneTaskTimeoutError) {
+              if (completedCurrentGeneration) {
+                diag.warn(
+                  `lane task timed out: lane=${lane} timeoutMs=${taskTimeoutMs} durationMs=${Date.now() - startTime} active=${activeBeforeComplete} queued=${state.queue.length}`,
+                );
+              } else {
+                diag.debug(
+                  `lane task timed out (stale, post-reset): lane=${lane} timeoutMs=${taskTimeoutMs} durationMs=${Date.now() - startTime}`,
+                );
+              }
+            } else if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
               );
@@ -245,6 +305,8 @@ export function enqueueCommandInLane<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    /** Max active execution time in ms. 0 or Infinity disables the lane fallback timeout. */
+    taskTimeoutMs?: number;
   },
 ): Promise<T> {
   const queueState = getQueueState();
@@ -262,6 +324,7 @@ export function enqueueCommandInLane<T>(
       enqueuedAt: Date.now(),
       warnAfterMs,
       onWait: opts?.onWait,
+      taskTimeoutMs: opts?.taskTimeoutMs,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
