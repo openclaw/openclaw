@@ -40,7 +40,11 @@ import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
-import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import {
+  isReservedCommandName,
+  registerPluginCommand,
+  validatePluginCommandDefinition,
+} from "./command-registration.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
@@ -1311,6 +1315,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: `only bundled plugins can claim reserved command ownership: ${name}`,
+      });
+      return;
+    }
+    if (allowReservedCommandNames && !isReservedCommandName(name)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `reserved command ownership requires a reserved command name: ${name}`,
       });
       return;
     }

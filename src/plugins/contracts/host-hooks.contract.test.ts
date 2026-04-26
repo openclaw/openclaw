@@ -43,6 +43,12 @@ import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
+async function waitForPluginEventHandlers(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -114,6 +120,37 @@ describe("host-hook fixture plugin contract", () => {
         expect.objectContaining({
           pluginId: "external-policy",
           message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects reserved command ownership for non-reserved bundled command names", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-command",
+        name: "Bundled Command",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "workflow",
+          description: "Should not need reserved ownership",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "bundled-command",
+          message: "reserved command ownership requires a reserved command name: workflow",
         }),
       ]),
     );
@@ -927,7 +964,7 @@ describe("host-hook fixture plugin contract", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
-    await Promise.resolve();
+    await waitForPluginEventHandlers();
 
     expect(
       getPluginRunContext({
@@ -1000,6 +1037,72 @@ describe("host-hook fixture plugin contract", () => {
       getPluginRunContext({
         pluginId: "healthy-subscription",
         get: { runId: "run-throws", namespace: "seen" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves run context until async terminal event subscriptions settle", async () => {
+    let releaseTerminalHandler: (() => void) | undefined;
+    let terminalHandlerSawContext: unknown;
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "async-terminal-subscription",
+        name: "Async Terminal Subscription",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "records",
+          streams: ["tool", "lifecycle"],
+          async handle(event, ctx) {
+            if (event.stream === "tool") {
+              ctx.setRunContext("seen", { runId: event.runId });
+              return;
+            }
+            if (event.data?.phase !== "end") {
+              return;
+            }
+            await new Promise<void>((resolve) => {
+              releaseTerminalHandler = resolve;
+            });
+            terminalHandlerSawContext = ctx.getRunContext("seen");
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    emitAgentEvent({
+      runId: "run-async-terminal",
+      stream: "tool",
+      data: { name: "approval_fixture_tool" },
+    });
+    await Promise.resolve();
+
+    emitAgentEvent({
+      runId: "run-async-terminal",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await Promise.resolve();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "async-terminal-subscription",
+        get: { runId: "run-async-terminal", namespace: "seen" },
+      }),
+    ).toEqual({ runId: "run-async-terminal" });
+
+    releaseTerminalHandler?.();
+    await waitForPluginEventHandlers();
+
+    expect(terminalHandlerSawContext).toEqual({ runId: "run-async-terminal" });
+    expect(
+      getPluginRunContext({
+        pluginId: "async-terminal-subscription",
+        get: { runId: "run-async-terminal", namespace: "seen" },
       }),
     ).toBeUndefined();
   });

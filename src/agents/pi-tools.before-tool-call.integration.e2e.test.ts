@@ -194,6 +194,7 @@ describe("before_tool_call hook integration", () => {
 
     await tool.execute("call-5", "not-an-object", undefined, extensionContext);
 
+    expect(execute).toHaveBeenCalledWith("call-5", "not-an-object", undefined, extensionContext);
     expect(beforeToolCallHook).toHaveBeenCalledWith(
       {
         toolName: "read",

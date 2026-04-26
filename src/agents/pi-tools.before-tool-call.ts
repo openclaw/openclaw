@@ -436,19 +436,19 @@ export async function runBeforeToolCallHook(args: {
         toolCallId: args.toolCallId,
         ctx: args.ctx,
         signal: args.signal,
-        baseParams: normalizedParams,
+        baseParams: params,
         overrideParams: trustedPolicyResult.params,
       });
     }
-    const policyAdjustedParams: Record<string, unknown> =
-      trustedPolicyResult?.params ?? normalizedParams;
+    const policyAdjustedParams = trustedPolicyResult?.params ?? params;
     if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
+    const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
-        params: policyAdjustedParams,
+        params: hookEventParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
@@ -490,8 +490,6 @@ export async function runBeforeToolCallHook(args: {
       reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,
     };
   }
-
-  return { blocked: false, params };
 }
 
 export function wrapToolWithBeforeToolCallHook(

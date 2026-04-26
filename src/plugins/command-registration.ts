@@ -23,27 +23,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  */
 let reservedCommands: Set<string> | undefined;
 
-export type CommandRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
-
-export function validateCommandName(
-  name: string,
-  opts?: { allowReservedCommandNames?: boolean },
-): string | null {
-  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
-
-  if (!trimmed) {
-    return "Command name cannot be empty";
-  }
-
-  // Must start with a letter, contain only letters, numbers, hyphens, underscores
-  // Note: trimmed is already lowercased, so no need for /i flag
-  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
-    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
-  }
-
+function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
     "help",
     "commands",
@@ -77,8 +57,36 @@ export function validateCommandName(
     "elevated",
     "usage",
   ]);
+  return reservedCommands;
+}
 
-  if (!opts?.allowReservedCommandNames && reservedCommands.has(trimmed)) {
+export type CommandRegistrationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export function isReservedCommandName(name: string): boolean {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+  return Boolean(trimmed && getReservedCommands().has(trimmed));
+}
+
+export function validateCommandName(
+  name: string,
+  opts?: { allowReservedCommandNames?: boolean },
+): string | null {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+
+  if (!trimmed) {
+    return "Command name cannot be empty";
+  }
+
+  // Must start with a letter, contain only letters, numbers, hyphens, underscores
+  // Note: trimmed is already lowercased, so no need for /i flag
+  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
+    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
+  }
+
+  if (!opts?.allowReservedCommandNames && getReservedCommands().has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -125,7 +133,7 @@ export function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim(), opts);
+    const aliasError = validateCommandName(alias.trim());
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }

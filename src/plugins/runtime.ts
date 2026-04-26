@@ -1,4 +1,5 @@
 import { onAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
 import { dispatchPluginAgentEventSubscriptions } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -8,6 +9,8 @@ import {
   type RegistryState,
   type RegistrySurfaceState,
 } from "./runtime-state.js";
+
+const log = createSubsystemLogger("plugins/runtime");
 
 function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
   return registry;
@@ -107,6 +110,8 @@ export function setActivePluginRegistry(
   void cleanupReplacedPluginHostRegistry({
     previousRegistry,
     nextRegistry: registry,
+  }).catch((error) => {
+    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
   });
 }
 

@@ -166,6 +166,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
   event: AgentEventPayload;
 }): void {
   const subscriptions = params.registry?.agentEventSubscriptions ?? [];
+  const pendingHandlers: Promise<void>[] = [];
   for (const registration of subscriptions) {
     const streams = registration.subscription.streams;
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
@@ -185,7 +186,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       },
     };
     try {
-      void Promise.resolve(
+      const pending = Promise.resolve(
         registration.subscription.handle(structuredClone(params.event), ctx),
       ).catch((error) => {
         logAgentEventSubscriptionFailure({
@@ -194,6 +195,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
           error,
         });
       });
+      pendingHandlers.push(pending);
     } catch (error) {
       logAgentEventSubscriptionFailure({
         pluginId,
@@ -203,7 +205,9 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     }
   }
   if (isTerminalAgentRunEvent(params.event)) {
-    clearPluginRunContext({ runId: params.event.runId });
+    void Promise.allSettled(pendingHandlers).then(() => {
+      clearPluginRunContext({ runId: params.event.runId });
+    });
   }
 }
 
