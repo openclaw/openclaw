@@ -71,10 +71,10 @@ The migration sequence is:
 7. Remove only with explicit breaking-release approval.
 
 Deprecated records must include a warning start date, replacement, docs link,
-and target removal date no more than three months after deprecation. Do not add
-a deprecated compatibility path with an open-ended removal window unless
-maintainers explicitly decide it is permanent compatibility and mark it
-`active` instead.
+and final removal date no more than three months after the warning starts. Do
+not add a deprecated compatibility path with an open-ended removal window unless
+maintainers explicitly decide it is permanent compatibility and mark it `active`
+instead.
 
 ## Current compatibility areas
 
