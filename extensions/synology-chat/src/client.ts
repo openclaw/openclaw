@@ -127,6 +127,65 @@ export async function sendMessage(
 }
 
 /**
+ * Send a text message to a Synology Chat channel via its incoming webhook URL.
+ * Unlike sendMessage(), this does NOT set user_ids — the message is posted to the
+ * channel rather than to a specific user.
+ */
+export async function sendToChannel(
+  channelIncomingUrl: string,
+  text: string,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  const body = `payload=${encodeURIComponent(JSON.stringify({ text }))}`;
+
+  const now = Date.now();
+  const elapsed = now - lastSendTime;
+  if (elapsed < MIN_SEND_INTERVAL_MS) {
+    await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+  }
+
+  const maxRetries = 3;
+  const baseDelay = 300;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const ok = await doPost(channelIncomingUrl, body, allowInsecureSsl);
+      lastSendTime = Date.now();
+      if (ok) return true;
+    } catch {
+      // will retry
+    }
+
+    if (attempt < maxRetries - 1) {
+      await sleep(baseDelay * Math.pow(2, attempt));
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Send a file URL to a Synology Chat channel via its incoming webhook URL.
+ * Unlike sendFileUrl(), this does NOT set user_ids — the file is posted to the
+ * channel rather than to a specific user.
+ */
+export async function sendFileUrlToChannel(
+  channelIncomingUrl: string,
+  fileUrl: string,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  const body = `payload=${encodeURIComponent(JSON.stringify({ file_url: fileUrl }))}`;
+
+  try {
+    const ok = await doPost(channelIncomingUrl, body, allowInsecureSsl);
+    lastSendTime = Date.now();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Send a file URL to Synology Chat.
  */
 export async function sendFileUrl(

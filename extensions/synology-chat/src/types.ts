@@ -2,6 +2,16 @@
  * Type definitions for the Synology Chat channel plugin.
  */
 
+/** Per-channel override config (nested under channels.<id>) */
+export interface SynologyChatChannelOverride {
+  /** Whether the bot must be mentioned to respond in this channel */
+  requireMention?: boolean;
+  /** User IDs allowed to interact in this channel (overrides account-level groupAllowFrom) */
+  allowFrom?: string | string[];
+  /** Incoming webhook URL for sending messages to this channel */
+  incomingUrl?: string;
+}
+
 type SynologyChatConfigFields = {
   enabled?: boolean;
   token?: string;
@@ -12,6 +22,9 @@ type SynologyChatConfigFields = {
   dangerouslyAllowInheritedWebhookPath?: boolean;
   dmPolicy?: "open" | "allowlist" | "disabled";
   allowedUserIds?: string | string[];
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupAllowFrom?: string | string[];
+  channels?: Record<string, SynologyChatChannelOverride>;
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
@@ -40,6 +53,9 @@ export interface ResolvedSynologyChatAccount {
   dangerouslyAllowInheritedWebhookPath: boolean;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
+  groupPolicy: "open" | "allowlist" | "disabled";
+  groupAllowFrom: string[];
+  channels: Record<string, SynologyChatChannelOverride>;
   rateLimitPerMinute: number;
   botName: string;
   allowInsecureSsl: boolean;

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { sendMessage } from "./client.js";
+import { sendMessage, sendToChannel } from "./client.js";
 import { buildSynologyChatInboundContext, type SynologyInboundMessage } from "./inbound-context.js";
 import { getSynologyRuntime } from "./runtime.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
@@ -15,15 +15,21 @@ function resolveSynologyChatInboundRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   userId: string;
+  channelId?: string;
+  channelName?: string;
+  chatType: string;
 }) {
   const rt = getSynologyRuntime();
+  const isGroup = params.chatType === "group";
+  const peerId = isGroup ? (params.channelId ?? params.channelName ?? params.userId) : params.userId;
+
   const route = rt.channel.routing.resolveAgentRoute({
     cfg: params.cfg,
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     peer: {
-      kind: "direct",
-      id: params.userId,
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
     },
   });
   return {
@@ -32,7 +38,8 @@ function resolveSynologyChatInboundRoute(params: {
     sessionKey: buildSynologyChatInboundSessionKey({
       agentId: route.agentId,
       accountId: params.account.accountId,
-      userId: params.userId,
+      userId: isGroup ? peerId : params.userId,
+      peerKind: isGroup ? "group" : "direct",
       identityLinks: params.cfg.session?.identityLinks,
     }),
   };
@@ -41,18 +48,26 @@ function resolveSynologyChatInboundRoute(params: {
 async function deliverSynologyChatReply(params: {
   account: ResolvedSynologyChatAccount;
   sendUserId: string;
+  isGroup: boolean;
+  channelIncomingUrl?: string;
   payload: { text?: string; body?: string };
 }): Promise<void> {
   const text = params.payload.text ?? params.payload.body;
   if (!text) {
     return;
   }
-  await sendMessage(
-    params.account.incomingUrl,
-    text,
-    params.sendUserId,
-    params.account.allowInsecureSsl,
-  );
+  if (params.isGroup && params.channelIncomingUrl) {
+    // Group: send to channel incoming URL without user_ids
+    await sendToChannel(params.channelIncomingUrl, text, params.account.allowInsecureSsl);
+  } else {
+    // DM: send to user via bot incoming URL with user_ids
+    await sendMessage(
+      params.account.incomingUrl,
+      text,
+      params.sendUserId,
+      params.account.allowInsecureSsl,
+    );
+  }
 }
 
 export async function dispatchSynologyChatInboundTurn(params: {
@@ -65,11 +80,15 @@ export async function dispatchSynologyChatInboundTurn(params: {
 
   // The Chat API user_id (for sending) may differ from the webhook
   // user_id (used for sessions/pairing). Use chatUserId for API calls.
+  const isGroup = params.msg.chatType === "group";
   const sendUserId = params.msg.chatUserId ?? params.msg.from;
   const resolved = resolveSynologyChatInboundRoute({
     cfg: currentCfg,
     account: params.account,
     userId: params.msg.from,
+    channelId: params.msg.channelId,
+    channelName: params.msg.channelName,
+    chatType: params.msg.chatType,
   });
   const msgCtx = buildSynologyChatInboundContext({
     finalizeInboundContext: resolved.rt.channel.reply.finalizeInboundContext,
@@ -83,9 +102,25 @@ export async function dispatchSynologyChatInboundTurn(params: {
     cfg: currentCfg,
     dispatcherOptions: {
       deliver: async (payload: { text?: string; body?: string }) => {
+        // Resolve channel incoming URL for group replies.
+        // Priority: per-channel override > account incomingUrl (for channel accounts)
+        const channelOverride = isGroup
+          ? (params.account.channels[params.msg.channelId ?? ""] ??
+            params.account.channels[params.msg.channelName ?? ""] ??
+            params.account.channels["*"])
+          : undefined;
+
+        // For group messages: use channel override URL, or fall back to the
+        // account's own incomingUrl (which IS the channel webhook for channel accounts)
+        const channelIncomingUrl = isGroup
+          ? (channelOverride?.incomingUrl ?? params.account.incomingUrl)
+          : undefined;
+
         await deliverSynologyChatReply({
           account: params.account,
           sendUserId,
+          isGroup,
+          channelIncomingUrl,
           payload,
         });
       },

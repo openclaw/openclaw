@@ -22,7 +22,7 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { sendMessage, sendFileUrl } from "./client.js";
+import { sendMessage, sendToChannel, sendFileUrl, sendFileUrlToChannel } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -87,6 +87,9 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "dangerouslyAllowInheritedWebhookPath",
     "dmPolicy",
     "allowedUserIds",
+    "groupPolicy",
+    "groupAllowFrom",
+    "channels",
     "rateLimitPerMinute",
     "botName",
     "allowInsecureSsl",
@@ -121,6 +124,13 @@ const collectSynologyChatSecurityWarnings =
       account.dmPolicy === "allowlist" &&
       account.allowedUserIds.length === 0 &&
       '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+    (account) =>
+      account.groupPolicy === "open" &&
+      '- Synology Chat: groupPolicy="open" allows any user to trigger the bot in channels. Consider "allowlist" for production use.',
+    (account) =>
+      account.groupPolicy === "allowlist" &&
+      account.groupAllowFrom.length === 0 &&
+      '- Synology Chat: groupPolicy="allowlist" with empty groupAllowFrom blocks all group senders. Add users or set groupPolicy="open".',
   );
 
 type SynologyChatOutboundResult = {
@@ -213,7 +223,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         order: 90,
       },
       capabilities: {
-        chatTypes: ["direct" as const],
+        chatTypes: ["direct" as const, "group" as const],
         media: true,
         threads: false,
         reactions: false,
@@ -246,10 +256,10 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
             if (!trimmed) {
               return false;
             }
-            // Synology Chat user IDs are numeric
-            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+            // Numeric user IDs, prefixed targets, or channel/group targets
+            return /^\d+$/.test(trimmed) || /^(synology[-_]?chat|channel|group):/i.test(trimmed);
           },
-          hint: "<userId>",
+          hint: "<userId> or channel:<name> or group:<name>",
         },
       },
       directory: createEmptyChannelDirectoryAdapter(),
@@ -337,8 +347,21 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
 
       sendText: async ({ to, text, accountId, cfg }: SynologyChannelSendTextContext) => {
         const account = resolveOutboundAccount(cfg ?? {}, accountId);
+        const normalizedTo = String(to).replace(/^synology[-_]?chat:/i, "");
+
+        // Route group messages to channel incoming URL (account.incomingUrl IS the channel webhook)
+        if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("group:")) {
+          const incomingUrl = requireIncomingUrl(account);
+          const ok = await sendToChannel(incomingUrl, text, account.allowInsecureSsl);
+          if (!ok) {
+            throw new Error("Failed to send message to Synology Chat channel");
+          }
+          return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
+        }
+
+        // DM: send to user via bot incoming URL
         const incomingUrl = requireIncomingUrl(account);
-        const ok = await sendMessage(incomingUrl, text, to, account.allowInsecureSsl);
+        const ok = await sendMessage(incomingUrl, text, normalizedTo, account.allowInsecureSsl);
         if (!ok) {
           throw new Error("Failed to send message to Synology Chat");
         }
@@ -352,7 +375,19 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
           throw new Error("No media URL provided");
         }
 
-        const ok = await sendFileUrl(incomingUrl, mediaUrl, to, account.allowInsecureSsl);
+        const normalizedTo = String(to).replace(/^synology[-_]?chat:/i, "");
+
+        // Route group media to channel incoming URL (no user_ids)
+        if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("group:")) {
+          const ok = await sendFileUrlToChannel(incomingUrl, mediaUrl, account.allowInsecureSsl);
+          if (!ok) {
+            throw new Error("Failed to send media to Synology Chat channel");
+          }
+          return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
+        }
+
+        // DM: send to user with user_ids
+        const ok = await sendFileUrl(incomingUrl, mediaUrl, normalizedTo, account.allowInsecureSsl);
         if (!ok) {
           throw new Error("Failed to send media to Synology Chat");
         }

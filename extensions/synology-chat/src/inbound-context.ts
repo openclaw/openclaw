@@ -11,6 +11,8 @@ export type SynologyInboundMessage = {
   accountId: string;
   commandAuthorized: boolean;
   chatUserId?: string;
+  channelId?: string;
+  channelName?: string;
 };
 
 export function buildSynologyChatInboundContext<TContext>(params: {
@@ -20,22 +22,27 @@ export function buildSynologyChatInboundContext<TContext>(params: {
   sessionKey: string;
 }): TContext {
   const { account, msg, sessionKey } = params;
+  const isGroup = msg.chatType === "group";
+  const groupTarget = msg.channelId ?? msg.channelName;
+
   return params.finalizeInboundContext({
     Body: msg.body,
     RawBody: msg.body,
     CommandBody: msg.body,
-    From: `synology-chat:${msg.from}`,
-    To: `synology-chat:${msg.from}`,
+    From: isGroup ? `synology-chat:group:${groupTarget}` : `synology-chat:${msg.from}`,
+    To: isGroup ? `synology-chat:channel:${groupTarget}` : `synology-chat:${msg.from}`,
     SessionKey: sessionKey,
     AccountId: account.accountId,
     OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: `synology-chat:${msg.from}`,
+    OriginatingTo: isGroup ? `synology-chat:channel:${groupTarget}` : `synology-chat:${msg.from}`,
     ChatType: msg.chatType,
     SenderName: msg.senderName,
     SenderId: msg.from,
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
-    ConversationLabel: msg.senderName || msg.from,
+    ConversationLabel: isGroup
+      ? (msg.channelName ?? msg.channelId ?? "channel")
+      : msg.senderName || msg.from,
     Timestamp: Date.now(),
     CommandAuthorized: msg.commandAuthorized,
   });
