@@ -16,10 +16,6 @@ export function buildSubagentSystemPrompt(params: {
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
 }) {
-  const taskText =
-    typeof params.task === "string" && params.task.trim()
-      ? params.task.replace(/\s+/g, " ").trim()
-      : "{{TASK_DESCRIPTION}}";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
   const maxSpawnDepth =
     typeof params.maxSpawnDepth === "number"
@@ -35,11 +31,10 @@ export function buildSubagentSystemPrompt(params: {
   const lines = [
     "# Subagent Context",
     "",
-    `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
+    `You are a **subagent** spawned by the ${parentLabel} for a specific task (see first user message).`,
     "",
     "## Your Role",
-    `- You were created to handle: ${taskText}`,
-    "- Complete this task. That's your entire purpose.",
+    "- Complete the task described in the first user message. That's your entire purpose.",
     `- You are NOT the ${parentLabel}. Don't try to be.`,
     "",
     "## Rules",
