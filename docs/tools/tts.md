@@ -680,6 +680,10 @@ for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
 provide expressive tags (laughter, singing cues, etc) that should only appear in
 the audio.
 
+Streaming block delivery strips these directives from visible text before the
+channel sees them, even when a directive is split across adjacent blocks. Final
+mode still parses the accumulated raw reply for TTS synthesis.
+
 `provider=...` directives are ignored unless `modelOverrides.allowProvider: true`.
 
 Example reply payload:

@@ -197,8 +197,9 @@ async function finalizeAcpTurnOutput(params: {
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
   const ttsMode = resolveConfiguredTtsMode(params.cfg, params.agentId);
-  const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
-  const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+  const accumulatedVisibleBlockText = params.delivery.getAccumulatedVisibleBlockText();
+  const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
+  const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
     sessionAuto: params.sessionTtsAuto,
@@ -212,7 +213,7 @@ async function finalizeAcpTurnOutput(params: {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
-        payload: { text: accumulatedBlockText },
+        payload: { text: accumulatedBlockTtsText },
         cfg: params.cfg,
         channel: params.ttsChannel,
         kind: "final",
@@ -224,7 +225,7 @@ async function finalizeAcpTurnOutput(params: {
         const delivered = await params.delivery.deliver("final", {
           mediaUrl: ttsSyntheticReply.mediaUrl,
           audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          spokenText: accumulatedBlockText,
+          spokenText: accumulatedBlockTtsText,
         });
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;
@@ -238,14 +239,14 @@ async function finalizeAcpTurnOutput(params: {
   // to prove the final result was visible to the user.
   const shouldDeliverTextFallback =
     ttsMode !== "all" &&
-    hasAccumulatedBlockText &&
+    accumulatedVisibleBlockText.trim().length > 0 &&
     !finalMediaDelivered &&
     !params.delivery.hasDeliveredFinalReply() &&
     (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",
-      { text: accumulatedBlockText },
+      { text: accumulatedVisibleBlockText },
       { skipTts: true },
     );
     queuedFinal = queuedFinal || delivered;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { parseTtsDirectives } from "./directives.js";
+import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -216,5 +216,38 @@ describe("parseTtsDirectives provider-aware routing", () => {
       warnings: [],
       hasDirective: false,
     });
+  });
+});
+
+describe("createTtsDirectiveTextStreamCleaner", () => {
+  it("strips directive tags split across streamed chunks", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Hello [[tts:voice=al")).toBe("Hello ");
+    expect(cleaner.push("loy]]world[[/tt")).toBe("world");
+    expect(cleaner.push("s]]")).toBe("");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it("suppresses hidden tts text blocks while preserving normal text", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Shown [[tts:text]]hid")).toBe("Shown ");
+    expect(cleaner.push("den[[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it("keeps plain tts block contents visible", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("[[tts]]read")).toBe("read");
+    expect(cleaner.push(" this[[/tts]] now")).toBe(" this now");
+  });
+
+  it("preserves non-tts bracket markup and flushes incomplete literals", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("See [[note")).toBe("See ");
+    expect(cleaner.flush()).toBe("[[note");
   });
 });

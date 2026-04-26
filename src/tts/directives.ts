@@ -21,6 +21,12 @@ type TextRange = {
   end: number;
 };
 
+export type TtsDirectiveTextStreamCleaner = {
+  push: (text: string) => string;
+  flush: () => string;
+  hasBufferedDirectiveText: () => boolean;
+};
+
 function buildProviderOrder(left: SpeechProviderPlugin, right: SpeechProviderPlugin): number {
   const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
   const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
@@ -96,6 +102,85 @@ function replaceOutsideMarkdownCode(
     const captures = args.slice(1, -2).map((capture) => String(capture));
     return replace(match, captures);
   });
+}
+
+function normalizeTtsTagBody(body: string): string {
+  return body.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
+  const normalized = normalizeTtsTagBody(body);
+  if (normalized === "tts:text") {
+    return "hidden-open";
+  }
+  if (normalized === "/tts:text") {
+    return "hidden-close";
+  }
+  if (
+    normalized === "tts" ||
+    normalized.startsWith("tts:") ||
+    normalized === "/tts" ||
+    normalized.startsWith("/tts:")
+  ) {
+    return "tts";
+  }
+  return "other";
+}
+
+export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
+  let pending = "";
+  let insideHiddenTextBlock = false;
+
+  return {
+    push(text: string): string {
+      const input = pending + text;
+      pending = "";
+      let output = "";
+      let index = 0;
+
+      while (index < input.length) {
+        const tagStart = input.indexOf("[[", index);
+        if (tagStart === -1) {
+          if (!insideHiddenTextBlock) {
+            output += input.slice(index);
+          }
+          break;
+        }
+
+        if (!insideHiddenTextBlock) {
+          output += input.slice(index, tagStart);
+        }
+
+        const tagEnd = input.indexOf("]]", tagStart + 2);
+        if (tagEnd === -1) {
+          pending = input.slice(tagStart);
+          break;
+        }
+
+        const rawTag = input.slice(tagStart, tagEnd + 2);
+        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
+        if (tag === "hidden-open") {
+          insideHiddenTextBlock = true;
+        } else if (tag === "hidden-close") {
+          insideHiddenTextBlock = false;
+        } else if (tag === "other" && !insideHiddenTextBlock) {
+          output += rawTag;
+        }
+
+        index = tagEnd + 2;
+      }
+
+      return output;
+    },
+    flush(): string {
+      const tail = pending;
+      pending = "";
+      return insideHiddenTextBlock ? "" : tail;
+    },
+    hasBufferedDirectiveText(): boolean {
+      return pending.length > 0 || insideHiddenTextBlock;
+    },
+  };
 }
 
 export function parseTtsDirectives(
