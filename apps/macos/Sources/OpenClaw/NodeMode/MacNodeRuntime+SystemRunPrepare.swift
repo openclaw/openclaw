@@ -3,18 +3,18 @@ import Foundation
 // MARK: - system.run.prepare handler
 
 extension MacNodeRuntime {
-
-    fileprivate func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try Self.decodeParams(OpenClawSystemRunPrepareParams.self, from: req.paramsJSON)
 
-        let command: [String]
-        if let cmd = params.command, !cmd.isEmpty {
-            command = cmd
-        } else if let raw = params.rawCommand, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            command = ["/bin/sh", "-c", raw]
-        } else {
+        let trimmedCommand = params.command?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let trimmedRaw = params.rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (trimmedCommand?.isEmpty == false) || (trimmedRaw?.isEmpty == false) else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
+
+        let command: [String] = (trimmedCommand?.isEmpty == false)
+            ? trimmedCommand!
+            : ["/bin/sh", "-c", trimmedRaw!]
 
         let cwd = params.cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedCwd = (cwd?.isEmpty == false) ? cwd : nil
@@ -30,28 +30,21 @@ extension MacNodeRuntime {
             cwd: resolvedCwd,
             env: [:]).first
 
-        let argv: [String]
-        let argvChanged: Bool
-        if let resolvedPath = resolution?.resolvedPath,
+        let (argv, argvChanged) = if let resolvedPath = resolution?.resolvedPath,
            let firstResolved = ExecCommandResolution.resolve(
                command: [command.first!],
                cwd: resolvedCwd,
                env: [:])?.resolvedPath,
            resolvedPath == firstResolved
         {
-            argv = [resolvedPath] + command.dropFirst()
-            argvChanged = true
+            ([resolvedPath] + command.dropFirst(), true)
         } else {
-            argv = command
-            argvChanged = false
+            (command, false)
         }
 
-        let rawCommandString: String
-        if argvChanged {
-            rawCommandString = ExecCommandFormatter.displayString(for: argv)
-        } else {
-            rawCommandString = ExecCommandFormatter.displayString(for: argv, rawCommand: params.rawCommand)
-        }
+        let rawCommandString = argvChanged
+            ? ExecCommandFormatter.displayString(for: argv)
+            : ExecCommandFormatter.displayString(for: argv, rawCommand: params.rawCommand)
 
         let plan = OpenClawSystemRunApprovalPlan(
             argv: argv,
