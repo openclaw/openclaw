@@ -22,6 +22,7 @@ function createPluginLogger(): PluginLogger {
 function createServiceContext(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
+  stateDir?: string;
   service?: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
   const grantsInternalDiagnostics =
@@ -33,7 +34,7 @@ function createServiceContext(params: {
   return {
     config: params.config,
     workspaceDir: params.workspaceDir,
-    stateDir: STATE_DIR,
+    stateDir: params.stateDir ?? STATE_DIR,
     logger: createPluginLogger(),
     ...(grantsInternalDiagnostics
       ? {
@@ -54,6 +55,7 @@ export async function startPluginServices(params: {
   registry: PluginRegistry;
   config: OpenClawConfig;
   workspaceDir?: string;
+  stateDir?: string;
 }): Promise<PluginServicesHandle> {
   const running: Array<{
     id: string;
@@ -64,6 +66,7 @@ export async function startPluginServices(params: {
     const serviceContext = createServiceContext({
       config: params.config,
       workspaceDir: params.workspaceDir,
+      stateDir: params.stateDir,
       service: entry,
     });
     try {

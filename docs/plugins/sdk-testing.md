@@ -25,6 +25,7 @@ The testing subpath exports a narrow set of helpers for plugin authors:
 
 ```typescript
 import {
+  createPluginServiceLifecycleTestHarness,
   installCommonResolveTargetErrorCases,
   shouldAckReaction,
   removeAckReactionAfterReply,
@@ -33,11 +34,12 @@ import {
 
 ### Available exports
 
-| Export                                 | Purpose                                                |
-| -------------------------------------- | ------------------------------------------------------ |
-| `installCommonResolveTargetErrorCases` | Shared test cases for target resolution error handling |
-| `shouldAckReaction`                    | Check whether a channel should add an ack reaction     |
-| `removeAckReactionAfterReply`          | Remove ack reaction after reply delivery               |
+| Export                                    | Purpose                                                      |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| `installCommonResolveTargetErrorCases`    | Shared test cases for target resolution error handling       |
+| `shouldAckReaction`                       | Check whether a channel should add an ack reaction           |
+| `removeAckReactionAfterReply`             | Remove ack reaction after reply delivery                     |
+| `createPluginServiceLifecycleTestHarness` | Finite test harness for registered plugin services and hooks |
 
 ### Types
 
@@ -53,6 +55,36 @@ import type {
   MockFn,
 } from "openclaw/plugin-sdk/testing";
 ```
+
+## Testing service lifecycle
+
+Use `createPluginServiceLifecycleTestHarness` for finite tests that need to
+start and stop a registered plugin service without launching the Gateway:
+
+```typescript
+import { createPluginServiceLifecycleTestHarness } from "openclaw/plugin-sdk/testing";
+
+const harness = await createPluginServiceLifecycleTestHarness();
+
+harness.registerService({
+  id: "my-service",
+  async start(ctx) {
+    await writeMyState(ctx.stateDir);
+  },
+  stop() {
+    // release test resources
+  },
+});
+
+await harness.startServices();
+await harness.runGatewayStart({ port: 0 });
+await harness.stopServices();
+await harness.cleanup();
+```
+
+The harness creates a temporary `stateDir` when one is not provided and exposes
+`runGatewayStart(...)` / `runGatewayStop(...)` for generic hook interaction
+tests. It is intended for finite tests only, not production service management.
 
 ## Testing target resolution
 

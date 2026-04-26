@@ -32,6 +32,11 @@ export {
 } from "../plugins/runtime.js";
 export { capturePluginRegistration } from "../plugins/captured-registration.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
+export {
+  createPluginServiceLifecycleTestHarness,
+  type PluginServiceLifecycleTestHarness,
+  type PluginServiceLifecycleTestHarnessOptions,
+} from "../plugins/service-lifecycle-test-harness.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
