@@ -784,6 +784,21 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("rejects an unknown agent before prompting for pasted tokens", async () => {
+    const runtime = createRuntime();
+    currentConfig = { agents: { list: [{ id: "main" }] } };
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai", agent: "missing" }, runtime),
+    ).rejects.toThrow(
+      'Unknown agent id "missing". Use "openclaw agents list" to see configured agents.',
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({
