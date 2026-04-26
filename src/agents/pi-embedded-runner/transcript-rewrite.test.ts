@@ -313,3 +313,261 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
     }
   });
 });
+
+// Regression suite for issue #66443 (refs #69208): overflow recovery / replay
+// must not persist duplicate role=user messages, cloned compaction entries, or
+// repeated openclaw:bootstrap-context:full custom entries to the session JSONL.
+describe("rewriteTranscriptEntriesInSessionManager — #66443 dedupe invariant", () => {
+  function getBranchEntries(sessionManager: SessionManager) {
+    return sessionManager.getBranch();
+  }
+
+  function countMessagesByRole(sessionManager: SessionManager, role: AgentMessage["role"]): number {
+    return getBranchMessages(sessionManager).filter((m) => m.role === role).length;
+  }
+
+  it("dedupes a polluted suffix: duplicate role=user messages collapse to one", () => {
+    const sessionManager = SessionManager.inMemory();
+    // Pollution pattern from the issue: the same user prompt re-appended N times
+    // by a previous (buggy) recovery pass.
+    const heartbeatPrompt = "Read HEARTBEAT.md if it exists (workspace context)...";
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 1 }),
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 2 }),
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 3 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ack"),
+        timestamp: 4,
+      }),
+    ]);
+
+    // Rewrite the first user entry in place to force the suffix replay (which
+    // is where the dedupe pass runs). Replacement is byte-equal so the user
+    // intent is preserved.
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: heartbeatPrompt, timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(countMessagesByRole(sessionManager, "user")).toBe(1);
+    const branchMessages = getBranchMessages(sessionManager);
+    expect(branchMessages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(branchMessages[0]).toMatchObject({ role: "user", content: heartbeatPrompt });
+  });
+
+  it("preserves messages with same content but distinct entry-identity inputs", () => {
+    // Two user messages with same content but different timestamps and metadata
+    // are separate logical entries; we dedupe on (role + content), so they
+    // collapse. This documents the chosen invariant: identity = role + content.
+    // Distinct content with the same role must NOT collapse.
+    const sessionManager = SessionManager.inMemory();
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "first", timestamp: 1 }),
+      asAppendMessage({ role: "user", content: "second", timestamp: 2 }),
+      asAppendMessage({ role: "user", content: "third", timestamp: 3 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ok"),
+        timestamp: 4,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: "first", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branchMessages = getBranchMessages(sessionManager);
+    expect(branchMessages.map((m) => (m.role === "user" ? m.content : m.role))).toEqual([
+      "first",
+      "second",
+      "third",
+      "assistant",
+    ]);
+  });
+
+  it("dedupes repeated openclaw:bootstrap-context:full custom entries", () => {
+    const sessionManager = SessionManager.inMemory();
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "hi", timestamp: 1 }),
+    ]);
+    const bootstrapData = { foo: "bar", n: 42 };
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", bootstrapData);
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", bootstrapData);
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", bootstrapData);
+    appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("done"),
+        timestamp: 5,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: "hi", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branch = getBranchEntries(sessionManager);
+    const bootstrapEntries = branch.filter(
+      (e) => e.type === "custom" && e.customType === "openclaw:bootstrap-context:full",
+    );
+    expect(bootstrapEntries.length).toBe(1);
+  });
+
+  it("dedupes cloned compaction entries (same summary + tokensBefore + firstKeptEntryId)", () => {
+    const sessionManager = SessionManager.inMemory();
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "anchor", timestamp: 1 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("kept"),
+        timestamp: 2,
+      }),
+    ]);
+    const keptId = ids[1];
+    // Issue evidence: 12 cloned compactions written in rapid succession.
+    sessionManager.appendCompaction("summary-A", keptId, 9000);
+    sessionManager.appendCompaction("summary-A", keptId, 9000);
+    sessionManager.appendCompaction("summary-A", keptId, 9000);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: "anchor", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const compactions = getBranchEntries(sessionManager).filter((e) => e.type === "compaction");
+    expect(compactions.length).toBe(1);
+    expect(compactions[0]).toMatchObject({ summary: "summary-A", tokensBefore: 9000 });
+  });
+
+  it("clean session with no duplicates is unchanged (no false positives)", () => {
+    const sessionManager = SessionManager.inMemory();
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "a", timestamp: 1 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("b"),
+        timestamp: 2,
+      }),
+      asAppendMessage({ role: "user", content: "c", timestamp: 3 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("d"),
+        timestamp: 4,
+      }),
+    ]);
+    const before = getBranchMessages(sessionManager).map((m) => JSON.stringify(m));
+
+    rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: "a", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    const after = getBranchMessages(sessionManager).map((m) => JSON.stringify(m));
+    expect(after).toEqual(before);
+  });
+
+  it("preserves order: first occurrence wins across [a, b, a, c, b]", () => {
+    const sessionManager = SessionManager.inMemory();
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "a", timestamp: 1 }),
+      asAppendMessage({ role: "user", content: "b", timestamp: 2 }),
+      asAppendMessage({ role: "user", content: "a", timestamp: 3 }),
+      asAppendMessage({ role: "user", content: "c", timestamp: 4 }),
+      asAppendMessage({ role: "user", content: "b", timestamp: 5 }),
+    ]);
+
+    rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: ids[0],
+          message: { role: "user", content: "a", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    const contents = getBranchMessages(sessionManager).map((m) => m.content);
+    expect(contents).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("rewriteTranscriptEntriesInSessionFile — #66443 integration", () => {
+  it("collapses duplicate role=user entries when overflow recovery replays a polluted branch", async () => {
+    const sessionFile = "/tmp/session-66443.jsonl";
+    const sessionManager = SessionManager.inMemory();
+    const heartbeatPrompt = "Read HEARTBEAT.md if it exists (workspace context)...";
+    const ids = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 1 }),
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 2 }),
+      asAppendMessage({ role: "user", content: heartbeatPrompt, timestamp: 3 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ack"),
+        timestamp: 4,
+      }),
+    ]);
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", { hash: "deadbeef" });
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", { hash: "deadbeef" });
+
+    const openSpy = vi
+      .spyOn(SessionManager, "open")
+      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+
+    try {
+      const result = await rewriteTranscriptEntriesInSessionFile({
+        sessionFile,
+        sessionKey: "agent:main:main:heartbeat",
+        request: {
+          replacements: [
+            {
+              entryId: ids[0],
+              message: { role: "user", content: heartbeatPrompt, timestamp: 1 } as AgentMessage,
+            },
+          ],
+        },
+      });
+
+      expect(result.changed).toBe(true);
+      const userMessages = getBranchMessages(sessionManager).filter((m) => m.role === "user");
+      expect(userMessages.length).toBe(1);
+      const bootstrapEntries = sessionManager
+        .getBranch()
+        .filter((e) => e.type === "custom" && e.customType === "openclaw:bootstrap-context:full");
+      expect(bootstrapEntries.length).toBe(1);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+});

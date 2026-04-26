@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
@@ -16,6 +17,39 @@ type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
+}
+
+/**
+ * Stable identity key for suppressing duplicate re-appends during transcript
+ * rewrite / overflow-recovery replay.
+ *
+ * Invariant (#66443, refs #69208): replaying a session suffix must not persist
+ * two identity-equal entries (duplicate role=user messages, cloned compaction
+ * entries, repeated openclaw:bootstrap-context:full custom entries). We key on
+ * intrinsic content rather than the per-entry `id` because re-append assigns
+ * fresh ids on every replay. Returns `null` for entry kinds that are inherently
+ * unique-per-id (labels, branch summaries, session_info) so they pass through.
+ */
+function computeBranchEntryDedupeKey(entry: SessionBranchEntry): string | null {
+  const sha = (value: unknown) =>
+    crypto
+      .createHash("sha256")
+      .update(JSON.stringify(value ?? null))
+      .digest("hex");
+  if (entry.type === "message") {
+    const message = entry.message as { role: string; content?: unknown };
+    return `message:${message.role}:${sha(message.content)}`;
+  }
+  if (entry.type === "compaction") {
+    return `compaction:${entry.tokensBefore}:${entry.firstKeptEntryId}:${sha(entry.summary)}`;
+  }
+  if (entry.type === "custom") {
+    return `custom:${entry.customType}:${sha(entry.data)}`;
+  }
+  if (entry.type === "custom_message") {
+    return `custom_message:${entry.customType}:${sha(entry.content)}`;
+  }
+  return null;
 }
 
 function remapEntryId(
@@ -166,19 +200,51 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   // re-running persistence hooks or size truncation on replayed messages.
   const appendMessage = getRawSessionAppendMessage(params.sessionManager);
   const rewrittenEntryIds = new Map<string, string>();
+  // Idempotency invariant for #66443: suppress identity-equal duplicates inside
+  // the replayed suffix (duplicate role=user messages, cloned compactions,
+  // repeated openclaw:bootstrap-context:full custom entries). User-requested
+  // replacements are always emitted; they define the rewrite intent.
+  const seenIdentities = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntryId =
-      replacement === undefined
-        ? appendBranchEntry({
-            sessionManager: params.sessionManager,
-            entry,
-            rewrittenEntryIds,
-            appendMessage,
-          })
-        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
-    rewrittenEntryIds.set(entry.id, newEntryId);
+    if (replacement === undefined) {
+      const dedupeKey = computeBranchEntryDedupeKey(entry);
+      if (dedupeKey !== null) {
+        const priorEmittedId = seenIdentities.get(dedupeKey);
+        if (priorEmittedId !== undefined) {
+          // Skip the duplicate but keep the id remap chain intact so any
+          // downstream entry referencing this entry's id resolves to the
+          // previously-emitted equivalent.
+          rewrittenEntryIds.set(entry.id, priorEmittedId);
+          continue;
+        }
+      }
+      const newEntryId = appendBranchEntry({
+        sessionManager: params.sessionManager,
+        entry,
+        rewrittenEntryIds,
+        appendMessage,
+      });
+      rewrittenEntryIds.set(entry.id, newEntryId);
+      if (dedupeKey !== null) {
+        seenIdentities.set(dedupeKey, newEntryId);
+      }
+    } else {
+      const newEntryId = appendMessage(
+        replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
+      );
+      rewrittenEntryIds.set(entry.id, newEntryId);
+      // Seed dedupe with the replacement's identity so identity-equal suffix
+      // duplicates collapse against the user-requested rewrite (#66443).
+      const replacementKey = computeBranchEntryDedupeKey({
+        ...entry,
+        message: replacement,
+      } as SessionBranchEntry);
+      if (replacementKey !== null) {
+        seenIdentities.set(replacementKey, newEntryId);
+      }
+    }
   }
 
   return {
