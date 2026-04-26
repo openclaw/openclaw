@@ -454,10 +454,12 @@ async function resolveProviderExecutionAuth(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
+  const primaryApiKey =
+    !auth.apiKey?.trim() && auth.mode === "aws-sdk" ? "" : requireApiKey(auth, params.providerId);
   return {
     apiKeys: collectProviderApiKeysForExecution({
       provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
+      primaryApiKey,
     }),
     providerConfig: params.cfg.models?.providers?.[params.providerId],
   };

@@ -231,7 +231,10 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  let apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let apiKey =
+    !apiKeyInfo.apiKey?.trim() && apiKeyInfo.mode === "aws-sdk"
+      ? ""
+      : requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
   // matches what runtime chat requests send.
@@ -245,7 +248,9 @@ async function prepareResolvedImageRuntime(
       model = { ...model, baseUrl: runtimeBaseUrl };
     }
   }
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  if (apiKey) {
+    authStorage.setRuntimeApiKey(model.provider, apiKey);
+  }
   return { apiKey, model };
 }
 
@@ -416,8 +421,10 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
+  const apiKey =
+    !auth.apiKey?.trim() && auth.mode === "aws-sdk" ? "" : requireApiKey(auth, authProvider);
   return {
-    apiKey: requireApiKey(auth, authProvider),
+    apiKey,
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }
