@@ -17,6 +17,7 @@ import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -64,6 +65,21 @@ import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
+const ingressAuditLog = createSubsystemLogger("slack-ingress-audit");
+
+function auditSlackIngress(
+  phase: "received" | "mention_decision" | "skipped" | "prepared" | "dropped",
+  fields: Record<string, unknown>,
+): void {
+  ingressAuditLog.info(
+    {
+      event: "slack_ingress_audit",
+      phase,
+      ...fields,
+    },
+    `slack ingress audit: phase=${phase}`,
+  );
+}
 
 function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
@@ -261,6 +277,22 @@ export async function prepareSlackMessage(params: {
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
+  const auditBase = {
+    accountId: account.accountId,
+    channel: message.channel,
+    ts: message.ts,
+    eventTs: message.event_ts,
+    threadTs: message.thread_ts,
+    parentUserId: message.parent_user_id,
+    senderId: message.user ?? message.bot_id,
+    source: opts.source,
+    optsWasMentioned: opts.wasMentioned,
+    subtype: message.subtype,
+    channelType: message.channel_type,
+    textLength: message.text?.length ?? 0,
+    hasFiles: Boolean(message.files?.length),
+  };
+  auditSlackIngress("received", auditBase);
   const conversation = await resolveSlackConversationContext({ ctx, account, message });
   const {
     channelInfo,
@@ -279,6 +311,14 @@ export async function prepareSlackMessage(params: {
     conversation,
   });
   if (!authorization) {
+    auditSlackIngress("dropped", {
+      ...auditBase,
+      reason: "authorization_failed",
+      isDirectMessage,
+      isGroupDm,
+      isRoom,
+      isBotMessage,
+    });
     return null;
   }
   const { senderId, allowFromLower } = authorization;
@@ -364,6 +404,12 @@ export async function prepareSlackMessage(params: {
     : true;
   if (isRoom && !channelUserAuthorized) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+    auditSlackIngress("dropped", {
+      ...auditBase,
+      reason: "channel_user_not_authorized",
+      senderId,
+      channelUsersAllowlistConfigured: Array.isArray(channelConfig?.users),
+    });
     return null;
   }
 
@@ -427,6 +473,13 @@ export async function prepareSlackMessage(params: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
+    auditSlackIngress("dropped", {
+      ...auditBase,
+      reason: "control_command_unauthorized",
+      senderId,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    });
     return null;
   }
 
@@ -453,8 +506,55 @@ export async function prepareSlackMessage(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  auditSlackIngress("mention_decision", {
+    ...auditBase,
+    senderId,
+    sessionKey,
+    historyKey,
+    isDirectMessage,
+    isGroupDm,
+    isRoom,
+    isThreadReply,
+    routeAgentId: route.agentId,
+    shouldRequireMention,
+    canDetectMention,
+    wasMentioned,
+    hasAnyMention,
+    explicitlyMentioned,
+    implicitMention: mentionDecision.implicitMention,
+    matchedImplicitMentionKinds: mentionDecision.matchedImplicitMentionKinds,
+    shouldBypassMention: mentionDecision.shouldBypassMention,
+    effectiveWasMentioned,
+    shouldSkip: mentionDecision.shouldSkip,
+    commandAuthorized,
+    hasControlCommand: hasControlCommandInMessage,
+    threadRequireExplicitMention: ctx.threadRequireExplicitMention,
+  });
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        thread_ts: message.thread_ts,
+        ts: message.ts,
+        senderId,
+        reason: "no-mention",
+        wasMentioned,
+        implicitMention: mentionDecision.implicitMention,
+        matchedImplicitMentionKinds: mentionDecision.matchedImplicitMentionKinds,
+      },
+      "skipping channel message",
+    );
+    auditSlackIngress("skipped", {
+      ...auditBase,
+      senderId,
+      sessionKey,
+      reason: "no-mention",
+      wasMentioned,
+      implicitMention: mentionDecision.implicitMention,
+      matchedImplicitMentionKinds: mentionDecision.matchedImplicitMentionKinds,
+      shouldRequireMention,
+      threadRequireExplicitMention: ctx.threadRequireExplicitMention,
+    });
     const pendingText = (message.text ?? "").trim();
     const fallbackFile = message.files?.length
       ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
@@ -494,6 +594,13 @@ export async function prepareSlackMessage(params: {
     resolveUserName: ctx.resolveUserName,
   });
   if (!resolvedMessageContent) {
+    auditSlackIngress("dropped", {
+      ...auditBase,
+      senderId,
+      sessionKey,
+      reason: "message_content_unavailable",
+      isThreadReply,
+    });
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
@@ -759,8 +866,31 @@ export async function prepareSlackMessage(params: {
   // metadata user-scoped for later session deliveries.
   const replyTarget = isDirectMessage ? `channel:${message.channel}` : (ctxPayload.To ?? undefined);
   if (!replyTarget) {
+    auditSlackIngress("dropped", {
+      ...auditBase,
+      senderId,
+      sessionKey,
+      reason: "missing_reply_target",
+      slackFrom,
+      isDirectMessage,
+    });
     return null;
   }
+
+  auditSlackIngress("prepared", {
+    ...auditBase,
+    senderId,
+    sessionKey,
+    historyKey,
+    replyTarget,
+    slackFrom,
+    isDirectMessage,
+    isRoomish,
+    isThreadReply,
+    routeAgentId: route.agentId,
+    effectiveWasMentioned,
+    previewLength: preview.length,
+  });
 
   if (shouldLogVerbose()) {
     logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
