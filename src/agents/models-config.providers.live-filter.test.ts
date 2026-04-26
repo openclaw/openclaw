@@ -1,24 +1,18 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { describe, expect, it } from "vitest";
 import { resolveProviderDiscoveryFilterForTest } from "./models-config.providers.implicit.js";
 
 function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     VITEST: "1",
     ...overrides,
   } as NodeJS.ProcessEnv;
 }
 
-describe("resolveProviderDiscoveryFilterForTest", () => {
-  beforeEach(() => {
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-  });
+function resolveOwners(provider: string): readonly string[] | undefined {
+  return provider === "claude-cli" ? ["anthropic"] : undefined;
+}
 
+describe("resolveProviderDiscoveryFilterForTest", () => {
   it("maps live provider backend ids to owning plugin ids", () => {
     expect(
       resolveProviderDiscoveryFilterForTest({
@@ -26,6 +20,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_PROVIDERS: "claude-cli",
         }),
+        resolveOwners,
       }),
     ).toEqual(["anthropic"]);
   });
@@ -37,6 +32,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_GATEWAY_PROVIDERS: "claude-cli",
         }),
+        resolveOwners,
       }),
     ).toEqual(["anthropic"]);
   });
@@ -48,6 +44,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_PROVIDERS: "openrouter",
         }),
+        resolveOwners,
       }),
     ).toEqual(["openrouter"]);
   });
