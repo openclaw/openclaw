@@ -9,7 +9,6 @@ import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -48,11 +47,11 @@ import {
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -624,11 +623,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           })()
         : false;
     const canAutoRouteVoiceWake =
-      !agentId &&
-      !explicitVoiceWakeSessionTarget &&
-      !requestedSessionId &&
-      !replyTo &&
-      !to;
+      !agentId && !explicitVoiceWakeSessionTarget && !requestedSessionId && !replyTo && !to;
     const hasVoiceWakeTriggerField = Object.prototype.hasOwnProperty.call(
       request,
       "voiceWakeTrigger",

@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: teach prompts and `agents_list` to surface native Codex app-server availability so agents prefer `/codex ...` over Codex ACP unless ACP/acpx is explicit. Thanks @vincentkoc.
 - ACPX/Droid: add Factory Droid to the live ACP bind Docker matrix, including `.factory` settings staging, `FACTORY_API_KEY` forwarding, and the single-agent `test:docker:live-acp-bind:droid` recipe.
 - TTS/personas: add provider-aware TTS personas with deterministic provider binding merges, `/tts persona` controls, gateway/CLI persona state, Google Gemini `audio-profile-v1` prompt wrapping, and OpenAI instruction mapping. (#70748) Thanks @barronlroth.
+- Voice Wake: add trigger-based routing so macOS voice wake phrases can select a configured agent or session target, with Gateway routing APIs and node update events. (#30354) Thanks @longbiaochen.
 
 ### Fixes
 

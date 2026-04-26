@@ -89,7 +89,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
   resolveAgentEffectiveModelPrimary: () => undefined,
-  resolveDefaultAgentId: () => "main",
 }));
 
 vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
