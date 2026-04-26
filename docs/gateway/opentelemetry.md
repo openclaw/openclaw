@@ -19,6 +19,9 @@ works without code changes. For local file logs and how to read them, see
   and exec.
 - **`diagnostics-otel` plugin** subscribes to those events and exports them as
   OpenTelemetry **metrics**, **traces**, and **logs** over OTLP/HTTP.
+- **Provider calls** receive a W3C `traceparent` header from OpenClaw's
+  trusted model-call span context when the provider transport accepts custom
+  headers. Plugin-emitted trace context is not propagated.
 - Exporters only attach when both the diagnostics surface and the plugin are
   enabled, so the in-process cost stays near zero by default.
 
@@ -120,6 +123,11 @@ Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids)
 and never include prompt text, response text, tool inputs, tool outputs, or
 session keys.
+
+Outbound model requests may include a W3C `traceparent` header. That header is
+generated only from OpenClaw-owned diagnostic trace context for the active model
+call. Existing caller-supplied `traceparent` headers are replaced, so plugins or
+custom provider options cannot spoof cross-service trace ancestry.
 
 Set `diagnostics.otel.captureContent.*` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, or system-prompt
