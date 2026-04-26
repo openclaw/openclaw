@@ -63,6 +63,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
+  retry once, repair replay, and allow configured model fallback instead of
+  preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed model call instead of exporting a misleading `StreamAbandoned` error span. Thanks @vincentkoc.
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from being treated as empty state, preserving `paired.json` for repair instead of overwriting approved pairings. Fixes #71873. Thanks @iret77.
 - ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`, on the Gateway path inside ACP-bound threads so they are not consumed as ACP prompt text. Fixes #66298. Thanks @kindomLee.

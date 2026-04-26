@@ -441,6 +441,60 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("empty response detected"));
   });
 
+  it("retries zero-token empty Claude stop turns with a visible-answer continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "anthropic",
+          model: "claude-opus-4.7",
+          content: [],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible Claude answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "anthropic",
+          model: "claude-opus-4.7",
+          content: [{ type: "text", text: "Visible Claude answer." }],
+          usage: {
+            input: 100,
+            output: 5,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 105,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4.7",
+      runId: "run-empty-zero-usage-claude-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("empty response detected"));
+  });
+
   it("surfaces an error after exhausting empty-response retries", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
