@@ -26,6 +26,10 @@ type ResolveExternalAuthProfileCompatFallbackPluginIds =
   typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
 type ResolveExternalAuthProfileProviderPluginIds =
   typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
+type ResolveOwningPluginIdsForProvider =
+  typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+type ResolveBundledProviderPolicySurface =
+  typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -36,6 +40,12 @@ const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
   vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
 const resolveExternalAuthProfileProviderPluginIdsMock =
   vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
+  (_) => undefined,
+);
+const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
+  (_) => null,
+);
 const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -244,7 +254,8 @@ describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./provider-public-artifacts.js", () => ({
-      resolveBundledProviderPolicySurface: () => null,
+      resolveBundledProviderPolicySurface: (provider: string) =>
+        resolveBundledProviderPolicySurfaceMock(provider),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -253,6 +264,8 @@ describe("provider-runtime", () => {
         resolveExternalAuthProfileCompatFallbackPluginIdsMock(params as never),
       resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
         resolveExternalAuthProfileProviderPluginIdsMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
@@ -322,6 +335,7 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
+    providerRuntimeTesting.resetCatalogHookProvidersCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
@@ -332,6 +346,10 @@ describe("provider-runtime", () => {
     resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
     resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
+    resolveBundledProviderPolicySurfaceMock.mockReset();
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
     providerRuntimeWarnMock.mockReset();
   });
 
@@ -820,6 +838,31 @@ describe("provider-runtime", () => {
     ).toMatchObject({
       baseUrl: "https://normalized.example.com/v1",
     });
+  });
+
+  it("does not scan provider plugins after bundled policy surface handles config", () => {
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-completions",
+      models: [],
+    };
+    const normalizeConfig = vi.fn(() => providerConfig);
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      normalizeConfig,
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "openai",
+        context: {
+          provider: "openai",
+          providerConfig,
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("resolves provider config defaults through owner plugins", () => {
@@ -1723,6 +1766,8 @@ describe("provider-runtime", () => {
         cache: false,
       }),
     );
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {
@@ -1758,7 +1803,7 @@ describe("provider-runtime", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps cached provider hook results available during a nested provider load", () => {
@@ -1825,6 +1870,6 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
 
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 });

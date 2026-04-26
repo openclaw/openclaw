@@ -23,6 +23,8 @@ type ProviderManifestLoadParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 };
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
@@ -30,6 +32,9 @@ type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
 };
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
+  if (params.registry) {
+    return params.registry;
+  }
   return loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -138,12 +143,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   );
 }
 
-export function resolveEnabledProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-}): string[] {
+export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
@@ -426,6 +426,30 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
+let owningProviderPluginIdsCache = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, string[] | undefined>
+>();
+
+function buildOwningProviderPluginIdsCacheKey(params: {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+}): string {
+  return JSON.stringify({
+    provider: normalizeProviderId(params.provider),
+    workspaceDir: params.workspaceDir ?? "",
+    plugins: params.config?.plugins ?? null,
+  });
+}
+
+export function resetProviderOwnerPluginIdsCacheForTest(): void {
+  owningProviderPluginIdsCache = new WeakMap<
+    NodeJS.ProcessEnv,
+    Map<string, string[] | undefined>
+  >();
+}
+
 function resolvePreferredManifestPluginIds(
   registry: PluginManifestRegistry,
   matchedPluginIds: readonly string[],
@@ -478,18 +502,33 @@ export function resolveOwningPluginIdsForProvider(params: {
     return pluginIds.length > 0 ? pluginIds : undefined;
   }
 
+  const env = params.env ?? process.env;
+  let envCache = owningProviderPluginIdsCache.get(env);
+  if (!envCache) {
+    envCache = new Map<string, string[] | undefined>();
+    owningProviderPluginIdsCache.set(env, envCache);
+  }
+  const cacheKey = buildOwningProviderPluginIdsCacheKey({
+    provider: normalizedProvider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  if (envCache.has(cacheKey)) {
+    return envCache.get(cacheKey);
+  }
+
   const pluginIds = [
     ...resolveProviderOwners({
       config: params.config,
       workspaceDir: params.workspaceDir,
-      env: params.env,
+      env,
       providerId: normalizedProvider,
       includeDisabled: true,
     }),
     ...resolvePluginContributionOwners({
       config: params.config,
       workspaceDir: params.workspaceDir,
-      env: params.env,
+      env,
       contribution: "cliBackends",
       matches: (backendId) => normalizeProviderId(backendId) === normalizedProvider,
       includeDisabled: true,
@@ -497,7 +536,9 @@ export function resolveOwningPluginIdsForProvider(params: {
   ];
 
   const deduped = dedupeSortedPluginIds(pluginIds);
-  return deduped.length > 0 ? deduped : undefined;
+  const resolved = deduped.length > 0 ? deduped : undefined;
+  envCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {

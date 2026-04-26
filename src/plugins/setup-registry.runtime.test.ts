@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry.js")>()),
   loadPluginRegistrySnapshot: loadPluginRegistrySnapshotMock,
 }));
 vi.mock("./manifest-registry-installed.js", () => ({

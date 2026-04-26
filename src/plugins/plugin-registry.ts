@@ -5,7 +5,9 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import {
+  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
+  refreshPersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
@@ -22,7 +24,12 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type {
+  PluginManifestContractListKey,
+  PluginManifestRecord,
+  PluginManifestRegistry,
+} from "./manifest-registry.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -59,6 +66,11 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
+};
+
+export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
+  includeDisabled?: boolean;
+  pluginIds?: readonly string[];
 };
 
 export type GetPluginRecordParams = LoadPluginRegistryParams & {
@@ -100,6 +112,25 @@ export type ResolveSetupProviderOwnersParams = PluginRegistryContributionOptions
   setupProviderId: string;
 };
 
+export type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
+  contract: PluginManifestContractListKey;
+  origin?: PluginOrigin;
+  onlyPluginIds?: readonly string[];
+};
+
+export type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
+  contract: PluginManifestContractListKey;
+  value: string | undefined;
+  origin?: PluginOrigin;
+};
+
+export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
+  LoadPluginRegistryParams & {
+    contract: PluginManifestContractListKey;
+    path: string | undefined;
+    origin?: PluginOrigin;
+  };
+
 function normalizeContributionId(value: string): string {
   return value.trim();
 }
@@ -130,6 +161,25 @@ function collectContractKeys(plugin: PluginManifestRecord): readonly string[] {
   return Object.entries(contracts).flatMap(([key, value]) =>
     Array.isArray(value) && value.length > 0 ? [key] : [],
   );
+}
+
+function listManifestContractValues(
+  plugin: PluginManifestRecord,
+  contract: PluginManifestContractListKey,
+): readonly string[] {
+  return plugin.contracts?.[contract] ?? [];
+}
+
+function loadManifestContractRegistry(
+  params: LoadPluginRegistryParams & {
+    onlyPluginIds?: readonly string[];
+  },
+): PluginManifestRegistry {
+  return loadPluginManifestRegistryForPluginRegistry({
+    ...params,
+    pluginIds: params.onlyPluginIds,
+    includeDisabled: true,
+  });
 }
 
 function listManifestContributionIds(
@@ -187,6 +237,20 @@ function loadContributionManifestRegistry(
       config: params.config,
     }),
     includeDisabled: true,
+  });
+}
+
+export function loadPluginManifestRegistryForPluginRegistry(
+  params: LoadPluginRegistryManifestParams = {},
+): PluginManifestRegistry {
+  const index = resolveSnapshot(params);
+  return loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    pluginIds: params.pluginIds,
+    includeDisabled: params.includeDisabled,
   });
 }
 
@@ -419,18 +483,61 @@ export function resolveSetupProviderOwners(
   });
 }
 
+export function resolveManifestContractPluginIds(
+  params: ResolveManifestContractPluginIdsParams,
+): string[] {
+  return loadManifestContractRegistry(params)
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        listManifestContractValues(plugin, params.contract).length > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
+  params: ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams,
+): string[] {
+  const normalizedPath = params.path?.trim();
+  if (!normalizedPath) {
+    return [];
+  }
+  return loadManifestContractRegistry(params)
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        listManifestContractValues(plugin, params.contract).length > 0 &&
+        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveManifestContractOwnerPluginId(
+  params: ResolveManifestContractOwnerPluginIdParams,
+): string | undefined {
+  const normalizedValue = normalizeContributionId(params.value ?? "").toLowerCase();
+  if (!normalizedValue) {
+    return undefined;
+  }
+  return loadManifestContractRegistry(params).plugins.find(
+    (plugin) =>
+      (!params.origin || plugin.origin === params.origin) &&
+      listManifestContractValues(plugin, params.contract).some(
+        (candidate) => normalizeContributionId(candidate).toLowerCase() === normalizedValue,
+      ),
+  )?.id;
+}
+
 export function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<PluginRegistryInspection> {
-  return import("./installed-plugin-index-store.js").then((store) =>
-    store.inspectPersistedInstalledPluginIndex(params),
-  );
+  return inspectPersistedInstalledPluginIndex(params);
 }
 
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  return import("./installed-plugin-index-store.js").then((store) =>
-    store.refreshPersistedInstalledPluginIndex(params),
-  );
+  return refreshPersistedInstalledPluginIndex(params);
 }

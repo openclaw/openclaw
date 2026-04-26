@@ -33,6 +33,7 @@ import {
 } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
@@ -50,8 +51,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayAuthResult } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -844,6 +844,7 @@ export function attachGatewayWsMessageHandler(params: {
           role,
           trustedProxyAuthOk,
           resolvedAuth.mode,
+          authMethod,
         );
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
@@ -1411,6 +1412,17 @@ export function attachGatewayWsMessageHandler(params: {
             .catch((err) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
+            );
+          void loadVoiceWakeRoutingConfig()
+            .then((routing) => {
+              context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
+                config: routing,
+              });
+            })
+            .catch((err) =>
+              logGateway.warn(
+                `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
             );
         }

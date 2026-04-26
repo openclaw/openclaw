@@ -11,6 +11,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
   listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
 }));

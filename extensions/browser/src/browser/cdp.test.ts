@@ -49,6 +49,19 @@ describe("cdp", () => {
           params?: Record<string, unknown>;
         };
         onMessage(msg, socket);
+        if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
       });
     });
     return wsPort;
@@ -87,7 +100,11 @@ describe("cdp", () => {
   });
 
   it("creates a target via the browser websocket", async () => {
+    const methods: string[] = [];
     const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
       if (msg.method !== "Target.createTarget") {
         return;
       }
@@ -109,6 +126,19 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
+    expect(methods).toEqual(
+      expect.arrayContaining([
+        "Target.createTarget",
+        "Target.attachToTarget",
+        "Page.enable",
+        "Runtime.enable",
+        "Network.enable",
+        "DOM.enable",
+        "Accessibility.enable",
+        "Runtime.runIfWaitingForDebugger",
+        "Target.detachFromTarget",
+      ]),
+    );
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
@@ -447,6 +477,18 @@ describe("cdp", () => {
         };
         if (msg.method === "Target.createTarget") {
           socket.send(JSON.stringify({ id: msg.id, result: { targetId: "ROOT_FALLBACK" } }));
+        } else if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
         }
       });
     });

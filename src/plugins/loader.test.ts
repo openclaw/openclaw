@@ -22,7 +22,8 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { clearPluginCommands } from "./command-registry-state.js";
+import { getPluginCommandSpecs } from "./command-specs.js";
 import {
   getGlobalHookRunner,
   getGlobalPluginRegistry,
@@ -99,6 +100,7 @@ function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime
     createRunningTaskRun: () => fail("createRunningTaskRun"),
     startTaskRunByRunId: () => fail("startTaskRunByRunId"),
     recordTaskRunProgressByRunId: () => fail("recordTaskRunProgressByRunId"),
+    finalizeTaskRunByRunId: () => fail("finalizeTaskRunByRunId"),
     completeTaskRunByRunId: () => fail("completeTaskRunByRunId"),
     failTaskRunByRunId: () => fail("failTaskRunByRunId"),
     setDetachedTaskDeliveryStatusByRunId: () => fail("setDetachedTaskDeliveryStatusByRunId"),
@@ -3301,6 +3303,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             createRunningTaskRun() { throw new Error("snapshot createRunningTaskRun should not run"); },
             startTaskRunByRunId() { throw new Error("snapshot startTaskRunByRunId should not run"); },
             recordTaskRunProgressByRunId() { throw new Error("snapshot recordTaskRunProgressByRunId should not run"); },
+            finalizeTaskRunByRunId() { throw new Error("snapshot finalizeTaskRunByRunId should not run"); },
             completeTaskRunByRunId() { throw new Error("snapshot completeTaskRunByRunId should not run"); },
             failTaskRunByRunId() { throw new Error("snapshot failTaskRunByRunId should not run"); },
             setDetachedTaskDeliveryStatusByRunId() { throw new Error("snapshot setDetachedTaskDeliveryStatusByRunId should not run"); },
@@ -3345,6 +3348,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             createRunningTaskRun() { throw new Error("failing createRunningTaskRun should not run"); },
             startTaskRunByRunId() { throw new Error("failing startTaskRunByRunId should not run"); },
             recordTaskRunProgressByRunId() { throw new Error("failing recordTaskRunProgressByRunId should not run"); },
+            finalizeTaskRunByRunId() { throw new Error("failing finalizeTaskRunByRunId should not run"); },
             completeTaskRunByRunId() { throw new Error("failing completeTaskRunByRunId should not run"); },
             failTaskRunByRunId() { throw new Error("failing failTaskRunByRunId should not run"); },
             setDetachedTaskDeliveryStatusByRunId() { throw new Error("failing setDetachedTaskDeliveryStatusByRunId should not run"); },
@@ -3386,6 +3390,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             createRunningTaskRun() { throw new Error("cached createRunningTaskRun should not run"); },
             startTaskRunByRunId() { throw new Error("cached startTaskRunByRunId should not run"); },
             recordTaskRunProgressByRunId() { throw new Error("cached recordTaskRunProgressByRunId should not run"); },
+            finalizeTaskRunByRunId() { throw new Error("cached finalizeTaskRunByRunId should not run"); },
             completeTaskRunByRunId() { throw new Error("cached completeTaskRunByRunId should not run"); },
             failTaskRunByRunId() { throw new Error("cached failTaskRunByRunId should not run"); },
             setDetachedTaskDeliveryStatusByRunId() { throw new Error("cached setDetachedTaskDeliveryStatusByRunId should not run"); },

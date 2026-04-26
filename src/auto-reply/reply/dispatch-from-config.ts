@@ -49,9 +49,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
   resolveConfiguredTtsMode,
+  shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -120,7 +122,13 @@ async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
   if (
-    !shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto, agentId: params.agentId })
+    !shouldAttemptTtsPayload({
+      cfg: params.cfg,
+      ttsAuto: params.ttsAuto,
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    })
   ) {
     return params.payload;
   }
@@ -732,6 +740,7 @@ export async function dispatchReplyFromConfig(
         inboundAudio,
         ttsAuto: sessionTtsAuto,
         agentId: sessionAgentId,
+        accountId: replyRoute.accountId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
@@ -931,7 +940,17 @@ export async function dispatchReplyFromConfig(
     // When block streaming succeeds, there's no final reply, so we need to generate
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
+    let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
+      cfg,
+      ttsAuto: sessionTtsAuto,
+      agentId: sessionAgentId,
+      channelId: deliveryChannel,
+      accountId: replyRoute.accountId,
+    })
+      ? createTtsDirectiveTextStreamCleaner()
+      : undefined;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -1000,6 +1019,7 @@ export async function dispatchReplyFromConfig(
               inboundAudio,
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
@@ -1076,11 +1096,27 @@ export async function dispatchReplyFromConfig(
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
             if (payload.text && !payload.isCompactionNotice) {
+              const joinsBufferedTtsDirective =
+                cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
               accumulatedBlockText += payload.text;
+              if (accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+                accumulatedBlockTtsText += "\n";
+              }
+              accumulatedBlockTtsText += payload.text;
               blockCount++;
+            }
+            const visiblePayload =
+              payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                ? (() => {
+                    const text = cleanBlockTtsDirectiveText.push(payload.text);
+                    return { ...payload, text: text.trim() ? text : undefined };
+                  })()
+                : payload;
+            if (!resolveSendableOutboundReplyParts(visiblePayload).hasContent) {
+              return;
             }
             // Channels that keep a live draft preview may need to rotate their
             // preview state at the logical block boundary before queued block
@@ -1093,15 +1129,16 @@ export async function dispatchReplyFromConfig(
                     assistantMessageIndex: payloadMetadata.assistantMessageIndex,
                   }
                 : context;
-            await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
+            await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
             const ttsPayload = await maybeApplyTtsToReplyPayload({
-              payload,
+              payload: visiblePayload,
               cfg,
               channel: deliveryChannel,
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
@@ -1172,7 +1209,11 @@ export async function dispatchReplyFromConfig(
         routedFinalCount += finalReply.routedFinalCount;
       }
 
-      const ttsMode = resolveConfiguredTtsMode(cfg, sessionAgentId);
+      const ttsMode = resolveConfiguredTtsMode(cfg, {
+        agentId: sessionAgentId,
+        channelId: deliveryChannel,
+        accountId: replyRoute.accountId,
+      });
       // Generate TTS-only reply after block streaming completes (when there's no final reply).
       // This handles the case where block streaming succeeds and drops final payloads,
       // but we still want TTS audio to be generated from the accumulated block content.
@@ -1180,17 +1221,18 @@ export async function dispatchReplyFromConfig(
         ttsMode === "final" &&
         replies.length === 0 &&
         blockCount > 0 &&
-        accumulatedBlockText.trim()
+        accumulatedBlockTtsText.trim()
       ) {
         try {
           const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-            payload: { text: accumulatedBlockText },
+            payload: { text: accumulatedBlockTtsText },
             cfg,
             channel: deliveryChannel,
             kind: "final",
             inboundAudio,
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
+            accountId: replyRoute.accountId,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
@@ -1199,9 +1241,10 @@ export async function dispatchReplyFromConfig(
             const ttsOnlyPayload: ReplyPayload = {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockText,
+              spokenText: accumulatedBlockTtsText,
             };
-            const result = await routeReplyToOriginating(ttsOnlyPayload);
+            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {
               queuedFinal = result.ok || queuedFinal;
               if (result.ok) {
@@ -1213,7 +1256,7 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
-              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
           }

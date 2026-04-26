@@ -47,9 +47,10 @@ Notes:
 - `models list` is read-only: it reads config, auth profiles, existing catalog
   state, and provider-owned catalog rows, but it does not rewrite
   `models.json`.
-- `models list --all` includes bundled provider-owned static catalog rows even
-  when you have not authenticated with that provider yet. Those rows still show
-  as unavailable until matching auth is configured.
+- `models list --all --provider <id>` can include provider-owned static catalog
+  rows from plugin manifests or bundled provider catalog metadata even when you
+  have not authenticated with that provider yet. Those rows still show as
+  unavailable until matching auth is configured.
 - `models list` keeps native model metadata and runtime caps distinct. In table
   output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime
   cap differs from the native context window; JSON rows include `contextTokens`
@@ -153,6 +154,9 @@ provider you choose.
 
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
+Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
+specific configured agent store. The parent `--agent` flag is honored by
+`add`, `login`, `setup-token`, `paste-token`, and `login-github-copilot`.
 
 Examples:
 

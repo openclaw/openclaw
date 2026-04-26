@@ -18,6 +18,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
 }));
@@ -94,6 +95,8 @@ describe("listManifestInstalledChannelIds", () => {
       },
       contribution: "channels",
       config: autoEnabledConfig,
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" },
     });
     expect(installedIds).toEqual(new Set(["slack"]));
   });

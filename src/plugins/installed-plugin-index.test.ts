@@ -127,6 +127,7 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
       "demo-chat": ["DEMO_CHAT_TOKEN"],
     },
     activation: {
+      onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
       onChannels: ["demo-chat"],
     },
@@ -138,6 +139,16 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
       packageName: "@vendor/demo-plugin",
       packageVersion: params.packageVersion ?? "1.2.3",
       packageManifest: {
+        channel: {
+          id: "demo",
+          label: "Demo",
+          blurb: "Demo channel",
+          preferOver: ["legacy-demo"],
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: false,
+          },
+        },
         install: {
           npmSpec: "@vendor/demo-plugin@1.2.3",
           expectedIntegrity: "sha512-demo",
@@ -184,7 +195,18 @@ describe("installed plugin index", () => {
             },
             warnings: [],
           },
+          packageChannel: {
+            id: "demo",
+            label: "Demo",
+            blurb: "Demo channel",
+            preferOver: ["legacy-demo"],
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
           compat: [
+            "activation-agent-harness-hint",
             "activation-channel-hint",
             "activation-provider-hint",
             "channel-env-vars",

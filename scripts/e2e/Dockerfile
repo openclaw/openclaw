@@ -40,7 +40,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/
 
 FROM deps AS build
 
-COPY --chown=appuser:appuser tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts openclaw.mjs ./
+COPY --chown=appuser:appuser .oxlintrc.json tsconfig.json tsconfig.plugin-sdk.dts.json tsconfig.oxlint*.json tsdown.config.ts vitest.config.ts openclaw.mjs ./
 COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser test ./test
 COPY --chown=appuser:appuser scripts ./scripts
@@ -48,7 +48,7 @@ COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser packages ./packages
 COPY --chown=appuser:appuser skills ./skills
 COPY --chown=appuser:appuser ui ./ui
-COPY --link --chown=appuser:appuser extensions ./extensions
+COPY --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser vendor/a2ui/renderers/lit ./vendor/a2ui/renderers/lit
 COPY --chown=appuser:appuser apps/shared/OpenClawKit/Sources/OpenClawKit/Resources ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources
 COPY --chown=appuser:appuser apps/shared/OpenClawKit/Tools/CanvasA2UI ./apps/shared/OpenClawKit/Tools/CanvasA2UI

@@ -388,7 +388,10 @@ export async function maybeApprovePendingBridgePairing(
     }>("device.pair.list", {});
   } catch (error) {
     const message = formatErrorMessage(error);
-    if (message.includes("missing scope: operator.pairing")) {
+    if (
+      message.includes("missing scope: operator.pairing") ||
+      message.includes("device.pair.list")
+    ) {
       return false;
     }
     throw error;

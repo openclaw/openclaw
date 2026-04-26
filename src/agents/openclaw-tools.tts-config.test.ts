@@ -167,6 +167,85 @@ describe("createOpenClawTools TTS config wiring", () => {
       __testing.setDepsForTest();
     }
   });
+
+  it("passes the resolved session agent id into the tts tool", async () => {
+    const injectedConfig = {
+      agents: {
+        list: [{ id: "reader" }, { id: "main" }],
+      },
+    } satisfies OpenClawConfig;
+
+    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
+    __testing.setDepsForTest({ config: injectedConfig });
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:reader:telegram:chat:123",
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).find((candidate) => candidate.name === "tts");
+
+      if (!tool) {
+        throw new Error("missing tts tool");
+      }
+
+      await tool.execute("call-1", { text: "hello from reader" });
+
+      expect(mocks.textToSpeech).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello from reader",
+          agentId: "reader",
+        }),
+      );
+    } finally {
+      __testing.setDepsForTest();
+    }
+  });
+
+  it("passes the active account id into the tts tool", async () => {
+    const injectedConfig = {
+      channels: {
+        feishu: {
+          accounts: {
+            "feishu-main": {
+              tts: {
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
+    __testing.setDepsForTest({ config: injectedConfig });
+
+    try {
+      const tool = createOpenClawTools({
+        agentChannel: "feishu",
+        agentAccountId: "feishu-main",
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).find((candidate) => candidate.name === "tts");
+
+      if (!tool) {
+        throw new Error("missing tts tool");
+      }
+
+      await tool.execute("call-1", { text: "hello from account" });
+
+      expect(mocks.textToSpeech).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello from account",
+          cfg: injectedConfig,
+          channel: "feishu",
+          accountId: "feishu-main",
+        }),
+      );
+    } finally {
+      __testing.setDepsForTest();
+    }
+  });
 });
 
 describe("createOpenClawTools cron context wiring", () => {

@@ -175,6 +175,10 @@ export type SessionEntry = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
+  /** Hash of the latest assistant reply that was sent through `/tts latest`. */
+  lastTtsReadLatestHash?: string;
+  /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
+  lastTtsReadLatestAt?: number;
   execHost?: string;
   execSecurity?: string;
   execAsk?: string;
