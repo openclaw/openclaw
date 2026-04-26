@@ -376,6 +376,10 @@ export async function projectPluginSessionExtensions(params: {
           state,
         })
       : state;
+    if (isPromiseLike(projected)) {
+      discardUnexpectedPromiseProjection(projected);
+      continue;
+    }
     if (projected !== undefined && isPluginJsonValue(projected)) {
       projections.push({
         pluginId: registration.pluginId,
@@ -387,8 +391,12 @@ export async function projectPluginSessionExtensions(params: {
   return projections;
 }
 
-function isPromiseLike(value: unknown): value is Promise<unknown> {
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return Boolean(value && typeof (value as { then?: unknown }).then === "function");
+}
+
+function discardUnexpectedPromiseProjection(value: PromiseLike<unknown>): void {
+  void Promise.resolve(value).catch(() => undefined);
 }
 
 export function projectPluginSessionExtensionsSync(params: {
@@ -415,7 +423,11 @@ export function projectPluginSessionExtensionsSync(params: {
           state,
         })
       : state;
-    if (isPromiseLike(projected) || projected === undefined || !isPluginJsonValue(projected)) {
+    if (isPromiseLike(projected)) {
+      discardUnexpectedPromiseProjection(projected);
+      continue;
+    }
+    if (projected === undefined || !isPluginJsonValue(projected)) {
       continue;
     }
     projections.push({

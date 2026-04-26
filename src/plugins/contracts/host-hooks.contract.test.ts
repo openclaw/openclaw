@@ -31,6 +31,7 @@ import {
   drainPluginNextTurnInjections,
   enqueuePluginNextTurnInjection,
   patchPluginSessionExtension,
+  projectPluginSessionExtensions,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
@@ -310,6 +311,45 @@ describe("host-hook fixture plugin contract", () => {
         }),
       ]),
     );
+  });
+
+  it("defensively ignores promise-like session projections from untyped plugins", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "promise-projector-fixture",
+        name: "Promise Projector Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Promise workflow state",
+          project: (() =>
+            Promise.reject(
+              new Error("projectors must be synchronous"),
+            )) as unknown as () => undefined,
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    const entry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      pluginExtensions: {
+        "promise-projector-fixture": {
+          workflow: { state: "waiting" },
+        },
+      },
+    };
+
+    expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual(
+      [],
+    );
+    await expect(
+      projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
+    ).resolves.toEqual([]);
   });
 
   it("requires explicit unset to remove plugin session extension state", async () => {
