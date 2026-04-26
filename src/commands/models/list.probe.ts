@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
@@ -296,25 +297,14 @@ export async function buildProbeTargets(params: {
     const runtimeProfileProviderKey = isCliProvider(cliExecutionProvider, cfg)
       ? normalizeProviderId(cliExecutionProvider)
       : providerKey;
+    const canonicalProfileIds = listProfilesForProvider(store, providerKey);
     const runtimeProfileIds =
       runtimeProfileProviderKey !== providerKey
         ? listProfilesForProvider(store, runtimeProfileProviderKey)
         : [];
-    const profileProviderKey =
-      runtimeProfileIds.length > 0 ? runtimeProfileProviderKey : providerKey;
-    const profileIds =
-      runtimeProfileIds.length > 0
-        ? runtimeProfileIds
-        : listProfilesForProvider(store, providerKey);
-    const explicitOrder =
-      findNormalizedProviderValue(store.order, providerKey) ??
-      findNormalizedProviderValue(cfg?.auth?.order, providerKey) ??
-      findNormalizedProviderValue(store.order, profileProviderKey) ??
-      findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey);
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: profileProviderKey }))
-        : null;
+    const runtimeProfileIdSet = new Set(runtimeProfileIds);
+    const canonicalProfileIdSet = new Set(canonicalProfileIds);
+    const profileIds = dedupeProfileIds([...canonicalProfileIds, ...runtimeProfileIds]);
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
       : profileIds;
@@ -322,6 +312,17 @@ export async function buildProbeTargets(params: {
     if (filteredProfiles.length > 0) {
       for (const profileId of filteredProfiles) {
         const profile = store.profiles[profileId];
+        const profileProviderKey =
+          runtimeProfileIdSet.has(profileId) && !canonicalProfileIdSet.has(profileId)
+            ? runtimeProfileProviderKey
+            : providerKey;
+        const explicitOrder =
+          findNormalizedProviderValue(store.order, profileProviderKey) ??
+          findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey);
+        const allowedProfiles =
+          explicitOrder && explicitOrder.length > 0
+            ? new Set(resolveAuthProfileOrder({ cfg, store, provider: profileProviderKey }))
+            : null;
         const mode = profile?.type;
         const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
         if (explicitOrder && !explicitOrder.includes(profileId)) {
