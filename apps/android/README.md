@@ -17,6 +17,7 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
+- [x] Nemo Buddy foreground mode MVP
 - [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio

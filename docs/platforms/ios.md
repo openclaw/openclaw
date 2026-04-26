@@ -15,6 +15,10 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 - Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
 - Receives `node.invoke` commands and reports node status events.
 
+## Buddy compatibility
+
+iOS shares the Nemo Buddy state model and default wake word (`NemoNemo`) with Android. The first Buddy UI implementation is Android-first because the product target is an old foreground Android phone, but iOS keeps the same model names and state priority so a SwiftUI Buddy screen can be added without redefining the protocol.
+
 ## Requirements
 
 - Gateway running on another device (macOS, Linux, or Windows via WSL2).

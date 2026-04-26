@@ -213,6 +213,24 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
 
+### Buddy mode
+
+The Android app includes Nemo Buddy mode for foreground, screen-on companion use on an old phone. Nemo is the pet-like face of the connected OpenClaw Agent. The default wake word is `NemoNemo`.
+
+Buddy mode translates node and agent state into expressions and short user-facing overlays. It avoids showing raw session, tool, token, route, or log details in the primary UI.
+
+Camera behavior:
+
+- User voice or touch can trigger a foreground `camera.snap` flow.
+- Agent-initiated camera requests are represented as Buddy confirmation prompts; command-policy enforcement belongs with the Gateway/node invoke layer.
+- Camera preview is not kept open while idle.
+
+Voice behavior:
+
+- Wake-word listening is intended for foreground use.
+- Ambient audio should stay local until wake detection.
+- Talk and voice wake still need microphone permission and Android foreground-service microphone requirements.
+
 ## Assistant entrypoints
 
 Android supports launching OpenClaw from the system assistant trigger (Google
