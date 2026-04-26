@@ -135,7 +135,7 @@ export function buildPortkeyImageGenerationProvider(): ImageGenerationProvider {
             size,
           };
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/${endpoint}`,
+        url: `${baseUrl.replace(/\/$/, "")}/${endpoint}`,
         headers: jsonHeaders,
         body,
         timeoutMs: req.timeoutMs,

@@ -39,8 +39,6 @@ describeLive("portkey plugin live", () => {
       max_tokens: 16,
     });
 
-    console.log("Portkey response:", JSON.stringify(response, null, 2));
-
     expect(response.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
   }, 30_000);
 
