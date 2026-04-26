@@ -291,7 +291,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             sessionKey: "agent:main:main",
             isGroup: false,
           },
-          {},
+          { channelId: "telegram" },
         ),
       ).resolves.toEqual({
         handled: true,
