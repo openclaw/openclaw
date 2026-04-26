@@ -43,7 +43,6 @@ const SSH_KEY = path.join(os.homedir(), ".ssh", "google_compute_engine");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let prevCommitHash = null; // detect new commits
-let prevSessionFile = null; // detect session changes
 let prevCurrentWorkHash = null; // only sync to GCP when content changes
 
 let sessionWatcher = null; // fs.FSWatcher for active transcript
@@ -392,9 +391,11 @@ async function notifyBucky(message) {
 async function tick() {
   const claudeCtx = getActiveClaudeProject();
 
-  // Start watching the active session file for live context
+  // Start watching the active session file for live context; clear stale state when no session
   if (claudeCtx?.sessionFile) {
     setupWatcher(claudeCtx.sessionFile);
+  } else {
+    sessionState = null;
   }
 
   const gitCtx = getGitContext(claudeCtx?.cwd || null);
@@ -417,7 +418,6 @@ async function tick() {
     }
   }
   prevCommitHash = gitCtx?.commitHash ?? prevCommitHash;
-  prevSessionFile = claudeCtx?.sessionFile ?? prevSessionFile;
 
   const action = sessionState?.claudeAction || "no session";
   const ts = new Date().toISOString().slice(11, 19);

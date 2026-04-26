@@ -19,7 +19,17 @@ function parseTranscript(filePath, fromLine = 0) {
   }
 
   const lines = raw.split("\n").filter(Boolean);
-  const newLines = lines.slice(fromLine);
+  // Don't count the last line if it's a partial write (fails JSON parse)
+  const lastLine = lines[lines.length - 1];
+  let safeLineCount = lines.length;
+  if (lastLine) {
+    try {
+      JSON.parse(lastLine);
+    } catch {
+      safeLineCount = lines.length - 1;
+    }
+  }
+  const newLines = lines.slice(fromLine, safeLineCount);
 
   const state = {
     lastUserMessage: null,
@@ -28,7 +38,7 @@ function parseTranscript(filePath, fromLine = 0) {
     lastBashCommand: null,
     recentError: null,
     lastActivityMs: null,
-    lineCount: lines.length,
+    lineCount: safeLineCount,
   };
 
   for (const line of newLines) {
