@@ -45,6 +45,7 @@
     "!dist/qa-runtime-*.js",
     "docs/",
     "!docs/.generated/**",
+    "patches/",
     "skills/",
     "scripts/npm-runner.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
