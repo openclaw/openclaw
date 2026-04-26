@@ -288,6 +288,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Claude CLI: allow large live `stream-json` JSONL lines up to the existing per-turn raw limit, preventing large Telegram, WebChat, MCP, and image turns from aborting on the old stdout buffer cap. Fixes #71793, #71080, and #70766. (#71897) Thanks @chacher86, @shivamgrover21, and @tpjordan.
 - Agents/Claude CLI: unwrap nested Claude result envelopes in CLI JSON output so delegated agent responses surface as final text instead of raw result JSON. (#66819) Thanks @mraleko.
 - Agents/Claude CLI: apply the configured 1M context window override to eligible Claude CLI Opus and Sonnet models when `context1m` is enabled. (#70863) Thanks @bidadh.
+- Models/status: report fresh Claude CLI native auth instead of stale stored `anthropic:claude-cli` profile expiry when local credentials are current. Fixes #71256. (#71332) Thanks @matthiasjanke and @neeravmakwana.
 
 ## 2026.4.24
 
@@ -370,7 +371,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Models/status: report fresh Claude CLI native auth instead of stale stored `anthropic:claude-cli` profile expiry when local Claude credentials are current. Fixes #71256. Thanks @matthiasjanke.
 - Packaged installs: preserve package-root runtime dependencies and their exported subpaths when bundled plugin runtime mirrors fall back to copying shared chunks, fixing Windows npm updates that could fail to load copied `dist` modules.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
