@@ -423,6 +423,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/diagnostics-prometheus:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
