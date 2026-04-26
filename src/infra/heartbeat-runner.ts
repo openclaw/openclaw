@@ -576,7 +576,10 @@ async function resolveHeartbeatPreflight(params: {
     forcedRawKey && !isSubagentSessionKey(forcedRawKey) ? peekSystemEventEntries(forcedRawKey) : [];
   const shouldHonorForcedSessionKey = Boolean(
     forcedSession &&
-    (reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || reasonFlags.isWakeReason),
+    (!params.reason ||
+      reasonFlags.isExecEventReason ||
+      reasonFlags.isCronEventReason ||
+      reasonFlags.isWakeReason),
   );
   const forcedRawNormalized = normalizeLowercaseStringOrEmpty(forcedRawKey);
   const shouldUseRawForcedSession = Boolean(
