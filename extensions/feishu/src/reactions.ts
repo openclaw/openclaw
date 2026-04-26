@@ -65,49 +65,49 @@ export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];
  *
  * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
  */
+const UNICODE_TO_FEISHU_EMOJI: Record<string, FeishuEmojiType> = {
+  "👍": "THUMBSUP",
+  "👎": "THUMBSDOWN",
+  "❤️": "HEART", // U+2764 U+FE0F (emoji presentation)
+  "❤": "HEART", // U+2764 (text presentation / bare form)
+  "🧡": "HEART",
+  "💛": "HEART",
+  "💚": "HEART",
+  "💙": "HEART",
+  "💜": "HEART",
+  "🖤": "HEART",
+  "🤍": "HEART",
+  "😊": "SMILE",
+  "😄": "SMILE",
+  "😁": "GRINNING",
+  "😂": "LAUGHING",
+  "🤣": "LAUGHING",
+  "😭": "CRY",
+  "😡": "ANGRY",
+  "😮": "SURPRISED",
+  "🤔": "THINKING",
+  "👏": "CLAP",
+  "🙌": "CLAP",
+  "👍🏿": "THUMBSUP",
+  "👍🏾": "THUMBSUP",
+  "👍🏽": "THUMBSUP",
+  "👍🏼": "THUMBSUP",
+  "👍🏻": "THUMBSUP",
+  "🙏": "PRAY",
+  "🔥": "FIRE",
+  "🎉": "PARTY",
+  "✅": "CHECK",
+  "❌": "CROSS",
+  "❓": "QUESTION",
+  "❗": "EXCLAMATION",
+  "💯": "EXCLAMATION",
+};
+
 export function toFeishuEmojiType(input: string): string {
-  // Feishu enum strings pass through unchanged (case-sensitive)
   if (Object.values(FeishuEmoji).includes(input as FeishuEmojiType)) {
     return input;
   }
-  // Map common Unicode emojis to Feishu enum values
-  const unicodeMap: Record<string, FeishuEmojiType> = {
-    "👍": "THUMBSUP",
-    "👎": "THUMBSDOWN",
-    "❤️": "HEART",
-    "🧡": "HEART",
-    "💛": "HEART",
-    "💚": "HEART",
-    "💙": "HEART",
-    "💜": "HEART",
-    "🖤": "HEART",
-    "🤍": "HEART",
-    "😊": "SMILE",
-    "😄": "SMILE",
-    "😁": "GRINNING",
-    "😂": "LAUGHING",
-    "🤣": "LAUGHING",
-    "😭": "CRY",
-    "😡": "ANGRY",
-    "😮": "SURPRISED",
-    "🤔": "THINKING",
-    "👏": "CLAP",
-    "🙌": "CLAP",
-    "👍🏿": "THUMBSUP",
-    "👍🏾": "THUMBSUP",
-    "👍🏽": "THUMBSUP",
-    "👍🏼": "THUMBSUP",
-    "👍🏻": "THUMBSUP",
-    "🙏": "PRAY",
-    "🔥": "FIRE",
-    "🎉": "PARTY",
-    "✅": "CHECK",
-    "❌": "CROSS",
-    "❓": "QUESTION",
-    "❗": "EXCLAMATION",
-    "💯": "EXCLAMATION",
-  };
-  return unicodeMap[input] ?? "THUMBSUP";
+  return UNICODE_TO_FEISHU_EMOJI[input] ?? "THUMBSUP";
 }
 
 /**

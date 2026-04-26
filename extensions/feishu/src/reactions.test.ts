@@ -30,7 +30,7 @@ describe("toFeishuEmojiType", () => {
   });
 
   it("maps all heart colour variants to HEART", () => {
-    const hearts = ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍"];
+    const hearts = ["❤️", "❤", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍"];
     for (const heart of hearts) {
       expect(toFeishuEmojiType(heart)).toBe("HEART");
     }
