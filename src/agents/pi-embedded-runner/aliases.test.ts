@@ -35,7 +35,7 @@ describe("embedded runner compatibility aliases", () => {
     expect(runEmbeddedAgentFromNeutralDirBarrel).toBe(runEmbeddedPiAgent);
     expect(compactEmbeddedAgentSessionFromNeutralDirBarrel).toBe(compactEmbeddedPiSession);
     expect(abortEmbeddedAgentRunFromNeutralDirBarrel).toBe(abortEmbeddedPiRun);
-    // Deprecated PI directory barrel chains through the canonical directory barrel.
+    // Deprecated PI directory barrel resolves through the flat PI compatibility barrel.
     expect(runEmbeddedAgentFromPiDirBarrel).toBe(runEmbeddedPiAgent);
     expect(runEmbeddedPiAgentFromPiDirBarrel).toBe(runEmbeddedPiAgent);
     expect(compactEmbeddedAgentSessionFromPiDirBarrel).toBe(compactEmbeddedPiSession);

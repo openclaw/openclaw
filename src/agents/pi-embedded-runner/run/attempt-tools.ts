@@ -74,7 +74,9 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
+  return params.toolsAllow.some(
+    (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
+  );
 }
 
 export function collectAttemptExplicitToolAllowlistSources(params: {

@@ -707,6 +707,55 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("jumps directly to a later live-session model switch candidate (#57471)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [
+              "anthropic/claude-haiku-3-5",
+              "anthropic/claude-sonnet-4-6",
+              "openrouter/deepseek-chat",
+            ],
+          },
+        },
+      },
+    });
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        throw switchError;
+      }
+      if (provider === "anthropic" && model === "claude-sonnet-4-6") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+    const onError = vi.fn();
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onError,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-sonnet-4-6");
+    expect(result.attempts).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-sonnet-4-6"],
+    ]);
+  });
+
   it("falls back on auth errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",

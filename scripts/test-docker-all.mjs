@@ -15,6 +15,8 @@ const DEFAULT_LIVE_RETRIES = 1;
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
+const DEFAULT_PROFILE = "all";
+const RELEASE_PATH_PROFILE = "release-path";
 const LIVE_PROFILE_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
@@ -367,6 +369,95 @@ const exclusiveLanes = [
 
 const tailLanes = exclusiveLanes;
 
+const releasePathChunks = {
+  core: [
+    lane("qr", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:qr"),
+    serviceLane("onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard", {
+      weight: 2,
+    }),
+    serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+    serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
+    lane(
+      "session-runtime-context",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+    ),
+    lane(
+      "pi-bundle-mcp-tools",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools",
+    ),
+    serviceLane("mcp-channels", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels", {
+      resources: ["npm"],
+      weight: 3,
+    }),
+  ],
+  "package-update": [
+    npmLane("install-e2e", "OPENCLAW_E2E_MODELS=both pnpm test:install:e2e", {
+      resources: ["service"],
+      weight: 4,
+    }),
+    npmLane(
+      "npm-onboard-channel-agent",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+      { resources: ["service"], weight: 3 },
+    ),
+    npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+      weight: 3,
+    }),
+    npmLane(
+      "update-channel-switch",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
+      {
+        timeoutMs: 30 * 60 * 1000,
+        weight: 3,
+      },
+    ),
+  ],
+  "plugins-integrations": [
+    lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
+      resources: ["npm", "service"],
+      weight: 6,
+    }),
+    npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
+    npmLane(
+      "bundled-channel-deps",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps",
+      { resources: ["service"], weight: 3 },
+    ),
+    serviceLane(
+      "cron-mcp-cleanup",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
+      {
+        resources: ["npm"],
+        weight: 3,
+      },
+    ),
+    serviceLane(
+      "openai-web-search-minimal",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
+      { timeoutMs: 8 * 60 * 1000 },
+    ),
+  ],
+};
+
+function releasePathChunkLanes(chunk, options = {}) {
+  const base = releasePathChunks[chunk];
+  if (!base) {
+    throw new Error(
+      `OPENCLAW_DOCKER_ALL_CHUNK must be one of: ${Object.keys(releasePathChunks).join(", ")}. Got: ${JSON.stringify(chunk)}`,
+    );
+  }
+  if (chunk !== "plugins-integrations" || !options.includeOpenWebUI) {
+    return base;
+  }
+  return [
+    ...base,
+    serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+      timeoutMs: OPENWEBUI_TIMEOUT_MS,
+      weight: 5,
+    }),
+  ];
+}
+
 function parsePositiveInt(raw, fallback, label) {
   if (!raw) {
     return fallback;
@@ -403,6 +494,16 @@ function parseLiveMode(raw) {
   }
   throw new Error(
     `OPENCLAW_DOCKER_ALL_LIVE_MODE must be one of: all, skip, only. Got: ${JSON.stringify(raw)}`,
+  );
+}
+
+function parseProfile(raw) {
+  const profile = raw || DEFAULT_PROFILE;
+  if (profile === DEFAULT_PROFILE || profile === RELEASE_PATH_PROFILE) {
+    return profile;
+  }
+  throw new Error(
+    `OPENCLAW_DOCKER_ALL_PROFILE must be one of: ${DEFAULT_PROFILE}, ${RELEASE_PATH_PROFILE}. Got: ${JSON.stringify(raw)}`,
   );
 }
 
@@ -565,6 +666,17 @@ async function writeTimingStore(timingStore, results) {
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
 
+async function writeRunSummary(logDir, summary) {
+  const file = path.join(logDir, "summary.json");
+  const payload = {
+    ...summary,
+    finishedAt: new Date().toISOString(),
+    version: 1,
+  };
+  await fs.promises.writeFile(file, `${JSON.stringify(payload, null, 2)}\n`);
+  console.log(`==> Docker run summary: ${file}`);
+}
+
 function printLaneManifest(label, poolLanes, timingStore) {
   console.log(`==> ${label} lanes (${poolLanes.length})`);
   for (const [index, poolLane] of poolLanes.entries()) {
@@ -572,6 +684,13 @@ function printLaneManifest(label, poolLanes, timingStore) {
     const estimate = seconds > 0 ? ` last=${Math.round(seconds)}s` : "";
     console.log(`  ${index + 1}. ${laneSummary(poolLane)}${estimate}`);
   }
+}
+
+function lanesNeedBundledPackage(poolLanes) {
+  return poolLanes.some(
+    (poolLane) =>
+      poolLane.name === "npm-onboard-channel-agent" || poolLane.name.startsWith("bundled-channel"),
+  );
 }
 
 function dockerPreflightContainerNames(raw) {
@@ -1077,6 +1196,7 @@ process.on("SIGTERM", () => {
 });
 
 async function main() {
+  const runStartedAt = new Date().toISOString();
   const parallelism = parsePositiveInt(
     process.env.OPENCLAW_DOCKER_ALL_PARALLELISM,
     DEFAULT_PARALLELISM,
@@ -1117,6 +1237,13 @@ async function main() {
   const preflightEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_PREFLIGHT, true);
   const preflightCleanup = parseBool(process.env.OPENCLAW_DOCKER_ALL_PREFLIGHT_CLEANUP, true);
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
+  const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
+  const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
+  const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
+  const includeOpenWebUI = parseBool(
+    process.env.OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI ?? process.env.INCLUDE_OPENWEBUI,
+    true,
+  );
   const liveMode = parseLiveMode(process.env.OPENCLAW_DOCKER_ALL_LIVE_MODE);
   const liveRetries = parseNonNegativeInt(
     process.env.OPENCLAW_DOCKER_ALL_LIVE_RETRIES,
@@ -1143,15 +1270,25 @@ async function main() {
   const timingStore = await loadTimingStore(timingsFile, timingsEnabled);
   const retriedMainLanes = applyLiveRetries(lanes, liveRetries);
   const retriedTailLanes = applyLiveRetries(tailLanes, liveRetries);
-  const configuredLanes =
-    liveMode === "only"
+  const releaseLanes =
+    profile === RELEASE_PATH_PROFILE
+      ? releasePathChunkLanes(releaseChunk, { includeOpenWebUI })
+      : undefined;
+  const configuredLanes = releaseLanes
+    ? releaseLanes
+    : liveMode === "only"
       ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], liveMode)
       : applyLiveMode(retriedMainLanes, liveMode);
-  const configuredTailLanes = liveMode === "only" ? [] : applyLiveMode(retriedTailLanes, liveMode);
+  const configuredTailLanes = releaseLanes
+    ? []
+    : liveMode === "only"
+      ? []
+      : applyLiveMode(retriedTailLanes, liveMode);
   const orderedLanes = orderLanes(configuredLanes, timingStore);
   const orderedTailLanes = orderLanes(configuredTailLanes, timingStore);
 
   console.log(`==> Docker test logs: ${logDir}`);
+  console.log(`==> Profile: ${profile}${releaseChunk ? ` chunk=${releaseChunk}` : ""}`);
   console.log(`==> Parallelism: ${parallelism}`);
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
@@ -1166,6 +1303,10 @@ async function main() {
       preflightCleanup ? " cleanup=yes" : " cleanup=no"
     }`,
   );
+  console.log(`==> Build shared Docker images: ${buildEnabled ? "yes" : "no"}`);
+  if (profile === RELEASE_PATH_PROFILE) {
+    console.log(`==> Include Open WebUI: ${includeOpenWebUI ? "yes" : "no"}`);
+  }
   console.log(`==> Docker lane timings: ${timingStore.enabled ? timingsFile : "disabled"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
   const schedulerOptions = parseSchedulerOptions(process.env, parallelism);
@@ -1189,17 +1330,24 @@ async function main() {
     runTimeoutMs: preflightRunTimeoutMs,
   });
 
-  await runForegroundGroup(
-    [
-      ["Build shared live-test image once", "pnpm test:docker:live-build"],
-      [
-        `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
-        "pnpm test:docker:e2e-build",
-      ],
-    ],
-    baseEnv,
-  );
-  await prepareBundledChannelPackage(baseEnv, logDir);
+  if (buildEnabled) {
+    const buildEntries = [];
+    if ([...orderedLanes, ...orderedTailLanes].some((poolLane) => poolLane.live)) {
+      buildEntries.push(["Build shared live-test image once", "pnpm test:docker:live-build"]);
+    }
+    buildEntries.push([
+      `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
+      "pnpm test:docker:e2e-build",
+    ]);
+    await runForegroundGroup(buildEntries, baseEnv);
+  } else {
+    console.log(`==> Shared Docker image builds: skipped`);
+  }
+  if (lanesNeedBundledPackage([...orderedLanes, ...orderedTailLanes])) {
+    await prepareBundledChannelPackage(baseEnv, logDir);
+  } else {
+    console.log("==> Bundled channel package: not needed for selected lanes");
+  }
 
   const options = {
     ...schedulerOptions,
@@ -1214,30 +1362,65 @@ async function main() {
   const allResults = [...mainResult.results];
   await writeTimingStore(timingStore, mainResult.results);
   if (failFast && failures.length > 0) {
+    await writeRunSummary(logDir, {
+      chunk: releaseChunk || undefined,
+      failures,
+      image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+      lanes: allResults,
+      profile,
+      startedAt: runStartedAt,
+      status: "failed",
+    });
     await printFailureSummary(failures, tailLines);
     process.exit(1);
   }
 
-  console.log("==> Running provider-sensitive Docker tail lanes");
-  const tailResult = await runLanePool(orderedTailLanes, baseEnv, logDir, tailParallelism, {
-    ...options,
-    ...tailSchedulerOptions,
-    poolLabel: "tail",
-  });
-  failures.push(...tailResult.failures);
-  allResults.push(...tailResult.results);
-  await writeTimingStore(timingStore, tailResult.results);
+  if (orderedTailLanes.length > 0) {
+    console.log("==> Running provider-sensitive Docker tail lanes");
+    const tailResult = await runLanePool(orderedTailLanes, baseEnv, logDir, tailParallelism, {
+      ...options,
+      ...tailSchedulerOptions,
+      poolLabel: "tail",
+    });
+    failures.push(...tailResult.failures);
+    allResults.push(...tailResult.results);
+    await writeTimingStore(timingStore, tailResult.results);
+  } else {
+    console.log("==> Provider-sensitive Docker tail lanes: none");
+  }
   if (failures.length > 0) {
+    await writeRunSummary(logDir, {
+      chunk: releaseChunk || undefined,
+      failures,
+      image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+      lanes: allResults,
+      profile,
+      startedAt: runStartedAt,
+      status: "failed",
+    });
     await printFailureSummary(failures, tailLines);
     process.exit(1);
   }
 
-  await runForeground(
-    "Run cleanup smoke after parallel lanes",
-    "pnpm test:docker:cleanup",
-    baseEnv,
-  );
+  if (profile === DEFAULT_PROFILE) {
+    await runForeground(
+      "Run cleanup smoke after parallel lanes",
+      "pnpm test:docker:cleanup",
+      baseEnv,
+    );
+  } else {
+    console.log("==> Cleanup smoke after parallel lanes: skipped for release-path chunk");
+  }
   await writeTimingStore(timingStore, allResults);
+  await writeRunSummary(logDir, {
+    chunk: releaseChunk || undefined,
+    failures,
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    lanes: allResults,
+    profile,
+    startedAt: runStartedAt,
+    status: "passed",
+  });
   console.log("==> Docker test suite passed");
 }
 

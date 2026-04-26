@@ -474,6 +474,8 @@ describe("test-projects args", () => {
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
       expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-core-support-boundary.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.boundary.config.ts");
       expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");

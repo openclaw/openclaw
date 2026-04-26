@@ -364,92 +364,22 @@ jobs:
   validate_docker_e2e:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_release_path_suites
+    name: Docker E2E (${{ matrix.label }})
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - suite_id: docker-onboard
-            label: Onboarding Docker E2E
-            command: pnpm test:docker:onboard
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-npm-onboard-channel-agent
-            label: Npm Onboard Channel Agent Docker E2E
-            command: pnpm test:docker:npm-onboard-channel-agent
-            timeout_minutes: 90
-            release_path: true
-          - suite_id: docker-gateway-network
-            label: Gateway Network Docker E2E
-            command: pnpm test:docker:gateway-network
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-openai-web-search-minimal
-            label: OpenAI Web Search Minimal Docker E2E
-            command: pnpm test:docker:openai-web-search-minimal
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-mcp-channels
-            label: MCP Channels Docker E2E
-            command: pnpm test:docker:mcp-channels
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-pi-bundle-mcp-tools
-            label: Pi Bundle MCP Tools Docker E2E
-            command: pnpm test:docker:pi-bundle-mcp-tools
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-cron-mcp-cleanup
-            label: Cron MCP Cleanup Docker E2E
-            command: pnpm test:docker:cron-mcp-cleanup
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-plugins
-            label: Plugins Docker E2E
-            command: pnpm test:docker:plugins
-            timeout_minutes: 75
-            release_path: true
-          - suite_id: docker-plugin-update
-            label: Plugin Update Docker E2E
-            command: pnpm test:docker:plugin-update
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-config-reload
-            label: Config Reload Docker E2E
-            command: pnpm test:docker:config-reload
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-bundled-channel-deps
-            label: Bundled Channel Runtime Deps Docker E2E
-            command: pnpm test:docker:bundled-channel-deps
-            timeout_minutes: 75
-            release_path: true
-          - suite_id: docker-doctor-switch
-            label: Doctor Install Switch Docker E2E
-            command: pnpm test:docker:doctor-switch
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-update-channel-switch
-            label: Update Channel Switch Docker E2E
-            command: pnpm test:docker:update-channel-switch
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-session-runtime-context
-            label: Session Runtime Context Docker E2E
-            command: pnpm test:docker:session-runtime-context
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-qr
-            label: QR Import Docker E2E
-            command: pnpm test:docker:qr
-            timeout_minutes: 60
-            release_path: true
-          - suite_id: docker-install-e2e
-            label: Installer Docker E2E
-            command: pnpm test:install:e2e
+          - chunk_id: core
+            label: core
             timeout_minutes: 120
-            release_path: true
+          - chunk_id: package-update
+            label: package/update
+            timeout_minutes: 180
+          - chunk_id: plugins-integrations
+            label: plugins/integrations
+            timeout_minutes: 180
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -497,6 +427,8 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
+      INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+      DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
@@ -521,22 +453,18 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
-      - name: Configure suite-specific env
+      - name: Pull shared Docker E2E image
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            docker-install-e2e)
-              echo "OPENCLAW_E2E_MODELS=both" >> "$GITHUB_ENV"
-              ;;
-          esac
+          docker pull "${OPENCLAW_DOCKER_E2E_IMAGE}"
 
-      - name: Validate suite credentials
+      - name: Validate chunk credentials
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            docker-install-e2e)
+          case "${DOCKER_E2E_CHUNK}" in
+            package-update)
               [[ -n "${OPENAI_API_KEY:-}" ]] || {
                 echo "OPENAI_API_KEY is required for installer Docker E2E." >&2
                 exit 1
@@ -546,14 +474,68 @@ jobs:
                 exit 1
               fi
               ;;
+            plugins-integrations)
+              if [[ "${INCLUDE_OPENWEBUI}" == "true" ]]; then
+                [[ -n "${OPENAI_API_KEY:-}" ]] || {
+                  echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+                  exit 1
+                }
+              fi
+              ;;
           esac
 
-      - name: Run ${{ matrix.label }}
-        run: ${{ matrix.command }}
+      - name: Run Docker E2E chunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_CHUNK="${DOCKER_E2E_CHUNK}"
+          export OPENCLAW_DOCKER_ALL_BUILD=0
+          export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
+          export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}-timings.json"
+
+          pnpm test:docker:all
+
+      - name: Summarize Docker E2E chunk
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node --input-type=module - "$summary" <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import fs from "node:fs";
+          const summary = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          const lanes = Array.isArray(summary.lanes) ? summary.lanes : [];
+          console.log(`### Docker E2E chunk: ${summary.chunk ?? "unknown"}`);
+          console.log("");
+          console.log(`Status: \`${summary.status}\``);
+          console.log("");
+          console.log("| Lane | Status | Seconds | Timed out |");
+          console.log("| --- | ---: | ---: | --- |");
+          for (const lane of lanes) {
+            const status = lane.status === 0 ? "pass" : `fail ${lane.status}`;
+            console.log(`| \`${lane.name}\` | ${status} | ${lane.elapsedSeconds ?? ""} | ${lane.timedOut ? "yes" : "no"} |`);
+          }
+          NODE
+
+      - name: Upload Docker E2E chunk artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-e2e-${{ matrix.chunk_id }}
+          path: .artifacts/docker-tests/
+          if-no-files-found: ignore
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_openwebui
+    if: inputs.include_openwebui && !inputs.include_release_path_suites
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 75
     env:

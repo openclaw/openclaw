@@ -143,6 +143,7 @@ export function createCronPromptExecutor(params: {
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
+            abortSignal: params.abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: true,

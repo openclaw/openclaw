@@ -157,6 +157,26 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Trace correlation
+
+File logs are JSONL. When a log call carries a valid diagnostic trace context,
+OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
+`parentSpanId`, `traceFlags`) so external log processors can correlate the line
+with OTEL spans and provider `traceparent` propagation.
+
+### Model call size and timing
+
+Model-call diagnostics record bounded request/response measurements without
+capturing raw prompt or response content:
+
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `responseStreamBytes`: UTF-8 byte size of streamed model response events
+- `timeToFirstByteMs`: elapsed time before the first streamed response event
+- `durationMs`: total model-call duration
+
+These fields are available to diagnostic snapshots, model-call plugin hooks, and
+OTEL model-call spans/metrics when diagnostics export is enabled.
+
 ### Console styles
 
 `logging.consoleStyle`:
@@ -167,14 +187,16 @@ file log levels.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+OpenClaw can redact sensitive tokens before they hit console output, file logs,
+OTLP log records, or persisted session transcript text:
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction applies at the logging sinks for **console output**, **stderr-routed
-console diagnostics**, and **file logs**. File logs stay JSONL, but matching
-secret values are masked before the line is written to disk.
+File logs and session transcripts stay JSONL, but matching secret values are
+masked before the line or message is written to disk. Redaction is best-effort:
+it applies to text-bearing message content and log strings, not every
+identifier or binary payload field.
 
 ## Diagnostics and OpenTelemetry
 

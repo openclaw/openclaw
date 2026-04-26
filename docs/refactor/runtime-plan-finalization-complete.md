@@ -9,7 +9,7 @@ title: "RuntimePlan finalization complete"
 
 ## Status
 
-Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). Companion to the baseline doc at [`docs/refactor/runtime-plan-finalization-baseline.md`](/refactor/runtime-plan-finalization-baseline). Captures the final state of the 7-PR roadmap, the deferred follow-up work, and the verification commands a maintainer should run after the structural PRs land. It was later carried into the consolidated cleanup package with the code/test PRs it summarizes.
+Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). Companion to the baseline doc at [`docs/refactor/runtime-plan-finalization-baseline.md`](./runtime-plan-finalization-baseline.md). Captures the final state of the 7-PR roadmap, the deferred follow-up work, and the verification commands a maintainer should run after the structural PRs land. It was later carried into the consolidated cleanup package with the code/test PRs it summarizes.
 
 ## Series at a glance
 
@@ -118,6 +118,6 @@ This handoff doc cannot run the smoke matrix from CI — it depends on live mode
 
 - Linked RFC: [openclaw/openclaw#72072](https://github.com/openclaw/openclaw/issues/72072).
 - Predecessor context: PR [#71722](https://github.com/openclaw/openclaw/pull/71722) (closed-merged at commit `2c35a6e`), RFC #71004 (closed-implemented).
-- Companion baseline doc: [`docs/refactor/runtime-plan-finalization-baseline.md`](/refactor/runtime-plan-finalization-baseline) (added in #72098).
+- Companion baseline doc: [`docs/refactor/runtime-plan-finalization-baseline.md`](./runtime-plan-finalization-baseline.md) (added in #72098).
 - In the original seven-PR draft series this file was documentation-only; in the consolidated package it ships alongside the production/test cleanup slices listed above.
 - If maintainers want a different sequencing for the deferred structural splits, please flag here and I will queue follow-up PRs against this handoff doc rather than against the RFC issue directly.
