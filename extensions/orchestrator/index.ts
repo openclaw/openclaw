@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerOrchestratorCli } from "./src/cli.js";
 import { tryReadCredentials } from "./src/credentials.js";
 import { dispatchTask } from "./src/dispatch.js";
+import { createExpirySweeper } from "./src/expiry-sweeper.js";
 import { createOrchestratorHttpHandler, type DispatchMode } from "./src/http.js";
 import { loadConfig } from "./src/routing.js";
 import { createStore } from "./src/store.js";
@@ -79,6 +80,23 @@ export default definePluginEntry({
       }
       return store;
     }
+
+    api.registerService({
+      id: "orchestrator-expiry-sweeper",
+      start: async () => {
+        const sweeper = createExpirySweeper({
+          store: getStore(),
+          logger: {
+            info: (msg) => api.logger.info?.(msg),
+            error: (msg) => api.logger.error?.(msg),
+          },
+        });
+        sweeper.start();
+        return async () => {
+          sweeper.stop();
+        };
+      },
+    });
 
     api.registerHttpRoute({
       path: "/orchestrator/",

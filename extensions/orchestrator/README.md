@@ -2,7 +2,7 @@
 
 Deterministic routing layer + file-backed task store for Phase B of the Fleet Command Center. Receives a high-level task description, picks a specialist agent via regex rules in `~/.openclaw/extensions/orchestrator/routing.json`, persists the task record under `~/.openclaw/tasks/orchestrator/<id>.json`, and (in `live` mode) hands the work off to the existing `sessions_spawn` machinery via the Fleet Orchestrator agent's prompt loop.
 
-> **Status:** in progress. The pieces shipped in this iteration are the schema (Unit 2), the routing engine (Unit 3), and the task store (Unit 4). Cross-repo HTTP routes, the orchestrator agent runtime, the synthetic-task observability gate, and the Mission Control Pipeline / Approvals tabs land in subsequent PRs. Recon notes for the design are at [`./RECON-NOTES.md`](./RECON-NOTES.md); the full plan lives at `(MissionControl) docs/plans/2026-04-25-005-feat-orchestrator-routing-layer-plan.md`.
+> **Status:** Phase B Units 2–11 are present in this extension (schema, routing engine, file-backed store, orchestrator agent template, dispatch + inbox seam, `task.*` trajectory writer, spawn-watch poller, bearer credentials + CLI verbs, HTTP route surface, synthetic harness, shadow-summary, and the expiry sweeper service). Live spawn integration via `sessions_spawn` and the live-mode flip remain operator-gated — see the runbook below. Recon notes are at [`./RECON-NOTES.md`](./RECON-NOTES.md); the full plan lives at `(MissionControl) docs/plans/2026-04-25-005-feat-orchestrator-routing-layer-plan.md`.
 
 ## Configuration
 
@@ -25,6 +25,84 @@ Deterministic routing layer + file-backed task store for Phase B of the Fleet Co
 ## Boundaries
 
 The extension imports only from `openclaw/plugin-sdk/*` and Node built-ins. It does not import `src/**`, channel internals, or other extensions. Trajectory events use the public `openclaw-trajectory schemaVersion:1` envelope; the JSONL sidecar avoids contention with the in-process `QueuedFileWriter` for the agent's main trajectory file.
+
+## CLI verbs
+
+| Verb                                                      | Purpose                                                                                                                                           |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw orchestrator init`                              | Generate the bearer token used by Mission Control. Refuses to overwrite an existing credentials file unless `--force` is passed.                  |
+| `openclaw orchestrator rotate-token`                      | Generate a fresh bearer token, replacing any existing one. Mirror the new token into `(MC) .env.local` as `OPENCLAW_ORCHESTRATOR_TOKEN`.          |
+| `openclaw orchestrator synthetic <label>`                 | Run one synthetic-harness fixture end-to-end. Exits non-zero on assertion mismatch.                                                               |
+| `openclaw orchestrator synthetic-all`                     | Run every synthetic-harness fixture (R30 gate). Exits non-zero if any fixture fails.                                                              |
+| `openclaw orchestrator shadow-summary [--window <hours>]` | Summarise the shadow archive over a time window (default 24h). Exits non-zero if any spawn failure landed inside the window — the live-flip gate. |
+
+## HTTP surface
+
+The extension claims `/orchestrator/*` on the gateway HTTP server (no separate port). Auth is plugin-managed via the bearer token at `~/.openclaw/credentials/orchestrator-bearer.json`. Mission Control proxies these endpoints through `app/api/orchestrator/*`.
+
+| Method | Path                                  | Auth   | Notes                                                                                |
+| ------ | ------------------------------------- | ------ | ------------------------------------------------------------------------------------ |
+| GET    | `/orchestrator/health`                | none   | Liveness + current `mode` + `hasCredentials` flag.                                   |
+| GET    | `/orchestrator/routing/preview`       | Bearer | Pure routing decision; no side effects.                                              |
+| GET    | `/orchestrator/tasks`                 | Bearer | List with `?state=…&kind=…&limit=…` filters.                                         |
+| GET    | `/orchestrator/tasks/<id>`            | Bearer | Single task.                                                                         |
+| POST   | `/orchestrator/tasks`                 | Bearer | Submit; gated to `mode: "synthetic"` in v0 (live / shadow return 403 LIVE_DISABLED). |
+| POST   | `/orchestrator/tasks/<id>/transition` | Bearer | Approve / reject / cancel; 409 on stale state.                                       |
+
+## Live-flip runbook
+
+The flip from `mode: "synthetic"` to `mode: "live"` is intentionally manual and operator-gated. Recon A-B4 picked a 24-hour shadow window between synthetic and live; the procedure below makes that gate concrete.
+
+### 1 — Provision credentials (one-time)
+
+```sh
+openclaw orchestrator init                       # writes ~/.openclaw/credentials/orchestrator-bearer.json (mode 0o600)
+# Mirror the printed token into (MC) .env.local as OPENCLAW_ORCHESTRATOR_TOKEN, then restart MC.
+```
+
+### 2 — Pass the synthetic gate (R30)
+
+```sh
+openclaw orchestrator synthetic-all              # exits non-zero if any fixture fails
+```
+
+The gate exercises the routing engine, store, dispatch path, and `task.*` trajectory writer for every shipped fixture. Do NOT proceed if anything fails — the failure means the data plane is broken regardless of mode.
+
+### 3 — Flip to shadow
+
+Edit `~/.openclaw/openclaw.json` and set:
+
+```json
+{ "extensions": { "orchestrator": { "mode": "shadow" } } }
+```
+
+Restart the gateway. Shadow mode runs real `sessions_spawn` against the assigned specialist but archives results under `~/.openclaw/tasks/orchestrator/shadow/<id>.json` — the operator never sees an "awaiting approval" prompt; the archive is the audit trail.
+
+### 4 — Wait 24 hours, then check shadow-summary
+
+```sh
+openclaw orchestrator shadow-summary --window 24
+```
+
+Exits non-zero if any spawn failure (`state == "failed"`) is inside the window. Investigate every failure before flipping live.
+
+### 5 — Flip to live
+
+Edit `~/.openclaw/openclaw.json` and set:
+
+```json
+{ "extensions": { "orchestrator": { "mode": "live" } } }
+```
+
+Restart the gateway. Live submissions go through `sessions_spawn` and produce real specialist work that hits the Approvals tab.
+
+### Rollback (live → synthetic)
+
+Reverse the config edit and restart. In-flight `awaiting_approval` tasks remain operator-actionable from the Approvals tab; no in-flight tasks are dropped. The expiry sweeper continues to clean stale tasks regardless of mode.
+
+## Off switch
+
+Setting `extensions.orchestrator.enabled` to `false` makes the extension contribute nothing on next gateway start: no CLI verbs, no HTTP routes, no expiry sweeper. Tasks already on disk remain readable by Mission Control's disk-fallback path under `app/api/orchestrator/pipeline`, but the Approvals tab degrades to read-only with a banner.
 
 ## Why a separate task store?
 

@@ -18,6 +18,13 @@ import {
   writeCredentials,
   type OrchestratorCredentials,
 } from "./credentials.js";
+import { formatShadowSummary, summariseShadow } from "./shadow-summary.js";
+import { createStore } from "./store.js";
+import {
+  createSyntheticHarness,
+  summariseRunResults,
+  type SyntheticHarnessOptions,
+} from "./synthetic.js";
 
 export interface CliDependencies {
   /** Override stdout for tests. */
@@ -26,6 +33,10 @@ export interface CliDependencies {
   now?: () => number;
   /** Override credentials path. */
   credentialsPath?: string;
+  /** Override synthetic-harness options for tests. */
+  syntheticHarnessOptions?: SyntheticHarnessOptions;
+  /** Override openclaw home for shadow-summary tests. */
+  openclawHome?: string;
 }
 
 function describe(creds: OrchestratorCredentials, action: "created" | "rotated"): string {
@@ -92,5 +103,58 @@ export function registerOrchestratorCli(program: Command, deps: CliDependencies 
         ...(deps.now != null ? { now: deps.now } : {}),
       });
       out.write(describe(credentials, "rotated"));
+    });
+
+  orchestrator
+    .command("synthetic <label>")
+    .description(
+      "Run a single synthetic-harness fixture end-to-end through the routing engine and store",
+    )
+    .action(async (label: string) => {
+      const harness = createSyntheticHarness(deps.syntheticHarnessOptions ?? {});
+      const result = harness.run(label);
+      out.write(`${summariseRunResults([result])}\n`);
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
+    });
+
+  orchestrator
+    .command("synthetic-all")
+    .description(
+      "Run every synthetic-harness fixture (R30 gate). Exits non-zero if any fixture fails.",
+    )
+    .action(async () => {
+      const harness = createSyntheticHarness(deps.syntheticHarnessOptions ?? {});
+      const results = harness.runAll();
+      out.write(`${summariseRunResults(results)}\n`);
+      if (results.some((r) => !r.ok)) {
+        process.exitCode = 1;
+      }
+    });
+
+  orchestrator
+    .command("shadow-summary")
+    .description(
+      "Summarise the shadow-archive over a time window. Exits non-zero if any spawn failure landed inside the window — the live-flip gate.",
+    )
+    .option("--window <hours>", "Window in hours (default 24)", "24")
+    .action(async (opts: { window?: string }) => {
+      const windowHours = Number.parseInt(opts.window ?? "24", 10);
+      const storeOptions: Parameters<typeof createStore>[0] = {};
+      if (deps.openclawHome != null) {
+        storeOptions.openclawHome = deps.openclawHome;
+      }
+      const store = createStore(storeOptions);
+      const summaryOpts: Parameters<typeof summariseShadow>[0] = {
+        store,
+        windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24,
+      };
+      if (deps.now != null) summaryOpts.now = deps.now;
+      const summary = summariseShadow(summaryOpts);
+      out.write(`${formatShadowSummary(summary)}\n`);
+      if (summary.failures > 0) {
+        process.exitCode = 1;
+      }
     });
 }

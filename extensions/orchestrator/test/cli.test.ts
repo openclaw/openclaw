@@ -93,6 +93,6 @@ describe("registerOrchestratorCli", () => {
     const program = buildProgram(stream);
     const orchestrator = program.commands.find((c) => c.name() === "orchestrator");
     const verbs = (orchestrator?.commands ?? []).map((c) => c.name()).toSorted();
-    expect(verbs).toEqual(["init", "rotate-token"]);
+    expect(verbs).toEqual(["init", "rotate-token", "shadow-summary", "synthetic", "synthetic-all"]);
   });
 });
