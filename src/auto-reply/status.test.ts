@@ -287,6 +287,44 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("uses latest compaction checkpoint tokens when total tokens are stale", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        inputTokens: 6,
+        outputTokens: 124,
+        totalTokens: 76_000,
+        totalTokensFresh: false,
+        contextTokens: 200_000,
+        compactionCount: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "cp-1",
+            sessionKey: "agent:main:main",
+            sessionId: "abc",
+            createdAt: 1_000,
+            reason: "manual",
+            tokensBefore: 106_000,
+            tokensAfter: 36,
+            preCompaction: { sessionId: "abc" },
+            postCompaction: { sessionId: "abc" },
+          },
+        ],
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: 36/200k (0%)");
+    expect(normalized).toContain("Compactions: 1");
+  });
+
   it("shows plugin status lines only when verbose is enabled", () => {
     const visible = normalizeTestText(
       buildStatusMessage({

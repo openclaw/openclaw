@@ -23,12 +23,12 @@ import type {
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -254,6 +254,27 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
+
+function resolveLatestCompactionTokensAfter(
+  entry?: Pick<SessionEntry, "compactionCheckpoints">,
+): number | undefined {
+  if (!Array.isArray(entry?.compactionCheckpoints) || entry.compactionCheckpoints.length === 0) {
+    return undefined;
+  }
+  const withTokensAfter = entry.compactionCheckpoints.filter(
+    (checkpoint) =>
+      typeof checkpoint.tokensAfter === "number" &&
+      Number.isFinite(checkpoint.tokensAfter) &&
+      checkpoint.tokensAfter >= 0,
+  );
+  if (withTokensAfter.length === 0) {
+    return undefined;
+  }
+  const latest = withTokensAfter.reduce((current, candidate) =>
+    (candidate.createdAt ?? 0) >= (current.createdAt ?? 0) ? candidate : current,
+  );
+  return latest.tokensAfter;
+}
 
 export const formatContextUsageShort = (
   total: number | null | undefined,
@@ -625,11 +646,16 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  const usageFallbackTotal = (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  const latestCompactionTokensAfter = resolveLatestCompactionTokensAfter(entry);
   let totalTokens =
     freshTotalTokens ??
-    (entry?.totalTokensFresh === false
-      ? undefined
-      : (entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0)));
+    (entry?.totalTokensFresh === false ? undefined : entry?.totalTokens ?? usageFallbackTotal);
+  if (entry?.totalTokensFresh === false && latestCompactionTokensAfter !== undefined) {
+    totalTokens = latestCompactionTokensAfter;
+  } else if (totalTokens === undefined && latestCompactionTokensAfter !== undefined) {
+    totalTokens = latestCompactionTokensAfter;
+  }
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
