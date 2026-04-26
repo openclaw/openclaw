@@ -2968,6 +2968,124 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("closes and clears ACP child sessions for parent cleanup", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const childOne = "agent:codex:acp:child-run";
+    const childTwo = "agent:claude:acp:child-thread";
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        sessionKey: childOne,
+        storeSessionKey: childOne,
+        entry: {
+          sessionId: "child-run",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+        },
+        acp: readySessionMeta({ mode: "oneshot" }),
+      },
+      {
+        sessionKey: childTwo,
+        storeSessionKey: childTwo,
+        entry: {
+          sessionId: "child-thread",
+          updatedAt: Date.now(),
+          parentSessionKey: "main",
+        },
+        acp: readySessionMeta({ agent: "claude" }),
+      },
+      {
+        sessionKey: "agent:codex:acp:other-child",
+        storeSessionKey: "agent:codex:acp:other-child",
+        entry: {
+          sessionId: "other-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:other:main",
+        },
+        acp: readySessionMeta(),
+      },
+    ]);
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+      if (sessionKey === childOne) {
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          entry: {
+            sessionId: "child-run",
+            updatedAt: Date.now(),
+            spawnedBy: "agent:main:main",
+          },
+          acp: readySessionMeta({ mode: "oneshot" }),
+        };
+      }
+      if (sessionKey === childTwo) {
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          entry: {
+            sessionId: "child-thread",
+            updatedAt: Date.now(),
+            parentSessionKey: "main",
+          },
+          acp: readySessionMeta({ agent: "claude" }),
+        };
+      }
+      return null;
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.closeChildSessionsForParent({
+      cfg,
+      parentSessionKey: "main",
+      reason: "session-reset",
+      discardPersistentState: true,
+      clearMeta: true,
+      allowBackendUnavailable: true,
+    });
+
+    expect(result).toEqual({
+      childrenMatched: 2,
+      childrenClosed: 2,
+      childrenFailed: 0,
+    });
+    expect(runtimeState.close).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handle: expect.objectContaining({ sessionKey: childOne }),
+        reason: "session-reset",
+        discardPersistentState: true,
+      }),
+    );
+    expect(runtimeState.close).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handle: expect.objectContaining({ sessionKey: childTwo }),
+        reason: "session-reset",
+        discardPersistentState: true,
+      }),
+    );
+    const clearedSessionKeys = hoisted.upsertAcpSessionMetaMock.mock.calls
+      .filter(([firstArg]) => {
+        const payload = firstArg as {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        return payload.mutate(readySessionMeta(), { acp: readySessionMeta() }) === null;
+      })
+      .map(([firstArg]) => (firstArg as { sessionKey?: string }).sessionKey);
+    expect(clearedSessionKeys).toEqual([childTwo, childOne]);
+  });
+
   it("can close and clear metadata when backend is unavailable", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue({
       sessionKey: "agent:codex:acp:session-1",

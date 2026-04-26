@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP: close spawned child ACP sessions when their parent session is reset or deleted so background `mode=run` children do not leave orphaned runtime processes. Fixes #68916; follows the parent-completion context from #52708. Thanks @shadow-enthusiast.
 - Exec approvals: accept a symlinked `OPENCLAW_HOME` as the trusted approvals root while still rejecting symlinked `.openclaw` path components below it. (#64663) Thanks @FunJim.
 - Logging: add top-level `hostname`, flattened `message`, and available `agent_id`, `session_id`, and `channel` fields to file-log JSONL records for multi-agent filtering without removing existing structured log arguments. Fixes #51075. Thanks @stevengonsalvez.
 - ACP: route server logs to stderr before Gateway config/bootstrap work so ACP stdout remains JSON-RPC only for IDE integrations. Fixes #49060. Thanks @Hollychou924.

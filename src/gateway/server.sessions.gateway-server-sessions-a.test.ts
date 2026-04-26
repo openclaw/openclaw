@@ -106,6 +106,7 @@ const acpRuntimeMocks = vi.hoisted(() => ({
 }));
 const acpManagerMocks = vi.hoisted(() => ({
   cancelSession: vi.fn(async () => {}),
+  closeChildSessionsForParent: vi.fn(async () => {}),
   closeSession: vi.fn(async () => {}),
 }));
 const browserSessionTabMocks = vi.hoisted(() => ({
@@ -211,6 +212,7 @@ vi.mock("../acp/runtime/registry.js", async () => {
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: acpManagerMocks.cancelSession,
+    closeChildSessionsForParent: acpManagerMocks.closeChildSessionsForParent,
     closeSession: acpManagerMocks.closeSession,
   }),
 }));
@@ -461,6 +463,7 @@ describe("gateway server sessions", () => {
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
     acpManagerMocks.cancelSession.mockClear();
+    acpManagerMocks.closeChildSessionsForParent.mockClear();
     acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
@@ -2527,6 +2530,14 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
+    expect(acpManagerMocks.closeChildSessionsForParent).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      clearMeta: true,
+      discardPersistentState: true,
+      parentSessionKey: "agent:main:discord:group:dev",
+      reason: "session-delete",
+    });
     expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
       allowBackendUnavailable: true,
       cfg: expect.any(Object),
@@ -2847,6 +2858,14 @@ describe("gateway server sessions", () => {
       requireAcpSession: false,
       reason: "session-reset",
       sessionKey: "agent:main:main",
+    });
+    expect(acpManagerMocks.closeChildSessionsForParent).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      clearMeta: true,
+      discardPersistentState: true,
+      parentSessionKey: "agent:main:main",
+      reason: "session-reset",
     });
     expect(prepareFreshSession).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",

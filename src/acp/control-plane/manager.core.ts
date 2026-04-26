@@ -40,6 +40,8 @@ import {
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
 import {
+  type AcpCloseChildSessionsInput,
+  type AcpCloseChildSessionsResult,
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
   type AcpInitializeSessionInput,
@@ -1365,6 +1367,63 @@ export class AcpSessionManager {
     });
   }
 
+  async closeChildSessionsForParent(
+    input: AcpCloseChildSessionsInput,
+  ): Promise<AcpCloseChildSessionsResult> {
+    const parentSessionKey = canonicalizeAcpSessionKey({
+      cfg: input.cfg,
+      sessionKey: input.parentSessionKey,
+    });
+    if (!parentSessionKey) {
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP parent session key is required.");
+    }
+
+    const childSessionKeys = await this.resolveChildSessionKeysForParent({
+      cfg: input.cfg,
+      parentSessionKey,
+    });
+    let childrenClosed = 0;
+    let childrenFailed = 0;
+
+    for (const childSessionKey of childSessionKeys) {
+      try {
+        await this.cancelSession({
+          cfg: input.cfg,
+          sessionKey: childSessionKey,
+          reason: input.reason,
+        });
+      } catch (error) {
+        logVerbose(
+          `acp-manager: child cleanup cancel failed for ${childSessionKey}: ${String(error)}`,
+        );
+      }
+
+      try {
+        await this.closeSession({
+          cfg: input.cfg,
+          sessionKey: childSessionKey,
+          reason: input.reason,
+          discardPersistentState: input.discardPersistentState,
+          clearMeta: input.clearMeta,
+          allowBackendUnavailable: input.allowBackendUnavailable,
+          requireAcpSession: false,
+        });
+        childrenClosed += 1;
+      } catch (error) {
+        childrenFailed += 1;
+        logVerbose(
+          `acp-manager: child cleanup close failed for ${childSessionKey}: ${String(error)}`,
+        );
+      }
+    }
+
+    return {
+      childrenMatched: childSessionKeys.length,
+      childrenClosed,
+      childrenFailed,
+    };
+  }
+
   private async ensureRuntimeHandle(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -2107,6 +2166,68 @@ export class AcpSessionManager {
     const actualAcpxRecordId =
       normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId) ?? "";
     return actualAcpxRecordId === expectedAcpxRecordId;
+  }
+
+  private async resolveChildSessionKeysForParent(params: {
+    cfg: OpenClawConfig;
+    parentSessionKey: string;
+  }): Promise<string[]> {
+    const parentKeys = new Set<string>();
+    const addParentKey = (value: string | undefined) => {
+      const normalized = normalizeText(value);
+      if (!normalized) {
+        return;
+      }
+      parentKeys.add(normalizeActorKey(normalized));
+      parentKeys.add(
+        normalizeActorKey(
+          canonicalizeAcpSessionKey({
+            cfg: params.cfg,
+            sessionKey: normalized,
+          }),
+        ),
+      );
+    };
+    addParentKey(params.parentSessionKey);
+
+    const childSessionKeys = new Map<string, string>();
+    const acpSessions = await this.deps.listAcpSessions({
+      cfg: params.cfg,
+    });
+    for (const session of acpSessions) {
+      if (!session.acp || !session.sessionKey) {
+        continue;
+      }
+
+      const childSessionKey = canonicalizeAcpSessionKey({
+        cfg: params.cfg,
+        sessionKey: session.sessionKey,
+      });
+      const normalizedChildSessionKey = normalizeActorKey(childSessionKey);
+      if (!childSessionKey || parentKeys.has(normalizedChildSessionKey)) {
+        continue;
+      }
+
+      const parentCandidates = [session.entry?.spawnedBy, session.entry?.parentSessionKey];
+      const parentMatches = parentCandidates.some((candidate) => {
+        const normalized = normalizeText(candidate);
+        if (!normalized) {
+          return false;
+        }
+        if (parentKeys.has(normalizeActorKey(normalized))) {
+          return true;
+        }
+        const canonical = canonicalizeAcpSessionKey({
+          cfg: params.cfg,
+          sessionKey: normalized,
+        });
+        return parentKeys.has(normalizeActorKey(canonical));
+      });
+      if (parentMatches) {
+        childSessionKeys.set(normalizedChildSessionKey, childSessionKey);
+      }
+    }
+    return [...childSessionKeys.values()].toSorted((a, b) => a.localeCompare(b));
   }
 
   private resolveBackgroundTaskContext(params: {

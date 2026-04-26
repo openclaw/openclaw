@@ -75,10 +75,25 @@ export type AcpCloseSessionInput = {
   requireAcpSession?: boolean;
 };
 
+export type AcpCloseChildSessionsInput = {
+  cfg: OpenClawConfig;
+  parentSessionKey: string;
+  reason: string;
+  discardPersistentState?: boolean;
+  clearMeta?: boolean;
+  allowBackendUnavailable?: boolean;
+};
+
 export type AcpCloseSessionResult = {
   runtimeClosed: boolean;
   runtimeNotice?: string;
   metaCleared: boolean;
+};
+
+export type AcpCloseChildSessionsResult = {
+  childrenMatched: number;
+  childrenClosed: number;
+  childrenFailed: number;
 };
 
 export type AcpSessionStatus = {

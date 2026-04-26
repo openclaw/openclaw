@@ -325,6 +325,38 @@ async function closeAcpRuntimeForSession(params: {
   return undefined;
 }
 
+async function closeAcpChildRuntimesForParent(params: {
+  cfg: OpenClawConfig;
+  parentSessionKey: string;
+  reason: "session-reset" | "session-delete";
+}) {
+  const acpManager = getAcpSessionManager();
+  const closeOutcome = await runAcpCleanupStep({
+    op: async () => {
+      await acpManager.closeChildSessionsForParent({
+        cfg: params.cfg,
+        parentSessionKey: params.parentSessionKey,
+        reason: params.reason,
+        discardPersistentState: true,
+        clearMeta: true,
+        allowBackendUnavailable: true,
+      });
+    },
+  });
+  if (closeOutcome.status === "timeout") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `Child sessions for ${params.parentSessionKey} are still active; try again in a moment.`,
+    );
+  }
+  if (closeOutcome.status === "error") {
+    logVerbose(
+      `sessions.${params.reason}: ACP child runtime cleanup failed for ${params.parentSessionKey}: ${String(closeOutcome.error)}`,
+    );
+  }
+  return undefined;
+}
+
 function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta {
   const currentIdentity = base.identity;
   const nextIdentity = currentIdentity
@@ -412,9 +444,19 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
+  const sessionKey =
+    params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key;
+  const childCleanupError = await closeAcpChildRuntimesForParent({
+    cfg: params.cfg,
+    parentSessionKey: sessionKey,
+    reason: params.reason,
+  });
+  if (childCleanupError) {
+    return childCleanupError;
+  }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,
-    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
+    sessionKey,
     entry: params.entry,
     reason: params.reason,
   });
