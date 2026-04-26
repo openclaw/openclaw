@@ -265,6 +265,11 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesBootstrapTokenAuth = params.authMethod === "bootstrap-token";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
+  // bootstrap-token and device-token bypass sharedAuthOk because they represent
+  // dedicated, scoped credentials (device identity / bootstrap handshake) that are
+  // not exposed to general operator use and therefore do not depend on the
+  // shared-secret trust signal (sharedAuthOk). Only the shared-secret path
+  // (token/password) requires sharedAuthOk to be true.
   return (
     params.locality === "direct_local" &&
     !params.hasBrowserOriginHeader &&

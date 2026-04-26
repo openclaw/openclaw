@@ -382,6 +382,15 @@ describe("handshake auth helpers", () => {
         connectParams,
         locality: "direct_local",
         hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "device-token",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
         sharedAuthOk: true,
         authMethod: "bootstrap-token",
       }),
