@@ -30,7 +30,7 @@ export function registerModelsCli(program: Command) {
     .description("List models (configured by default)")
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
-    .option("--provider <name>", "Filter by provider")
+    .option("--provider <id>", "Filter by provider id")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain line output", false)
     .action(async (opts) => {

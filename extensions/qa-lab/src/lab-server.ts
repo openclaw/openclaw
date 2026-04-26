@@ -639,6 +639,7 @@ export async function startQaLabServer(
       await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
       await closeQaHttpServer(server);
+      captureStore.close();
     },
   };
   labHandle = lab;

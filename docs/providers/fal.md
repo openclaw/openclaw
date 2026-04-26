@@ -1,13 +1,11 @@
 ---
-title: "fal"
 summary: "fal image and video generation setup in OpenClaw"
+title: "Fal"
 read_when:
   - You want to use fal image generation in OpenClaw
   - You need the FAL_KEY auth flow
   - You want fal defaults for image_generate or video_generate
 ---
-
-# fal
 
 OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 
@@ -52,10 +50,15 @@ The bundled `fal` image-generation provider defaults to
 | Size overrides | Supported                  |
 | Aspect ratio   | Supported                  |
 | Resolution     | Supported                  |
+| Output format  | `png` or `jpeg`            |
 
 <Warning>
 The fal image edit endpoint does **not** support `aspectRatio` overrides.
 </Warning>
+
+Use `outputFormat: "png"` when you want PNG output. fal does not declare an
+explicit transparent-background control in OpenClaw, so `background:
+"transparent"` is reported as an ignored override for fal models.
 
 To use fal as the default image provider:
 
@@ -139,7 +142,7 @@ models, including any recently added entries.
   <Card title="Video generation" href="/tools/video-generation" icon="video">
     Shared video tool parameters and provider selection.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults including image and video model selection.
   </Card>
 </CardGroup>

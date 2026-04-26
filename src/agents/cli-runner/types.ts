@@ -7,16 +7,19 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -35,11 +38,18 @@ export type RunCliAgentParams = {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
+  messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  /**
+   * Close any long-lived CLI live session created for this run after the run
+   * finishes. Intended for temporary helper calls that should not keep process
+   * handles alive after returning.
+   */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {
