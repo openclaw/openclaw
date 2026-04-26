@@ -85,6 +85,25 @@ describe("createTtsTool", () => {
     expect(result.details).toMatchObject({ timeoutMs: 12_345 });
   });
 
+  it("passes the active agent id to speech generation", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({ agentId: "voice-agent" });
+    await tool.execute("call-1", { text: "hello" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        agentId: "voice-agent",
+      }),
+    );
+  });
+
   it("echoes longer utterances verbatim into the tool-result content", async () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,
