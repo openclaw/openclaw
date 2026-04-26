@@ -279,7 +279,7 @@ function setupWatcher(sessionFile) {
 /**
  * Overwrite CURRENT_WORK.md with current state, then sync to GCP. Silent — no WhatsApp message.
  */
-function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject) {
+function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject, sessState) {
   const projectPath = claudeCtx?.cwd || vsCodeProject || null;
   const projectName = projectPath ? path.basename(projectPath) : "unknown";
 
@@ -318,6 +318,26 @@ function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject) {
       `- Status: ${claudeCtx.isActive ? "active" : `idle (last activity ${agoMin}min ago)`}`,
     );
     lines.push(`- Session file: ${path.basename(claudeCtx.sessionFile)}`);
+  }
+
+  if (sessState && claudeCtx?.isActive) {
+    lines.push("", "## Session Activity");
+    if (sessState.lastUserMessage) {
+      lines.push(`- Dirgh asked: "${sessState.lastUserMessage.slice(0, 120)}"`);
+    }
+    if (sessState.claudeAction && sessState.claudeAction !== "idle") {
+      lines.push(`- Claude is: ${sessState.claudeAction}`);
+    }
+    if (sessState.filesModified && sessState.filesModified.length > 0) {
+      const recent = sessState.filesModified.slice(-5);
+      lines.push(`- Files modified: ${recent.map((f) => path.basename(f)).join(", ")}`);
+    }
+    if (sessState.lastBashCommand) {
+      lines.push(`- Last command: \`${sessState.lastBashCommand}\``);
+    }
+    if (sessState.recentError) {
+      lines.push(`- Recent error: ${sessState.recentError.split("\n")[0].slice(0, 120)}`);
+    }
   }
 
   const content = lines.join("\n") + "\n";
@@ -381,7 +401,7 @@ async function tick() {
   const vsCodeProj = getVSCodeProject();
 
   // Always update CURRENT_WORK.md silently
-  updateCurrentWork(claudeCtx, gitCtx, vsCodeProj);
+  updateCurrentWork(claudeCtx, gitCtx, vsCodeProj, sessionState);
 
   // Notify on new commits (skip the very first poll — we don't know prevCommitHash yet)
   if (gitCtx?.commitHash && prevCommitHash !== null && gitCtx.commitHash !== prevCommitHash) {
