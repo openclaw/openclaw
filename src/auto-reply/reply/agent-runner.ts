@@ -58,6 +58,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-l
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { buildEmptyFinalReplyPayload } from "./empty-final-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -75,6 +76,11 @@ import {
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import {
+  buildReplyRunProgressPayload,
+  createReplyRunProgressWatchdog,
+  type ReplyRunProgressWatchdog,
+} from "./reply-run-watchdog.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -109,6 +115,42 @@ function formatRawTraceBlock(title: string, value: string | undefined): string {
 
 function escapeTraceFence(value: string): string {
   return value.replace(/^~~~/gm, "\\~~~");
+}
+
+function wrapReplyOptionsWithVisibleActivity(
+  opts: GetReplyOptions | undefined,
+  markVisibleActivity: () => void,
+): GetReplyOptions | undefined {
+  if (!opts) {
+    return undefined;
+  }
+  return {
+    ...opts,
+    onPartialReply: opts.onPartialReply
+      ? async (payload) => {
+          markVisibleActivity();
+          await opts.onPartialReply?.(payload);
+        }
+      : undefined,
+    onBlockReplyQueued: opts.onBlockReplyQueued
+      ? async (payload, context) => {
+          markVisibleActivity();
+          await opts.onBlockReplyQueued?.(payload, context);
+        }
+      : undefined,
+    onBlockReply: opts.onBlockReply
+      ? async (payload, context) => {
+          markVisibleActivity();
+          await opts.onBlockReply?.(payload, context);
+        }
+      : undefined,
+    onToolResult: opts.onToolResult
+      ? async (payload) => {
+          markVisibleActivity();
+          await opts.onToolResult?.(payload);
+        }
+      : undefined,
+  };
 }
 
 function hasTraceUsageFields(
@@ -907,8 +949,12 @@ export async function runReplyAgent(params: {
     resolvedVerboseLevel,
   });
 
+  let progressWatchdog: ReplyRunProgressWatchdog | undefined;
+  const markProgressVisibleActivity = () => progressWatchdog?.markVisibleActivity();
+  const runOpts = wrapReplyOptionsWithVisibleActivity(opts, markProgressVisibleActivity);
+
   const pendingToolTasks = new Set<Promise<void>>();
-  const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
+  const blockReplyTimeoutMs = runOpts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
   const touchActiveSessionEntry = async () => {
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
@@ -1014,7 +1060,7 @@ export async function runReplyAgent(params: {
     requesterSenderE164: followupRun.run.senderE164,
   });
   const blockReplyCoalescing =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && runOpts?.onBlockReply
       ? resolveEffectiveBlockStreamingConfig({
           cfg,
           provider: sessionCtx.Provider,
@@ -1023,15 +1069,16 @@ export async function runReplyAgent(params: {
         }).coalescing
       : undefined;
   const blockReplyPipeline =
-    blockStreamingEnabled && opts?.onBlockReply
+    blockStreamingEnabled && runOpts?.onBlockReply
       ? createBlockReplyPipeline({
-          onBlockReply: opts.onBlockReply,
+          onBlockReply: runOpts.onBlockReply,
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
 
+  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   let replyOperation: ReplyOperation;
   try {
@@ -1052,6 +1099,22 @@ export async function runReplyAgent(params: {
     }
     throw error;
   }
+  progressWatchdog = createReplyRunProgressWatchdog({
+    enabled:
+      !isHeartbeat &&
+      followupRun.run.silentExpected !== true &&
+      typeof opts?.onBlockReply === "function",
+    getPhase: () => replyOperation.phase,
+    sendNotice: async (notice) => {
+      const payload = applyReplyToMode({
+        ...buildReplyRunProgressPayload(notice),
+        replyToId: currentMessageId,
+        replyToCurrent: true,
+      });
+      await opts?.onBlockReply?.(payload);
+    },
+  });
+
   let runFollowupTurn = queuedRunFollowupTurn;
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
@@ -1081,7 +1144,7 @@ export async function runReplyAgent(params: {
       followupRun,
       promptForEstimate: followupRun.prompt,
       sessionCtx,
-      opts,
+      opts: runOpts,
       defaultModel,
       agentCfgContextTokens,
       resolvedVerboseLevel,
@@ -1161,7 +1224,7 @@ export async function runReplyAgent(params: {
       sessionCtx,
       replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       replyOperation,
-      opts,
+      opts: runOpts,
       typingSignals,
       blockReplyPipeline,
       blockStreamingEnabled,
@@ -1318,10 +1381,22 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return finalizeWithFollowup(
+        buildEmptyFinalReplyPayload({
+          isHeartbeat,
+          silentExpected: followupRun.run.silentExpected,
+          hasVisibleBlockReply:
+            (directlySentBlockKeys?.size ?? 0) > 0 || blockReplyPipeline?.didStream() === true,
+          hasMessagingToolSend:
+            (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+            (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+            (runResult.messagingToolSentTargets?.length ?? 0) > 0,
+        }),
+        queueKey,
+        runFollowupTurn,
+      );
     }
 
-    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
@@ -1752,6 +1827,7 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    progressWatchdog?.stop();
     replyOperation.complete();
     blockReplyPipeline?.stop();
     typing.markRunComplete();
