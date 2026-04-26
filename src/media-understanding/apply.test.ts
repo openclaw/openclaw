@@ -1136,6 +1136,68 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
+  it("orders synthetic too-small audio output between image and video", async () => {
+    const dir = await createTempMediaDir();
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "silent.ogg");
+    const videoPath = path.join(dir, "clip.mp4");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, Buffer.alloc(100));
+    await fs.writeFile(videoPath, "video-bytes");
+
+    const ctx: MsgContext = {
+      Body: "<media:mixed>",
+      MediaPaths: [imagePath, audioPath, videoPath],
+      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
+          audio: { enabled: true, models: [{ provider: "groq" }] },
+          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: dir,
+      providers: {
+        openai: {
+          id: "openai",
+          describeImage: async () => ({ text: "image ok" }),
+        },
+        groq: {
+          id: "groq",
+          transcribeAudio: async () => ({ text: "audio should not run" }),
+        },
+        google: {
+          id: "google",
+          describeVideo: async () => ({ text: "video ok" }),
+        },
+      },
+    });
+
+    const placeholder =
+      "[Voice note could not be transcribed because the audio attachment was too small]";
+
+    expect(result.appliedImage).toBe(true);
+    expect(result.appliedAudio).toBe(true);
+    expect(result.appliedVideo).toBe(true);
+    expect(ctx.Body).toBe(
+      [
+        "[Image]\nDescription:\nimage ok",
+        `[Audio]\nTranscript:\n${placeholder}`,
+        "[Video]\nDescription:\nvideo ok",
+      ].join("\n\n"),
+    );
+    expect(ctx.Transcript).toBe(placeholder);
+    expect(ctx.CommandBody).toBe(placeholder);
+    expect(ctx.BodyForCommands).toBe(placeholder);
+  });
+
   it("treats text-like attachments as CSV (comma wins over tabs)", async () => {
     const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
     const csvPath = await createTempMediaFile({

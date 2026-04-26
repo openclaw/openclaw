@@ -130,7 +130,7 @@ Recommended defaults:
 Rules:
 
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
-- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
+- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription; inbound reply context receives a deterministic placeholder transcript so the agent knows the note was too small.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
 - If the active primary image model already supports vision natively, OpenClaw
