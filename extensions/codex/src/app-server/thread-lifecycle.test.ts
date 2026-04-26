@@ -46,8 +46,14 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("off", "gpt-4o")).toBeNull();
     });
 
-    it("returns null for undefined / null thinkLevel", () => {
-      expect(resolveReasoningEffort(undefined, "gpt-5.5")).toBeNull();
+    it("returns null for 'adaptive' (non-effort enum value)", () => {
+      expect(resolveReasoningEffort("adaptive", "gpt-5.5")).toBeNull();
+      expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
+    });
+
+    it("returns null for 'max' (non-effort enum value)", () => {
+      expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
+      expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
     });
   });
 });
