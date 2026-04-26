@@ -25,7 +25,10 @@ function lane(name, command, options = {}) {
   return {
     cacheKey: options.cacheKey,
     command,
-    e2eImageKind: options.e2eImageKind ?? (options.live ? undefined : "functional"),
+    e2eImageKind:
+      options.e2eImageKind === false
+        ? undefined
+        : (options.e2eImageKind ?? (options.live ? undefined : "functional")),
     estimateSeconds: options.estimateSeconds,
     live: options.live === true,
     name,
@@ -181,6 +184,10 @@ export const mainLanes = [
     { resources: ["service"], weight: 3 },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
+  serviceLane("observability", "bash scripts/e2e/docker-observability-smoke.sh", {
+    e2eImageKind: false,
+    weight: 3,
+  }),
   serviceLane(
     "agents-delete-shared-workspace",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agents-delete-shared-workspace",
