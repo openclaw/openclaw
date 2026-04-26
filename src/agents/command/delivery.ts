@@ -6,9 +6,11 @@ import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-med
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitContinuityDiagnostic } from "../../infra/continuity-diagnostics.js";
 import {
+  type AgentDeliveryPlan,
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
@@ -25,6 +27,7 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { isNestedAgentLane } from "../lanes.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -173,6 +176,258 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
+type LiveOutboundSessionEntry = {
+  entry: SessionEntry;
+  storeKey: string;
+  canonicalKey: string;
+};
+
+type DeliveryPlanArgs = Parameters<typeof resolveAgentDeliveryPlan>[0];
+
+type BoundaryDeliverySeed = {
+  boundaryId?: string;
+  checkpointId?: string;
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+function loadLiveOutboundSessionEntry(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): LiveOutboundSessionEntry | null {
+  const sessionKey = typeof params.sessionKey === "string" && params.sessionKey.trim()
+    ? params.sessionKey.trim()
+    : "";
+  if (!sessionKey) {
+    return null;
+  }
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: sessionKey,
+    });
+    const store = loadSessionStore(target.storePath);
+    for (const key of target.storeKeys ?? []) {
+      const entry = store[key];
+      if (entry) {
+        return {
+          entry,
+          storeKey: key,
+          canonicalKey: target.canonicalKey,
+        };
+      }
+    }
+    const entry = store[target.canonicalKey];
+    return entry
+      ? {
+          entry,
+          storeKey: target.canonicalKey,
+          canonicalKey: target.canonicalKey,
+        }
+      : null;
+  } catch (err) {
+    emitContinuityDiagnostic({
+      type: "diag.outbound.live_lookup_failed",
+      severity: "info",
+      sessionKey,
+      phase: "before_delivery",
+      correlation: { sessionKey },
+      details: { error: err instanceof Error ? err.message : String(err) },
+    });
+    return null;
+  }
+}
+
+function snapshotDeliveryPlan(plan: AgentDeliveryPlan): Record<string, unknown> {
+  return {
+    channel: plan.resolvedChannel,
+    to: plan.resolvedTo,
+    accountId: plan.resolvedAccountId,
+    threadId: plan.resolvedThreadId,
+    targetMode: plan.deliveryTargetMode,
+  };
+}
+
+function stableJson(value: Record<string, unknown>): string {
+  return JSON.stringify(value, Object.keys(value).sort());
+}
+
+function maybeEmitOutboundReresolveDiagnostic(params: {
+  sessionKey?: string;
+  carriedPlan: AgentDeliveryPlan;
+  livePlan: AgentDeliveryPlan | null;
+  carriedEntry?: SessionEntry;
+  liveEntry?: SessionEntry;
+  liveStoreKey?: string;
+}): void {
+  if (!params.livePlan) {
+    return;
+  }
+  const carried = snapshotDeliveryPlan(params.carriedPlan);
+  const live = snapshotDeliveryPlan(params.livePlan);
+  if (stableJson(carried) === stableJson(live)) {
+    return;
+  }
+  emitContinuityDiagnostic({
+    type: "diag.outbound.target_reresolved",
+    severity: "warn",
+    sessionKey: params.sessionKey,
+    phase: "before_delivery",
+    correlation: {
+      sessionKey: params.sessionKey,
+      storeKey: params.liveStoreKey,
+    },
+    details: {
+      carried,
+      live,
+      carriedUpdatedAt: params.carriedEntry?.updatedAt,
+      liveUpdatedAt: params.liveEntry?.updatedAt,
+    },
+  });
+}
+
+function isPlainBoundaryObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? value.trim() : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function readBoundaryDeliverySeed(entry: SessionEntry | undefined): BoundaryDeliverySeed | null {
+  const restore = isPlainBoundaryObject(entry?.continuityRestore)
+    ? entry.continuityRestore
+    : undefined;
+  const marker = isPlainBoundaryObject(restore?.usedBoundary) ? restore.usedBoundary : undefined;
+  const metadata = isPlainBoundaryObject(marker?.boundaryMetadata)
+    ? marker.boundaryMetadata
+    : undefined;
+  const state = isPlainBoundaryObject(metadata?.state) ? metadata.state : undefined;
+  if (!marker || !metadata || !state) {
+    return null;
+  }
+  const outbound = isPlainBoundaryObject(state.outbound) ? state.outbound : {};
+  const binding = isPlainBoundaryObject(state.sessionBinding) ? state.sessionBinding : {};
+  const channel = nonEmptyString(outbound.channel) ?? nonEmptyString(binding.channel);
+  const to = nonEmptyString(outbound.targetId) ?? nonEmptyString(binding.targetId);
+  const accountId = nonEmptyString(binding.accountId);
+  const threadId = nonEmptyString(outbound.threadId) ?? nonEmptyString(binding.threadId);
+  if (!channel && !to && !accountId && !threadId) {
+    return null;
+  }
+  return {
+    boundaryId:
+      nonEmptyString(marker.boundaryId) ??
+      nonEmptyString(metadata.boundaryId) ??
+      nonEmptyString(marker.checkpointId),
+    checkpointId: nonEmptyString(marker.checkpointId),
+    channel,
+    to,
+    accountId,
+    threadId,
+  };
+}
+
+function missingDeliveryField(entry: SessionEntry | undefined, field: keyof SessionEntry): boolean {
+  if (!entry) {
+    return true;
+  }
+  const value = entry[field];
+  return value === undefined || value === null || value === "";
+}
+
+function applyBoundaryDeliveryFallback(entry: SessionEntry | undefined): {
+  entry: SessionEntry | undefined;
+  appliedFields: string[];
+  seed: BoundaryDeliverySeed | null;
+} {
+  const seed = readBoundaryDeliverySeed(entry);
+  if (!seed) {
+    return { entry, appliedFields: [], seed: null };
+  }
+  const next: SessionEntry = entry ? { ...entry } : ({ sessionId: "" } as SessionEntry);
+  const appliedFields: string[] = [];
+  const context = isPlainBoundaryObject(next.deliveryContext) ? { ...next.deliveryContext } : {};
+  if (
+    seed.channel &&
+    missingDeliveryField(next, "lastChannel") &&
+    missingDeliveryField(next, "channel") &&
+    !nonEmptyString(context.channel)
+  ) {
+    next.lastChannel = seed.channel as SessionEntry["lastChannel"];
+    context.channel = seed.channel;
+    appliedFields.push("channel");
+  }
+  if (seed.to && missingDeliveryField(next, "lastTo") && !nonEmptyString(context.to)) {
+    next.lastTo = seed.to;
+    context.to = seed.to;
+    appliedFields.push("to");
+  }
+  if (
+    seed.accountId &&
+    missingDeliveryField(next, "lastAccountId") &&
+    !nonEmptyString(context.accountId)
+  ) {
+    next.lastAccountId = seed.accountId;
+    context.accountId = seed.accountId;
+    appliedFields.push("accountId");
+  }
+  if (
+    seed.threadId &&
+    missingDeliveryField(next, "lastThreadId") &&
+    !nonEmptyString(context.threadId)
+  ) {
+    next.lastThreadId = seed.threadId;
+    context.threadId = seed.threadId;
+    appliedFields.push("threadId");
+  }
+  if (appliedFields.length > 0) {
+    next.deliveryContext = context as SessionEntry["deliveryContext"];
+  }
+  return {
+    entry: appliedFields.length > 0 ? next : entry,
+    appliedFields,
+    seed,
+  };
+}
+
+function maybeEmitBoundaryDeliveryFallbackDiagnostic(params: {
+  sessionKey?: string;
+  planSource: "live" | "carried";
+  appliedFields?: string[];
+  seed?: BoundaryDeliverySeed | null;
+  plan?: AgentDeliveryPlan;
+}): void {
+  if (!params.appliedFields?.length || !params.seed) {
+    return;
+  }
+  emitContinuityDiagnostic({
+    type: "continuity.restore.boundary_fallback_applied",
+    severity: "info",
+    sessionKey: params.sessionKey,
+    phase: "before_delivery",
+    correlation: {
+      boundaryId: params.seed.boundaryId,
+      checkpointId: params.seed.checkpointId,
+      sessionKey: params.sessionKey,
+      planSource: params.planSource,
+    },
+    details: {
+      appliedFields: params.appliedFields,
+      seed: params.seed,
+      plan: params.plan ? snapshotDeliveryPlan(params.plan) : undefined,
+    },
+  });
+}
+
 export async function deliverAgentCommandResult(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -182,6 +437,7 @@ export async function deliverAgentCommandResult(params: {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: RunResult["payloads"];
+  hasPendingSpawnedChildren?: boolean;
 }) {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
@@ -191,8 +447,7 @@ export async function deliverAgentCommandResult(params: {
   const turnSourceTo = opts.runContext?.currentChannelId ?? opts.to;
   const turnSourceAccountId = opts.runContext?.accountId ?? opts.accountId;
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
-  const deliveryPlan = resolveAgentDeliveryPlan({
-    sessionEntry,
+  const deliveryPlanArgs: Omit<DeliveryPlanArgs, "sessionEntry"> = {
     requestedChannel: opts.replyChannel ?? opts.channel,
     explicitTo: opts.replyTo ?? opts.to,
     explicitThreadId: opts.threadId,
@@ -202,6 +457,43 @@ export async function deliverAgentCommandResult(params: {
     turnSourceTo,
     turnSourceAccountId,
     turnSourceThreadId,
+  };
+  const carriedBoundaryFallback = applyBoundaryDeliveryFallback(sessionEntry);
+  const carriedDeliveryPlan = resolveAgentDeliveryPlan({
+    sessionEntry: carriedBoundaryFallback.entry,
+    ...deliveryPlanArgs,
+  });
+  const liveOutboundSession = deliver
+    ? loadLiveOutboundSessionEntry({
+        cfg,
+        sessionKey: effectiveSessionKey,
+      })
+    : null;
+  const liveBoundaryFallback = liveOutboundSession?.entry
+    ? applyBoundaryDeliveryFallback(liveOutboundSession.entry)
+    : null;
+  const liveDeliveryPlan = liveBoundaryFallback?.entry
+    ? resolveAgentDeliveryPlan({
+        sessionEntry: liveBoundaryFallback.entry,
+        ...deliveryPlanArgs,
+      })
+    : null;
+  maybeEmitOutboundReresolveDiagnostic({
+    sessionKey: effectiveSessionKey,
+    carriedPlan: carriedDeliveryPlan,
+    livePlan: liveDeliveryPlan,
+    carriedEntry: sessionEntry,
+    liveEntry: liveOutboundSession?.entry,
+    liveStoreKey: liveOutboundSession?.storeKey,
+  });
+  const deliveryPlan = liveDeliveryPlan ?? carriedDeliveryPlan;
+  const selectedFallback = liveDeliveryPlan ? liveBoundaryFallback : carriedBoundaryFallback;
+  maybeEmitBoundaryDeliveryFallbackDiagnostic({
+    sessionKey: effectiveSessionKey,
+    planSource: liveDeliveryPlan ? "live" : "carried",
+    appliedFields: selectedFallback?.appliedFields,
+    seed: selectedFallback?.seed,
+    plan: deliveryPlan,
   });
   let deliveryChannel = deliveryPlan.resolvedChannel;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
@@ -319,7 +611,12 @@ export async function deliverAgentCommandResult(params: {
           accountId: resolvedAccountId,
         })
       : normalizedReplyPayloads;
-  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads, {
+    cfg,
+    sessionKey: effectiveSessionKey,
+    surface: deliveryChannel,
+    hasPendingSpawnedChildren: params.hasPendingSpawnedChildren,
+  });
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   if (opts.json) {
     runtime.log(

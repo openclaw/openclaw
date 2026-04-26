@@ -1,12 +1,25 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
+
+const emittedDiagnostics = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+
+vi.mock("../../infra/continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: vi.fn((params: Record<string, unknown>) => {
+    emittedDiagnostics.push(params);
+    return params;
+  }),
+}));
 
 const deliverOutboundPayloadsMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => [] as unknown[]),
@@ -55,6 +68,27 @@ const slackRegistry = createTestRegistry([
   },
 ]);
 
+const tempDirs: string[] = [];
+
+async function createSessionStoreForTest(entries: Record<string, SessionEntry>): Promise<{
+  dir: string;
+  storePath: string;
+  cfg: OpenClawConfig;
+}> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-store-"));
+  tempDirs.push(dir);
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify(entries), "utf8");
+  return {
+    dir,
+    storePath,
+    cfg: {
+      session: { scope: "global", mainKey: "main", store: storePath },
+      agents: { list: [{ id: "tester", workspace: "/tmp/agent-workspace" }] },
+    } as OpenClawConfig,
+  };
+}
+
 function createResult(overrides: Partial<RunResult> = {}): RunResult {
   return {
     meta: {
@@ -90,11 +124,15 @@ async function deliverMediaReplyForTest(outboundSession: DeliverParams["outbound
 
 describe("normalizeAgentCommandReplyPayloads", () => {
   beforeEach(() => {
+    emittedDiagnostics.length = 0;
+    deliverOutboundPayloadsMock.mockClear();
+    createReplyMediaPathNormalizerMock.mockClear();
     setActivePluginRegistry(slackRegistry);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setActivePluginRegistry(emptyRegistry);
+    await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   });
 
   it("keeps Slack directives in text for direct agent deliveries", () => {
@@ -262,5 +300,109 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
       },
     ]);
+  });
+
+  it("re-resolves outbound target from the live session entry before delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const now = Date.now();
+    const { cfg } = await createSessionStoreForTest({
+      global: {
+        sessionId: "session-live",
+        updatedAt: now,
+        lastChannel: "slack",
+        lastTo: "#live",
+      } as SessionEntry,
+    });
+
+    await deliverAgentCommandResult({
+      cfg,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        deliver: true,
+      } as AgentCommandOpts,
+      outboundSession: { key: "main", agentId: "tester" } as never,
+      sessionEntry: {
+        sessionId: "session-live",
+        updatedAt: now - 1,
+        lastChannel: "slack",
+        lastTo: "#carried",
+      } as SessionEntry,
+      payloads: [{ text: "Ready." }],
+      result: createResult(),
+    });
+
+    const [deliverArgs] = deliverOutboundPayloadsMock.mock.calls[0] ?? [];
+    expect(deliverArgs).toMatchObject({ channel: "slack", to: "#live" });
+    expect(emittedDiagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "diag.outbound.target_reresolved",
+        severity: "warn",
+        phase: "before_delivery",
+      }),
+    );
+  });
+
+  it("uses restored boundary delivery metadata as a transient fallback", async () => {
+    const runtime = { log: vi.fn() };
+    const entry = {
+      sessionId: "session-restored",
+      updatedAt: Date.now(),
+      continuityRestore: {
+        usedBoundary: {
+          type: "continuity.restore.used_boundary",
+          checkpointId: "checkpoint-1",
+          boundaryId: "compact-boundary:test",
+          restoredAt: Date.now(),
+          boundaryMetadata: {
+            version: 1,
+            type: "compact.boundary",
+            boundaryId: "compact-boundary:test",
+            createdAt: Date.now(),
+            state: {
+              sessionBinding: { channel: "slack", accountId: "account-1", threadId: "thread-1" },
+              approval: { captured: false, reason: "captured elsewhere" },
+              outbound: { channel: "slack", targetId: "#restored", threadId: "thread-1" },
+              children: { pendingDescendantState: "live-query-required" },
+              policy: {},
+            },
+          },
+        },
+      },
+    } as SessionEntry;
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+      } as AgentCommandOpts,
+      outboundSession: { key: "main", agentId: "tester" } as never,
+      sessionEntry: entry,
+      payloads: [{ text: "Preview." }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("Preview.");
+    expect(delivered.payloads).toMatchObject([{ text: "Preview." }]);
+    expect(entry.lastChannel).toBeUndefined();
+    expect(emittedDiagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "continuity.restore.boundary_fallback_applied",
+        severity: "info",
+        phase: "before_delivery",
+        correlation: expect.objectContaining({
+          boundaryId: "compact-boundary:test",
+          checkpointId: "checkpoint-1",
+          planSource: "carried",
+        }),
+        details: expect.objectContaining({
+          appliedFields: ["channel", "to", "accountId", "threadId"],
+        }),
+      }),
+    );
   });
 });
