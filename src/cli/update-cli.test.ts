@@ -1645,6 +1645,52 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("fails a JSON package update when fallback restart leaves the old gateway running", async () => {
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: createCaseDir("openclaw-updated-root"),
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    prepareRestartScript.mockResolvedValue(null);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.23",
+        connId: "old-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true, json: true });
+
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain(
+      "Gateway version mismatch: expected 2026.4.24, running gateway reported 2026.4.23.",
+    );
+    expect(doctorCommand).not.toHaveBeenCalled();
+  });
+
   it("fails a package update when the restarted gateway reports activated plugin load errors", async () => {
     setupUpdatedRootRefresh({
       gatewayUpdateImpl: async () =>
