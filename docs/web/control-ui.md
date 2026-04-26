@@ -87,7 +87,7 @@ The Control UI can localize itself on first load based on your browser locale. T
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
-    - Talk to OpenAI Realtime directly from the browser via WebRTC. The Gateway mints a short-lived Realtime client secret with `talk.realtime.session`; the browser sends microphone audio directly to OpenAI and relays `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
+    - Talk to OpenAI Realtime directly from the browser via WebRTC, or Google Live via a browser WebSocket. The Gateway mints a short-lived provider token with `talk.realtime.session`; the browser sends microphone audio directly to the realtime provider and relays `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
@@ -144,8 +144,8 @@ The Control UI can localize itself on first load based on your browser locale. T
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - When fresh Gateway session usage reports show high context pressure, the chat composer area shows a context notice and, at recommended compaction levels, a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
   </Accordion>
-  <Accordion title="Talk mode (browser WebRTC)">
-    Talk mode uses a registered realtime voice provider that supports browser WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider config. The browser never receives the standard OpenAI API key; it receives only the ephemeral Realtime client secret. Google Live realtime voice is supported for backend Voice Call and Google Meet bridges, but not this browser WebRTC path yet. The Realtime session prompt is assembled by the Gateway; `talk.realtime.session` does not accept caller-provided instruction overrides.
+  <Accordion title="Talk mode (browser realtime)">
+    Talk mode uses a registered realtime voice provider that supports browser sessions. Configure OpenAI with `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, configure Google with `talk.provider: "google"` plus `talk.providers.google.apiKey`, or reuse the Voice Call realtime provider config. The browser never receives the standard provider API key; it receives only a short-lived Realtime client secret or Google Live auth token. OpenAI uses browser WebRTC; Google Live uses a browser WebSocket with a Gateway-generated constrained setup. The Realtime session prompt is assembled by the Gateway; `talk.realtime.session` does not accept caller-provided instruction overrides.
 
     In the Chat composer, the Talk control is the waves button next to the microphone dictation button. When Talk starts, the composer status row shows `Connecting Talk...`, then `Talk live` while audio is connected, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `chat.send`.
 

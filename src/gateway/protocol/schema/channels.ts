@@ -50,9 +50,14 @@ export const TalkRealtimeSessionResultSchema = Type.Object(
   {
     provider: NonEmptyString,
     clientSecret: NonEmptyString,
+    transport: Type.Optional(
+      Type.Union([Type.Literal("openai-webrtc"), Type.Literal("google-live-websocket")]),
+    ),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
     expiresAt: Type.Optional(Type.Number()),
+    websocketUrl: Type.Optional(Type.String()),
+    googleLiveSetup: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
   { additionalProperties: false },
 );

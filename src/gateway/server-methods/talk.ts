@@ -430,7 +430,7 @@ export const talkHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            `Realtime voice provider "${resolution.provider.id}" does not support browser WebRTC sessions`,
+            `Realtime voice provider "${resolution.provider.id}" does not support browser realtime sessions`,
           ),
         );
         return;
@@ -447,9 +447,12 @@ export const talkHandlers: GatewayRequestHandlers = {
         {
           provider: session.provider,
           clientSecret: session.clientSecret,
+          ...(session.transport ? { transport: session.transport } : {}),
           ...(session.model ? { model: session.model } : {}),
           ...(session.voice ? { voice: session.voice } : {}),
           ...(typeof session.expiresAt === "number" ? { expiresAt: session.expiresAt } : {}),
+          ...(session.websocketUrl ? { websocketUrl: session.websocketUrl } : {}),
+          ...(session.googleLiveSetup ? { googleLiveSetup: session.googleLiveSetup } : {}),
         },
         undefined,
       );

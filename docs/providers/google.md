@@ -352,9 +352,10 @@ SDK rejects language-code hints on this API path.
 </Note>
 
 <Note>
-Control UI Talk browser sessions still require a realtime voice provider with a
-browser WebRTC session implementation. Today that path is OpenAI Realtime; the
-Google provider is for backend realtime bridges.
+Control UI Talk can use Google Live through browser WebSocket sessions. The
+Gateway mints a short-lived constrained Live API auth token, sends the browser a
+provider setup payload, and keeps `openclaw_agent_consult` routed back through
+the Gateway chat session. OpenAI Talk still uses browser WebRTC.
 </Note>
 
 ## Advanced configuration

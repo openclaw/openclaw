@@ -9,6 +9,7 @@ import {
   TurnCoverage,
   type FunctionDeclaration,
   type FunctionResponse,
+  type LiveConnectConfig,
   type LiveServerContent,
   type LiveServerMessage,
   type LiveServerToolCall,
@@ -18,6 +19,8 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
@@ -37,6 +40,9 @@ import { createGoogleGenAI } from "./google-genai-runtime.js";
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
 const GOOGLE_REALTIME_DEFAULT_API_VERSION = "v1beta";
+const GOOGLE_REALTIME_BROWSER_API_VERSION = "v1alpha";
+const GOOGLE_REALTIME_BROWSER_WS_URL =
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
 const TELEPHONY_SAMPLE_RATE = 8000;
 const MAX_PENDING_AUDIO_CHUNKS = 320;
@@ -71,6 +77,23 @@ type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   voice?: string;
   temperature?: number;
   apiVersion?: string;
+  prefixPaddingMs?: number;
+  silenceDurationMs?: number;
+  startSensitivity?: GoogleRealtimeSensitivity;
+  endSensitivity?: GoogleRealtimeSensitivity;
+  activityHandling?: GoogleRealtimeActivityHandling;
+  turnCoverage?: GoogleRealtimeTurnCoverage;
+  automaticActivityDetectionDisabled?: boolean;
+  enableAffectiveDialog?: boolean;
+  thinkingLevel?: GoogleRealtimeThinkingLevel;
+  thinkingBudget?: number;
+};
+
+type GoogleRealtimeLiveConfig = {
+  instructions?: string;
+  tools?: RealtimeVoiceTool[];
+  voice?: string;
+  temperature?: number;
   prefixPaddingMs?: number;
   silenceDurationMs?: number;
   startSensitivity?: GoogleRealtimeSensitivity;
@@ -257,7 +280,7 @@ function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCov
   }
 }
 
-function buildThinkingConfig(config: GoogleRealtimeVoiceBridgeConfig): ThinkingConfig | undefined {
+function buildThinkingConfig(config: GoogleRealtimeLiveConfig): ThinkingConfig | undefined {
   if (config.thinkingLevel) {
     return { thinkingLevel: config.thinkingLevel.toUpperCase() as ThinkingConfig["thinkingLevel"] };
   }
@@ -268,7 +291,7 @@ function buildThinkingConfig(config: GoogleRealtimeVoiceBridgeConfig): ThinkingC
 }
 
 function buildRealtimeInputConfig(
-  config: GoogleRealtimeVoiceBridgeConfig,
+  config: GoogleRealtimeLiveConfig,
 ): RealtimeInputConfig | undefined {
   const startSensitivity = mapStartSensitivity(config.startSensitivity);
   const endSensitivity = mapEndSensitivity(config.endSensitivity);
@@ -295,18 +318,105 @@ function buildRealtimeInputConfig(
   return Object.keys(realtimeInputConfig).length > 0 ? realtimeInputConfig : undefined;
 }
 
-function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
+function buildFunctionDeclarations(
+  tools: RealtimeVoiceTool[] | undefined,
+  opts: { nonBlockingAgentConsult?: boolean } = {},
+): FunctionDeclaration[] {
   return (tools ?? []).map((tool) => {
     const declaration: FunctionDeclaration = {
       name: tool.name,
       description: tool.description,
       parametersJsonSchema: tool.parameters,
     };
-    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+    if (
+      opts.nonBlockingAgentConsult !== false &&
+      tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
       declaration.behavior = Behavior.NON_BLOCKING;
     }
     return declaration;
   });
+}
+
+function buildLiveConnectConfig(
+  config: GoogleRealtimeLiveConfig,
+  opts: { nonBlockingAgentConsult?: boolean } = {},
+): LiveConnectConfig {
+  const functionDeclarations = buildFunctionDeclarations(config.tools, opts);
+  const realtimeInputConfig = buildRealtimeInputConfig(config);
+  const thinkingConfig = buildThinkingConfig(config);
+  return {
+    responseModalities: [Modality.AUDIO],
+    ...(typeof config.temperature === "number" && config.temperature > 0
+      ? { temperature: config.temperature }
+      : {}),
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE,
+        },
+      },
+    },
+    systemInstruction: config.instructions,
+    ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
+    ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    ...(typeof config.enableAffectiveDialog === "boolean"
+      ? { enableAffectiveDialog: config.enableAffectiveDialog }
+      : {}),
+    ...(thinkingConfig ? { thinkingConfig } : {}),
+  };
+}
+
+function toGoogleApiModelName(model: string): string {
+  return model.startsWith("models/") || model.startsWith("tunedModels/")
+    ? model
+    : `models/${model}`;
+}
+
+function buildGoogleLiveBrowserSetup(
+  model: string,
+  config: LiveConnectConfig,
+): Record<string, unknown> {
+  const setup: Record<string, unknown> = {
+    model: toGoogleApiModelName(model),
+  };
+  const generationConfig: Record<string, unknown> = {};
+  if (config.responseModalities) {
+    generationConfig.responseModalities = config.responseModalities;
+  }
+  if (typeof config.temperature === "number") {
+    generationConfig.temperature = config.temperature;
+  }
+  if (config.speechConfig) {
+    generationConfig.speechConfig = config.speechConfig;
+  }
+  if (config.thinkingConfig) {
+    generationConfig.thinkingConfig = config.thinkingConfig;
+  }
+  if (typeof config.enableAffectiveDialog === "boolean") {
+    generationConfig.enableAffectiveDialog = config.enableAffectiveDialog;
+  }
+  if (Object.keys(generationConfig).length > 0) {
+    setup.generationConfig = generationConfig;
+  }
+  if (typeof config.systemInstruction === "string") {
+    setup.systemInstruction = { role: "user", parts: [{ text: config.systemInstruction }] };
+  }
+  if (config.tools) {
+    setup.tools = config.tools;
+  }
+  if (config.inputAudioTranscription) {
+    setup.inputAudioTranscription = config.inputAudioTranscription;
+  }
+  if (config.outputAudioTranscription) {
+    setup.outputAudioTranscription = config.outputAudioTranscription;
+  }
+  if (config.realtimeInputConfig) {
+    setup.realtimeInputConfig = config.realtimeInputConfig;
+  }
+  return setup;
 }
 
 function parsePcmSampleRate(mimeType: string | undefined): number {
@@ -349,31 +459,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
 
-    const functionDeclarations = buildFunctionDeclarations(this.config.tools);
     this.session = (await ai.live.connect({
       model: this.config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL,
-      config: {
-        responseModalities: [Modality.AUDIO],
-        ...(typeof this.config.temperature === "number" && this.config.temperature > 0
-          ? { temperature: this.config.temperature }
-          : {}),
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: this.config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE,
-            },
-          },
-        },
-        systemInstruction: this.config.instructions,
-        ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
-        ...(this.realtimeInputConfig ? { realtimeInputConfig: this.realtimeInputConfig } : {}),
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
-        ...(typeof this.config.enableAffectiveDialog === "boolean"
-          ? { enableAffectiveDialog: this.config.enableAffectiveDialog }
-          : {}),
-        ...(this.thinkingConfig ? { thinkingConfig: this.thinkingConfig } : {}),
-      },
+      config: buildLiveConnectConfig(this.config),
       callbacks: {
         onopen: () => {
           this.connected = true;
@@ -622,14 +710,70 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
     }
   }
+}
 
-  private get realtimeInputConfig(): RealtimeInputConfig | undefined {
-    return buildRealtimeInputConfig(this.config);
+async function createGoogleRealtimeBrowserSession(
+  req: RealtimeVoiceBrowserSessionCreateRequest,
+): Promise<RealtimeVoiceBrowserSession> {
+  const config = normalizeProviderConfig(req.providerConfig);
+  const apiKey = config.apiKey || resolveEnvApiKey();
+  if (!apiKey) {
+    throw new Error("Google Gemini API key missing");
   }
 
-  private get thinkingConfig(): ThinkingConfig | undefined {
-    return buildThinkingConfig(this.config);
+  const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
+  const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
+  const liveConfig = buildLiveConnectConfig(
+    {
+      instructions: req.instructions,
+      tools: req.tools,
+      voice,
+      temperature: config.temperature,
+      prefixPaddingMs: config.prefixPaddingMs,
+      silenceDurationMs: config.silenceDurationMs,
+      startSensitivity: config.startSensitivity,
+      endSensitivity: config.endSensitivity,
+      activityHandling: config.activityHandling,
+      turnCoverage: config.turnCoverage,
+      automaticActivityDetectionDisabled: config.automaticActivityDetectionDisabled,
+      enableAffectiveDialog: config.enableAffectiveDialog,
+      thinkingLevel: config.thinkingLevel,
+      thinkingBudget: config.thinkingBudget,
+    },
+    { nonBlockingAgentConsult: true },
+  );
+  const expireTime = new Date(Date.now() + 30 * 60_000).toISOString();
+  const newSessionExpireTime = new Date(Date.now() + 60_000).toISOString();
+  const ai = createGoogleGenAI({
+    apiKey,
+    httpOptions: { apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION },
+  });
+  const token = await ai.authTokens.create({
+    config: {
+      uses: 1,
+      expireTime,
+      newSessionExpireTime,
+      liveConnectConstraints: {
+        model,
+        config: liveConfig,
+      },
+    },
+  });
+  const clientSecret = token.name?.trim();
+  if (!clientSecret) {
+    throw new Error("Google Live browser session did not return an auth token");
   }
+
+  return {
+    provider: "google",
+    transport: "google-live-websocket",
+    clientSecret,
+    model,
+    voice,
+    expiresAt: Math.floor(Date.parse(expireTime) / 1000),
+    websocketUrl: GOOGLE_REALTIME_BROWSER_WS_URL,
+    googleLiveSetup: buildGoogleLiveBrowserSetup(model, liveConfig),
+  };
 }
 
 export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
@@ -665,6 +809,7 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         thinkingBudget: config.thinkingBudget,
       });
     },
+    createBrowserSession: createGoogleRealtimeBrowserSession,
   };
 }
 

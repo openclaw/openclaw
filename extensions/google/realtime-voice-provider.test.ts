@@ -19,19 +19,23 @@ type MockGoogleLiveConnectParams = {
   };
 };
 
-const { connectMock, session } = vi.hoisted(() => {
+const { authTokenCreateMock, connectMock, session } = vi.hoisted(() => {
   const session: MockGoogleLiveSession = {
     close: vi.fn(),
     sendClientContent: vi.fn(),
     sendRealtimeInput: vi.fn(),
     sendToolResponse: vi.fn(),
   };
+  const authTokenCreateMock = vi.fn(async () => ({ name: "auth_tokens/browser-token" }));
   const connectMock = vi.fn(async (_params: MockGoogleLiveConnectParams) => session);
-  return { connectMock, session };
+  return { authTokenCreateMock, connectMock, session };
 });
 
 vi.mock("./google-genai-runtime.js", () => ({
   createGoogleGenAI: vi.fn(() => ({
+    authTokens: {
+      create: authTokenCreateMock,
+    },
     live: {
       connect: connectMock,
     },
@@ -53,6 +57,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     session.sendClientContent.mockClear();
     session.sendRealtimeInput.mockClear();
     session.sendToolResponse.mockClear();
+    authTokenCreateMock.mockClear();
+    authTokenCreateMock.mockResolvedValue({ name: "auth_tokens/browser-token" });
     delete process.env.GEMINI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
   });
@@ -525,6 +531,88 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           response: { result: "ok" },
         },
       ],
+    });
+  });
+
+  it("creates constrained Google Live browser sessions with setup metadata", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    const browserSession = await provider.createBrowserSession?.({
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+        voice: "Algieba",
+        temperature: 0.2,
+      },
+      instructions: "Answer briefly.",
+      tools: [
+        {
+          type: "function",
+          name: "openclaw_agent_consult",
+          description: "Ask OpenClaw",
+          parameters: {
+            type: "object",
+            properties: { question: { type: "string" } },
+            required: ["question"],
+          },
+        },
+      ],
+    });
+
+    expect(browserSession).toMatchObject({
+      provider: "google",
+      transport: "google-live-websocket",
+      clientSecret: "auth_tokens/browser-token",
+      model: "gemini-live-2.5-flash-preview",
+      voice: "Algieba",
+      websocketUrl:
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      googleLiveSetup: {
+        model: "models/gemini-live-2.5-flash-preview",
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          temperature: 0.2,
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Algieba",
+              },
+            },
+          },
+        },
+        systemInstruction: { role: "user", parts: [{ text: "Answer briefly." }] },
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "openclaw_agent_consult",
+                behavior: "NON_BLOCKING",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: { question: { type: "string" } },
+                  required: ["question"],
+                },
+              },
+            ],
+          },
+        ],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      },
+    });
+    expect(authTokenCreateMock).toHaveBeenCalledWith({
+      config: {
+        uses: 1,
+        expireTime: expect.any(String),
+        newSessionExpireTime: expect.any(String),
+        liveConnectConstraints: {
+          model: "gemini-live-2.5-flash-preview",
+          config: expect.objectContaining({
+            responseModalities: ["AUDIO"],
+            systemInstruction: "Answer briefly.",
+          }),
+        },
+      },
     });
   });
 });

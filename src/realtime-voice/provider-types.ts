@@ -68,9 +68,12 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
 export type RealtimeVoiceBrowserSession = {
   provider: RealtimeVoiceProviderId;
   clientSecret: string;
+  transport?: "openai-webrtc" | "google-live-websocket";
   model?: string;
   voice?: string;
   expiresAt?: number;
+  websocketUrl?: string;
+  googleLiveSetup?: Record<string, unknown>;
 };
 
 export type RealtimeVoiceBridge = {
