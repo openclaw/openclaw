@@ -146,4 +146,11 @@ export async function runPluginUpdateCommand(params: {
     }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }
+
+  if (
+    pluginResult.outcomes.some((outcome) => outcome.status === "error") ||
+    hookResult.outcomes.some((outcome) => outcome.status === "error")
+  ) {
+    defaultRuntime.exit(1);
+  }
 }

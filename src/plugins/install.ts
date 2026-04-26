@@ -1,5 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { matchBoundaryFileOpenFailure, openBoundaryFile } from "../infra/boundary-file-read.js";
+import { resolveBoundaryPath } from "../infra/boundary-path.js";
 import {
   packageNameMatchesId,
   resolveSafeInstallDir,
@@ -14,9 +17,11 @@ import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
+  getPackageManifestMetadata,
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
+import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 
 let pluginInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
 
@@ -54,6 +59,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
   MISSING_PLUGIN_MANIFEST: "missing_plugin_manifest",
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
+  INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
   SECURITY_SCAN_BLOCKED: "security_scan_blocked",
@@ -184,6 +190,139 @@ function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
     ok: true,
     entries: resolved.entries,
   };
+}
+
+type ExtensionEntryValidation = { ok: true; exists: boolean } | { ok: false; error: string };
+
+async function validatePackageExtensionEntry(params: {
+  packageDir: string;
+  entry: string;
+  label: string;
+  requireExisting: boolean;
+}): Promise<ExtensionEntryValidation> {
+  const absolutePath = path.resolve(params.packageDir, params.entry);
+  try {
+    const resolved = await resolveBoundaryPath({
+      absolutePath,
+      rootPath: params.packageDir,
+      boundaryLabel: "plugin package directory",
+    });
+    if (!resolved.exists) {
+      return params.requireExisting
+        ? { ok: false, error: `${params.label} not found: ${params.entry}` }
+        : { ok: true, exists: false };
+    }
+  } catch {
+    return {
+      ok: false,
+      error: `${params.label} escapes plugin directory: ${params.entry}`,
+    };
+  }
+
+  const opened = await openBoundaryFile({
+    absolutePath,
+    rootPath: params.packageDir,
+    boundaryLabel: "plugin package directory",
+  });
+  if (!opened.ok) {
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => ({ ok: false, error: `${params.label} not found: ${params.entry}` }),
+      io: () => ({ ok: false, error: `${params.label} unreadable: ${params.entry}` }),
+      validation: () => ({
+        ok: false,
+        error: `${params.label} failed plugin directory boundary checks: ${params.entry}`,
+      }),
+      fallback: () => ({
+        ok: false,
+        error: `${params.label} failed plugin directory boundary checks: ${params.entry}`,
+      }),
+    });
+  }
+  fsSync.closeSync(opened.fd);
+  return { ok: true, exists: true };
+}
+
+async function validatePackageExtensionEntries(params: {
+  packageDir: string;
+  extensions: string[];
+  manifest: PackageManifest;
+}): Promise<{ ok: true } | { ok: false; error: string; code: PluginInstallErrorCode }> {
+  const packageMetadata = getPackageManifestMetadata(params.manifest);
+  const runtimeExtensions = Array.isArray(packageMetadata?.runtimeExtensions)
+    ? packageMetadata.runtimeExtensions
+        .map((entry) => normalizeOptionalString(entry) ?? "")
+        .filter(Boolean)
+    : [];
+  const useRuntimeExtensions = runtimeExtensions.length === params.extensions.length;
+
+  for (const [index, entry] of params.extensions.entries()) {
+    const sourceEntry = await validatePackageExtensionEntry({
+      packageDir: params.packageDir,
+      entry,
+      label: "extension entry",
+      requireExisting: false,
+    });
+    if (!sourceEntry.ok) {
+      return {
+        ok: false,
+        error: sourceEntry.error,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+      };
+    }
+
+    const runtimeEntry = useRuntimeExtensions ? runtimeExtensions[index] : undefined;
+    if (runtimeEntry) {
+      const runtimeResult = await validatePackageExtensionEntry({
+        packageDir: params.packageDir,
+        entry: runtimeEntry,
+        label: "runtime extension entry",
+        requireExisting: true,
+      });
+      if (!runtimeResult.ok) {
+        return {
+          ok: false,
+          error: runtimeResult.error,
+          code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+        };
+      }
+      continue;
+    }
+
+    if (sourceEntry.exists) {
+      continue;
+    }
+
+    let foundBuiltEntry = false;
+    for (const builtEntry of listBuiltRuntimeEntryCandidates(entry)) {
+      const builtResult = await validatePackageExtensionEntry({
+        packageDir: params.packageDir,
+        entry: builtEntry,
+        label: "inferred runtime extension entry",
+        requireExisting: false,
+      });
+      if (!builtResult.ok) {
+        return {
+          ok: false,
+          error: builtResult.error,
+          code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+        };
+      }
+      if (builtResult.exists) {
+        foundBuiltEntry = true;
+        break;
+      }
+    }
+
+    if (!foundBuiltEntry) {
+      return {
+        ok: false,
+        error: `extension entry not found: ${entry}`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 function isNpmPackageNotFoundMessage(error: string): boolean {
@@ -766,6 +905,15 @@ async function installPluginFromPackageDir(
     };
   }
 
+  const extensionValidation = await validatePackageExtensionEntries({
+    packageDir: params.packageDir,
+    extensions,
+    manifest,
+  });
+  if (!extensionValidation.ok) {
+    return extensionValidation;
+  }
+
   const targetResult = await resolvePreparedDirectoryInstallTarget({
     runtime,
     pluginId,
@@ -819,18 +967,6 @@ async function installPluginFromPackageDir(
     hasDeps: Object.keys(deps).length > 0,
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
-    afterCopy: async (installedDir) => {
-      for (const entry of extensions) {
-        const resolvedEntry = path.resolve(installedDir, entry);
-        if (!runtime.isPathInside(installedDir, resolvedEntry)) {
-          logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
-          continue;
-        }
-        if (!(await runtime.fileExists(resolvedEntry))) {
-          logger.warn?.(`extension entry not found: ${entry}`);
-        }
-      }
-    },
     afterInstall: async (installedDir) => {
       // Run the dependency-tree security scan BEFORE linking peer deps.
       // The scan rejects any node_modules/ symlink whose target resolves
