@@ -5,6 +5,7 @@ const resolveDefaultAgentIdMock = vi.fn(() => "main");
 const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
+const uninstallSkillFromClawHubMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
@@ -20,6 +21,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../agents/skills-clawhub.js", () => ({
   installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
+  uninstallSkillFromClawHub: (...args: unknown[]) => uninstallSkillFromClawHubMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
 }));
 
@@ -36,6 +38,7 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
+    uninstallSkillFromClawHubMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
@@ -206,5 +209,121 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(ok).toBe(false);
     expect(error?.message).toContain('requires "slug" or "all"');
     expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("uninstalls an installed ClawHub skill through skills.uninstall", async () => {
+    uninstallSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      removed: true,
+      targetDir: "/tmp/workspace/skills/calendar",
+      previousVersion: "1.2.3",
+    });
+
+    let ok: boolean | null = null;
+    let response: unknown;
+    let error: unknown;
+    await skillsHandlers["skills.uninstall"]({
+      params: { slug: "calendar" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result;
+        error = err;
+      },
+    });
+
+    expect(uninstallSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(response).toMatchObject({
+      ok: true,
+      slug: "calendar",
+      removed: true,
+      previousVersion: "1.2.3",
+      message: "Uninstalled calendar",
+    });
+  });
+
+  it("returns removed=false idempotently when slug is not installed", async () => {
+    uninstallSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "nope",
+      removed: false,
+      targetDir: "/tmp/workspace/skills/nope",
+      previousVersion: null,
+    });
+
+    let ok: boolean | null = null;
+    let response: { removed?: boolean; message?: string } | undefined;
+    let error: unknown;
+    await skillsHandlers["skills.uninstall"]({
+      params: { slug: "nope", source: "clawhub" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result as { removed?: boolean; message?: string } | undefined;
+        error = err;
+      },
+    });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(response?.removed).toBe(false);
+    expect(response?.message).toBe("Skill nope was not installed");
+  });
+
+  it("rejects skills.uninstall with an empty slug", async () => {
+    let ok: boolean | null = null;
+    let error: { code?: string; message?: string } | undefined;
+    await skillsHandlers["skills.uninstall"]({
+      params: { slug: "" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: (success, _result, err) => {
+        ok = success;
+        error = err as { code?: string; message?: string } | undefined;
+      },
+    });
+
+    expect(ok).toBe(false);
+    expect(error?.code).toBe("INVALID_REQUEST");
+    expect(uninstallSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces backend errors from skills.uninstall as UNAVAILABLE", async () => {
+    uninstallSkillFromClawHubMock.mockResolvedValue({
+      ok: false,
+      error: "boom",
+    });
+
+    let ok: boolean | null = null;
+    let error: { code?: string; message?: string } | undefined;
+    await skillsHandlers["skills.uninstall"]({
+      params: { slug: "calendar" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: (success, _result, err) => {
+        ok = success;
+        error = err as { code?: string; message?: string } | undefined;
+      },
+    });
+
+    expect(ok).toBe(false);
+    expect(error?.code).toBe("UNAVAILABLE");
+    expect(error?.message).toBe("boom");
   });
 });

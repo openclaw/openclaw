@@ -455,6 +455,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
     skill folder into the default agent workspace `skills/` directory.
   - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
+- Operators may call `skills.uninstall` (`operator.admin`) to remove an
+  installed skill folder from the default agent workspace and drop the
+  matching `.clawhub/lock.json` entry. Params: `{ slug, source?: "clawhub" }`.
+  Idempotent: returns `{ ok: true, removed: false }` when the slug is not
+  installed rather than an error. Shared bin dependencies are left in place.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.

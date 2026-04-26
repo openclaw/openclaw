@@ -245,6 +245,14 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
 ]);
 
+export const SkillsUninstallParamsSchema = Type.Object(
+  {
+    slug: NonEmptyString,
+    source: Type.Optional(Type.Literal("clawhub")),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsSearchParamsSchema = Type.Object(
   {
     query: Type.Optional(NonEmptyString),

@@ -129,6 +129,7 @@ export type SkillsSearchResult = SchemaType<"SkillsSearchResult">;
 export type SkillsDetailParams = SchemaType<"SkillsDetailParams">;
 export type SkillsDetailResult = SchemaType<"SkillsDetailResult">;
 export type SkillsInstallParams = SchemaType<"SkillsInstallParams">;
+export type SkillsUninstallParams = SchemaType<"SkillsUninstallParams">;
 export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
 export type CronJob = SchemaType<"CronJob">;
 export type CronListParams = SchemaType<"CronListParams">;
