@@ -98,11 +98,12 @@ function run(cmd, args) {
   let child;
   try {
     // On Windows, when the command path contains spaces, shell: true doesn't
-    // properly quote the command path. Work around by using just the command
-    // basename (e.g. "pnpm.CMD") and letting the shell resolve it via PATH.
+    // properly quote the command path. Wrap the path in double quotes so the
+    // shell receives the explicit absolute path rather than relying on PATH
+    // resolution via basename (which could pick the wrong binary).
     const useShell = shouldUseShellForCommand(cmd);
     const useQuotedShell = useShell && cmd.includes(" ");
-    const spawnCmd = useQuotedShell ? path.basename(cmd) : cmd;
+    const spawnCmd = useQuotedShell ? `"${cmd}"` : cmd;
     const spawnOpts = useQuotedShell
       ? { cwd: uiDir, stdio: "inherit", env: process.env, shell: true }
       : createSpawnOptions(cmd, args);
@@ -127,11 +128,11 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    // On Windows, when the command path contains spaces, use command basename
-    // and let the shell resolve it via PATH.
+    // On Windows, when the command path contains spaces, wrap it in double
+    // quotes so the shell receives the explicit absolute path.
     const useShell = shouldUseShellForCommand(cmd);
     const useQuotedShell = useShell && cmd.includes(" ");
-    const spawnCmd = useQuotedShell ? path.basename(cmd) : cmd;
+    const spawnCmd = useQuotedShell ? `"${cmd}"` : cmd;
     const spawnOpts = useQuotedShell
       ? { cwd: uiDir, stdio: "inherit", env: envOverride ?? process.env, shell: true }
       : createSpawnOptions(cmd, args, envOverride);

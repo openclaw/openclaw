@@ -123,11 +123,9 @@ export function createAsyncLock() {
       release = resolve;
     });
     const timeoutMs = options?.timeoutMs ?? 30_000;
-    let timedOut = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
-        timedOut = true;
         reject(new AsyncLockTimeoutError(timeoutMs));
       }, timeoutMs);
     });
