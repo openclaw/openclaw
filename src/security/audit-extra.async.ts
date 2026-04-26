@@ -5,11 +5,6 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
-import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
-import { resolveSkillSource } from "../agents/skills/source.js";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -20,18 +15,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import {
-  formatPermissionDetail,
-  formatPermissionRemediation,
-  inspectPathPermissions,
-  safeStat,
-} from "./audit-fs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
-import * as skillScanner from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
-
-export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -41,10 +27,16 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
+type CollectPluginsTrustFindingsParams = Parameters<
+  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
+>[0];
+type SkillScanSummary = Awaited<
+  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+>;
 type ExecDockerRawFn = (
   args: string[],
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
-) => Promise<ExecDockerRawResult>;
+) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 type WorkspaceSkillScanLimits = {
@@ -91,6 +83,18 @@ function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null
 }
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
+let agentWorkspaceDirsModulePromise:
+  | Promise<typeof import("../agents/workspace-dirs.js")>
+  | undefined;
+let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
+let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
+let sandboxConstantsModulePromise:
+  | Promise<typeof import("../agents/sandbox/constants.js")>
+  | undefined;
+let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
+let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
+let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
 
 function loadSkillsModule() {
   skillsModulePromise ??= import("../agents/skills.js");
@@ -102,9 +106,86 @@ function loadConfigModule() {
   return configModulePromise;
 }
 
+function loadAuditFsModule() {
+  auditFsModulePromise ??= import("./audit-fs.js");
+  return auditFsModulePromise;
+}
+
+function loadAgentScopeModule() {
+  agentScopeModulePromise ??= import("../agents/agent-scope.js");
+  return agentScopeModulePromise;
+}
+
+function loadAgentWorkspaceDirsModule() {
+  agentWorkspaceDirsModulePromise ??= import("../agents/workspace-dirs.js");
+  return agentWorkspaceDirsModulePromise;
+}
+
+function loadSkillSourceModule() {
+  skillSourceModulePromise ??= import("../agents/skills/source.js");
+  return skillSourceModulePromise;
+}
+
+function loadSkillScannerModule() {
+  skillScannerModulePromise ??= import("./skill-scanner.js");
+  return skillScannerModulePromise;
+}
+
+async function loadExecDockerRaw(): Promise<ExecDockerRawFn> {
+  sandboxDockerModulePromise ??= import("../agents/sandbox/docker.js");
+  const { execDockerRaw } = await sandboxDockerModulePromise;
+  return execDockerRaw;
+}
+
+async function loadSandboxBrowserSecurityHashEpoch(): Promise<string> {
+  sandboxConstantsModulePromise ??= import("../agents/sandbox/constants.js");
+  const { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } = await sandboxConstantsModulePromise;
+  return SANDBOX_BROWSER_SECURITY_HASH_EPOCH;
+}
+
+export async function collectPluginsTrustFindings(
+  params: CollectPluginsTrustFindingsParams,
+): Promise<SecurityAuditFinding[]> {
+  auditPluginsTrustModulePromise ??= import("./audit-plugins-trust.js");
+  const { collectPluginsTrustFindings: collect } = await auditPluginsTrustModulePromise;
+  return await collect(params);
+}
+
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
+
+async function safeStat(targetPath: string): Promise<{
+  ok: boolean;
+  isSymlink: boolean;
+  isDir: boolean;
+  mode: number | null;
+  uid: number | null;
+  gid: number | null;
+  error?: string;
+}> {
+  try {
+    const lst = await fs.lstat(targetPath);
+    return {
+      ok: true,
+      isSymlink: lst.isSymbolicLink(),
+      isDir: lst.isDirectory(),
+      mode: typeof lst.mode === "number" ? lst.mode : null,
+      uid: typeof lst.uid === "number" ? lst.uid : null,
+      gid: typeof lst.gid === "number" ? lst.gid : null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      isSymlink: false,
+      isDir: false,
+      mode: null,
+      uid: null,
+      gid: null,
+      error: String(err),
+    };
+  }
+}
 
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
@@ -197,7 +278,7 @@ async function getCodeSafetySummary(params: {
   dirPath: string;
   includeFiles?: string[];
   summaryCache?: CodeSafetySummaryCache;
-}): Promise<Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>> {
+}): Promise<SkillScanSummary> {
   const cacheKey = buildCodeSafetySummaryCacheKey({
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
@@ -206,14 +287,16 @@ async function getCodeSafetySummary(params: {
   if (cache) {
     const hit = cache.get(cacheKey);
     if (hit) {
-      return (await hit) as Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>;
+      return (await hit) as SkillScanSummary;
     }
+    const skillScanner = await loadSkillScannerModule();
     const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
     });
     cache.set(cacheKey, pending);
     return await pending;
   }
+  const skillScanner = await loadSkillScannerModule();
   return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
     includeFiles: params.includeFiles,
   });
@@ -388,7 +471,10 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
-  const execFn = params?.execDockerRawFn ?? execDockerRaw;
+  const [execFn, browserHashEpoch] = await Promise.all([
+    params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
+    loadSandboxBrowserSecurityHashEpoch(),
+  ]);
   const containers = await listSandboxBrowserContainers(execFn);
   if (!containers || containers.length === 0) {
     return findings;
@@ -406,7 +492,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     if (!labels.configHash) {
       missingHash.push(containerName);
     }
-    if (labels.epoch !== SANDBOX_BROWSER_SECURITY_HASH_EPOCH) {
+    if (labels.epoch !== browserHashEpoch) {
       staleEpoch.push(containerName);
     }
     const portMappings = await readSandboxBrowserPortMappings({
@@ -444,7 +530,7 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
       title: "Sandbox browser container hash epoch is stale",
       detail:
         `Containers: ${staleEpoch.join(", ")}. ` +
-        `Expected openclaw.browserConfigEpoch=${SANDBOX_BROWSER_SECURITY_HASH_EPOCH}.`,
+        `Expected openclaw.browserConfigEpoch=${browserHashEpoch}.`,
       remediation: `${formatCliCommand("openclaw sandbox recreate --browser --all")} (add --force to skip prompt).`,
     });
   }
@@ -471,6 +557,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   skillScanLimits?: WorkspaceSkillScanLimits;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const { listAgentWorkspaceDirs } = await loadAgentWorkspaceDirsModule();
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   if (workspaceDirs.length === 0) {
     return findings;
@@ -589,6 +676,9 @@ export async function collectIncludeFilePermFindings(params: {
     return findings;
   }
 
+  const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
+    await loadAuditFsModule();
+
   for (const p of includePaths) {
     const perms = await inspectPathPermissions(p, {
       env: params.env,
@@ -655,6 +745,8 @@ export async function collectStateDeepFilesystemFindings(params: {
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const oauthDir = resolveOAuthDir(params.env, params.stateDir);
+  const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
+    await loadAuditFsModule();
 
   const oauthPerms = await inspectPathPermissions(oauthDir, {
     env: params.env,
@@ -703,6 +795,7 @@ export async function collectStateDeepFilesystemFindings(params: {
         )
         .filter(Boolean)
     : [];
+  const { resolveDefaultAgentId } = await loadAgentScopeModule();
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
 
@@ -943,6 +1036,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
+  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
+    loadAgentWorkspaceDirsModule(),
+    loadSkillSourceModule(),
+  ]);
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 

@@ -41,6 +41,8 @@ export type TtsStatusEntry = {
   error?: string;
 };
 
+export type TtsSpeechTarget = "audio-file" | "voice-note";
+
 export type SummarizeResult = {
   summary: string;
   latencyMs: number;
@@ -69,6 +71,7 @@ export type TtsRequestParams = {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 };
 
 export type TtsTelephonyRequestParams = {
@@ -98,6 +101,12 @@ export type TtsTestFacade = {
   parseTtsDirectives: (...args: unknown[]) => TtsDirectiveParseResult;
   resolveModelOverridePolicy: (...args: unknown[]) => ResolvedTtsModelOverrides;
   supportsNativeVoiceNoteTts: (channel: string | undefined) => boolean;
+  supportsTranscodedVoiceNoteTts: (channel: string | undefined) => boolean;
+  shouldDeliverTtsAsVoice: (params: {
+    channel: string | undefined;
+    target: TtsSpeechTarget | undefined;
+    voiceCompatible: boolean | undefined;
+  }) => boolean;
   summarizeText: (...args: unknown[]) => Promise<SummarizeResult>;
   getResolvedSpeechProviderConfig: (
     config: ResolvedTtsConfig,
@@ -119,6 +128,8 @@ export type TtsResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   voiceCompatible?: boolean;
+  audioAsVoice?: boolean;
+  target?: TtsSpeechTarget;
 };
 
 export type TtsSynthesisResult = {
@@ -133,6 +144,7 @@ export type TtsSynthesisResult = {
   outputFormat?: string;
   voiceCompatible?: boolean;
   fileExtension?: string;
+  target?: TtsSpeechTarget;
 };
 
 export type TtsTelephonyResult = {
