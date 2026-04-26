@@ -24,6 +24,7 @@ type ReadOnlyChannelPluginOptions = {
   workspaceDir?: string;
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
+  includeSetupRuntimeFallback?: boolean;
   cache?: boolean;
 };
 
@@ -585,7 +586,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
           [pluginId, channelIds.filter((channelId) => missingChannelIdSet.has(channelId))] as const,
       ),
     );
-    if (setupMissingChannelIds.length > 0) {
+    if (setupMissingChannelIds.length > 0 && options.includeSetupRuntimeFallback === true) {
       const registry = loadOpenClawPlugins({
         config: cfg,
         activationSourceConfig: options.activationSourceConfig ?? cfg,
