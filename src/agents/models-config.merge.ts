@@ -34,6 +34,48 @@ function getProviderModelId(model: unknown): string {
   return normalizeOptionalString(id) ?? "";
 }
 
+/**
+ * Default `input` modalities for explicit model entries that don't specify
+ * one and have no matching implicit (discovery) entry to inherit from.
+ *
+ * Without this, models silently default to text-only at query time,
+ * which silently breaks image attachments for Claude 3.5+ / 4.x, GPT-4o,
+ * Gemini 1.5+, and every other modern vision-capable model whose explicit
+ * entry was authored before `input` became required.
+ *
+ * Kept conservative: only adds "image" for ID patterns that are
+ * known-vision-capable. Anything else stays undefined (which downstream
+ * still treats as text-only, matching prior behavior).
+ */
+const VISION_CAPABLE_ID_PATTERNS: readonly RegExp[] = [
+  // Anthropic Claude 3.5+, 3.7, 4.x (dot and dash variants, all regions)
+  /claude-(?:3-5|3\.5|3-7|3\.7|opus-4|sonnet-4|haiku-4|4-\d)/i,
+  // OpenAI multimodal families
+  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|o1|o3|o4/i,
+  // Google multimodal families
+  /gemini-(?:1\.5|2|2\.5|pro-vision)/i,
+  // Meta multimodal families
+  /llama-(?:3\.2|4).*vision|llama-(?:3\.2|4).*instruct/i,
+];
+
+function explicitEntryLooksVisionCapable(id: string): boolean {
+  if (!id) return false;
+  return VISION_CAPABLE_ID_PATTERNS.some((re) => re.test(id));
+}
+
+function applyInputDefaultForExplicitOnlyEntry<T extends { id?: unknown; input?: unknown }>(
+  entry: T,
+): T {
+  const id = getProviderModelId(entry);
+  if ("input" in entry && Array.isArray(entry.input)) {
+    return entry;
+  }
+  if (!explicitEntryLooksVisionCapable(id)) {
+    return entry;
+  }
+  return Object.assign({}, entry, { input: ["text", "image"] });
+}
+
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
@@ -49,9 +91,13 @@ export function mergeProviderModels(
       ? explicit.headers
       : undefined;
   if (implicitModels.length === 0) {
+    const explicitWithDefaults = explicitModels.map((m) =>
+      applyInputDefaultForExplicitOnlyEntry(m as { id?: unknown; input?: unknown }),
+    );
     return {
       ...implicit,
       ...explicit,
+      ...(explicitWithDefaults.length > 0 ? { models: explicitWithDefaults } : {}),
       ...(implicitHeaders || explicitHeaders
         ? {
             headers: {
@@ -78,7 +124,7 @@ export function mergeProviderModels(
     seen.add(id);
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
-      return explicitModel;
+      return applyInputDefaultForExplicitOnlyEntry(explicitModel);
     }
 
     const contextWindow = resolvePreferredTokenLimit({
