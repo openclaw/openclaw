@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
@@ -132,7 +131,9 @@ describe("security audit install metadata findings", () => {
       })),
       diagnostics: [],
     };
-    await writePersistedInstalledPluginIndex(index, { stateDir });
+    const filePath = path.join(stateDir, "plugins", "installs.json");
+    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    await fs.writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
   };
 
   beforeAll(async () => {
