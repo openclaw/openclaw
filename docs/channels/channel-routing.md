@@ -2,7 +2,7 @@
 summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
 read_when:
   - Changing channel routing or inbox behavior
-title: "Channel Routing"
+title: "Channel routing"
 ---
 
 # Channels & routing
@@ -13,7 +13,7 @@ host configuration.
 
 ## Key terms
 
-- **Channel**: `telegram`, `whatsapp`, `discord`, `irc`, `googlechat`, `slack`, `signal`, `imessage`, `line`, plus extension channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
+- **Channel**: `telegram`, `whatsapp`, `discord`, `irc`, `googlechat`, `slack`, `signal`, `imessage`, `line`, plus plugin channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
 - **AccountId**: per‑channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
@@ -141,3 +141,9 @@ Inbound replies include:
 - Quoted context is appended to `Body` as a `[Replying to ...]` block.
 
 This is consistent across channels.
+
+## Related
+
+- [Groups](/channels/groups)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Pairing](/channels/pairing)

@@ -141,6 +141,17 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("returns a model-switch hint for OpenAI model capacity errors", () => {
+    expect(
+      sanitizeUserFacingText(
+        "OpenAI error: Selected model is at capacity. Please try a different model.",
+        {
+          errorContext: true,
+        },
+      ),
+    ).toBe("⚠️ Selected model is at capacity. Try a different model, or wait and retry.");
+  });
+
   it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
     expect(
       sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
@@ -440,6 +451,26 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("drops replayable reasoning when requested even with following content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any, { dropReplayableReasoning: true })).toEqual(
+      [{ role: "assistant", content: [{ type: "text", text: "answer" }] }],
+    );
   });
 
   it("drops orphaned reasoning blocks without following content", () => {

@@ -1,11 +1,17 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import {
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  withoutPluginInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -37,6 +43,7 @@ export type ChannelsAddOptions = {
 } & Record<string, unknown>;
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
+const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
@@ -72,6 +79,10 @@ function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
   return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
 }
 
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   const input: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(opts)) {
@@ -79,6 +90,13 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
       continue;
     }
     input[key] = value;
+  }
+
+  const rawChannel = readOptionalString(opts.channel)?.trim().toLowerCase();
+  if (rawChannel && NEXTCLOUD_TALK_CLI_ALIASES.has(rawChannel)) {
+    input.baseUrl ??= readOptionalString(input.url);
+    input.secret ??= readOptionalString(input.token) ?? readOptionalString(input.password);
+    input.secretFile ??= readOptionalString(input.tokenFile);
   }
 
   input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);
@@ -99,6 +117,7 @@ export async function channelsAddCommand(
   const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
   const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
+  let pluginRegistrySourceChanged = false;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
@@ -141,7 +160,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -225,13 +244,32 @@ export async function channelsAddCommand(
       }
     }
 
+    const shouldMovePluginInstalls = Boolean(
+      nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
+    );
+    const writtenConfig = shouldMovePluginInstalls
+      ? withoutPluginInstallRecords(nextConfig)
+      : nextConfig;
+    if (shouldMovePluginInstalls) {
+      await writePersistedInstalledPluginIndexInstallRecords(nextConfig.plugins?.installs ?? {});
+    }
     await replaceConfigFile({
-      nextConfig,
+      nextConfig: writtenConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
+      ...(shouldMovePluginInstalls
+        ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+        : {}),
     });
+    if (shouldMovePluginInstalls) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: writtenConfig,
+        reason: "source-changed",
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
     await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
     await prompter.outro("Channels updated.");
@@ -248,7 +286,7 @@ export async function channelsAddCommand(
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
-    const existing = getChannelPlugin(channelId);
+    const existing = getLoadedChannelPlugin(channelId);
     if (existing) {
       return existing;
     }
@@ -260,10 +298,11 @@ export async function channelsAddCommand(
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
+      installRuntimeDeps: false,
     });
     return (
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
     );
   };
 
@@ -290,6 +329,7 @@ export async function channelsAddCommand(
       if (!result.installed) {
         return;
       }
+      pluginRegistrySourceChanged = true;
       catalogEntry = {
         ...catalogEntry,
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
@@ -355,11 +395,30 @@ export async function channelsAddCommand(
     runtime,
   });
 
+  const shouldMovePluginInstalls = Boolean(
+    nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
+  );
+  const writtenConfig = shouldMovePluginInstalls
+    ? withoutPluginInstallRecords(nextConfig)
+    : nextConfig;
+  if (shouldMovePluginInstalls) {
+    await writePersistedInstalledPluginIndexInstallRecords(nextConfig.plugins?.installs ?? {});
+  }
   await replaceConfigFile({
-    nextConfig,
+    nextConfig: writtenConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    ...(shouldMovePluginInstalls
+      ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+      : {}),
   });
-  runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
+  if (shouldMovePluginInstalls || pluginRegistrySourceChanged) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: writtenConfig,
+      reason: "source-changed",
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
+  runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
