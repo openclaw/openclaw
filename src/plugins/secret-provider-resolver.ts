@@ -1,4 +1,4 @@
-import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./contracts/inventory/bundled-capability-metadata.js";
+import { resolveBundledPluginIdForSecretProviderSource } from "./contracts/registry.js";
 import { loadBundledSecretProviderEntriesFromDir } from "./secret-provider-public-artifacts.js";
 import type { PluginSecretProviderEntry } from "./secret-provider-types.js";
 
@@ -23,30 +23,31 @@ export async function resolveBundledSecretProviderForSource(
     return cached;
   }
 
-  for (const snapshot of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS) {
-    if (!snapshot.secretProviderIds.includes(source)) {
-      continue;
-    }
-    let entries: PluginSecretProviderEntry[] | null;
-    try {
-      entries = loadBundledSecretProviderEntriesFromDir({
-        dirName: snapshot.pluginId,
-        pluginId: snapshot.pluginId,
-      });
-    } catch (err) {
-      throw new Error(
-        `Plugin "${snapshot.pluginId}" declares secret provider source "${source}" but its artifact failed to load.`,
-        { cause: err },
-      );
-    }
-    if (!entries) {
-      continue;
-    }
-    const match = entries.find((entry) => entry.id === source);
-    if (match) {
-      cache.set(source, match);
-      return match;
-    }
+  const pluginId = resolveBundledPluginIdForSecretProviderSource(source);
+  if (!pluginId) {
+    return undefined;
   }
-  return undefined;
+
+  let entries: PluginSecretProviderEntry[] | null;
+  try {
+    entries = loadBundledSecretProviderEntriesFromDir({
+      dirName: pluginId,
+      pluginId,
+    });
+  } catch (err) {
+    throw new Error(
+      `Plugin "${pluginId}" declares secret provider source "${source}" but its artifact failed to load.`,
+      { cause: err },
+    );
+  }
+  if (!entries) {
+    return undefined;
+  }
+
+  const match = entries.find((entry) => entry.id === source);
+  if (!match) {
+    return undefined;
+  }
+  cache.set(source, match);
+  return match;
 }
