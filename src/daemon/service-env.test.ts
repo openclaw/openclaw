@@ -13,10 +13,17 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
+  // Default existsSync stub for tests that pre-date the on-disk filter:
+  // pretend every hard-coded version-manager dir exists so we can keep the
+  // original assertions about which paths get emitted.
+  const allExist = (): boolean => true;
+  const noneExist = (): boolean => false;
+
   it("includes user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     // Should include all common user bin directories
@@ -50,6 +57,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     const userDirIndex = result.indexOf("/home/testuser/.local/bin");
@@ -65,6 +73,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       platform: "linux",
       home: "/home/testuser",
       extraDirs: ["/custom/bin"],
+      existsSync: allExist,
     });
 
     const extraDirIndex = result.indexOf("/custom/bin");
@@ -88,6 +97,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         NVM_DIR: "/opt/nvm",
         FNM_DIR: "/opt/fnm",
       },
+      existsSync: allExist,
     });
 
     expect(result).toContain("/opt/pnpm");
@@ -103,6 +113,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
     // Should include common user bin directories
@@ -134,6 +145,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         NVM_DIR: "/Users/testuser/.nvm",
         PNPM_HOME: "/Users/testuser/Library/pnpm",
       },
+      existsSync: allExist,
     });
 
     // fnm uses aliases/default/bin (not current)
@@ -148,6 +160,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
     // fnm on macOS defaults to ~/Library/Application Support/fnm
@@ -165,10 +178,90 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     const result = getMinimalServicePathParts({
       platform: "win32",
       home: "C:\\Users\\testuser",
+      existsSync: allExist,
     });
 
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
+  });
+
+  it("omits hard-coded VM fallbacks on Linux when their directories do not exist", () => {
+    // Issue #71944: doctor warns gateway.path.non-minimal about exactly these dirs.
+    // When they don't exist on disk we must not write them into the launchd plist.
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: noneExist,
+    });
+
+    // Stable user-bin conventions are still emitted (audit excludes these).
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.npm-global/bin");
+    expect(result).toContain("/home/testuser/bin");
+    // Version-manager fallbacks must be filtered out.
+    expect(result).not.toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/pnpm");
+  });
+
+  it("omits hard-coded VM fallbacks on macOS when their directories do not exist", () => {
+    // Issue #71944: matches the audit's gateway.path.non-minimal pattern set.
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      existsSync: noneExist,
+    });
+
+    // Stable user-bin conventions remain.
+    expect(result).toContain("/Users/testuser/.local/bin");
+    expect(result).toContain("/Users/testuser/.npm-global/bin");
+    expect(result).toContain("/Users/testuser/bin");
+    // Hard-coded version-manager fallbacks are filtered out.
+    expect(result).not.toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
+    expect(result).not.toContain("/Users/testuser/.bun/bin");
+    expect(result).not.toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
+    expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
+  });
+
+  it("keeps env-configured roots even when their directories do not exist on disk", () => {
+    // Env vars are explicit user signal; users may set them before the VM is installed.
+    // The audit accepts these because they're typed by the user, not by us guessing.
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/opt/pnpm",
+        VOLTA_HOME: "/opt/volta",
+        BUN_INSTALL: "/opt/bun",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/volta/bin");
+    expect(result).toContain("/opt/bun/bin");
+  });
+
+  it("emits only the existing hard-coded VM fallbacks on macOS", () => {
+    // Realistic: a user has volta installed but not bun.
+    const exists = (candidate: string) => candidate === "/Users/testuser/.volta/bin";
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      existsSync: exists,
+    });
+
+    expect(result).toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.bun/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
   });
 });
 
@@ -295,6 +388,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -361,6 +455,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 

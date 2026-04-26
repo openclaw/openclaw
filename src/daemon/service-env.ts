@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -28,6 +29,14 @@ export type MinimalServicePathOptions = {
   extraDirs?: string[];
   home?: string;
   env?: Record<string, string | undefined>;
+  /**
+   * Predicate used to check whether an optional version-manager directory exists
+   * on disk. Injected for tests; defaults to {@link fs.existsSync}. Only consulted
+   * for hard-coded version-manager fallbacks (volta, asdf, bun, fnm, pnpm); env-driven
+   * roots (PNPM_HOME, VOLTA_HOME, …) and stable user dirs (~/.local/bin, ~/.npm-global/bin,
+   * ~/bin) remain unconditional.
+   */
+  existsSync?: (candidate: string) => boolean;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -86,13 +95,31 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
   return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
 }
 
-function addCommonUserBinDirs(dirs: string[], home: string): void {
+function addCommonUserBinDirs(
+  dirs: string[],
+  home: string,
+  existsSync: (candidate: string) => boolean,
+): void {
+  // Stable user-bin conventions — emit unconditionally. The audit excludes these.
   dirs.push(`${home}/.local/bin`);
   dirs.push(`${home}/.npm-global/bin`);
   dirs.push(`${home}/bin`);
-  dirs.push(`${home}/.volta/bin`);
-  dirs.push(`${home}/.asdf/shims`);
-  dirs.push(`${home}/.bun/bin`);
+  // Version-manager fallbacks — only emit when the directory actually exists.
+  // Otherwise the gateway plist contains paths that never resolve and the
+  // service-audit (gateway.path.non-minimal) flags its own writes.
+  addExistingDir(dirs, `${home}/.volta/bin`, existsSync);
+  addExistingDir(dirs, `${home}/.asdf/shims`, existsSync);
+  addExistingDir(dirs, `${home}/.bun/bin`, existsSync);
+}
+
+function addExistingDir(
+  dirs: string[],
+  candidate: string,
+  existsSync: (candidate: string) => boolean,
+): void {
+  if (existsSync(candidate)) {
+    dirs.push(candidate);
+  }
 }
 
 function addCommonEnvConfiguredBinDirs(
@@ -144,6 +171,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 export function resolveDarwinUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  existsSync: (candidate: string) => boolean = fs.existsSync,
 ): string[] {
   if (!home) {
     return [];
@@ -163,19 +191,19 @@ export function resolveDarwinUserBinDirs(
   // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home);
+  addCommonUserBinDirs(dirs, home, existsSync);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env);
 
-  // Node version managers - macOS specific paths
-  // nvm: no stable default path, depends on user's shell configuration
-  // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
-  // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  dirs.push(`${home}/Library/pnpm`); // pnpm default
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+  // Node version managers - macOS specific paths.
+  // Only emit hard-coded fallbacks that actually exist on disk so the gateway
+  // plist matches what the doctor's gateway.path.non-minimal audit will accept.
+  // Env-driven equivalents (FNM_DIR, PNPM_HOME) above stay unconditional.
+  addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, existsSync); // fnm default
+  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
+  addExistingDir(dirs, `${home}/Library/pnpm`, existsSync); // pnpm default on macOS
+  addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm XDG fallback
 
   return dirs;
 }
@@ -187,6 +215,7 @@ export function resolveDarwinUserBinDirs(
 export function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  existsSync: (candidate: string) => boolean = fs.existsSync,
 ): string[] {
   if (!home) {
     return [];
@@ -200,15 +229,16 @@ export function resolveLinuxUserBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home);
+  addCommonUserBinDirs(dirs, home, existsSync);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env);
 
-  // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  // Node version managers - only emit when the directory actually exists.
+  // Mirrors the macOS branch so the gateway plist agrees with the audit.
+  addExistingDir(dirs, `${home}/.nvm/current/bin`, existsSync); // nvm with current symlink
+  addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm
+  addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
 
   return dirs;
 }
@@ -223,12 +253,15 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
-  // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
+  // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.).
+  // Hard-coded VM fallbacks are filtered through `existsSync` so the plist matches
+  // what `service-audit.ts:gateway.path.non-minimal` will accept.
+  const existsSync = options.existsSync ?? fs.existsSync;
   const userDirs =
     platform === "linux"
-      ? resolveLinuxUserBinDirs(options.home, options.env)
+      ? resolveLinuxUserBinDirs(options.home, options.env, existsSync)
       : platform === "darwin"
-        ? resolveDarwinUserBinDirs(options.home, options.env)
+        ? resolveDarwinUserBinDirs(options.home, options.env, existsSync)
         : [];
 
   const add = (dir: string) => {

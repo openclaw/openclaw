@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+- Daemon/service: only emit hard-coded version-manager paths (`~/.volta/bin`, `~/.asdf/shims`, `~/.bun/bin`, fnm/pnpm fallbacks) into the gateway/node service PATH when the directories actually exist on disk, so `openclaw doctor` no longer flags `gateway.path.non-minimal` against a PATH the daemon itself wrote. Env-driven roots (`PNPM_HOME`, `VOLTA_HOME`, `BUN_INSTALL`, `FNM_DIR`, etc.) and stable user-bin dirs (`~/.local/bin`, `~/.npm-global/bin`, `~/bin`) remain unconditional. Fixes #71944.
+
 ## 2026.4.25 (Unreleased)
 
 ### Changes
