@@ -259,6 +259,7 @@ sequences (e.g. spaces become `\032`).
 
 - `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
 - `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
+- `plugins.entries.bonjour.config.instanceName` overrides the mDNS service instance name. By default the service is advertised as `<machine display name> (OpenClaw)`. Set this to a unique value per gateway when running multiple OpenClaw gateways on the same host so each is discoverable on its own name instead of getting auto-suffixed `(2)` by ciao on every restart. The configured value is passed through the same `(OpenClaw)` suffix logic as the default; include `OpenClaw` anywhere in the value to skip the suffix.
 - `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - Docker Compose sets `OPENCLAW_DISABLE_BONJOUR=1` by default for bridge networking; override with `OPENCLAW_DISABLE_BONJOUR=0` only when mDNS multicast is available.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.

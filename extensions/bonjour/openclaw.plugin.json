@@ -6,6 +6,11 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "instanceName": {
+        "type": "string",
+        "description": "Override the mDNS service instance name (defaults to the machine display name, e.g. \"My Mac\" advertises as \"My Mac (OpenClaw)\"). Set this to a unique value per gateway when running multiple OpenClaw gateways on the same host so each can be discovered without ciao auto-suffixing duplicates as \"(2)\". The configured value is passed through the same `(OpenClaw)` suffix logic as the default; include \"OpenClaw\" anywhere in the value to skip the suffix."
+      }
+    }
   }
 }

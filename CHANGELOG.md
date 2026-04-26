@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Bonjour: add `plugins.entries.bonjour.config.instanceName` to override the mDNS service instance name, so multi-gateway hosts can advertise distinct names instead of relying on the shared machine display name and getting auto-suffixed `(2)` on every restart. Fixes #54467. Thanks @jeffjhunter.
+
 ### Fixes
 
 - Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
