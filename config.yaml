@@ -1,0 +1,29 @@
+defaults:
+ provider: openai
+ model: tts-1
+ voice: alloy
+ speed: 1.0
+ response_format: mp3
+
+groups:
+ friendly:
+   voice: nova
+   speed: 0.95
+ dramatic:
+   provider: elevenlabs
+   model: eleven_multilingual_v2
+   voice: adam
+   speed: 0.85
+
+agents:
+ customer_support:
+   group: friendly
+   voice: shimmer
+ narrator:
+   group: dramatic
+   voice: rachel
+ assistant:
+   voice: echo
+ tutor:
+   group: friendly
+   model: tts-1-hd

@@ -1,10 +1,23 @@
-[tool.ruff]
-target-version = "py310"
-line-length = 100
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
 
-[tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82", "I"]
+[project]
+name = "agent-tts"
+version = "1.0.0"
+description = "Per-agent TTS voice configuration with sensible defaults"
+requires-python = ">=3.10"
+dependencies = [
+   "pyyaml>=6.0.1",
+   "click>=8.1.7",
+   "fastapi>=0.111.0",
+   "uvicorn>=0.30.0",
+   "pydantic>=2.7.0",
+   "httpx>=0.27.0",
+]
 
-[tool.pytest.ini_options]
-testpaths = ["skills"]
-python_files = ["test_*.py"]
+[project.optional-dependencies]
+dev = ["pytest>=8.2.0", "pytest-asyncio>=0.23.0"]
+
+[project.scripts]
+agent-tts = "agent_tts.cli:cli"
