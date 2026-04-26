@@ -155,6 +155,16 @@ async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<vo
   );
 }
 
+async function writeNamedDailySignal(
+  workspaceDir: string,
+  relativePath: string,
+  lines: string[],
+): Promise<void> {
+  const filePath = path.join(workspaceDir, relativePath);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, lines.join("\n"), "utf-8");
+}
+
 async function createDreamingWorkspace(): Promise<string> {
   const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
   await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -252,6 +262,87 @@ describe("memory-core dreaming phases", () => {
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+  });
+
+  it("ingests a first-seen memory/daily-log.md into traceable dreaming evidence", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeNamedDailySignal(workspaceDir, "memory/daily-log.md", [
+      "- Route cold storage backups to Glacier Deep Archive.",
+      "- Keep the restore checklist near the backup log.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                dailySignalFiles: ["memory/daily-log.md"],
+                storage: { mode: "separate", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 20,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    const store = JSON.parse(
+      await fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json"),
+        "utf-8",
+      ),
+    ) as {
+      entries: Record<
+        string,
+        { path: string; queryTerms?: string[]; dailyCount?: number; snippet?: string }
+      >;
+    };
+    expect(Object.values(store.entries)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "memory/daily-log.md",
+          dailyCount: 1,
+          queryTerms: expect.arrayContaining(["__dreaming_daily__:daily-log"]),
+          snippet: expect.stringContaining("Route cold storage backups to Glacier Deep Archive."),
+        }),
+      ]),
+    );
+    const candidates = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+    expect(
+      candidates.some((snippet) =>
+        snippet.includes("Route cold storage backups to Glacier Deep Archive."),
+      ),
+    ).toBe(true);
   });
 
   it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {

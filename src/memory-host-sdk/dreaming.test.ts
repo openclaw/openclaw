@@ -28,6 +28,16 @@ describe("memory dreaming host helpers", () => {
           enabled: true,
           frequency: "0 */4 * * *",
           timezone: "Europe/London",
+          dailySignalFiles: ["./memory/daily-log.md", "memory/custom-signals.md"],
+          maintenance: {
+            autoApply: true,
+            maxManagedEntries: "24",
+            maxEntryChars: "180",
+            maxIndexLines: "9",
+            maxEvidencePerEntry: "4",
+            maxQueryTermsPerEntry: "6",
+            staleAfterDays: "21",
+          },
           storage: {
             mode: "both",
             separateReports: true,
@@ -49,6 +59,17 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(true);
     expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
+    expect(resolved.dailySignalFiles).toEqual(["memory/daily-log.md", "memory/custom-signals.md"]);
+    expect(resolved.maintenance).toEqual({
+      enabled: true,
+      autoApply: true,
+      maxManagedEntries: 24,
+      maxEntryChars: 180,
+      maxIndexLines: 9,
+      maxEvidencePerEntry: 4,
+      maxQueryTermsPerEntry: 6,
+      staleAfterDays: 21,
+    });
     expect(resolved.storage).toEqual({
       mode: "both",
       separateReports: true,
@@ -81,6 +102,17 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(false);
     expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("America/Los_Angeles");
+    expect(resolved.dailySignalFiles).toEqual(["memory/daily-log.md"]);
+    expect(resolved.maintenance).toEqual({
+      enabled: true,
+      autoApply: false,
+      maxManagedEntries: 48,
+      maxEntryChars: 240,
+      maxIndexLines: 12,
+      maxEvidencePerEntry: 6,
+      maxQueryTermsPerEntry: 8,
+      staleAfterDays: 45,
+    });
     expect(resolved.phases.deep).toMatchObject({
       cron: "0 3 * * *",
       limit: 10,
