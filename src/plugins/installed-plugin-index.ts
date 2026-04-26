@@ -610,6 +610,9 @@ function buildInstalledPluginIndex(
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;
     }
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (candidate?.packageName) {
       indexRecord.packageName = candidate.packageName;
     }

@@ -490,6 +490,8 @@ describe("gateway bonjour advertiser", () => {
 
     const stateRef = { value: "announcing" };
     const events: string[] = [];
+    const cleanupException = vi.fn();
+    const cleanupRejection = vi.fn();
     let advertiseCount = 0;
     const destroy = vi.fn().mockImplementation(async () => {
       events.push("destroy");
@@ -505,6 +507,8 @@ describe("gateway bonjour advertiser", () => {
       return Promise.resolve();
     });
     mockCiaoService({ advertise, destroy, stateRef });
+    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
+    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -513,6 +517,8 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(1);
+    expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
+    expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(15_000);
 
@@ -521,11 +527,15 @@ describe("gateway bonjour advertiser", () => {
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).not.toHaveBeenCalled();
+    expect(cleanupException).not.toHaveBeenCalled();
+    expect(cleanupRejection).not.toHaveBeenCalled();
     expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
 
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(cleanupException).toHaveBeenCalledTimes(1);
+    expect(cleanupRejection).toHaveBeenCalledTimes(1);
   });
 
   it("treats probing-to-announcing churn as one unhealthy window", async () => {
