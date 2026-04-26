@@ -41,6 +41,7 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
+import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
 import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
@@ -282,14 +283,16 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // failure statement in the next provider request and change model
       // behavior even when no failure occurred.
       //
-      // Only `stopReason: "error"` turns are the Bedrock-Converse replay
-      // poison this fix is scoped to: the provider rejects assistant
-      // messages with no ContentBlock, and the persisted error turn was
-      // never going to render anything useful to the model anyway. Leaving
-      // non-error empty-content turns untouched preserves silent-reply
-      // semantics on every other code path.
+      // `stopReason: "error"` turns are Bedrock-Converse replay poison:
+      // the provider rejects assistant messages with no ContentBlock, and
+      // the persisted error turn was never going to render anything useful
+      // to the model anyway. A zero-token `stop` turn is the same shape from
+      // the next run's perspective: the provider produced no billable prompt
+      // or completion and no content. Leaving other non-error empty-content
+      // turns untouched preserves silent-reply semantics on every other code
+      // path.
       const stopReason = (message as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error") {
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
         out.push({
           ...message,
           content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
