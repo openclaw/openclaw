@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -109,14 +110,28 @@ export async function createChildAdapter(params: {
     : undefined;
 
   const onStdout = (listener: (chunk: string) => void) => {
-    child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+    const decoder = new StringDecoder("utf8");
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      listener(Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk);
+    });
+    child.stdout.on("end", () => {
+      const remaining = decoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
-    child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+    const decoder = new StringDecoder("utf8");
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      listener(Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk);
+    });
+    child.stderr.on("end", () => {
+      const remaining = decoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 
