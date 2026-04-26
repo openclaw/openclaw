@@ -91,6 +91,7 @@ vi.mock("../../plugins/loader.js", () => ({
 const clearPluginDiscoveryCache = vi.fn();
 vi.mock("../../plugins/discovery.js", () => ({
   clearPluginDiscoveryCache: () => clearPluginDiscoveryCache(),
+  discoverOpenClawPlugins: () => ({ candidates: [], diagnostics: [] }),
 }));
 
 import fs from "node:fs";
