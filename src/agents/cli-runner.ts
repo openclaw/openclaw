@@ -70,6 +70,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
     if (hookRunner?.hasHooks("before_agent_reply")) {
       const hookContext = {
         runId: params.runId,
+        jobId: params.jobId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -135,6 +136,7 @@ export async function runPreparedCliAgent(
   } as const;
   const hookContext = {
     runId: params.runId,
+    jobId: params.jobId,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -374,6 +376,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
+    jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,

@@ -323,6 +323,7 @@ export async function runEmbeddedPiAgent(
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
+        jobId: params.jobId,
         agentId: workspaceResolution.agentId,
         sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
