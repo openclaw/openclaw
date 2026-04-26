@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { setConsoleSubsystemFilter } from "../logging/console.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
   resolveSharedMemoryStatusSnapshot,
@@ -30,12 +31,17 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
   requireDefaultStore?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
-  return await resolveSharedMemoryStatusSnapshot({
-    cfg: params.cfg,
-    agentStatus: params.agentStatus,
-    memoryPlugin: params.memoryPlugin,
-    resolveMemoryConfig: resolveMemorySearchConfig,
-    getMemorySearchManager,
-    requireDefaultStore: params.requireDefaultStore,
-  });
+  setConsoleSubsystemFilter(["__openclaw_status_json_memory_probe_quiet__"]);
+  try {
+    return await resolveSharedMemoryStatusSnapshot({
+      cfg: params.cfg,
+      agentStatus: params.agentStatus,
+      memoryPlugin: params.memoryPlugin,
+      resolveMemoryConfig: resolveMemorySearchConfig,
+      getMemorySearchManager,
+      requireDefaultStore: params.requireDefaultStore,
+    });
+  } finally {
+    setConsoleSubsystemFilter(null);
+  }
 }

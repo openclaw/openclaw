@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
+import {
+  resolveGatewayProbeSnapshot,
+  resolveSharedMemoryStatusSnapshot,
+} from "./status.scan.shared.js";
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
@@ -138,5 +141,59 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(result.gatewayProbe?.error).toBe("timeout; warn");
     expect(result.gatewayProbeAuthWarning).toBeUndefined();
+  });
+});
+
+describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("allows memory-slot plugins to provide status without built-in store paths", async () => {
+    const manager = {
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "lancedb-pro",
+        provider: "openai-compatible",
+        requestedProvider: "openai-compatible",
+        model: "nomic-embed-text",
+        dbPath: "/tmp/lancedb-pro",
+        workspaceDir: "/tmp/workspace",
+        vector: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => undefined),
+    };
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { agents: {} },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+      requireDefaultStore: vi.fn(() => "/tmp/main.sqlite"),
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        backend: "lancedb-pro",
+        vector: { enabled: true, available: true },
+      }),
+    );
+    expect(manager.probeVectorAvailability).toHaveBeenCalled();
+    expect(manager.status).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+  });
+
+  it("keeps returning null for built-in memory without explicit config or store", async () => {
+    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { agents: {} },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager,
+      requireDefaultStore: vi.fn(() => "/tmp/main.sqlite"),
+    });
+
+    expect(result).toBeNull();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });

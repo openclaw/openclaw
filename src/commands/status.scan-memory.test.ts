@@ -4,10 +4,15 @@ const mocks = vi.hoisted(() => ({
   resolveMemorySearchConfig: vi.fn(),
   getMemorySearchManager: vi.fn(),
   resolveSharedMemoryStatusSnapshot: vi.fn(),
+  setConsoleSubsystemFilter: vi.fn(),
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
   resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
+}));
+
+vi.mock("../logging/console.js", () => ({
+  setConsoleSubsystemFilter: mocks.setConsoleSubsystemFilter,
 }));
 
 vi.mock("./status.scan.deps.runtime.js", () => ({
@@ -55,6 +60,10 @@ describe("status.scan-memory", () => {
       requireDefaultStore,
     });
 
+    expect(mocks.setConsoleSubsystemFilter).toHaveBeenNthCalledWith(1, [
+      "__openclaw_status_json_memory_probe_quiet__",
+    ]);
+    expect(mocks.setConsoleSubsystemFilter).toHaveBeenLastCalledWith(null);
     expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
       cfg: { agents: {} },
       agentStatus,
