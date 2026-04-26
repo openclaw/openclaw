@@ -448,15 +448,13 @@ final class AppState {
             return fallback
         }
 
-        let preservePort: Bool
-        if LoopbackHost.isLoopbackHost(host) {
-            preservePort = true
+        let preservePort: Bool = if LoopbackHost.isLoopbackHost(host) {
+            true
         } else if let expectedRemoteHost {
-            preservePort =
-                OpenClawConfigFile.canonicalHostForComparison(host) ==
+            OpenClawConfigFile.canonicalHostForComparison(host) ==
                 OpenClawConfigFile.canonicalHostForComparison(expectedRemoteHost)
         } else {
-            preservePort = false
+            false
         }
         guard preservePort else { return fallback }
 
