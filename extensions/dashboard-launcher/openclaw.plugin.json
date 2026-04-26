@@ -1,0 +1,8 @@
+{
+  "id": "dashboard-launcher",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

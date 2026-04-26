@@ -223,6 +223,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/copilot-proxy/**"
+"extensions: dashboard-launcher":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dashboard-launcher/**"
 "extensions: diagnostics-otel":
   - changed-files:
       - any-glob-to-any-file:
