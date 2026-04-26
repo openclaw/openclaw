@@ -218,10 +218,14 @@
     },
     {
       "source": "/glm",
-      "destination": "/providers/glm"
+      "destination": "/providers/zai"
     },
     {
       "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/glm",
       "destination": "/providers/zai"
     },
     {
@@ -1337,7 +1341,6 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
-                  "providers/glm",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",

@@ -262,7 +262,6 @@
             "zh-CN/providers/claude-max-api-proxy",
             "zh-CN/providers/deepgram",
             "zh-CN/providers/github-copilot",
-            "zh-CN/providers/glm",
             "zh-CN/providers/moonshot",
             "zh-CN/providers/minimax",
             "zh-CN/providers/opencode",
