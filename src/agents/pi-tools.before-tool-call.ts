@@ -1,4 +1,5 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -45,6 +46,18 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 
+type LivePluginApprovalState =
+  | {
+      ok: true;
+      pending: boolean;
+      request?: unknown;
+    }
+  | {
+      ok: false;
+      pending?: undefined;
+      error: string;
+    };
+
 const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./pi-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
@@ -55,6 +68,85 @@ function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }):
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+async function resolveLivePluginApprovalState(
+  approvalId: string,
+): Promise<LivePluginApprovalState> {
+  try {
+    const requests = await callGatewayTool<unknown[]>(
+      "plugin.approval.list",
+      { timeoutMs: 3_000 },
+      {},
+      { expectFinal: false },
+    );
+    const list = Array.isArray(requests) ? requests : [];
+    const request = list.find(
+      (entry) =>
+        Boolean(entry) &&
+        typeof entry === "object" &&
+        (entry as { id?: unknown }).id === approvalId,
+    );
+    return {
+      ok: true,
+      pending: Boolean(request),
+      request,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function describePluginCarriedApprovalState(decision: string | null | undefined): string {
+  if (decision === undefined) {
+    return "wait-for-live-decision";
+  }
+  if (decision === null) {
+    return "resolved:null";
+  }
+  return `resolved:${decision}`;
+}
+
+function describePluginLiveApprovalState(live: LivePluginApprovalState): string {
+  if (!live.ok) {
+    return "unknown";
+  }
+  return live.pending ? "pending" : "not-pending";
+}
+
+function emitPluginApprovalCarryMismatch(params: {
+  approvalId: string;
+  sessionKey?: string;
+  runId?: string;
+  toolName: string;
+  toolCallId?: string;
+  phase: string;
+  severity?: "info" | "warn" | "error";
+  carriedState: string;
+  liveState: string;
+  error?: string;
+}): void {
+  emitContinuityDiagnostic({
+    type: "diag.approval.carry_mismatch",
+    severity: params.severity ?? "warn",
+    runId: params.runId ?? params.approvalId,
+    sessionKey: params.sessionKey,
+    phase: params.phase,
+    correlation: {
+      approvalKind: "plugin",
+      approvalId: params.approvalId,
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+    },
+    details: {
+      carriedState: params.carriedState,
+      liveState: params.liveState,
+      error: params.error,
+    },
+  });
 }
 
 function mergeParamsWithApprovalOverrides(
@@ -315,9 +407,39 @@ export async function runBeforeToolCallHook(args: {
           requestResult ?? {},
           "decision",
         );
+        const preResolvedDecision = hasImmediateDecision ? requestResult?.decision : undefined;
+        const carriedState = describePluginCarriedApprovalState(preResolvedDecision);
+        if (hasImmediateDecision) {
+          const liveBefore = await resolveLivePluginApprovalState(id);
+          if (liveBefore.ok && liveBefore.pending) {
+            emitPluginApprovalCarryMismatch({
+              approvalId: id,
+              sessionKey: args.ctx?.sessionKey,
+              runId: args.ctx?.runId,
+              toolName,
+              toolCallId: args.toolCallId,
+              phase: "before_plugin_decision_use",
+              carriedState,
+              liveState: describePluginLiveApprovalState(liveBefore),
+            });
+          } else if (!liveBefore.ok) {
+            emitPluginApprovalCarryMismatch({
+              approvalId: id,
+              sessionKey: args.ctx?.sessionKey,
+              runId: args.ctx?.runId,
+              toolName,
+              toolCallId: args.toolCallId,
+              phase: "before_plugin_decision_use",
+              severity: "info",
+              carriedState,
+              liveState: "unknown",
+              error: liveBefore.error,
+            });
+          }
+        }
         let decision: string | null | undefined;
         if (hasImmediateDecision) {
-          decision = requestResult?.decision;
+          decision = preResolvedDecision;
           if (decision === null) {
             safeOnResolution(PluginApprovalResolutions.CANCELLED);
             return {
@@ -360,6 +482,19 @@ export async function runBeforeToolCallHook(args: {
             waitResult = await waitPromise;
           }
           decision = waitResult?.decision;
+        }
+        const liveAfter = await resolveLivePluginApprovalState(id);
+        if (liveAfter.ok && liveAfter.pending && decision !== undefined) {
+          emitPluginApprovalCarryMismatch({
+            approvalId: id,
+            sessionKey: args.ctx?.sessionKey,
+            runId: args.ctx?.runId,
+            toolName,
+            toolCallId: args.toolCallId,
+            phase: "after_plugin_decision_resolve",
+            carriedState: `decision:${decision ?? "null"}`,
+            liveState: describePluginLiveApprovalState(liveAfter),
+          });
         }
         const resolution: PluginApprovalResolution =
           decision === PluginApprovalResolutions.ALLOW_ONCE ||

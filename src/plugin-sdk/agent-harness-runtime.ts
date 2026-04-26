@@ -63,6 +63,7 @@ export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtim
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
+export { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,

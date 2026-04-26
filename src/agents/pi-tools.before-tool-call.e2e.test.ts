@@ -679,7 +679,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
+    expect(mockCallGateway).toHaveBeenCalledTimes(3);
     expect(mockCallGateway).toHaveBeenCalledWith(
       "plugin.approval.request",
       expect.any(Object),
@@ -825,6 +825,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("cancelled");
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
+      "plugin.approval.list",
     ]);
   });
 

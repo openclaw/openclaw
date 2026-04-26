@@ -7,8 +7,8 @@ import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
   requestPluginApproval,
+  resolveCodexPluginApprovalDecision,
   type AppServerApprovalOutcome,
-  waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -101,9 +101,14 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: "Codex app-server approval requested.",
     });
 
-    const decision = approvalRequestExplicitlyUnavailable(requestResult)
-      ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+    const decision = await resolveCodexPluginApprovalDecision({
+      approvalId,
+      requestResult,
+      paramsForRun: params.paramsForRun,
+      toolName: context.toolName,
+      toolCallId: context.itemId,
+      signal: params.signal,
+    });
     const outcome = mapExecDecisionToOutcome(decision);
 
     emitApprovalEvent(params.paramsForRun, {
