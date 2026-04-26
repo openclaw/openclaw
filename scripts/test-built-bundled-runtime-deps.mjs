@@ -112,6 +112,20 @@ function stageBrowserRuntimeDependencyStub(stageNodeModulesDir, packageName) {
   );
 }
 
+function findBuiltBrowserEntryPath(distDir) {
+  const candidates = fs
+    .readdirSync(distDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^pw-ai-(?!state-).*\.js$/u.test(entry.name))
+    .map((entry) => path.join(distDir, entry.name))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (candidates.length === 0) {
+    throw new assert.AssertionError({
+      message: `missing built pw-ai entry under ${distDir}`,
+    });
+  }
+  return candidates[0];
+}
+
 function createBuiltBrowserImportSmokeFixture(packageRoot) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-built-browser-smoke-"));
   const tempDistDir = path.join(tempRoot, "dist");
@@ -168,7 +182,7 @@ function createBuiltBrowserImportSmokeFixture(packageRoot) {
   }
 
   return {
-    entryPath: path.join(tempDistDir, "pw-ai.js"),
+    entryPath: findBuiltBrowserEntryPath(tempDistDir),
     stageNodeModulesDir,
     tempRoot,
   };
