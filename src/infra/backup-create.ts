@@ -110,8 +110,16 @@ function isTarEofRaceError(err: unknown): boolean {
   if (code === "EOF") {
     return true;
   }
+  // Keep this regex narrow: match only the two tar-specific EOF-class error
+  // strings thrown by node-tar's WriteEntry#onread (grow and shrink races,
+  // see node_modules/tar/dist/commonjs/write-entry.js around the
+  // "did not encounter expected EOF" and "encountered unexpected EOF"
+  // Object.assign sites), plus the TAR_BAD_ARCHIVE code surfaced by the
+  // parser on truncated input. A bare /EOF/i alternative also matched
+  // unrelated SSL/OpenSSL strings like "EOF occurred in violation of
+  // protocol" and "unexpected eof while reading", causing pointless retries.
   const message = (err as Error).message ?? "";
-  return /did not encounter expected|unexpected end of|EOF/i.test(message);
+  return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
 }
 
 function sleep(ms: number): Promise<void> {
