@@ -121,6 +121,7 @@ const mocks = vi.hoisted(() => {
     }),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
+    resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
   };
 });
 
@@ -210,6 +211,9 @@ vi.mock("../../infra/provider-usage.js", () => ({
 }));
 vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
+}));
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 
 import { modelsStatusCommand } from "./list.status-command.js";
@@ -427,6 +431,8 @@ describe("modelsStatusCommand auth overview", () => {
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     const originalSyntheticImpl =
       mocks.resolveRuntimeSyntheticAuthProviderRefs.getMockImplementation();
+    const originalResolveSyntheticAuthImpl =
+      mocks.resolveProviderSyntheticAuthWithPlugin.getMockImplementation();
     mocks.loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -439,6 +445,17 @@ describe("modelsStatusCommand auth overview", () => {
     });
     mocks.resolveEnvApiKey.mockImplementation(() => null);
     mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["codex", "unused-synthetic"]);
+    mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(
+      ({ provider }: { provider: string }) =>
+        provider === "codex"
+          ? {
+              apiKey: "codex-runtime-token",
+              source: "codex-app-server",
+              mode: "token",
+              expiresAt: Date.now() + 60_000,
+            }
+          : undefined,
+    );
 
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
@@ -453,13 +470,13 @@ describe("modelsStatusCommand auth overview", () => {
         expect.arrayContaining([
           expect.objectContaining({
             provider: "codex",
-            syntheticAuth: {
+            syntheticAuth: expect.objectContaining({
               value: "plugin-owned",
-              source: "plugin synthetic auth",
-            },
+              source: "codex-app-server",
+            }),
             effective: {
               kind: "synthetic",
-              detail: "plugin synthetic auth",
+              detail: "codex-app-server",
             },
           }),
         ]),
@@ -480,6 +497,13 @@ describe("modelsStatusCommand auth overview", () => {
         mocks.resolveRuntimeSyntheticAuthProviderRefs.mockImplementation(originalSyntheticImpl);
       } else {
         mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
+      }
+      if (originalResolveSyntheticAuthImpl) {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(
+          originalResolveSyntheticAuthImpl,
+        );
+      } else {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
       }
     }
   });

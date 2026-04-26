@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CLAUDE_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
@@ -9,7 +8,6 @@ import {
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { readClaudeCliCredentialsCached } from "./cli-credentials.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type AuthProfileSource = "store";
@@ -103,46 +101,19 @@ function resolveOAuthStatus(
   return { status: "ok", remainingMs };
 }
 
-function resolveClaudeCliStatusCredential(params: {
-  profileId: string;
-  credential: AuthProfileCredential;
-}): AuthProfileCredential {
-  if (params.profileId !== CLAUDE_CLI_PROFILE_ID) {
-    return params.credential;
-  }
-  const cliCredential = readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
-  if (!cliCredential) {
-    return params.credential;
-  }
-  if (cliCredential.type === "oauth") {
-    return {
-      type: "oauth",
-      provider: params.credential.provider,
-      access: cliCredential.access,
-      refresh: cliCredential.refresh,
-      expires: cliCredential.expires,
-    };
-  }
-  return {
-    type: "token",
-    provider: params.credential.provider,
-    token: cliCredential.token,
-    expires: cliCredential.expires,
-  };
-}
-
 function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
+  runtimeCredential?: AuthProfileCredential;
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
-  const { profileId, credential, store, cfg, now, warnAfterMs } = params;
+  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const source = resolveAuthProfileSource(profileId);
-  const healthCredential = resolveClaudeCliStatusCredential({ profileId, credential });
+  const healthCredential = runtimeCredential ?? credential;
   const provider = normalizeProviderId(healthCredential.provider);
 
   if (healthCredential.type === "api_key") {
@@ -227,6 +198,7 @@ export function buildAuthHealthSummary(params: {
   cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
+  runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
 }): AuthHealthSummary {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
@@ -242,6 +214,9 @@ export function buildAuthHealthSummary(params: {
       buildProfileHealth({
         profileId,
         credential,
+        runtimeCredential: params.runtimeCredentialsByProvider?.get(
+          normalizeProviderId(credential.provider),
+        ),
         store: params.store,
         cfg: params.cfg,
         now,
