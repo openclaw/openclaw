@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.buddy.BuddyModeScreen
 
 private enum class HomeTab(
   val label: String,
@@ -55,6 +57,7 @@ private enum class HomeTab(
 ) {
   Connect(label = "Connect", icon = Icons.Default.CheckCircle),
   Chat(label = "Chat", icon = Icons.Default.ChatBubble),
+  Buddy(label = "Nemo", icon = Icons.Default.Pets),
   Voice(label = "Voice", icon = Icons.Default.RecordVoiceOver),
   Screen(label = "Screen", icon = Icons.AutoMirrored.Filled.ScreenShare),
   Settings(label = "Settings", icon = Icons.Default.Settings),
@@ -91,6 +94,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
   // Stop TTS when user navigates away from voice tab, and lazily keep the Chat/Screen tabs
   // alive after the first visit so repeated tab switches do not rebuild their UI trees.
   LaunchedEffect(activeTab) {
+    viewModel.setBuddyModeActive(activeTab == HomeTab.Buddy)
     viewModel.setVoiceScreenActive(activeTab == HomeTab.Voice)
     if (activeTab == HomeTab.Chat) {
       chatTabStarted = true
@@ -173,6 +177,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> if (!chatTabStarted) ChatSheet(viewModel = viewModel)
+        HomeTab.Buddy -> BuddyModeScreen(viewModel = viewModel)
         HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
         HomeTab.Screen -> Unit
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
