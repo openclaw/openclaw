@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { enforceActionSinkPolicySync } from "../security/action-sink-runtime.js";
 import type {
   DetachedRunningTaskCreateParams,
   DetachedTaskCreateParams,
@@ -91,7 +92,36 @@ function ensureSingleTaskFlow(params: {
 type TaskRunCreateParams = DetachedTaskCreateParams;
 type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
 
+function enforceTaskStatusTransition(params: {
+  toolName: string;
+  status: TaskStatus;
+  runId?: string;
+  sessionKey?: string;
+  taskId?: string;
+  payloadSummary?: unknown;
+}): void {
+  enforceActionSinkPolicySync({
+    policyVersion: "v1",
+    actionType: "status_transition",
+    toolName: params.toolName,
+    targetResource: params.taskId ?? params.runId,
+    payloadSummary: params.payloadSummary,
+    actor: { sessionKey: params.sessionKey },
+    context: {
+      status: params.status,
+      runId: params.runId,
+      taskId: params.taskId,
+    },
+  });
+}
+
 export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord {
+  enforceTaskStatusTransition({
+    toolName: "task.createQueuedTaskRun",
+    status: "queued",
+    sessionKey: params.ownerKey,
+    payloadSummary: params,
+  });
   const task = createTaskRecord({
     ...params,
     status: "queued",
@@ -107,6 +137,13 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
 }
 
 export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRecord {
+  enforceTaskStatusTransition({
+    toolName: "task.createRunningTaskRun",
+    status: "running",
+    runId: params.runId,
+    sessionKey: params.ownerKey,
+    payloadSummary: params,
+  });
   const task = createTaskRecord({
     ...params,
     status: "running",
@@ -145,6 +182,13 @@ export function startTaskRunByRunId(params: {
   progressSummary?: string | null;
   eventSummary?: string | null;
 }) {
+  enforceTaskStatusTransition({
+    toolName: "task.startTaskRunByRunId",
+    status: "running",
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    payloadSummary: params,
+  });
   return markTaskRunningByRunId(params);
 }
 
@@ -176,6 +220,13 @@ export function completeTaskRunByRunId(params: {
 }
 
 export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
+  enforceTaskStatusTransition({
+    toolName: "task.finalizeTaskRunByRunId",
+    status: params.status,
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    payloadSummary: params,
+  });
   return finalizeTaskRunByRunIdInRegistry(params);
 }
 
@@ -203,6 +254,12 @@ export function markTaskRunLostById(params: {
   error?: string;
   cleanupAfter?: number;
 }) {
+  enforceTaskStatusTransition({
+    toolName: "task.markTaskRunLostById",
+    status: "lost",
+    taskId: params.taskId,
+    payloadSummary: params,
+  });
   return markTaskLostById(params);
 }
 
