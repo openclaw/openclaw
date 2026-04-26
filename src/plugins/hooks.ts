@@ -318,13 +318,18 @@ export function createHookRunner(
           left: acc.reason,
           right: next.reason,
         }),
+        ...((acc.retry ?? next.retry) ? { retry: acc.retry ?? next.retry } : {}),
       };
     }
     if (acc?.action === "revise") {
       return acc;
     }
     if (next.action === "revise") {
-      return { action: "revise", reason: next.reason };
+      return {
+        action: "revise",
+        reason: next.reason,
+        ...(next.retry ? { retry: next.retry } : {}),
+      };
     }
     return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
   };
