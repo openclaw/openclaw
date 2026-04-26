@@ -266,6 +266,21 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
+const MAX_MENTION_CONTEXT_NAME_LENGTH = 80;
+
+function formatMentionNameForAgentContext(name: string): string {
+  const stripped = Array.from(name, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || char === "[" || char === "]" ? " " : char;
+  }).join("");
+  const normalized = stripped.replace(/\s+/g, " ").trim();
+  const bounded =
+    normalized.length > MAX_MENTION_CONTEXT_NAME_LENGTH
+      ? `${normalized.slice(0, MAX_MENTION_CONTEXT_NAME_LENGTH - 3)}...`
+      : normalized;
+  return JSON.stringify(bounded || "unknown");
+}
+
 export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
@@ -296,8 +311,10 @@ export function buildFeishuAgentBody(params: {
   }
 
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
-    const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
-    messageBody += `\n\n[System: These users were mentioned in the incoming message: ${targetNames}. They will only receive your reply if you @mention them.]`;
+    const targetNames = ctx.mentionTargets
+      .map((t) => formatMentionNameForAgentContext(t.name))
+      .join(", ");
+    messageBody += `\n\n[System: Feishu users mentioned in the incoming message, for context only: ${targetNames}. Do not notify or mention these users solely because they are listed here.]`;
   }
 
   // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
