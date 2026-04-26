@@ -3,7 +3,7 @@ summary: "Logging surfaces, file logs, WS log styles, and console formatting"
 read_when:
   - Changing logging output or formats
   - Debugging CLI or gateway output
-title: "Gateway Logging"
+title: "Gateway logging"
 ---
 
 # Logging
@@ -19,6 +19,8 @@ OpenClaw has two log “surfaces”:
 
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`
   - Date uses the gateway host's local timezone.
+- Active log files rotate at `logging.maxFileBytes` (default: 100 MB), keeping
+  up to five numbered archives and continuing to write a fresh active file.
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
   - `logging.file`
   - `logging.level`
@@ -111,3 +113,9 @@ Behavior:
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
+
+## Related
+
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
+- [Diagnostics export](/gateway/diagnostics)

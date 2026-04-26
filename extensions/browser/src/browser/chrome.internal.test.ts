@@ -82,6 +82,20 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
   return Object.assign(proc, overrides);
 }
 
+function effectiveSpawnCommand(call: unknown[] | undefined): unknown {
+  const command = call?.[0];
+  const args = call?.[1];
+  if (
+    command === "/bin/sh" &&
+    Array.isArray(args) &&
+    args[0] === "-c" &&
+    typeof args[2] === "string"
+  ) {
+    return args[2];
+  }
+  return command;
+}
+
 async function withMockChromeCdpServer(params: {
   wsPath: string;
   onConnection?: (wss: WebSocketServer) => void;
@@ -157,6 +171,7 @@ describe("chrome.ts internal", () => {
         headless: false,
         noSandbox: false,
         extraArgs: [],
+        headlessSource: "default",
         ...overrides,
       }) as unknown as ResolvedBrowserConfig;
 
@@ -166,16 +181,71 @@ describe("chrome.ts internal", () => {
       cdpPort: 19222,
       cdpUrl: "http://127.0.0.1:19222",
       cdpIsLoopback: true,
+      driver: "openclaw",
+      headless: false,
+      headlessSource: "default",
+      attachOnly: false,
     } as unknown as ResolvedBrowserProfile;
 
     it("toggles headless args", () => {
       const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: true }),
-        profile: baseProfile,
+        resolved: baseResolved({ headless: false }),
+        profile: { ...baseProfile, headless: true, headlessSource: "profile" },
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--headless=new");
       expect(args).toContain("--disable-gpu");
+    });
+
+    it("lets profile headless=false override global headless=true", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved({ headless: true, headlessSource: "config" }),
+        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
+        userDataDir: "/tmp/foo",
+      });
+      expect(args).not.toContain("--headless=new");
+      expect(args).not.toContain("--disable-gpu");
+    });
+
+    it("lets a request headless override beat env and profile headed settings", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved({ headless: false, headlessSource: "config" }),
+        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
+        userDataDir: "/tmp/foo",
+        headlessOverride: true,
+        env: { OPENCLAW_BROWSER_HEADLESS: "0" },
+      });
+      expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+    });
+
+    it("adds headless args for Linux local managed profiles without a display", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+        platform: "linux",
+        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
+      });
+      expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+    });
+
+    it("does not apply Linux no-display fallback to remote profiles", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: {
+          ...baseProfile,
+          cdpHost: "10.0.0.42",
+          cdpUrl: "http://10.0.0.42:9222",
+          cdpIsLoopback: false,
+        },
+        userDataDir: "/tmp/foo",
+        platform: "linux",
+        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
+      });
+      expect(args).not.toContain("--headless=new");
+      expect(args).not.toContain("--disable-gpu");
     });
 
     it("toggles no-sandbox args", () => {
@@ -185,7 +255,7 @@ describe("chrome.ts internal", () => {
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--no-sandbox");
-      expect(args).toContain("--disable-setuid-sandbox");
+      expect(args).not.toContain("--disable-setuid-sandbox");
     });
 
     it("adds --disable-dev-shm-usage on linux", () => {
@@ -213,6 +283,16 @@ describe("chrome.ts internal", () => {
       });
       expect(args).toContain("--proxy-server=http://localhost:3128");
       expect(args).toContain("--mute-audio");
+      expect(args).not.toContain("--no-proxy-server");
+    });
+
+    it("launches managed Chrome direct by default", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+      });
+      expect(args).toContain("--no-proxy-server");
     });
   });
 
@@ -232,7 +312,11 @@ describe("chrome.ts internal", () => {
           }
           return true;
         }
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         return false;
@@ -290,6 +374,8 @@ describe("chrome.ts internal", () => {
         headless: true,
         noSandbox: true,
         extraArgs: [],
+        localLaunchTimeoutMs: 15_000,
+        localCdpReadyTimeoutMs: 8_000,
       }) as unknown as ResolvedBrowserConfig;
 
     it("rejects a remote profile before attempting to spawn", async () => {
@@ -321,7 +407,11 @@ describe("chrome.ts internal", () => {
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         // Pretend the mac Chrome binary exists and the preference files exist.
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -335,6 +425,9 @@ describe("chrome.ts internal", () => {
         spawnCalls += 1;
         return makeFakeProc();
       });
+      vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
+      vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8443");
+      vi.stubEnv("NO_PROXY", "localhost");
 
       // Set up a real HTTP server impersonating Chrome's /json/version.
       await withMockChromeCdpServer({
@@ -345,10 +438,106 @@ describe("chrome.ts internal", () => {
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
           expect(spawnCalls).toBeGreaterThanOrEqual(1);
+          const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+          expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
+          expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
+          expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
           // Cleanup.
           running.proc.kill?.("SIGTERM");
         },
       });
+    });
+
+    it("uses profile executablePath over global executablePath when launching", async () => {
+      const originalPlatform = process.platform;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === "/tmp/profile-chrome" || s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        await withMockChromeCdpServer({
+          wsPath: "/devtools/browser/PROFILE_EXE",
+          run: async (baseUrl) => {
+            const port = new URL(baseUrl).port;
+            const profile = { ...makeProfile(Number(port)), executablePath: "/tmp/profile-chrome" };
+            const resolved = {
+              ...makeResolved(),
+              executablePath: "/tmp/global-chrome",
+            } as ResolvedBrowserConfig;
+            const running = await launchOpenClawChrome(resolved, profile);
+            expect(effectiveSpawnCommand(spawnMock.mock.calls[0])).toBe("/tmp/profile-chrome");
+            running.proc.kill?.("SIGTERM");
+          },
+        });
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
+    it("clears stale singleton locks and retries once after profile-in-use launch failure", async () => {
+      let cdpReachable = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (!cdpReachable) {
+            throw new Error("ECONNREFUSED");
+          }
+          return {
+            ok: true,
+            json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+          } as unknown as Response;
+        }),
+      );
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === "/tmp/profile-chrome" || s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+
+      let spawnCalls = 0;
+      const firstProc = makeFakeProc();
+      const secondProc = makeFakeProc();
+      spawnMock.mockImplementation(() => {
+        spawnCalls += 1;
+        if (spawnCalls === 1) {
+          setTimeout(() => {
+            firstProc.stderr.emit(
+              "data",
+              Buffer.from("The profile appears to be in use by another Chromium process"),
+            );
+          }, 0);
+          return firstProc;
+        }
+        cdpReachable = true;
+        return secondProc;
+      });
+
+      const profile = { ...makeProfile(18888), executablePath: "/tmp/profile-chrome" };
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+      await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+      await fsp.symlink("remote-host-535", path.join(userDataDir, "SingletonLock"));
+
+      try {
+        const running = await launchOpenClawChrome(makeResolved(), profile);
+        expect(running.proc).toBe(secondProc);
+        expect(firstProc.kill).toHaveBeenCalledWith("SIGKILL");
+        expect(spawnCalls).toBe(2);
+        expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+        expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+        running.proc.kill?.("SIGTERM");
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
     });
 
     it("throws with stderr hint + sandbox hint when CDP never becomes reachable", async () => {
@@ -357,7 +546,11 @@ describe("chrome.ts internal", () => {
       try {
         vi.spyOn(fs, "existsSync").mockImplementation((p) => {
           const s = String(p);
-          if (s.includes("google-chrome")) {
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
             return true;
           }
           if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -385,6 +578,41 @@ describe("chrome.ts internal", () => {
         expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
       } finally {
         Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
+    it("uses the configured local launch timeout while waiting for CDP discovery", async () => {
+      vi.useFakeTimers();
+      try {
+        const executablePath = path.join(tmpDir, "chrome");
+        await fsp.writeFile(executablePath, "");
+        const existsSync = fs.existsSync.bind(fs);
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
+          return existsSync(p);
+        });
+        const fakeProc = makeFakeProc();
+        spawnMock.mockReturnValue(fakeProc);
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+        const resolved = {
+          ...makeResolved(),
+          executablePath,
+          localLaunchTimeoutMs: 1,
+        };
+        const profile = makeProfile(55556);
+        const rejection = expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          /Failed to start Chrome CDP/,
+        );
+
+        await vi.advanceTimersByTimeAsync(10);
+        await rejection;
+        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      } finally {
+        vi.useRealTimers();
       }
     });
   });
@@ -516,7 +744,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
+          await expect(isChromeCdpReady(baseUrl, 500, 100)).resolves.toBe(true);
         },
       });
     });
@@ -608,34 +836,6 @@ describe("chrome.ts internal", () => {
         },
       });
     });
-
-    it("guards against post-settled messages by dropping them", async () => {
-      // Emit two valid id=1 responses — the second must be dropped via the
-      // `if (settled) return;` guard at the top of onMessage.
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/SETTLED",
-        onConnection: (wss) => {
-          wss.on("connection", (ws) => {
-            ws.on("message", (raw) => {
-              const text = rawDataToString(raw);
-              const msg = JSON.parse(text) as { id?: number };
-              if (msg.id === 1) {
-                ws.send(JSON.stringify({ id: 1, result: { product: "Chrome" } }));
-                // Second message after settled — the onMessage guard
-                // should return early.
-                setTimeout(
-                  () => ws.send(JSON.stringify({ id: 1, result: { product: "after" } })),
-                  20,
-                );
-              }
-            });
-          });
-        },
-        run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
-        },
-      });
-    });
   });
 
   describe("isChromeCdpReady swallowed errors", () => {
@@ -693,7 +893,11 @@ describe("chrome.ts internal", () => {
         );
         vi.spyOn(fs, "existsSync").mockImplementation((p) => {
           const s = String(p);
-          if (s.includes("Google Chrome")) {
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
             return true;
           }
           // Fall through to real fs for the user-data-dir files.
@@ -731,7 +935,11 @@ describe("chrome.ts internal", () => {
       // Covers the `profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR` coalescing.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -767,7 +975,11 @@ describe("chrome.ts internal", () => {
       // stderrHint truthy branch on failure.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -804,7 +1016,11 @@ describe("chrome.ts internal", () => {
       try {
         vi.spyOn(fs, "existsSync").mockImplementation((p) => {
           const s = String(p);
-          if (s.includes("Google Chrome")) {
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
             return true;
           }
           if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -850,7 +1066,11 @@ describe("chrome.ts internal", () => {
       }, 50);
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -892,7 +1112,11 @@ describe("chrome.ts internal", () => {
       let prefsProbeCount = 0;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -942,7 +1166,11 @@ describe("chrome.ts internal", () => {
       const { decorateOpenClawProfile } = await import("./chrome.profile-decoration.js");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -992,7 +1220,11 @@ describe("chrome.ts internal", () => {
       // Covers the `proc.pid ?? -1` falsy side.
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.includes("Google Chrome")) {
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {

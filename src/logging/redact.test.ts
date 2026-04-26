@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getDefaultRedactPatterns,
   redactSensitiveLines,
@@ -7,6 +10,28 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let tempDirs: string[] = [];
+
+function writeConfig(source: string): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+}
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
 
 describe("redactSensitiveText", () => {
   it("masks env assignments while keeping the key", () => {
@@ -54,7 +79,7 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
   });
 
-  it("masks Telegram-style tokens", () => {
+  it("masks bot-style tokens", () => {
     const input = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
     const output = redactSensitiveText(input, {
       mode: "tools",
@@ -63,14 +88,14 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
-  it("masks Telegram Bot API URL tokens", () => {
+  it("masks bot API URL tokens", () => {
     const input =
-      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+      "GET https://api.example.test/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+    expect(output).toBe("GET https://api.example.test/bot123456…cdef/getMe HTTP/1.1");
   });
 
   it("redacts short tokens fully", () => {
@@ -132,6 +157,18 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+
+  it("honors logging redaction settings from the active config path", () => {
+    writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+      },
+    }`);
+
+    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+      "OPENAI_API_KEY=sk-1234567890abcdef",
+    );
   });
 
   it("does not resolve patterns when mode is off", () => {

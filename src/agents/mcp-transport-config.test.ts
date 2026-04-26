@@ -83,6 +83,19 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("sanitizes config-controlled names in stdio env warnings", () => {
+    resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
+      command: "node",
+      env: {
+        "LD_PRELOAD\nWARN forged\u001b[31m": "/tmp/pwn.so",
+      },
+    });
+
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probeWARN forged": env "LD_PRELOADWARN forged" is blocked for stdio startup safety and was ignored.',
+    );
+  });
+
   it("resolves SSE config by default", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/sse",

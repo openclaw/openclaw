@@ -3,7 +3,8 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,6 +52,8 @@ import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
+
+const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
 let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
 
@@ -106,6 +109,7 @@ async function runGatewayHealthCheck(params: {
     port: params.port,
     customBindHost: params.cfg.gateway?.customBindHost,
     basePath: undefined,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
   const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
@@ -386,33 +390,42 @@ export async function runConfigureWizard(
     }
 
     const localUrl = "ws://127.0.0.1:18789";
-    const baseLocalProbeToken = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
-      path: "gateway.auth.token",
-    });
-    const baseLocalProbePassword = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
-      path: "gateway.auth.password",
-    });
-    const localProbe = await probeGatewayReachable({
-      url: localUrl,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
-    });
     const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
-    const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-    });
-    const remoteProbe = remoteUrl
-      ? await probeGatewayReachable({
-          url: remoteUrl,
-          token: baseRemoteProbeToken,
-        })
-      : null;
+    const localProbePromise = (async () => {
+      const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
+        resolveGatewaySecretInputForWizard({
+          cfg: baseConfig,
+          value: baseConfig.gateway?.auth?.token,
+          path: "gateway.auth.token",
+        }),
+        resolveGatewaySecretInputForWizard({
+          cfg: baseConfig,
+          value: baseConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+        }),
+      ]);
+      return probeGatewayReachable({
+        url: localUrl,
+        token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
+        password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+        timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+      });
+    })();
+    const remoteProbePromise = remoteUrl
+      ? (async () => {
+          const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+            cfg: baseConfig,
+            value: baseConfig.gateway?.remote?.token,
+            path: "gateway.remote.token",
+          });
+          return probeGatewayReachable({
+            url: remoteUrl,
+            token: baseRemoteProbeToken,
+            timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+          });
+        })()
+      : Promise.resolve(null);
+    const [localProbe, remoteProbe] = await Promise.all([localProbePromise, remoteProbePromise]);
 
     const mode = guardCancel(
       await select({
@@ -445,10 +458,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await replaceConfigFile({
+      const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: remoteConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
       });
+      remoteConfig = committed.config;
       currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
@@ -484,10 +498,11 @@ export async function runConfigureWizard(
       const maxRetries = 3;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          await replaceConfigFile({
+          const committed = await commitConfigWithPendingPluginInstalls({
             nextConfig,
             ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
           });
+          nextConfig = committed.config;
 
           // After successful write, re-read the snapshot to get the new hash
           const freshSnapshot = await readConfigFileSnapshot();
@@ -743,6 +758,7 @@ export async function runConfigureWizard(
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??

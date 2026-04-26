@@ -43,9 +43,6 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
-  const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
-
-  await installGaxiosFetchCompat();
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -73,7 +70,7 @@ if (
       return false;
     }
 
-    const child = spawn(process.execPath, plan.argv, {
+    const child = spawn(plan.command, plan.argv, {
       stdio: "inherit",
       env: plan.env,
     });

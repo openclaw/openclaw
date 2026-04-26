@@ -141,6 +141,77 @@ export function createPayloadPatchStreamWrapper(
     );
 }
 
+export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+
+function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
+  const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
+  return normalized === "off" || normalized === "none";
+}
+
+function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "max" {
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+}
+
+function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    delete (message as Record<string, unknown>).reasoning_content;
+  }
+}
+
+function ensureDeepSeekV4ToolCallReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
+export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  thinkingLevel: DeepSeekV4ThinkingLevel;
+  shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+}): StreamFn | undefined {
+  if (!params.baseStreamFn) {
+    return undefined;
+  }
+  const underlying = params.baseStreamFn;
+  return (model, context, options) => {
+    if (!params.shouldPatchModel(model)) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (isDisabledDeepSeekV4ThinkingLevel(params.thinkingLevel)) {
+        payload.thinking = { type: "disabled" };
+        delete payload.reasoning_effort;
+        delete payload.reasoning;
+        stripDeepSeekV4ReasoningContent(payload);
+        return;
+      }
+
+      payload.thinking = { type: "enabled" };
+      payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
+      ensureDeepSeekV4ToolCallReasoningContent(payload);
+    });
+  };
+}
+
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 export type GoogleThinkingInputLevel =
   | "off"
@@ -156,6 +227,10 @@ export type GoogleThinkingInputLevel =
 // "Budget 0 is invalid. This model only works in thinking mode."
 export function isGoogleThinkingRequiredModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
+}
+
+export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
+  return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 export function isGoogleGemini3ProModel(modelId: string): boolean {
@@ -187,13 +262,19 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "low":
         return "LOW";
       case "medium":
-      case "adaptive":
       case "high":
       case "max":
       case "xhigh":
         return "HIGH";
+      case "adaptive":
+        return undefined;
+      case undefined:
+        break;
     }
     if (typeof params.thinkingBudget === "number") {
+      if (params.thinkingBudget < 0) {
+        return undefined;
+      }
       return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
     }
     return undefined;
@@ -208,14 +289,20 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "low":
       return "LOW";
     case "medium":
-    case "adaptive":
       return "MEDIUM";
     case "high":
     case "max":
     case "xhigh":
       return "HIGH";
+    case "adaptive":
+      return undefined;
+    case undefined:
+      break;
   }
   if (typeof params.thinkingBudget !== "number") {
+    return undefined;
+  }
+  if (params.thinkingBudget < 0) {
     return undefined;
   }
   if (params.thinkingBudget <= 0) {
@@ -350,6 +437,29 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
+
+  if (
+    params.thinkingLevel === "adaptive" &&
+    typeof params.modelId === "string" &&
+    isGoogleGemini25ThinkingBudgetModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingLevel;
+    thinkingConfigObj.thinkingBudget = -1;
+    return;
+  }
+
+  if (
+    params.thinkingLevel === "adaptive" &&
+    typeof params.modelId === "string" &&
+    isGoogleGemini3ThinkingLevelModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingBudget;
+    delete thinkingConfigObj.thinkingLevel;
+    if (Object.keys(thinkingConfigObj).length === 0) {
+      delete configObj.thinkingConfig;
+    }
+    return;
+  }
 
   if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
     const mappedLevel = resolveGoogleGemini3ThinkingLevel({

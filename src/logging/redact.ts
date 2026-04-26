@@ -1,9 +1,6 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
-
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
 type RedactPattern = string | RegExp;
@@ -110,24 +107,14 @@ function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
     next = replacePatternBounded(next, pattern, (...args: string[]) =>
-      redactMatch(args[0], args.slice(1, args.length - 2)),
+      redactMatch(args[0], args.slice(1, -2)),
     );
   }
   return next;
 }
 
 function resolveConfigRedaction(): RedactOptions {
-  let cfg: OpenClawConfig["logging"] | undefined;
-  try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    cfg = loaded?.loadConfig?.().logging;
-  } catch {
-    cfg = undefined;
-  }
+  const cfg = readLoggingConfig();
   return {
     mode: normalizeMode(cfg?.redactSensitive),
     patterns: cfg?.redactPatterns,

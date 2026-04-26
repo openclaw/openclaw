@@ -37,6 +37,12 @@ export type BlockStreamingChunkConfig = {
 export type ChannelStreamingPreviewConfig = {
   /** Chunking thresholds for preview-draft updates while streaming. */
   chunk?: BlockStreamingChunkConfig;
+  /**
+   * Render live tool/activity updates into the preview draft for channels that
+   * edit a single preview message in place.
+   * Default: true.
+   */
+  toolProgress?: boolean;
 };
 
 export type ChannelStreamingBlockConfig = {
@@ -215,7 +221,7 @@ export type SessionMaintenanceConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
-  /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
+  /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
@@ -228,6 +234,9 @@ export type LoggingConfig = {
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
+  tracesEndpoint?: string;
+  metricsEndpoint?: string;
+  logsEndpoint?: string;
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;
@@ -238,6 +247,21 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /**
+   * Opt-in raw content capture for OTEL span attributes.
+   * Boolean `true` captures non-system message/tool content; the object form
+   * can enable each content class explicitly.
+   */
+  captureContent?:
+    | boolean
+    | {
+        enabled?: boolean;
+        inputMessages?: boolean;
+        outputMessages?: boolean;
+        toolInputs?: boolean;
+        toolOutputs?: boolean;
+        systemPrompt?: boolean;
+      };
 };
 
 export type DiagnosticsCacheTraceConfig = {

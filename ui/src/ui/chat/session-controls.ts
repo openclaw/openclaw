@@ -6,8 +6,6 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
-import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -16,7 +14,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 
@@ -72,12 +70,19 @@ export function renderChatSessionSelect(
 }
 
 async function refreshSessionOptions(state: AppViewState) {
+  const { loadSessions } = await import("../controllers/sessions.ts");
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
   });
+}
+
+async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
+  const { refreshVisibleToolsEffectiveForCurrentSession } =
+    await import("../controllers/agents.ts");
+  return refreshVisibleToolsEffectiveForCurrentSession(state);
 }
 
 function renderChatModelSelect(state: AppViewState) {
@@ -139,8 +144,7 @@ function resolveThinkingTargetModel(state: AppViewState): {
 }
 
 function buildThinkingOptions(
-  provider: string | null,
-  model: string | null,
+  levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
 ): ChatThinkingSelectOption[] {
   const seen = new Set<string>();
@@ -160,14 +164,36 @@ function buildThinkingOptions(
     );
   };
 
-  for (const label of listThinkingLevelLabels(provider, model)) {
-    const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
-    addOption(normalized);
+  for (const level of levels) {
+    const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
+    addOption(normalized, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);
   }
   return options;
+}
+
+function resolveThinkingLevelOptions(
+  activeRow: SessionsListResult["sessions"][number] | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+  provider: string | null,
+  model: string | null,
+): GatewayThinkingLevelOption[] {
+  if (activeRow?.thinkingLevels?.length) {
+    return activeRow.thinkingLevels;
+  }
+  if (defaults?.thinkingLevels?.length) {
+    return defaults.thinkingLevels;
+  }
+  const labels =
+    activeRow?.thinkingOptions ??
+    defaults?.thinkingOptions ??
+    (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
+  return labels.map((label) => ({
+    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
+    label,
+  }));
 }
 
 function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
@@ -178,18 +204,26 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
   const { provider, model } = resolveThinkingTargetModel(state);
+  const levels = resolveThinkingLevelOptions(
+    activeRow,
+    state.sessionsResult?.defaults,
+    provider,
+    model,
+  );
   const defaultLevel =
-    provider && model
+    activeRow?.thinkingDefault ??
+    state.sessionsResult?.defaults?.thinkingDefault ??
+    (provider && model
       ? resolveThinkingDefaultForModel({
           provider,
           model,
           catalog: state.chatModelCatalog ?? [],
         })
-      : "off";
+      : "off");
   return {
     currentOverride,
     defaultLabel: `Default (${defaultLevel})`,
-    options: buildThinkingOptions(provider, model, currentOverride),
+    options: buildThinkingOptions(levels, currentOverride),
   };
 }
 
@@ -249,7 +283,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       key: targetSessionKey,
       model: nextModel || null,
     });
-    void refreshVisibleToolsEffectiveForCurrentSession(state);
+    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.

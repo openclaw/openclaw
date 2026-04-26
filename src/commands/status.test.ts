@@ -482,6 +482,10 @@ vi.mock("../channels/config-presence.js", () => ({
     ),
   listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
+  listPotentialConfiguredChannelPresenceSignals: (cfg: { channels?: Record<string, unknown> }) =>
+    Object.keys(cfg.channels ?? {})
+      .filter((key) => key !== "defaults" && key !== "modelByChannel")
+      .map((channelId) => ({ channelId, source: "config" })),
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -736,6 +740,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
     }),
   ),
   resolveStatusUsageSummary: vi.fn(async () => undefined),
@@ -755,6 +760,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
                 deep: false,
                 includeFilesystem: true,
                 includeChannelSecurity: true,
+                loadPluginSecurityCollectors: false,
               }))
           )({
             config: params.config,

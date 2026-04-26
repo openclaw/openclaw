@@ -3,12 +3,12 @@ summary: "CLI reference for `openclaw plugins` (list, install, marketplace, unin
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
-title: "plugins"
+title: "Plugins"
 ---
 
 # `openclaw plugins`
 
-Manage Gateway plugins/extensions, hook packs, and compatible bundles.
+Manage Gateway plugins, hook packs, and compatible bundles.
 
 Related:
 
@@ -31,9 +31,11 @@ openclaw plugins inspect --all
 openclaw plugins info <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
+openclaw plugins registry
+openclaw plugins registry --refresh
 openclaw plugins uninstall <id>
 openclaw plugins doctor
-openclaw plugins update <id>
+openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
@@ -68,6 +70,8 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
 
+If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
+
 If config is invalid, `plugins install` normally fails closed and tells you to
 run `openclaw doctor --fix` first. The only documented exception is a narrow
 bundled-plugin recovery path for plugins that explicitly opt into
@@ -76,6 +80,13 @@ bundled-plugin recovery path for plugins that explicitly opt into
 `--force` reuses the existing install target and overwrites an already-installed
 plugin or hook pack in place. Use it when you are intentionally reinstalling
 the same id from a new local path, archive, ClawHub package, or npm artifact.
+For routine upgrades of an already tracked npm plugin, prefer
+`openclaw plugins update <id-or-npm-spec>`.
+
+If you run `plugins install` for a plugin id that is already installed, OpenClaw
+stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade,
+or at `plugins install <package> --force` when you genuinely want to overwrite
+the current install from a different source.
 
 `--pin` applies to npm installs only. It is not supported with `--marketplace`,
 because marketplace installs persist marketplace source metadata instead of an
@@ -98,7 +109,8 @@ visibility and per-hook enablement, not package installation.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+installs run project-local with `--ignore-scripts` for safety, even when your
+shell has global npm install settings.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
 those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
@@ -110,6 +122,9 @@ installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at
+the extracted plugin root; archives that only contain `package.json` are
+rejected before OpenClaw writes install records.
 
 Claude marketplace installs are also supported.
 
@@ -170,7 +185,7 @@ For local paths and archives, OpenClaw auto-detects:
   component layout)
 - Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
 
-Compatible bundles install into the normal extensions root and participate in
+Compatible bundles install into the normal plugin root and participate in
 the same list/info/enable/disable flow. Today, bundle skills, Claude
 command-skills, Claude `settings.json` defaults, Claude `.lsp.json` /
 manifest-declared `lspServers` defaults, Cursor command-skills, and compatible
@@ -186,10 +201,30 @@ openclaw plugins list --verbose
 openclaw plugins list --json
 ```
 
-Use `--enabled` to show only loaded plugins. Use `--verbose` to switch from the
+Use `--enabled` to show only enabled plugins. Use `--verbose` to switch from the
 table view to per-plugin detail lines with source/origin/version/activation
 metadata. Use `--json` for machine-readable inventory plus registry
 diagnostics.
+
+`plugins list` reads the persisted local plugin registry first, with a
+manifest-only derived fallback when the registry is missing or invalid. It is
+useful for checking whether a plugin is installed, enabled, and visible to cold
+startup planning, but it is not a live runtime probe of an already-running
+Gateway process. After changing plugin code, enablement, hook policy, or
+`plugins.load.paths`, restart the Gateway that serves the channel before
+expecting new `register(api)` code or hooks to run. For remote/container
+deployments, verify you are restarting the actual `openclaw gateway run` child,
+not only a wrapper process.
+
+For runtime hook debugging:
+
+- `openclaw plugins inspect <id> --json` shows registered hooks and diagnostics
+  from a module-loaded inspection pass.
+- `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway,
+  service/process hints, config path, and RPC health.
+- Non-bundled conversation hooks (`llm_input`, `llm_output`,
+  `before_agent_finalize`, `agent_end`) require
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 
@@ -201,7 +236,20 @@ openclaw plugins install -l ./my-plugin
 source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
-`plugins.installs` while keeping the default behavior unpinned.
+the managed plugin index while keeping the default behavior unpinned.
+
+### Plugin Index
+
+Plugin install metadata is machine-managed state, not user config. Installs
+and updates write it to `plugins/installs.json` under the active OpenClaw state
+directory. Its top-level `installRecords` map is the durable source of install
+metadata, including records for broken or missing plugin manifests. The
+`plugins` array is the manifest-derived cold registry cache. The file includes a
+do-not-edit warning and is used by `openclaw plugins update`, uninstall,
+diagnostics, and the cold plugin registry.
+When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves
+them into the plugin index and removes the config key; if either write fails,
+the config records are kept so the install metadata is not lost.
 
 ### Uninstall
 
@@ -211,13 +259,11 @@ openclaw plugins uninstall <id> --dry-run
 openclaw plugins uninstall <id> --keep-files
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
-the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
+`uninstall` removes plugin records from `plugins.entries`, the persisted plugin
+index, the plugin allowlist, and linked `plugins.load.paths` entries when
+applicable. Unless `--keep-files` is set, uninstall also removes the tracked
+managed install directory when it is inside OpenClaw's plugin extensions root.
 For active memory plugins, the memory slot resets to `memory-core`.
-
-By default, uninstall also removes the plugin install directory under the active
-state-dir plugin root. Use
-`--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
 
@@ -231,8 +277,8 @@ openclaw plugins update @openclaw/voice-call@beta
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
-installs in `hooks.internal.installs`.
+Updates apply to tracked plugin installs in the managed plugin index and
+tracked hook-pack installs in `hooks.internal.installs`.
 
 When you pass a plugin id, OpenClaw reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
@@ -243,9 +289,20 @@ or exact version. OpenClaw resolves that package name back to the tracked plugin
 record, updates that installed plugin, and records the new npm spec for future
 id-based updates.
 
+Passing the npm package name without a version or tag also resolves back to the
+tracked plugin record. Use this when a plugin was pinned to an exact version and
+you want to move it back to the registry's default release line.
+
+Before a live npm update, OpenClaw checks the installed package version against
+the npm registry metadata. If the installed version and recorded artifact
+identity already match the resolved target, the update is skipped without
+downloading, reinstalling, or rewriting `openclaw.json`.
+
 When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
-global `--yes` to bypass prompts in CI/non-interactive runs.
+OpenClaw treats that as npm artifact drift. The interactive
+`openclaw plugins update` command prints the expected and actual hashes and asks
+for confirmation before proceeding. Non-interactive update helpers fail closed
+unless the caller supplies an explicit continuation policy.
 
 `--dangerously-force-unsafe-install` is also available on `plugins update` as a
 break-glass override for built-in dangerous-code scan false positives during
@@ -292,6 +349,33 @@ openclaw plugins doctor
 compatibility notices. When everything is clean it prints `No plugin issues
 detected.`
 
+For module-shape failures such as missing `register`/`activate` exports, rerun
+with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in
+the diagnostic output.
+
+### Registry
+
+```bash
+openclaw plugins registry
+openclaw plugins registry --refresh
+openclaw plugins registry --json
+```
+
+The local plugin registry is OpenClaw's persisted cold read model for installed
+plugin identity, enablement, source metadata, and contribution ownership.
+Normal startup, provider owner lookup, channel setup classification, and plugin
+inventory can read it without importing plugin runtime modules.
+
+Use `plugins registry` to inspect whether the persisted registry is present,
+current, or stale. Use `--refresh` to rebuild it from the persisted plugin
+index, config policy, and manifest/package metadata. This is a repair path, not
+a runtime activation path.
+
+`OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass
+compatibility switch for registry read failures. Prefer `plugins registry
+--refresh` or `openclaw doctor --fix`; the env fallback is only for emergency
+startup recovery while the migration rolls out.
+
 ### Marketplace
 
 ```bash
@@ -303,3 +387,9 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a
 GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json`
 prints the resolved source label plus the parsed marketplace manifest and
 plugin entries.
+
+## Related
+
+- [CLI reference](/cli)
+- [Building plugins](/plugins/building-plugins)
+- [Community plugins](/plugins/community)

@@ -2,7 +2,7 @@
 summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
 read_when:
   - Setting up or debugging remote mac control
-title: "Remote Control"
+title: "Remote control"
 ---
 
 # Remote OpenClaw (macOS ⇄ remote host)
@@ -21,6 +21,18 @@ Remote mode supports two transports:
 
 - **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
+
+In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
+`gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
+tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
+the local node-host service all use the same safe loopback transport.
+
+Browser automation in remote mode is owned by the CLI node host, not by the
+native macOS app node. The app starts the installed node host service when
+possible; if you need browser control from that Mac, install/start it with
+`openclaw node install ...` and `openclaw node start` (or run
+`openclaw node run ...` in the foreground), then target that browser-capable
+node.
 
 ## Prereqs on the remote host
 
@@ -82,3 +94,8 @@ openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" -
 ```
 
 There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Remote access](/gateway/remote)

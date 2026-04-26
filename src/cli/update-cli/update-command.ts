@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -16,6 +18,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -40,9 +43,15 @@ import {
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withoutPluginInstallRecords,
+  withPluginInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
@@ -55,6 +64,9 @@ import {
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
+import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -80,6 +92,7 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
+const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -108,6 +121,10 @@ const UPDATE_QUIPS = [
   "Molting complete. Please don't look at my soft shell phase.",
   "Version bump! Same chaos energy, fewer crashes (probably).",
 ];
+
+type PostCorePluginUpdateResult = NonNullable<
+  NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
+>;
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
@@ -336,6 +353,7 @@ async function runPackageInstallUpdate(params: {
   timeoutMs: number;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
+  jsonMode: boolean;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -366,6 +384,18 @@ async function runPackageInstallUpdate(params: {
       globalRoot: path.dirname(pkgRoot),
       packageName,
     });
+  }
+
+  const diskWarning = createLowDiskSpaceWarning({
+    targetPath: pkgRoot ? path.dirname(pkgRoot) : params.root,
+    purpose: "global package update",
+  });
+  if (diskWarning) {
+    if (params.jsonMode) {
+      defaultRuntime.error(`Warning: ${diskWarning}`);
+    } else {
+      defaultRuntime.log(theme.warn(diskWarning));
+    }
   }
 
   const updateStep = await runUpdateStep({
@@ -410,6 +440,10 @@ async function runPackageInstallUpdate(params: {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
         argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        },
         timeoutMs: params.timeoutMs,
         progress: params.progress,
       });
@@ -527,12 +561,28 @@ async function updatePluginsAfterCoreUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
-}): Promise<void> {
+}): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     if (!params.opts.json) {
       defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
     }
-    return;
+    return {
+      status: "skipped",
+      reason: "invalid-config",
+      changed: false,
+      sync: {
+        changed: false,
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+      npm: {
+        changed: false,
+        outcomes: [],
+      },
+      integrityDrifts: [],
+    };
   }
 
   const pluginLogger = params.opts.json
@@ -548,30 +598,88 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.heading("Updating plugins..."));
   }
 
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const syncResult = await syncPluginsForUpdateChannel({
-    config: params.configSnapshot.config,
+    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: params.channel,
     workspaceDir: params.root,
+    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
+      workspaceDir: params.root,
+    }),
     logger: pluginLogger,
   });
   let pluginConfig = syncResult.config;
+  const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     skipIds: new Set(syncResult.summary.switchedToNpm),
     logger: pluginLogger,
+    onIntegrityDrift: async (drift) => {
+      integrityDrifts.push({
+        pluginId: drift.pluginId,
+        spec: drift.spec,
+        expectedIntegrity: drift.expectedIntegrity,
+        actualIntegrity: drift.actualIntegrity,
+        ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
+        ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
+        action: "aborted",
+      });
+      if (!params.opts.json) {
+        const specLabel = drift.resolvedSpec ?? drift.spec;
+        defaultRuntime.log(
+          theme.warn(
+            `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
+              `\nExpected: ${drift.expectedIntegrity}` +
+              `\nActual:   ${drift.actualIntegrity}` +
+              "\nPlugin update aborted. Reinstall the plugin only if you trust the new artifact.",
+          ),
+        );
+      }
+      return false;
+    },
   });
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await replaceConfigFile({
-      nextConfig: pluginConfig,
+    const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
+    const nextConfig = withoutPluginInstallRecords(pluginConfig);
+    await commitPluginInstallRecordsWithConfig({
+      previousInstallRecords: pluginInstallRecords,
+      nextInstallRecords,
+      nextConfig,
       baseHash: params.configSnapshot.hash,
+    });
+    await refreshPluginRegistryAfterConfigMutation({
+      config: nextConfig,
+      reason: "source-changed",
+      workspaceDir: params.root,
+      installRecords: nextInstallRecords,
+      logger: pluginLogger,
     });
   }
 
   if (params.opts.json) {
-    return;
+    return {
+      status:
+        syncResult.summary.errors.length > 0 ||
+        npmResult.outcomes.some((outcome) => outcome.status === "error")
+          ? "error"
+          : "ok",
+      changed: syncResult.changed || npmResult.changed,
+      sync: {
+        changed: syncResult.changed,
+        switchedToBundled: syncResult.summary.switchedToBundled,
+        switchedToNpm: syncResult.summary.switchedToNpm,
+        warnings: syncResult.summary.warnings,
+        errors: syncResult.summary.errors,
+      },
+      npm: {
+        changed: npmResult.changed,
+        outcomes: npmResult.outcomes,
+      },
+      integrityDrifts,
+    };
   }
 
   const summarizeList = (list: string[]) => {
@@ -624,6 +732,27 @@ async function updatePluginsAfterCoreUpdate(params: {
     }
     defaultRuntime.log(theme.error(outcome.message));
   }
+
+  return {
+    status:
+      syncResult.summary.errors.length > 0 ||
+      npmResult.outcomes.some((outcome) => outcome.status === "error")
+        ? "error"
+        : "ok",
+    changed: syncResult.changed || npmResult.changed,
+    sync: {
+      changed: syncResult.changed,
+      switchedToBundled: syncResult.summary.switchedToBundled,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      warnings: syncResult.summary.warnings,
+      errors: syncResult.summary.errors,
+    },
+    npm: {
+      changed: npmResult.changed,
+      outcomes: npmResult.outcomes,
+    },
+    integrityDrifts,
+  };
 }
 
 async function maybeRestartService(params: {
@@ -634,7 +763,53 @@ async function maybeRestartService(params: {
   gatewayPort: number;
   restartScriptPath?: string | null;
   invocationCwd?: string;
-}): Promise<void> {
+}): Promise<boolean> {
+  const verifyRestartedGateway = async (expectedGatewayVersion: string | undefined) => {
+    const service = resolveGatewayService();
+    let health = await waitForGatewayHealthyRestart({
+      service,
+      port: params.gatewayPort,
+      expectedVersion: expectedGatewayVersion,
+    });
+    if (!health.healthy && health.staleGatewayPids.length > 0) {
+      if (!params.opts.json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+          ),
+        );
+      }
+      await terminateStaleGatewayPids(health.staleGatewayPids);
+      await runDaemonRestart();
+      health = await waitForGatewayHealthyRestart({
+        service,
+        port: params.gatewayPort,
+        expectedVersion: expectedGatewayVersion,
+      });
+    }
+
+    if (health.healthy) {
+      return true;
+    }
+
+    const diagnosticLines = [
+      "Gateway did not become healthy after restart.",
+      ...renderRestartDiagnostics(health),
+      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
+    ];
+    if (params.opts.json) {
+      defaultRuntime.error(diagnosticLines.join("\n"));
+    } else {
+      defaultRuntime.log(theme.warn(diagnosticLines[0] ?? "Gateway did not become healthy."));
+      for (const line of diagnosticLines.slice(1)) {
+        defaultRuntime.log(theme.muted(line));
+      }
+    }
+
+    return !(health.versionMismatch || health.activatedPluginErrors?.length);
+  };
+
   if (params.shouldRestart) {
     if (!params.opts.json) {
       defaultRuntime.log("");
@@ -642,6 +817,9 @@ async function maybeRestartService(params: {
     }
 
     try {
+      const expectedGatewayVersion = isPackageManagerUpdateMode(params.result.mode)
+        ? normalizeOptionalString(params.result.after?.version)
+        : undefined;
       let restarted = false;
       let restartInitiated = false;
       if (params.refreshServiceEnv) {
@@ -661,6 +839,9 @@ async function maybeRestartService(params: {
           } else {
             defaultRuntime.log(theme.warn(message));
           }
+          if (isPackageManagerUpdateMode(params.result.mode)) {
+            return false;
+          }
         }
       }
       if (params.restartScriptPath) {
@@ -668,6 +849,22 @@ async function maybeRestartService(params: {
         restartInitiated = true;
       } else {
         restarted = await runDaemonRestart();
+      }
+
+      const shouldVerifyRestart =
+        restartInitiated || (restarted && expectedGatewayVersion !== undefined);
+      if (shouldVerifyRestart) {
+        const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion);
+        if (!restartHealthy) {
+          if (!params.opts.json) {
+            defaultRuntime.log("");
+          }
+          return false;
+        }
+        if (!params.opts.json && restartInitiated) {
+          defaultRuntime.log(theme.success("Daemon restart completed."));
+          defaultRuntime.log("");
+        }
       }
 
       if (!params.opts.json && restarted) {
@@ -686,47 +883,6 @@ async function maybeRestartService(params: {
           delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
         }
       }
-
-      if (!params.opts.json && restartInitiated) {
-        const service = resolveGatewayService();
-        let health = await waitForGatewayHealthyRestart({
-          service,
-          port: params.gatewayPort,
-        });
-        if (!health.healthy && health.staleGatewayPids.length > 0) {
-          if (!params.opts.json) {
-            defaultRuntime.log(
-              theme.warn(
-                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
-              ),
-            );
-          }
-          await terminateStaleGatewayPids(health.staleGatewayPids);
-          await runDaemonRestart();
-          health = await waitForGatewayHealthyRestart({
-            service,
-            port: params.gatewayPort,
-          });
-        }
-
-        if (health.healthy) {
-          defaultRuntime.log(theme.success("Daemon restart completed."));
-        } else {
-          defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
-          for (const line of renderRestartDiagnostics(health)) {
-            defaultRuntime.log(theme.muted(line));
-          }
-          defaultRuntime.log(
-            theme.muted(`Restart log: ${resolveGatewayRestartLogPath(process.env)}`),
-          );
-          defaultRuntime.log(
-            theme.muted(
-              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
-            ),
-          );
-        }
-        defaultRuntime.log("");
-      }
     } catch (err) {
       if (!params.opts.json) {
         defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
@@ -737,7 +893,7 @@ async function maybeRestartService(params: {
         );
       }
     }
-    return;
+    return true;
   }
 
   if (!params.opts.json) {
@@ -756,6 +912,7 @@ async function maybeRestartService(params: {
       );
     }
   }
+  return true;
 }
 
 async function runPostCorePluginUpdate(params: {
@@ -763,8 +920,8 @@ async function runPostCorePluginUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
-}): Promise<void> {
-  await updatePluginsAfterCoreUpdate({
+}): Promise<PostCorePluginUpdateResult> {
+  return await updatePluginsAfterCoreUpdate({
     root: params.root,
     channel: params.channel,
     configSnapshot: params.configSnapshot,
@@ -772,14 +929,43 @@ async function runPostCorePluginUpdate(params: {
   });
 }
 
+async function writePostCorePluginUpdateResultFile(
+  filePath: string | undefined,
+  result: PostCorePluginUpdateResult,
+): Promise<void> {
+  if (!filePath) {
+    return;
+  }
+  await fs.writeFile(filePath, `${JSON.stringify(result)}\n`, "utf-8");
+}
+
+async function readPostCorePluginUpdateResultFile(
+  filePath: string,
+): Promise<PostCorePluginUpdateResult | undefined> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as PostCorePluginUpdateResult;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      (parsed.status === "ok" || parsed.status === "skipped" || parsed.status === "error")
+    ) {
+      return parsed;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   opts: UpdateCommandOptions;
-}): Promise<boolean> {
+}): Promise<{ resumed: boolean; pluginUpdate?: PostCorePluginUpdateResult }> {
   const entryPath = path.join(params.root, "dist", "entry.js");
   if (!(await pathExists(entryPath))) {
-    return false;
+    return { resumed: false };
   }
 
   const argv = [entryPath, "update"];
@@ -792,32 +978,50 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.yes) {
     argv.push("--yes");
   }
+  const resultDir =
+    params.opts.json === true
+      ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"))
+      : null;
+  const resultPath = resultDir ? path.join(resultDir, "plugins.json") : null;
 
-  const child = spawn(resolveNodeRunner(), argv, {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      [POST_CORE_UPDATE_ENV]: "1",
-      [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
-    },
-  });
-
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        reject(new Error(`post-update process terminated by signal ${signal}`));
-        return;
-      }
-      resolve(code ?? 1);
+  try {
+    const child = spawn(resolveNodeRunner(), argv, {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        [POST_CORE_UPDATE_ENV]: "1",
+        [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
+        ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),
+      },
     });
-  });
 
-  if (exitCode !== 0) {
-    defaultRuntime.exit(exitCode);
-    throw new Error(`post-update process exited with code ${exitCode}`);
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        if (signal) {
+          reject(new Error(`post-update process terminated by signal ${signal}`));
+          return;
+        }
+        resolve(code ?? 1);
+      });
+    });
+
+    const pluginUpdate = resultPath
+      ? await readPostCorePluginUpdateResultFile(resultPath)
+      : undefined;
+    if (exitCode !== 0) {
+      if (pluginUpdate) {
+        return { resumed: true, pluginUpdate };
+      }
+      defaultRuntime.exit(exitCode);
+      throw new Error(`post-update process exited with code ${exitCode}`);
+    }
+    return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
+  } finally {
+    if (resultDir) {
+      await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
-  return true;
 }
 
 function shouldResumePostCoreUpdateInFreshProcess(params: {
@@ -851,12 +1055,33 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return;
     }
 
-    await runPostCorePluginUpdate({
+    const pluginUpdate = await runPostCorePluginUpdate({
       root,
       channel: postCoreUpdateChannel,
       configSnapshot: await readConfigFileSnapshot(),
       opts,
     });
+    if (opts.json) {
+      await writePostCorePluginUpdateResultFile(
+        process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
+        pluginUpdate,
+      );
+      if (!process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
+        const result: UpdateRunResult = {
+          status: pluginUpdate.status === "error" ? "error" : "ok",
+          mode: "unknown",
+          root,
+          steps: [],
+          durationMs: 0,
+          postUpdate: { plugins: pluginUpdate },
+        };
+        defaultRuntime.writeJson(result);
+      }
+    }
+    if (pluginUpdate.status === "error") {
+      defaultRuntime.exit(1);
+      return;
+    }
     return;
   }
 
@@ -903,6 +1128,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let downgradeRisk = false;
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
+  let packageAlreadyCurrent = false;
 
   if (updateInstallKind !== "git") {
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
@@ -917,6 +1143,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
+    packageAlreadyCurrent =
+      updateInstallKind === "package" &&
+      !switchToPackage &&
+      currentVersion != null &&
+      targetVersion != null &&
+      currentVersion === targetVersion &&
+      (requestedChannel === null || requestedChannel === storedChannel);
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
@@ -951,6 +1184,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       actions.push(`Switch install mode from git to package manager (${mode})`);
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
+    } else if (packageAlreadyCurrent) {
+      actions.push(
+        `Refresh package install with spec ${packageInstallSpec ?? tag}; current version already matches ${targetVersion}`,
+      );
     } else {
       actions.push(`Run global package manager update with spec ${packageInstallSpec ?? tag}`);
     }
@@ -1061,6 +1298,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           timeoutMs: timeoutMs ?? 20 * 60_000,
           startedAt,
           progress,
+          jsonMode: Boolean(opts.json),
         })
       : await runGitUpdate({
           root,
@@ -1078,7 +1316,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         });
 
   stop();
-  printResult(result, { ...opts, hideSteps: showProgress });
+  if (!opts.json || result.status !== "ok") {
+    printResult(result, { ...opts, hideSteps: showProgress });
+  }
 
   if (result.status === "error") {
     defaultRuntime.exit(1);
@@ -1120,6 +1360,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           "Switched from a package install to a git checkout. Skipping remaining post-update work in the old CLI process; rerun follow-up commands from the new git install if needed.",
         ),
       );
+    } else {
+      defaultRuntime.writeJson(result);
     }
     defaultRuntime.exit(0);
     return;
@@ -1137,9 +1379,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       }
     } else {
       const next = {
-        ...configSnapshot.config,
+        ...configSnapshot.sourceConfig,
         update: {
-          ...configSnapshot.config.update,
+          ...configSnapshot.sourceConfig.update,
           channel: requestedChannel,
         },
       };
@@ -1164,6 +1406,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const postUpdateRoot = result.root ?? root;
 
+  let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
   if (
     shouldResumePostCoreUpdateInFreshProcess({
@@ -1171,11 +1414,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       downgradeRisk,
     })
   ) {
-    pluginsUpdatedInFreshProcess = await continuePostCoreUpdateInFreshProcess({
+    const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
       channel,
       opts,
     });
+    pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
+    postCorePluginUpdate = freshProcessResult.pluginUpdate;
   }
 
   const deferOldProcessPostUpdateWork = switchToGit && result.mode === "git";
@@ -1188,12 +1433,34 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       );
     }
   } else if (!pluginsUpdatedInFreshProcess) {
-    await runPostCorePluginUpdate({
+    postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
       configSnapshot: postUpdateConfigSnapshot,
       opts,
     });
+  }
+
+  const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+    ? {
+        ...result,
+        status: postCorePluginUpdate.status === "error" ? "error" : result.status,
+        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+        postUpdate: {
+          ...result.postUpdate,
+          plugins: postCorePluginUpdate,
+        },
+      }
+    : result;
+
+  if (postCorePluginUpdate?.status === "error") {
+    if (opts.json) {
+      defaultRuntime.writeJson(resultWithPostUpdate);
+    } else {
+      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
+    }
+    defaultRuntime.exit(1);
+    return;
   }
 
   let restartScriptPath: string | null = null;
@@ -1229,18 +1496,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       skipPrompt: Boolean(opts.yes),
     });
 
-    await maybeRestartService({
+    const restartOk = await maybeRestartService({
       shouldRestart,
-      result,
+      result: resultWithPostUpdate,
       opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
       gatewayPort,
       restartScriptPath,
       invocationCwd,
     });
+    if (!restartOk) {
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
+  } else {
+    defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }

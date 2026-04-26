@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -12,6 +12,7 @@ import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -24,6 +25,8 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   HealthSummary,
+  PluginHealthErrorSummary,
+  PluginHealthSummary,
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
@@ -133,6 +136,42 @@ const buildSessionSummary = async (storePath: string) => {
     recent,
   } satisfies HealthSummary["sessions"];
 };
+
+function buildPluginHealthSummary(): PluginHealthSummary | undefined {
+  const registry = getActivePluginRegistry();
+  if (!registry) {
+    return undefined;
+  }
+  const loaded = registry.plugins
+    .filter((plugin) => plugin.status === "loaded")
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin) => {
+      const error: PluginHealthErrorSummary = {
+        id: plugin.id,
+        origin: plugin.origin,
+        activated: plugin.activated === true,
+        error: plugin.error ?? "unknown plugin load error",
+      };
+      if (plugin.activationSource) {
+        error.activationSource = plugin.activationSource;
+      }
+      if (plugin.activationReason) {
+        error.activationReason = plugin.activationReason;
+      }
+      if (plugin.failurePhase) {
+        error.failurePhase = plugin.failurePhase;
+      }
+      return error;
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  if (loaded.length === 0 && errors.length === 0) {
+    return undefined;
+  }
+  return { loaded, errors };
+}
 
 async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
@@ -247,10 +286,13 @@ export async function getHealthSnapshot(params?: {
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
-  const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupRuntimeFallback: false,
+  });
+  const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of plugins) {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
@@ -372,10 +414,12 @@ export async function getHealthSnapshot(params?: {
     }
   }
 
+  const pluginHealth = buildPluginHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
+    ...(pluginHealth ? { plugins: pluginHealth } : {}),
     channels,
     channelOrder,
     channelLabels,
@@ -447,9 +491,12 @@ export async function healthCommand(
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
+    const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      includeSetupRuntimeFallback: false,
+    });
     if (debugEnabled) {
       runtime.log(info("[debug] local channel accounts"));
-      for (const plugin of listChannelPlugins()) {
+      for (const plugin of displayPlugins) {
         const accountIds = plugin.config.listAccountIds(cfg);
         const defaultAccountId = resolveChannelDefaultAccountId({
           plugin,
@@ -496,7 +543,7 @@ export async function healthCommand(
       }
     }
     const channelAccountFallbacks = Object.fromEntries(
-      listChannelPlugins().map((plugin) => {
+      displayPlugins.map((plugin) => {
         const accountIds = plugin.config.listAccountIds(cfg);
         const defaultAccountId = resolveChannelDefaultAccountId({
           plugin,
@@ -547,7 +594,7 @@ export async function healthCommand(
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line, rich));
     }
-    for (const plugin of listChannelPlugins()) {
+    for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
       if (!channelSummary || channelSummary.linked !== true) {
         continue;

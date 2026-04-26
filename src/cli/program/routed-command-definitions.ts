@@ -1,6 +1,8 @@
 import { defaultRuntime } from "../../runtime.js";
 import {
   parseAgentsListRouteArgs,
+  parseChannelsListRouteArgs,
+  parseChannelsStatusRouteArgs,
   parseConfigGetRouteArgs,
   parseConfigUnsetRouteArgs,
   parseGatewayStatusRouteArgs,
@@ -15,7 +17,7 @@ type RouteArgParser<TArgs> = (argv: string[]) => TArgs | null;
 
 type ParsedRouteArgs<TParse extends RouteArgParser<unknown>> = Exclude<ReturnType<TParse>, null>;
 type ConfigCliModule = typeof import("../config-cli.js");
-type ModelsCommandsModule = typeof import("../../commands/models.js");
+type ModelsListModule = typeof import("../../commands/models/list.js");
 
 export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
   parseArgs: TParse;
@@ -34,16 +36,16 @@ function defineRoutedCommand<TParse extends RouteArgParser<unknown>>(
 }
 
 let configCliPromise: Promise<ConfigCliModule> | undefined;
-let modelsCommandsPromise: Promise<ModelsCommandsModule> | undefined;
+let modelsListPromise: Promise<ModelsListModule> | undefined;
 
 function loadConfigCli(): Promise<ConfigCliModule> {
   configCliPromise ??= import("../config-cli.js");
   return configCliPromise;
 }
 
-function loadModelsCommands(): Promise<ModelsCommandsModule> {
-  modelsCommandsPromise ??= import("../../commands/models.js");
-  return modelsCommandsPromise;
+function loadModelsList(): Promise<ModelsListModule> {
+  modelsListPromise ??= import("../../commands/models/list.js");
+  return modelsListPromise;
 }
 
 export const routedCommandDefinitions = {
@@ -112,15 +114,29 @@ export const routedCommandDefinitions = {
   "models-list": defineRoutedCommand({
     parseArgs: parseModelsListRouteArgs,
     runParsedArgs: async (args) => {
-      const { modelsListCommand } = await loadModelsCommands();
+      const { modelsListCommand } = await loadModelsList();
       await modelsListCommand(args, defaultRuntime);
     },
   }),
   "models-status": defineRoutedCommand({
     parseArgs: parseModelsStatusRouteArgs,
     runParsedArgs: async (args) => {
-      const { modelsStatusCommand } = await loadModelsCommands();
+      const { modelsStatusCommand } = await loadModelsList();
       await modelsStatusCommand(args, defaultRuntime);
+    },
+  }),
+  "channels-list": defineRoutedCommand({
+    parseArgs: parseChannelsListRouteArgs,
+    runParsedArgs: async (args) => {
+      const { channelsListCommand } = await import("../../commands/channels/list.js");
+      await channelsListCommand(args, defaultRuntime);
+    },
+  }),
+  "channels-status": defineRoutedCommand({
+    parseArgs: parseChannelsStatusRouteArgs,
+    runParsedArgs: async (args) => {
+      const { channelsStatusCommand } = await import("../../commands/channels/status.js");
+      await channelsStatusCommand(args, defaultRuntime);
     },
   }),
 };

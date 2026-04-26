@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -56,13 +56,38 @@ function shouldUsePluginAuthAliases(
   return isWorkspacePluginTrustedForAuthAliases(plugin, params?.config);
 }
 
+function setPreferredAlias(params: {
+  aliases: Map<string, ProviderAuthAliasCandidate>;
+  alias: string;
+  origin?: PluginOrigin;
+  target: string;
+}) {
+  const normalizedAlias = normalizeProviderId(params.alias);
+  const normalizedTarget = normalizeProviderId(params.target);
+  if (!normalizedAlias || !normalizedTarget) {
+    return;
+  }
+  const existing = params.aliases.get(normalizedAlias);
+  if (
+    !existing ||
+    resolveProviderAuthAliasOriginPriority(params.origin) <
+      resolveProviderAuthAliasOriginPriority(existing.origin)
+  ) {
+    params.aliases.set(normalizedAlias, {
+      origin: params.origin,
+      target: normalizedTarget,
+    });
+  }
+}
+
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env,
+    includeDisabled: true,
   });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -73,20 +98,21 @@ export function resolveProviderAuthAliasMap(
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
-      const normalizedAlias = normalizeProviderId(alias);
-      const normalizedTarget = normalizeProviderId(target);
-      if (normalizedAlias && normalizedTarget) {
-        const existing = preferredAliases.get(normalizedAlias);
-        if (
-          !existing ||
-          resolveProviderAuthAliasOriginPriority(plugin.origin) <
-            resolveProviderAuthAliasOriginPriority(existing.origin)
-        ) {
-          preferredAliases.set(normalizedAlias, {
-            origin: plugin.origin,
-            target: normalizedTarget,
-          });
-        }
+      setPreferredAlias({
+        aliases: preferredAliases,
+        alias,
+        origin: plugin.origin,
+        target,
+      });
+    }
+    for (const choice of plugin.providerAuthChoices ?? []) {
+      for (const deprecatedChoiceId of choice.deprecatedChoiceIds ?? []) {
+        setPreferredAlias({
+          aliases: preferredAliases,
+          alias: deprecatedChoiceId,
+          origin: plugin.origin,
+          target: choice.provider,
+        });
       }
     }
   }

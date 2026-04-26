@@ -1,3 +1,4 @@
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -25,6 +26,7 @@ import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
@@ -55,7 +57,15 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
-    const pluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
+    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
+      const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
+      if (runtimePluginConfig) {
+        return runtimePluginConfig as OllamaPluginConfig;
+      }
+      return config ? {} : startupPluginConfig;
+    };
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
       id: OLLAMA_PROVIDER_ID,
@@ -115,7 +125,7 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,
-            pluginConfig,
+            pluginConfig: resolveCurrentPluginConfig(ctx.config),
             buildProvider: buildOllamaProvider,
           }),
       },
