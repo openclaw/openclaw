@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getPluginRegistryState = vi.hoisted(() => vi.fn());
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
 }));
 
@@ -16,6 +17,8 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
@@ -27,11 +30,14 @@ describe("synthetic auth runtime refs", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex
       .mockReset()
       .mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry
+      .mockReset()
+      .mockReturnValue({ plugins: [] });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
   });
 
   it("uses manifest-owned synthetic auth refs before the runtime registry exists", () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         { syntheticAuthRefs: [" local-provider ", "local-provider", "local-cli"] },
         { syntheticAuthRefs: ["remote-provider"] },
@@ -44,9 +50,7 @@ describe("synthetic auth runtime refs", () => {
       "local-cli",
       "remote-provider",
     ]);
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalledWith({ cache: true });
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith({
-      index: expect.anything(),
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
       includeDisabled: true,
     });
   });
@@ -79,7 +83,7 @@ describe("synthetic auth runtime refs", () => {
     });
 
     expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual(["runtime-provider", "runtime-cli"]);
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
     expect(pluginRegistryMocks.loadPluginRegistrySnapshot).not.toHaveBeenCalled();
   });
 });

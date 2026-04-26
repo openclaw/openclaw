@@ -3,9 +3,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn(),
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryForPluginRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => mocks.loadPluginRegistrySnapshot(...args),
 }));
 
@@ -26,7 +29,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    const manifestRegistry = {
       plugins: [
         {
           id: "alpha",
@@ -46,7 +49,10 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         },
       ],
       diagnostics: [],
-    });
+    };
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(manifestRegistry);
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {
@@ -76,7 +82,6 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
       }),
     ).toEqual(["alpha", "beta"]);
-    expect(mocks.loadPluginRegistrySnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
   });
 });
