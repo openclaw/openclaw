@@ -589,17 +589,17 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
-  it("treats zhipuai weekly/monthly limit exhausted as rate_limit", () => {
+  it("treats zhipuai weekly/monthly limit exhausted as quota_exhausted", () => {
     expect(
       resolveFailoverReasonFromError({
         message: ZHIPUAI_WEEKLY_MONTHLY_LIMIT_EXHAUSTED_MESSAGE,
       }),
-    ).toBe("rate_limit");
+    ).toBe("quota_exhausted");
     expect(
       resolveFailoverReasonFromError({
         message: "LLM error: monthly limit reached",
       }),
-    ).toBe("rate_limit");
+    ).toBe("quota_exhausted");
   });
 
   it("treats Chinese provider network/server errors as timeout for failover", () => {
