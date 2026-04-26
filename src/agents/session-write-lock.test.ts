@@ -446,12 +446,17 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
-  it("reclaims orphan lock files without starttime when PID matches current process", async () => {
+  // On non-Linux, when getProcessStartTime returns null, we cannot distinguish
+  // "previous process with same PID died" from "subprocess with parent PID exited
+  // and left a lock" (data-corruption bug #71872). We are conservative and do NOT
+  // reclaim self-PID locks without a verifiable starttime.
+  // Even on Linux, the isPidAlive guard prevents reclamation here — if the PID is
+  // alive (even though we can't verify starttime), we assume the lock may be held
+  // by a live parent process. The "reclaims lock files with recycled PIDs" test
+  // covers the distinct case where a stored starttime mismatches the live process.
+  it.skip("reclaims orphan lock files without starttime when PID matches current process", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
-      // Simulate an old-format lock file left behind by a previous process
-      // instance that reused the same PID (common in containers).
       await writeCurrentProcessLock(lockPath);
-
       await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500 });
     });
   });

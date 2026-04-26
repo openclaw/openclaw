@@ -430,15 +430,35 @@ function shouldTreatAsOrphanSelfLock(params: {
   payload: LockFilePayload | null;
   normalizedSessionFile: string;
 }): boolean {
-  const pid = isValidLockNumber(params.payload?.pid) ? params.payload.pid : null;
+  // No payload means we can't determine anything — don't remove the lock.
+  if (!params.payload) {
+    return false;
+  }
+  const pid = isValidLockNumber(params.payload.pid) ? params.payload.pid : null;
   if (pid !== process.pid) {
     return false;
   }
-  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
+  const hasValidStarttime = isValidLockNumber(params.payload.starttime);
   if (hasValidStarttime) {
+    // Lock has starttime — compare with current process starttime to detect
+    // PID recycling. On Linux, starttime is monotonically increasing and
+    // survives PID reuse, so a mismatch definitively means the PID was recycled
+    // to a different process and the lock can safely be removed.
+    const currentStarttime = getProcessStartTime(process.pid);
+    if (currentStarttime !== null && params.payload.starttime === currentStarttime) {
+      return false; // Lock is ours — do not remove
+    }
+    return true; // Starttime missing or mismatch — PID recycled, remove
+  }
+  // No verifiable starttime (non-Linux or legacy lock). Be conservative: if
+  // the PID is alive, assume it might be the parent gateway holding the lock
+  // (ACP harness fork-execs with same PID as parent — deadlock case #71872).
+  // If the PID is dead, the original holder is gone and the lock is safe to
+  // reclaim.
+  if (isPidAlive(pid)) {
     return false;
   }
-  return !HELD_LOCKS.has(params.normalizedSessionFile);
+  return true;
 }
 
 export async function cleanStaleLockFiles(params: {
