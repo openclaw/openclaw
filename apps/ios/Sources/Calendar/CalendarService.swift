@@ -203,15 +203,27 @@ extension CalendarService {
             self.box.resume(value)
         }
 
-        func waitUntilInstalled() async {
+        private var isInstalled: Bool {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.hasInstalled
+        }
+
+        private func enqueueInstallWaiter(_ continuation: CheckedContinuation<Void, Never>) {
             self.lock.lock()
             if self.hasInstalled {
                 self.lock.unlock()
+                continuation.resume()
                 return
             }
+            self.installWaiters.append(continuation)
+            self.lock.unlock()
+        }
+
+        func waitUntilInstalled() async {
+            guard !self.isInstalled else { return }
             await withCheckedContinuation { continuation in
-                self.installWaiters.append(continuation)
-                self.lock.unlock()
+                self.enqueueInstallWaiter(continuation)
             }
         }
 
@@ -219,13 +231,13 @@ extension CalendarService {
             await withCheckedContinuation { continuation in
                 self.lock.lock()
                 self.hasInstalled = true
+                self.box.install(continuation)
                 let waiters = self.installWaiters
                 self.installWaiters.removeAll()
                 self.lock.unlock()
                 for waiter in waiters {
                     waiter.resume()
                 }
-                self.box.install(continuation)
             }
         }
     }
