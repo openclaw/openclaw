@@ -729,8 +729,9 @@ set, declare that provider as `refreshable` or `runtime` in `discovery`.
 
 The OpenClaw Provider Index is OpenClaw-owned preview metadata for providers
 whose plugins may not be installed yet. It is not part of a plugin manifest.
-Use plugin manifests for installed plugin authority; use the Provider Index only
-for installable-provider and pre-install model picker surfaces.
+Plugin manifests remain the installed-plugin authority. The Provider Index is
+the internal fallback contract that future installable-provider and pre-install
+model picker surfaces will consume when a provider plugin is not installed.
 
 Catalog authority order:
 
