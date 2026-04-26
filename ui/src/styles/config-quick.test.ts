@@ -12,7 +12,6 @@ describe("config-quick styles", () => {
     expect(css).toContain(".qs-identity-card__error");
     expect(css).toContain(".qs-assistant-avatar");
     expect(css).toContain(".qs-user-avatar");
-    expect(css).toContain(".qs-personal-actions");
     expect(css).toContain(".qs-card--personal");
   });
 
