@@ -35,6 +35,9 @@ export function buildEmbeddedRunQueuePlan(params: {
   const enqueueInLane = params.enqueueInLane ?? enqueueCommandInLane;
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // A caller-supplied enqueue function is an explicit override of lane routing.
+  // Preserve that legacy escape hatch: such callers own serialization and any
+  // cron -> nested deadlock guard themselves.
   const enqueueGlobal = params.enqueue ?? ((task, opts) => enqueueInLane(globalLane, task, opts));
   const enqueueSession = params.enqueue ?? ((task, opts) => enqueueInLane(sessionLane, task, opts));
   return {

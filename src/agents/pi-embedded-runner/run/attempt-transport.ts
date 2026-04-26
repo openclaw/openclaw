@@ -22,7 +22,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type AttemptTransportSession = {
   sessionId: string;
   agent: {
-    streamFn?: StreamFn;
+    streamFn: StreamFn;
     transport?: unknown;
   };
 };
@@ -39,7 +39,6 @@ export async function configureAttemptTransportRuntime(params: {
   model: EmbeddedRunAttemptParams["model"];
   agentDir: string;
   effectiveWorkspace: string;
-  sessionId: string;
   resolvedApiKey?: string;
   authStorage: EmbeddedRunAttemptParams["authStorage"];
   runAbortSignal: AbortSignal;
@@ -92,7 +91,7 @@ export async function configureAttemptTransportRuntime(params: {
     providerStreamFn,
     shouldUseWebSocketTransport,
     wsApiKey,
-    sessionId: params.sessionId,
+    sessionId: params.activeSession.sessionId,
     signal: params.runAbortSignal,
     model: params.model,
     resolvedApiKey: params.resolvedApiKey,

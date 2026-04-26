@@ -1208,7 +1208,6 @@ export async function runEmbeddedAttempt(
         model: params.model,
         agentDir,
         effectiveWorkspace,
-        sessionId: params.sessionId,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
         runAbortSignal: runAbortController.signal,

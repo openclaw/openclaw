@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { startRunLifecycleDiagnostics } from "./attempt-lifecycle.js";
 
-const diagnosticEvents: unknown[] = [];
+const { diagnosticEvents } = vi.hoisted(() => ({
+  diagnosticEvents: [] as unknown[],
+}));
 
 vi.mock("../../../infra/diagnostic-events.js", () => ({
   emitTrustedDiagnosticEvent: (event: unknown) => {
     diagnosticEvents.push(event);
   },
 }));
+
+import { startRunLifecycleDiagnostics } from "./attempt-lifecycle.js";
 
 describe("attempt-lifecycle", () => {
   beforeEach(() => {
@@ -62,6 +65,25 @@ describe("attempt-lifecycle", () => {
       runId: "run-2",
       outcome: "error",
       errorCategory: "Error",
+    });
+  });
+
+  it("emits aborted completion once", () => {
+    const diagnostics = startRunLifecycleDiagnostics({
+      runId: "run-3",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      trigger: "manual",
+    });
+
+    diagnostics.emitCompleted("aborted");
+    diagnostics.emitCompleted("completed");
+
+    expect(diagnosticEvents).toHaveLength(2);
+    expect(diagnosticEvents[1]).toMatchObject({
+      type: "run.completed",
+      runId: "run-3",
+      outcome: "aborted",
     });
   });
 });

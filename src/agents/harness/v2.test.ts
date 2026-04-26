@@ -551,8 +551,9 @@ describe("AgentHarness V2 compatibility adapter", () => {
 
 describe("AgentHarness V2 native factory registry", () => {
   // Tests in this describe block use unique harness ids so they do not collide
-  // with the module-level "pi" registration in builtin-pi.ts. Vitest isolates
-  // modules per test file, so our registrations stay scoped to this file.
+  // with the module-level "pi" registration in builtin-pi.ts. Temporary
+  // registrations must be explicitly restored with the returned cleanup
+  // callback rather than relying on test-file isolation.
 
   it("falls back to the V1 adapter when no native factory is registered", async () => {
     const params = createAttemptParams();
