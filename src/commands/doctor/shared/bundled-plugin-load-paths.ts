@@ -68,11 +68,16 @@ export function scanBundledPluginLoadPathMigrations(
   }
 
   const legacyPathMap = new Map<string, { pluginId: string; toPath: string }>();
+  const bundledPathMap = new Map<string, { pluginId: string; toPath: string }>();
   for (const source of bundled.values()) {
     const legacyPath = buildLegacyBundledPath(source.localPath);
     if (!legacyPath) {
       continue;
     }
+    bundledPathMap.set(normalizeBundledLookupPath(source.localPath), {
+      pluginId: source.pluginId,
+      toPath: source.localPath,
+    });
     legacyPathMap.set(normalizeBundledLookupPath(legacyPath), {
       pluginId: source.pluginId,
       toPath: source.localPath,
@@ -85,7 +90,7 @@ export function scanBundledPluginLoadPathMigrations(
       continue;
     }
     const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
-    const match = legacyPathMap.get(normalized);
+    const match = bundledPathMap.get(normalized) ?? legacyPathMap.get(normalized);
     if (!match) {
       continue;
     }
@@ -109,9 +114,9 @@ export function collectBundledPluginLoadPathWarnings(params: {
   }
   const lines = params.hits.map(
     (hit) =>
-      `- ${hit.pathLabel}: legacy bundled plugin path "${hit.fromPath}" still points at ${hit.pluginId}; current packaged path is "${hit.toPath}".`,
+      `- ${hit.pathLabel}: bundled plugin path "${hit.fromPath}" still points at ${hit.pluginId} and disables bundled runtime-deps staging.`,
   );
-  lines.push(`- Run "${params.doctorFixCommand}" to rewrite these bundled plugin paths.`);
+  lines.push(`- Run "${params.doctorFixCommand}" to remove these redundant bundled plugin paths.`);
   return lines.map((line) => sanitizeForLog(line));
 }
 
@@ -144,7 +149,11 @@ export function maybeRepairBundledPluginLoadPaths(
       continue;
     }
     const resolved = normalizeBundledLookupPath(resolveUserPath(entry, env));
-    const replacement = replacements.get(resolved)?.toPath ?? entry;
+    const hit = replacements.get(resolved);
+    if (hit) {
+      continue;
+    }
+    const replacement = entry;
     const replacementResolved = normalizeBundledLookupPath(resolveUserPath(replacement, env));
     if (seen.has(replacementResolved)) {
       continue;
@@ -164,8 +173,7 @@ export function maybeRepairBundledPluginLoadPaths(
   return {
     config: next,
     changes: hits.map(
-      (hit) =>
-        `- plugins.load.paths: rewrote bundled ${hit.pluginId} path from ${hit.fromPath} to ${hit.toPath}`,
+      (hit) => `- plugins.load.paths: removed bundled ${hit.pluginId} path ${hit.fromPath}`,
     ),
   };
 }
