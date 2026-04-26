@@ -210,9 +210,23 @@ export function createSessionsSpawnTool(
         );
       }
       const task = readStringParam(params, "task", { required: true });
-      const label = readStringParam(params, "label") ?? "";
+      const explicitLabel = readStringParam(params, "label");
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
+      const label =
+        explicitLabel ??
+        (() => {
+          const cfg = opts?.config;
+          const perAgent = requestedAgentId
+            ? cfg?.agents?.list?.find((a) => a.id === requestedAgentId)?.subagents?.labelTemplate
+            : undefined;
+          const tmpl = perAgent ?? cfg?.agents?.defaults?.subagents?.labelTemplate;
+          if (!tmpl) return "";
+          const taskPreview = task.slice(0, 40).replace(/[\r\n]+/g, " ").trim();
+          return tmpl
+            .replace("{agentId}", requestedAgentId ?? "")
+            .replace("{taskPreview}", taskPreview);
+        })();
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");

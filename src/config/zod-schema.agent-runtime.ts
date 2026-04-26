@@ -861,6 +861,7 @@ export const AgentEntrySchema = z
           .optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
+        labelTemplate: z.string().max(200).optional(),
       })
       .strict()
       .optional(),

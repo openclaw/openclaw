@@ -412,6 +412,8 @@ export type AgentDefaultsConfig = {
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
+    /** Template for auto-generating a session label when sessions_spawn omits label. Tokens: {agentId}, {taskPreview}. Explicit label always takes precedence. */
+    labelTemplate?: string;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

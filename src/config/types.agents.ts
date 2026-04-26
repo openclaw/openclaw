@@ -117,6 +117,8 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
+    /** Template for auto-generating a session label when sessions_spawn omits label. Tokens: {agentId}, {taskPreview}. Overrides agents.defaults.subagents.labelTemplate. */
+    labelTemplate?: string;
   };
   /** Optional per-agent embedded Pi overrides. */
   embeddedPi?: {
