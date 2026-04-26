@@ -8,6 +8,11 @@ import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 
+// Module-level caches: bundled plugin layout doesn't change during the process
+// lifetime, so we compute directory resolution and tree usability once.
+const bundledPluginsDirCache = new Map<string, string | undefined>();
+const usablePluginTreeCache = new Map<string, boolean>();
+
 function bundledPluginsDisabled(env: NodeJS.ProcessEnv): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";
@@ -27,11 +32,17 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
 }
 
 function hasUsableBundledPluginTree(pluginsDir: string): boolean {
+  const cached = usablePluginTreeCache.get(pluginsDir);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (!fs.existsSync(pluginsDir)) {
+    usablePluginTreeCache.set(pluginsDir, false);
     return false;
   }
   try {
-    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
+    const entries = fs.readdirSync(pluginsDir, { withFileTypes: true });
+    const result = entries.some((entry) => {
       if (!entry.isDirectory()) {
         return false;
       }
@@ -41,6 +52,8 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
         fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
       );
     });
+    usablePluginTreeCache.set(pluginsDir, result);
+    return result;
   } catch {
     return false;
   }
@@ -109,14 +122,29 @@ function resolveBundledDirFromPackageRoot(
 }
 
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  // Build a cache key from the env vars that influence the result.
+  const cacheKey = [
+    env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ?? "",
+    env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
+    env.VITEST ?? "",
+  ].join("\0");
+
+  const cached = bundledPluginsDirCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   if (bundledPluginsDisabled(env)) {
-    return resolveDisabledBundledPluginsDir();
+    const result = resolveDisabledBundledPluginsDir();
+    bundledPluginsDirCache.set(cacheKey, result);
+    return result;
   }
 
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
+      bundledPluginsDirCache.set(cacheKey, resolvedOverride);
       return resolvedOverride;
     }
     // Installed CLIs can inherit stale bundled-dir overrides from older shells
@@ -127,12 +155,14 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       if (argvPackageRoot && !isSourceCheckoutRoot(argvPackageRoot)) {
         const argvFallback = resolveBundledDirFromPackageRoot(argvPackageRoot, false);
         if (argvFallback) {
+          bundledPluginsDirCache.set(cacheKey, argvFallback);
           return argvFallback;
         }
       }
     } catch {
       // ignore
     }
+    bundledPluginsDirCache.set(cacheKey, resolvedOverride);
     return resolvedOverride;
   }
 
@@ -150,6 +180,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     for (const packageRoot of packageRoots) {
       const bundledDir = resolveBundledDirFromPackageRoot(packageRoot, preferSourceCheckout);
       if (bundledDir) {
+        bundledPluginsDirCache.set(cacheKey, bundledDir);
         return bundledDir;
       }
     }
@@ -162,10 +193,12 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     const execDir = path.dirname(process.execPath);
     const siblingBuilt = path.join(execDir, "dist", "extensions");
     if (fs.existsSync(siblingBuilt)) {
+      bundledPluginsDirCache.set(cacheKey, siblingBuilt);
       return siblingBuilt;
     }
     const sibling = path.join(execDir, "extensions");
     if (fs.existsSync(sibling)) {
+      bundledPluginsDirCache.set(cacheKey, sibling);
       return sibling;
     }
   } catch {
@@ -178,6 +211,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     for (let i = 0; i < 6; i += 1) {
       const candidate = path.join(cursor, "extensions");
       if (fs.existsSync(candidate)) {
+        bundledPluginsDirCache.set(cacheKey, candidate);
         return candidate;
       }
       const parent = path.dirname(cursor);
@@ -190,5 +224,6 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     // ignore
   }
 
+  bundledPluginsDirCache.set(cacheKey, undefined);
   return undefined;
 }

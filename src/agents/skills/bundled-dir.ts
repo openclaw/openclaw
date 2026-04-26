@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 
+// The bundled skills dir never changes during the process lifetime,
+// so we cache the result after the first computation.
+let bundledSkillsDirResult: string | undefined = undefined;
+let bundledSkillsDirComputed = false;
+
 function looksLikeSkillsDir(dir: string): boolean {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -36,9 +41,15 @@ export type BundledSkillsResolveOptions = {
 export function resolveBundledSkillsDir(
   opts: BundledSkillsResolveOptions = {},
 ): string | undefined {
+  if (bundledSkillsDirComputed) {
+    return bundledSkillsDirResult;
+  }
+
   const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
   if (override) {
-    return override;
+    bundledSkillsDirResult = override;
+    bundledSkillsDirComputed = true;
+    return bundledSkillsDirResult;
   }
 
   // bun --compile: ship a sibling `skills/` next to the executable.
@@ -47,7 +58,9 @@ export function resolveBundledSkillsDir(
     const execDir = path.dirname(execPath);
     const sibling = path.join(execDir, "skills");
     if (fs.existsSync(sibling)) {
-      return sibling;
+      bundledSkillsDirResult = sibling;
+      bundledSkillsDirComputed = true;
+      return bundledSkillsDirResult;
     }
   } catch {
     // ignore
@@ -67,14 +80,18 @@ export function resolveBundledSkillsDir(
     if (packageRoot) {
       const candidate = path.join(packageRoot, "skills");
       if (looksLikeSkillsDir(candidate)) {
-        return candidate;
+        bundledSkillsDirResult = candidate;
+        bundledSkillsDirComputed = true;
+        return bundledSkillsDirResult;
       }
     }
     let current = moduleDir;
     for (let depth = 0; depth < 6; depth += 1) {
       const candidate = path.join(current, "skills");
       if (looksLikeSkillsDir(candidate)) {
-        return candidate;
+        bundledSkillsDirResult = candidate;
+        bundledSkillsDirComputed = true;
+        return bundledSkillsDirResult;
       }
       const next = path.dirname(current);
       if (next === current) {
@@ -86,5 +103,6 @@ export function resolveBundledSkillsDir(
     // ignore
   }
 
-  return undefined;
+  bundledSkillsDirComputed = true;
+  return bundledSkillsDirResult;
 }
