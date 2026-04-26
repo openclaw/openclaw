@@ -486,7 +486,7 @@ function resolveOpenAICompletionsChatTemplateKwargs(params: {
       : undefined;
   const merged = {
     ...defaults,
-    ...(params.configured ?? {}),
+    ...params.configured,
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
