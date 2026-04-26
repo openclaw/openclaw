@@ -11,12 +11,11 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
-    hoisted.loadPluginManifestRegistryForInstalledIndex(...args),
+  loadPluginManifestRegistryForInstalledIndex: hoisted.loadPluginManifestRegistryForInstalledIndex,
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: (...args: unknown[]) => hoisted.loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
