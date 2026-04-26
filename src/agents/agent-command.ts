@@ -73,6 +73,7 @@ type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
 type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
+type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
@@ -88,6 +89,7 @@ let acpRuntimeErrorsRuntimePromise: Promise<AcpRuntimeErrorsRuntime> | undefined
 let acpSessionIdentifiersRuntimePromise: Promise<AcpSessionIdentifiersRuntime> | undefined;
 let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
 let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
+let cliCompactionRuntimePromise: Promise<CliCompactionRuntime> | undefined;
 let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
 let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
 let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
@@ -129,6 +131,11 @@ function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
 function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
   sessionStoreRuntimePromise ??= import("./command/session-store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
+  cliCompactionRuntimePromise ??= import("./command/cli-compaction.js");
+  return cliCompactionRuntimePromise;
 }
 
 function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
@@ -874,6 +881,11 @@ async function agentCommandInternal(
     const startedAt = Date.now();
     let lifecycleEnded = false;
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+    const runContext = resolveAgentRunContext(opts);
+    const messageChannel = resolveMessageChannel(
+      runContext.messageChannel,
+      opts.replyChannel ?? opts.channel,
+    );
 
     let result: Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
     let fallbackProvider = provider;
@@ -882,11 +894,6 @@ async function agentCommandInternal(
     let liveSwitchRetries = 0;
     for (;;) {
       try {
-        const runContext = resolveAgentRunContext(opts);
-        const messageChannel = resolveMessageChannel(
-          runContext.messageChannel,
-          opts.replyChannel ?? opts.channel,
-        );
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
@@ -1102,6 +1109,27 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+        });
+        sessionEntry = await (
+          await loadCliCompactionRuntime()
+        ).runCliTurnCompactionLifecycle({
+          cfg,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          workspaceDir,
+          agentDir,
+          provider: result.meta.agentMeta?.provider ?? provider,
+          model: result.meta.agentMeta?.model ?? model,
+          skillsSnapshot,
+          messageChannel,
+          agentAccountId: runContext.accountId,
+          senderIsOwner: opts.senderIsOwner,
+          thinkLevel: resolvedThinkLevel,
+          extraSystemPrompt: opts.extraSystemPrompt,
         });
       } catch (error) {
         log.warn(

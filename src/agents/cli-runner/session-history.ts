@@ -15,6 +15,69 @@ import {
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 
+type HistoryMessage = {
+  role?: unknown;
+  content?: unknown;
+};
+
+function coerceHistoryText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" && text.trim().length > 0 ? [text.trim()] : [];
+    })
+    .join("\n")
+    .trim();
+}
+
+export function buildCliSessionHistoryPrompt(params: {
+  messages: unknown[];
+  prompt: string;
+}): string | undefined {
+  const renderedHistory = params.messages
+    .flatMap((message) => {
+      if (!message || typeof message !== "object") {
+        return [];
+      }
+      const entry = message as HistoryMessage;
+      const role =
+        entry.role === "assistant" ? "Assistant" : entry.role === "user" ? "User" : undefined;
+      if (!role) {
+        return [];
+      }
+      const text = coerceHistoryText(entry.content);
+      return text ? [`${role}: ${text}`] : [];
+    })
+    .join("\n\n")
+    .trim();
+
+  if (!renderedHistory) {
+    return undefined;
+  }
+
+  return [
+    "Continue this conversation using the OpenClaw transcript below as prior session history.",
+    "Treat it as authoritative context for this fresh CLI session.",
+    "",
+    "<conversation_history>",
+    renderedHistory,
+    "</conversation_history>",
+    "",
+    "<next_user_message>",
+    params.prompt,
+    "</next_user_message>",
+  ].join("\n");
+}
+
 function safeRealpathSync(filePath: string): string | undefined {
   try {
     return fs.realpathSync(filePath);
