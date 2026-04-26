@@ -62,9 +62,11 @@ describe("gateway config mutation guard coverage", () => {
       expect.arrayContaining([
         "agents.defaults.systemPromptOverride",
         "agents.defaults.model",
+        "agents.defaults.compaction.mode",
         "agents.list[].id",
         "agents.list[].model",
         "channels.*.requireMention",
+        "cron.enabled",
       ]),
     );
   });
@@ -506,6 +508,17 @@ describe("gateway config mutation guard coverage", () => {
           },
         },
       },
+    );
+  });
+
+  it("allows cron.enabled toggles via config.patch", () => {
+    expectAllowed({ cron: { enabled: true } }, { cron: { enabled: false } });
+  });
+
+  it("allows agents.defaults.compaction.mode edits via config.patch", () => {
+    expectAllowed(
+      { agents: { defaults: { compaction: { mode: "default" } } } },
+      { agents: { defaults: { compaction: { mode: "safeguard" } } } },
     );
   });
 });
