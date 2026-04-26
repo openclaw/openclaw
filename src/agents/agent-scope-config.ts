@@ -55,10 +55,11 @@ function stripNullBytes(s: string): string {
 
 function isManagedMainWorkspaceDir(workspaceDir: string, env: NodeJS.ProcessEnv): boolean {
   const resolved = path.resolve(workspaceDir);
-  const stateDir = path.resolve(stripNullBytes(resolveStateDir(env)));
-  const name = path.basename(resolved);
+  const stateDir = stripNullBytes(resolveStateDir(env));
+  const defaultWorkspaceDir = stripNullBytes(resolveDefaultAgentWorkspaceDir(env));
   return (
-    path.dirname(resolved) === stateDir && (name === "workspace" || name.startsWith("workspace-"))
+    resolved === path.resolve(stateDir, "workspace") ||
+    resolved === path.resolve(defaultWorkspaceDir)
   );
 }
 
