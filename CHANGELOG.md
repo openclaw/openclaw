@@ -72,6 +72,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Diagnostics/OTEL: treat normal early model stream cleanup as a completed
+  model call instead of exporting a misleading `StreamAbandoned` error span.
+  Thanks @vincentkoc.
 - ACP: wait for the configured runtime backend to become healthy before startup
   identity reconciliation, avoiding transient acpx warnings during Gateway boot.
   Fixes #40566.
