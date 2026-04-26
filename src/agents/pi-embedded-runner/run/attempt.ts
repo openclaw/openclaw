@@ -1117,6 +1117,7 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel: params.thinkLevel,
         reasoningLevel: params.reasoningLevel ?? "off",
+        emotionMode: params.emotionMode,
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
         ownerDisplay: ownerDisplay.ownerDisplay,
@@ -1856,6 +1857,7 @@ export async function runEmbeddedAttempt(
           model: params.model,
           sessionManager,
           sessionId: params.sessionId,
+          emotionMode: params.emotionMode,
           policy: transcriptPolicy,
         });
         cacheTrace?.recordStage("session:sanitized", { messages: prior });

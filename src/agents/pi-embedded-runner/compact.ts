@@ -751,6 +751,7 @@ export async function compactEmbeddedPiSessionDirect(
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel,
           reasoningLevel: params.reasoningLevel ?? "off",
+          emotionMode: params.emotionMode,
           extraSystemPrompt: params.extraSystemPrompt,
           ownerNumbers: params.ownerNumbers,
           ownerDisplay: ownerDisplay.ownerDisplay,
@@ -955,6 +956,7 @@ export async function compactEmbeddedPiSessionDirect(
             model,
             sessionManager,
             sessionId: params.sessionId,
+            emotionMode: params.emotionMode,
             policy: transcriptPolicy,
           });
           const validated = await validateReplayTurns({

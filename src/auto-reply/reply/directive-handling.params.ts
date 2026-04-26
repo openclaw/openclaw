@@ -3,7 +3,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  ElevatedLevel,
+  EmotionMode,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 
 export type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
@@ -36,6 +42,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentThinkLevel?: ThinkLevel;
   currentFastMode?: boolean;
   currentVerboseLevel?: VerboseLevel;
+  currentEmotionMode?: EmotionMode;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
   surface?: string;

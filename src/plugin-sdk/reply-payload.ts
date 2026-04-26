@@ -5,6 +5,12 @@ import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/stri
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export {
+  cloneReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
+export type { ReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 
 export type OutboundReplyPayload = {

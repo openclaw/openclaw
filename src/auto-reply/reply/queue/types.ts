@@ -2,6 +2,7 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { EmotionMode } from "../../../emotion-mode.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
@@ -74,6 +75,7 @@ export type FollowupRun = {
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
+    emotionMode?: EmotionMode;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;

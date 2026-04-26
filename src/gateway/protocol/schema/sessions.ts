@@ -137,6 +137,9 @@ export const SessionsPatchParamsSchema = Type.Object(
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    emotionMode: Type.Optional(
+      Type.Union([Type.Literal("off"), Type.Literal("on"), Type.Literal("full"), Type.Null()]),
+    ),
     responseUsage: Type.Optional(
       Type.Union([
         Type.Literal("off"),

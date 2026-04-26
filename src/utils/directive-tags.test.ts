@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   parseInlineDirectives,
+  sanitizeDirectiveAndEmotionTagsForDisplay,
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -237,5 +238,30 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toEqual(input);
+  });
+
+  test("hides emotion tags from message text in normal mode and reveals them in full mode", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "text", text: "[softly] hello there" }],
+    };
+
+    const hidden = stripInlineDirectiveTagsFromMessageForDisplay(input, { emotionMode: "on" });
+    const visible = stripInlineDirectiveTagsFromMessageForDisplay(input, { emotionMode: "full" });
+
+    expect(hidden?.content).toEqual([{ type: "text", text: "hello there" }]);
+    expect(visible?.content).toEqual([{ type: "text", text: "[softly] hello there" }]);
+  });
+});
+
+describe("sanitizeDirectiveAndEmotionTagsForDisplay", () => {
+  test("strips trailing partial emotion tags during streaming", () => {
+    const result = sanitizeDirectiveAndEmotionTagsForDisplay("hello [soft", {
+      emotionMode: "on",
+      hideTrailingPartialEmotionTag: true,
+    });
+
+    expect(result.text).toBe("hello ");
+    expect(result.changed).toBe(true);
   });
 });

@@ -32,6 +32,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeEmotionMode } from "../emotion-mode.js";
 import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
@@ -151,6 +152,14 @@ function resolveConfiguredTextVerbosity(params: {
       agentId: params.agentId,
     }),
   );
+}
+
+function resolveEffectiveEmotionMode(
+  args: Pick<StatusArgs, "sessionEntry">,
+): "off" | "on" | "full" {
+  // PR-B: agent-defaults `emotionDefault` was dropped per Copilot review (it
+  // rejected "full" while session mode accepts it). Resolve from session only.
+  return normalizeEmotionMode(args.sessionEntry?.emotionMode) ?? "off";
 }
 
 function resolveExecutionLabel(
@@ -716,6 +725,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
+  const emotionMode = resolveEffectiveEmotionMode(args);
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -789,6 +799,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     verboseLabel,
     traceLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
+    emotionMode !== "off" ? `Emotions: ${emotionMode}` : null,
     elevatedLabel,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");

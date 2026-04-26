@@ -19,6 +19,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeEmotionMode } from "../emotion-mode.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
@@ -299,6 +300,19 @@ export async function applySessionsPatchToStore(params: {
       // Persist "off" explicitly so that resolveDefaultReasoningLevel()
       // does not re-enable reasoning for capable models (#24406).
       next.reasoningLevel = normalized;
+    }
+  }
+
+  if ("emotionMode" in patch) {
+    const raw = patch.emotionMode;
+    if (raw === null) {
+      delete next.emotionMode;
+    } else if (raw !== undefined) {
+      const normalized = normalizeEmotionMode(raw);
+      if (!normalized) {
+        return invalid('invalid emotionMode (use "off"|"on"|"full")');
+      }
+      next.emotionMode = normalized;
     }
   }
 

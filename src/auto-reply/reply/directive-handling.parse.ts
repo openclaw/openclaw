@@ -2,6 +2,7 @@ import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approva
 import { extractModelDirective } from "../model.js";
 import type {
   ElevatedLevel,
+  EmotionMode,
   ReasoningLevel,
   ThinkLevel,
   TraceLevel,
@@ -9,6 +10,7 @@ import type {
 } from "./directives.js";
 import {
   extractElevatedDirective,
+  extractEmotionsDirective,
   extractExecDirective,
   extractFastDirective,
   extractReasoningDirective,
@@ -28,6 +30,9 @@ export type InlineDirectives = {
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
+  hasEmotionsDirective: boolean;
+  emotionMode?: EmotionMode;
+  rawEmotionMode?: string;
   hasTraceDirective: boolean;
   traceLevel?: TraceLevel;
   rawTraceLevel?: string;
@@ -93,11 +98,17 @@ export function parseInlineDirectives(
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
   const {
+    cleaned: emotionsCleaned,
+    emotionMode,
+    rawLevel: rawEmotionMode,
+    hasDirective: hasEmotionsDirective,
+  } = extractEmotionsDirective(verboseCleaned);
+  const {
     cleaned: traceCleaned,
     traceLevel,
     rawLevel: rawTraceLevel,
     hasDirective: hasTraceDirective,
-  } = extractTraceDirective(verboseCleaned);
+  } = extractTraceDirective(emotionsCleaned);
   const {
     cleaned: fastCleaned,
     fastMode,
@@ -176,6 +187,9 @@ export function parseInlineDirectives(
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
+    hasEmotionsDirective,
+    emotionMode,
+    rawEmotionMode,
     hasTraceDirective,
     traceLevel,
     rawTraceLevel,

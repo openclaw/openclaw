@@ -1,6 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { EmotionMode } from "../../emotion-mode.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -54,6 +55,7 @@ export type CompactEmbeddedPiSessionParams = {
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
   thinkLevel?: ThinkLevel;
+  emotionMode?: EmotionMode;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;

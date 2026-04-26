@@ -136,4 +136,8 @@ describe("resolveCurrentDirectiveLevels", () => {
     // Agent explicitly setting "off" should be respected, not overridden by model default
     expect(result.currentReasoningLevel).toBe("off");
   });
+
+  // PR-B note: agent-level / global `emotionDefault` was dropped per Copilot
+  // review (it rejected "full" while session mode accepts it). The original
+  // test for global-default fallback is intentionally not ported.
 });

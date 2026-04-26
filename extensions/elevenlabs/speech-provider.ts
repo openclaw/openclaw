@@ -339,6 +339,14 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     id: "elevenlabs",
     label: "ElevenLabs",
     autoSelectOrder: 20,
+    capabilities: {
+      sourceTextHandling: "preserve_expressive_tags",
+      // Per chatgpt-codex P1 review: only ElevenLabs v3 understands expressive
+      // tags. v2 / turbo / monolingual would speak `[whisper]` etc. as words.
+      // The routing layer reads the resolved provider config's modelId and
+      // gates forwarding on this allowlist.
+      expressiveTagsModels: ["eleven_v3"],
+    },
     models: ELEVENLABS_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeElevenLabsProviderConfig(rawConfig),
     parseDirectiveToken,

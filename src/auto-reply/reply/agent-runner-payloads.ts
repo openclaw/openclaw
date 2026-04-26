@@ -1,7 +1,14 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  resolveSendableOutboundReplyParts,
+  setReplyPayloadMetadata,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
+import type { EmotionMode } from "../../emotion-mode.js";
+import { isEmotionModeEnabled } from "../../emotion-mode.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeEmotionTagsForMode } from "../../shared/text/emotion-tags.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -19,6 +26,12 @@ import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.
 let replyPayloadsDedupeRuntimePromise: Promise<
   typeof import("./reply-payloads-dedupe.runtime.js")
 > | null = null;
+
+const EMOTION_RAW_TTS_TEXT_KEY = "__openclawEmotionRawTtsText";
+
+type EmotionTaggedPayload = ReplyPayload & {
+  [EMOTION_RAW_TTS_TEXT_KEY]?: string;
+};
 
 function loadReplyPayloadsDedupeRuntime() {
   replyPayloadsDedupeRuntimePromise ??= import("./reply-payloads-dedupe.runtime.js");
@@ -89,6 +102,7 @@ async function normalizeSentMediaUrlsForDedupe(params: {
 
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
+  emotionMode?: EmotionMode;
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
@@ -110,17 +124,41 @@ export async function buildReplyPayloads(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
-  const sanitizedPayloads = params.isHeartbeat
+  const preserveRawEmotionTtsText = isEmotionModeEnabled(params.emotionMode);
+  const sanitizedPayloads: EmotionTaggedPayload[] = params.isHeartbeat
     ? params.payloads
     : params.payloads.flatMap((payload) => {
         let text = payload.text;
+        let rawEmotionTtsText: string | undefined;
 
         if (payload.isError && text && isBunFetchSocketError(text)) {
           text = formatBunFetchSocketError(text);
         }
 
         if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [{ ...payload, text }];
+          if (typeof text === "string") {
+            if (preserveRawEmotionTtsText) {
+              rawEmotionTtsText = text;
+            }
+            const emotionSanitized = sanitizeEmotionTagsForMode(text, params.emotionMode);
+            text = emotionSanitized.text;
+          }
+          return [
+            {
+              ...payload,
+              text,
+              // Per chatgpt-codex P2 + Copilot reviews on PR-D's
+              // agent-runner-payloads.ts:151,153: in `/emotions full` mode the
+              // sanitizer is a no-op so `rawEmotionTtsText === text`. Without
+              // dropping the inequality guard, the EMOTION_RAW_TTS_TEXT_KEY
+              // marker would never get set, so PR-A's writer would never set
+              // `ttsSourceText` and ElevenLabs would lose its expressive variant.
+              // Carry the raw whenever emotion mode is enabled.
+              ...(typeof rawEmotionTtsText === "string"
+                ? { [EMOTION_RAW_TTS_TEXT_KEY]: rawEmotionTtsText }
+                : {}),
+            },
+          ];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
         if (stripped.didStrip && !didLogHeartbeatStrip) {
@@ -131,7 +169,20 @@ export async function buildReplyPayloads(params: {
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
-        return [{ ...payload, text: stripped.text }];
+        if (preserveRawEmotionTtsText) {
+          rawEmotionTtsText = stripped.text;
+        }
+        const emotionSanitized = sanitizeEmotionTagsForMode(stripped.text, params.emotionMode);
+        return [
+          {
+            ...payload,
+            text: emotionSanitized.text,
+            // See note above on the `/emotions full` no-op sanitizer issue.
+            ...(typeof rawEmotionTtsText === "string"
+              ? { [EMOTION_RAW_TTS_TEXT_KEY]: rawEmotionTtsText }
+              : {}),
+          },
+        ];
       });
 
   const replyTaggedPayloads = (
@@ -149,10 +200,43 @@ export async function buildReplyPayloads(params: {
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
         });
-        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-          payload: parsed.payload,
+        const parsedPayload = parsed.payload as EmotionTaggedPayload;
+        const rawEmotionTtsText =
+          typeof parsedPayload[EMOTION_RAW_TTS_TEXT_KEY] === "string"
+            ? parsedPayload[EMOTION_RAW_TTS_TEXT_KEY]
+            : undefined;
+        const mediaNormalizedPayload = (await normalizeReplyPayloadMedia({
+          payload: parsedPayload,
           normalizeMediaPaths: params.normalizeMediaPaths,
-        });
+        })) as EmotionTaggedPayload;
+        // Strip inline directive tags ([[audio_as_voice]] etc.) BEFORE handing the
+        // raw text to TTS, otherwise tag-aware providers would speak the directive.
+        // Order: directive strip first, emotion tag strip later (PR-A's TTS layer).
+        const cleanedRawEmotionTtsText =
+          typeof rawEmotionTtsText === "string"
+            ? stripInlineDirectiveTagsForDelivery(rawEmotionTtsText).text
+            : undefined;
+        if (
+          typeof cleanedRawEmotionTtsText === "string" &&
+          cleanedRawEmotionTtsText.trim().length > 0
+        ) {
+          // Per chatgpt-codex P1 review: in `/emotions full` mode the visible reply
+          // text intentionally still contains expressive tags. Without an explicit
+          // ttsPlainText, plain TTS providers in PR-A's fallback chain would speak
+          // the tag words out loud. Compute the stripped variant here so the per-
+          // provider router gets a clean fallback regardless of emotion mode.
+          const cleanedPlainTtsText = sanitizeEmotionTagsForMode(
+            cleanedRawEmotionTtsText,
+            "on", // force-strip; emotion mode is already factored into rawEmotionTtsText
+          ).text.trim();
+          setReplyPayloadMetadata(mediaNormalizedPayload, {
+            ttsSourceText: cleanedRawEmotionTtsText,
+            ...(cleanedPlainTtsText.length > 0 && cleanedPlainTtsText !== cleanedRawEmotionTtsText
+              ? { ttsPlainText: cleanedPlainTtsText }
+              : {}),
+          });
+        }
+        delete mediaNormalizedPayload[EMOTION_RAW_TTS_TEXT_KEY];
         if (
           parsed.isSilent &&
           !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia

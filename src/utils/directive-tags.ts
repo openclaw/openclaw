@@ -1,4 +1,6 @@
+import type { EmotionMode } from "../emotion-mode.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeEmotionTagsForMode } from "../shared/text/emotion-tags.js";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -120,6 +122,40 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   return sanitized;
 }
 
+/**
+ * Sanitize both inline `[[…]]` directives and per-mode emotion tags for display.
+ *
+ * When `options.emotionMode` is undefined the emotion-tag pass is skipped: the
+ * caller hasn't expressed an opinion about emotion handling, so we strip only
+ * inline `[[…]]` directives (the legacy behavior of this layer). This matches
+ * the "no opinion → no behavior change" contract bots flagged for the
+ * `directive-tags.ts:144` callsite.
+ *
+ * `hideTrailingPartialEmotionTag: true` instructs the underlying stripper to
+ * also remove a trailing partial emotion fragment like `"[soft"` mid-stream
+ * (the option name reads from the *caller's* perspective: hide the partial tag
+ * from the visible UI). It maps to the lower-level `allowTrailingPartialTag`
+ * option in `sanitizeEmotionTagsForMode` — that name is "allow stripping" from
+ * the stripper's perspective. Keep both names; renaming the lower-level one
+ * would touch every caller of `stripEmotionTags`.
+ */
+export function sanitizeDirectiveAndEmotionTagsForDisplay(
+  text: string,
+  options?: { emotionMode?: EmotionMode; hideTrailingPartialEmotionTag?: boolean },
+): StripInlineDirectiveTagsResult {
+  const inline = stripInlineDirectiveTagsForDisplay(text);
+  if (options?.emotionMode === undefined) {
+    return inline;
+  }
+  const emotion = sanitizeEmotionTagsForMode(inline.text, options.emotionMode, {
+    allowTrailingPartialTag: options.hideTrailingPartialEmotionTag,
+  });
+  return {
+    text: emotion.text,
+    changed: inline.changed || emotion.changed,
+  };
+}
+
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -142,6 +178,7 @@ function isMessageTextPart(part: MessagePart): part is MessageTextPart {
  */
 export function stripInlineDirectiveTagsFromMessageForDisplay(
   message: DisplayMessageWithContent | undefined,
+  options?: { emotionMode?: EmotionMode; hideTrailingPartialEmotionTag?: boolean },
 ): DisplayMessageWithContent | undefined {
   if (!message) {
     return message;
@@ -157,7 +194,10 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
     if (!isMessageTextPart(record)) {
       return part;
     }
-    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
+    return {
+      ...record,
+      text: sanitizeDirectiveAndEmotionTagsForDisplay(record.text, options).text,
+    };
   });
   return { ...message, content: cleaned };
 }

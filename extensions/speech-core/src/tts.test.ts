@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { setReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
@@ -505,6 +505,213 @@ describe("speech-core native voice-note routing", () => {
       persona: "alfred",
       personaBinding: "applied",
     });
+  });
+
+  it("preserves expressive source text for tag-aware providers when ttsSourceText metadata is present", async () => {
+    const elevenSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+    });
+    installSpeechProviders([eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-pra-eleven-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      { ttsSourceText: "[warmly] Hello there, friend." },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(elevenSynthesize).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "[warmly] Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("falls back to plain visible text for providers without preserve_expressive_tags capability", async () => {
+    const plainSynthesize = vi.fn(synthesizeMock);
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+    });
+    installSpeechProviders([plain]);
+    const cfg = createTtsConfig("openclaw-tts-pra-plain-test");
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      { ttsSourceText: "[warmly] Hello there, friend." },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(plainSynthesize).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("routes per provider when an expressive primary fails over to a plain fallback", async () => {
+    const elevenSynthesize = vi.fn(async () => {
+      throw new Error("elevenlabs unavailable");
+    });
+    const plainSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+      autoSelectOrder: 1,
+    });
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([eleven, plain]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-pra-fallback-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      { ttsSourceText: "[warmly] Hello there, friend." },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(elevenSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "[warmly] Hello there, friend." }),
+      );
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("supplies expressive source text again when failing over from a plain primary to a tag-aware fallback", async () => {
+    const plainSynthesize = vi.fn(async () => {
+      throw new Error("mock unavailable");
+    });
+    const elevenSynthesize = vi.fn(synthesizeMock);
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 1,
+    });
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([plain, eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          prefsPath: `/tmp/openclaw-tts-pra-reverse-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      { ttsSourceText: "[warmly] Hello there, friend." },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      expect(elevenSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "[warmly] Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("leaves behavior unchanged when ttsSourceText metadata is absent", async () => {
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+    });
+    installSpeechProviders([eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-pra-no-metadata-test.json`,
+        },
+      },
+    };
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Hello there, friend." } satisfies ReplyPayload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(synthesizeMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
   });
 });
 

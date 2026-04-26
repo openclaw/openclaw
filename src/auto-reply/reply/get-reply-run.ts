@@ -15,6 +15,7 @@ import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeEmotionMode } from "../../emotion-mode.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
@@ -294,6 +295,21 @@ export async function runPreparedReply(
     execOverrides,
     abortedLastRun,
   } = params;
+  // PR-B notes:
+  // - Agent-level / global `emotionDefault` was dropped per Copilot review
+  //   (it rejected "full" while session mode accepts it). Resolve from session only.
+  // - Per chatgpt-codex P2 review on get-reply-run.ts:301: `params.sessionEntry`
+  //   is a snapshot taken before inline `/emotions` directive persistence in the
+  //   same request. Re-read from the session store (where directive-handling.persist
+  //   wrote the fresh value) so a `/emotions on` typed in the same message takes
+  //   effect for that very run instead of the next one.
+  const persistedSessionEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey }).existing
+    : undefined;
+  const effectiveEmotionMode =
+    normalizeEmotionMode(persistedSessionEntry?.emotionMode) ??
+    normalizeEmotionMode(sessionEntry?.emotionMode) ??
+    "off";
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
@@ -816,6 +832,7 @@ export async function runPreparedReply(
             sessionEntry: preparedSessionState.sessionEntry,
           }).enabled,
       verboseLevel: resolvedVerboseLevel,
+      emotionMode: effectiveEmotionMode,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,

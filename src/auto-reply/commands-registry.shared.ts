@@ -737,6 +737,23 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "emotions",
+      nativeName: "emotions",
+      description: "Toggle personality-mode emotion tags.",
+      textAlias: "/emotions",
+      category: "options",
+      tier: "standard",
+      args: [
+        {
+          name: "mode",
+          description: "on, off, or full",
+          type: "string",
+          choices: ["on", "off", "full"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "trace",
       nativeName: "trace",
       description: "Toggle plugin trace lines.",
