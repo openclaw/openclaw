@@ -1,32 +1,24 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { describe, expect, it } from "vitest";
 import { shouldExcludeProviderFromDefaultHighSignalLiveSweep } from "./live-model-filter.js";
 
-function hermeticProviderRegistryEnv(): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
-    VITEST: "1",
-  } as NodeJS.ProcessEnv;
+function resolveProviderOwners(provider: string): readonly string[] | undefined {
+  if (provider === "openai" || provider === "openai-codex") {
+    return ["openai"];
+  }
+  if (provider === "codex" || provider === "codex-cli") {
+    return ["codex"];
+  }
+  return undefined;
 }
 
 describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
-  beforeEach(() => {
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-  });
-
   it("excludes dedicated harness providers from the default high-signal sweep", () => {
-    const env = hermeticProviderRegistryEnv();
-
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
         provider: "codex",
         useExplicitModels: false,
         providerFilter: null,
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(true);
     expect(
@@ -34,7 +26,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: null,
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(true);
     expect(
@@ -42,20 +34,18 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "codex-cli",
         useExplicitModels: false,
         providerFilter: null,
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(true);
   });
 
   it("keeps dedicated harness providers when explicitly requested by provider filter", () => {
-    const env = hermeticProviderRegistryEnv();
-
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
         provider: "codex",
         useExplicitModels: false,
         providerFilter: new Set(["codex"]),
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(false);
     expect(
@@ -63,7 +53,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: new Set(["codex-cli"]),
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(false);
     expect(
@@ -71,7 +61,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: new Set(["openai"]),
-        env,
+        resolveProviderOwners,
       }),
     ).toBe(false);
   });
@@ -92,7 +82,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai",
         useExplicitModels: false,
         providerFilter: null,
-        env: hermeticProviderRegistryEnv(),
+        resolveProviderOwners,
       }),
     ).toBe(false);
   });

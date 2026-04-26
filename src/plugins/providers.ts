@@ -23,6 +23,8 @@ type ProviderManifestLoadParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 };
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
@@ -30,6 +32,9 @@ type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
 };
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
+  if (params.registry) {
+    return params.registry;
+  }
   return loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -138,12 +143,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   );
 }
 
-export function resolveEnabledProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-}): string[] {
+export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
