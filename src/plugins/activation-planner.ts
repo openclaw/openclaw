@@ -56,18 +56,21 @@ type ResolveManifestActivationPlanParams = {
   cache?: boolean;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
+  manifestRecords?: readonly PluginManifestRecord[];
 };
 
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    cache: params.cache,
-  });
+  const registry = params.manifestRecords
+    ? { plugins: params.manifestRecords, diagnostics: [] }
+    : loadPluginManifestRegistry({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        cache: params.cache,
+      });
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {

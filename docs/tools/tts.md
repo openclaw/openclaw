@@ -146,7 +146,8 @@ voice, model, style, or auto-TTS mode. The agent block deep-merges over
 }
 ```
 
-Precedence for automatic replies is:
+Precedence for automatic replies, `/tts audio`, `/tts status`, and the `tts`
+agent tool is:
 
 1. `messages.tts`
 2. active `agents.list[].tts`

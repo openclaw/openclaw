@@ -302,6 +302,23 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes ACP command source files to ACP command regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/auto-reply/reply/commands-acp.ts",
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ],
+    });
+  });
+
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",

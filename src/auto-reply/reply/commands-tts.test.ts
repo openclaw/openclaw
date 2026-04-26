@@ -38,9 +38,11 @@ const FALLBACK_TTS_PROVIDER = "backup-speech";
 function buildTtsParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
+  agentId?: string,
 ): Parameters<typeof handleTtsCommands>[0] {
   return {
     cfg,
+    agentId,
     command: {
       commandBodyNormalized,
       isAuthorizedSender: true,
@@ -188,5 +190,39 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("TTS status");
+  });
+
+  it("resolves status config for the active agent", async () => {
+    const cfg = {
+      agents: { list: [{ id: "reader", tts: { provider: "elevenlabs" } }] },
+    } as OpenClawConfig;
+
+    const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(ttsMocks.resolveTtsConfig).toHaveBeenCalledWith(cfg, "reader");
+  });
+
+  it("passes the active agent id to /tts audio synthesis", async () => {
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reader.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: true,
+    });
+    const cfg = {
+      agents: { list: [{ id: "reader", tts: { provider: PRIMARY_TTS_PROVIDER } }] },
+    } as OpenClawConfig;
+
+    const result = await handleTtsCommands(buildTtsParams("/tts audio hello", cfg, "reader"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(ttsMocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        cfg,
+        agentId: "reader",
+      }),
+    );
   });
 });
