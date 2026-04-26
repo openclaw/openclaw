@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "first-shadow",
+      "pattern": "\\bping\\b",
+      "capabilities": [],
+      "agent": "main",
+      "priority": 5
+    },
+    {
+      "id": "second-shadow",
+      "pattern": "\\bping\\b",
+      "capabilities": [],
+      "agent": "coder",
+      "priority": 5
+    }
+  ],
+  "default": { "agent": "main", "requireApproval": false },
+  "approvalRequired": [],
+  "approvalRequiredCapabilities": []
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "good-rule",
+      "pattern": "\\bhello\\b",
+      "capabilities": [],
+      "agent": "main",
+      "priority": 5
+    },
+    {
+      "id": "bad-regex",
+      "pattern": "[unterminated",
+      "capabilities": [],
+      "agent": "main",
+      "priority": 5
+    }
+  ],
+  "default": { "agent": "main", "requireApproval": false },
+  "approvalRequired": [],
+  "approvalRequiredCapabilities": []
+}
