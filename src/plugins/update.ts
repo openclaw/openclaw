@@ -417,13 +417,13 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
     delete nextEntries[fromId];
   }
 
-  const nextSlots =
-    slots?.memory === fromId
-      ? {
-          ...slots,
-          memory: toId,
-        }
-      : slots;
+  const nextSlots = slots
+    ? {
+        ...slots,
+        ...(slots.memory === fromId ? { memory: toId } : {}),
+        ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+      }
+    : undefined;
 
   return {
     ...cfg,

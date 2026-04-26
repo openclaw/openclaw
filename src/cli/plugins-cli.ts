@@ -634,6 +634,11 @@ export function registerPluginsCli(program: Command) {
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "${defaultSlotIdForKey("memory")}")`);
       }
+      if (cfg.plugins?.slots?.contextEngine === pluginId) {
+        preview.push(
+          `context engine slot (will reset to "${defaultSlotIdForKey("contextEngine")}")`,
+        );
+      }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
       const channels = cfg.channels as Record<string, unknown> | undefined;
       if (hasInstall && channels) {
@@ -722,6 +727,9 @@ export function registerPluginsCli(program: Command) {
       }
       if (result.actions.memorySlot) {
         removed.push("memory slot");
+      }
+      if (result.actions.contextEngineSlot) {
+        removed.push("context engine slot");
       }
       if (result.actions.channelConfig) {
         removed.push("channel config");

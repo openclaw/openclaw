@@ -365,6 +365,22 @@ describe("removePluginFromConfig", () => {
     expect(actions.memorySlot).toBe(expectedChanged);
   });
 
+  it("clears context engine slot when uninstalling active context engine plugin", () => {
+    const config = createPluginConfig({
+      entries: {
+        "context-plugin": { enabled: true },
+      },
+      slots: {
+        contextEngine: "context-plugin",
+      },
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
+
+    expect(result.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(actions.contextEngineSlot).toBe(true);
+  });
+
   it("removes plugins object when uninstall leaves only empty slots", () => {
     const config = createSinglePluginWithEmptySlotsConfig();
 

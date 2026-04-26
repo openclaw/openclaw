@@ -13,6 +13,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  contextEngineSlot: boolean;
   channelConfig: boolean;
   directory: boolean;
 };
@@ -155,6 +156,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    contextEngineSlot: false,
     channelConfig: false,
   };
 
@@ -204,7 +206,7 @@ export function removePluginFromConfig(
     }
   }
 
-  // Reset memory slot if this plugin was selected
+  // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
   if (slots?.memory === pluginId) {
     slots = {
@@ -212,6 +214,13 @@ export function removePluginFromConfig(
       memory: defaultSlotIdForKey("memory"),
     };
     actions.memorySlot = true;
+  }
+  if (slots?.contextEngine === pluginId) {
+    slots = {
+      ...slots,
+      contextEngine: defaultSlotIdForKey("contextEngine"),
+    };
+    actions.contextEngineSlot = true;
   }
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;

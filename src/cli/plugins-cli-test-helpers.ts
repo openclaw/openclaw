@@ -594,6 +594,7 @@ export function resetPluginsCliTestState() {
       allowlist: false,
       loadPath: false,
       memorySlot: false,
+      contextEngineSlot: false,
       directory: false,
     },
   });

@@ -876,6 +876,41 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.["voice-call"]).toBeUndefined();
   });
 
+  it("migrates context engine slot when a plugin id changes during update", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/context-engine",
+      targetDir: "/tmp/openclaw-context-engine",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          slots: { contextEngine: "context-engine" },
+          installs: {
+            "context-engine": {
+              source: "npm",
+              spec: "@openclaw/context-engine",
+              installPath: "/tmp/context-engine",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginIds: ["context-engine"],
+    });
+
+    expect(result.config.plugins?.slots?.contextEngine).toBe("@openclaw/context-engine");
+    expect(result.config.plugins?.installs?.["@openclaw/context-engine"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/context-engine",
+      installPath: "/tmp/openclaw-context-engine",
+      version: "0.0.2",
+    });
+    expect(result.config.plugins?.installs?.["context-engine"]).toBeUndefined();
+  });
+
   it("checks marketplace installs during dry-run updates", async () => {
     installPluginFromMarketplaceMock.mockResolvedValue({
       ok: true,

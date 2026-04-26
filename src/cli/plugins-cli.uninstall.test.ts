@@ -40,6 +40,9 @@ describe("plugins cli uninstall", () => {
             installPath: ALPHA_INSTALL_PATH,
           },
         },
+        slots: {
+          contextEngine: "alpha",
+        },
       },
     } as OpenClawConfig);
     buildPluginDiagnosticsReport.mockReturnValue({
@@ -53,6 +56,7 @@ describe("plugins cli uninstall", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("Dry run, no changes made."))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("context engine slot"))).toBe(true);
   });
 
   it("uninstalls with --force and --keep-files without prompting", async () => {
@@ -93,6 +97,7 @@ describe("plugins cli uninstall", () => {
         allowlist: false,
         loadPath: false,
         memorySlot: false,
+        contextEngineSlot: false,
         directory: false,
       },
     });
@@ -162,6 +167,7 @@ describe("plugins cli uninstall", () => {
         allowlist: false,
         loadPath: false,
         memorySlot: false,
+        contextEngineSlot: false,
         directory: false,
       },
     });
