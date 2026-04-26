@@ -849,7 +849,7 @@ async function maybeRestartService(params: {
           );
         }
         defaultRuntime.log("");
-        if (!health.healthy && health.versionMismatch) {
+        if (!health.healthy && (health.versionMismatch || health.activatedPluginErrors?.length)) {
           return false;
         }
       }

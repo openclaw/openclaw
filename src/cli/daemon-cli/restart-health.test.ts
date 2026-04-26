@@ -305,6 +305,107 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("marks matching-version restarts unhealthy when activated plugins failed to load", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+      health: {
+        ok: true,
+        plugins: {
+          errors: [
+            {
+              id: "telegram",
+              origin: "bundled",
+              activated: true,
+              error: "failed to install bundled runtime deps: ENOSPC",
+            },
+            {
+              id: "optional",
+              origin: "workspace",
+              activated: false,
+              error: "disabled plugin ignored",
+            },
+          ],
+        },
+      },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedVersion: "2026.4.24",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+      activatedPluginErrors: [
+        {
+          id: "telegram",
+          origin: "bundled",
+          activated: true,
+          error: "failed to install bundled runtime deps: ENOSPC",
+        },
+      ],
+    });
+    expect(snapshot.versionMismatch).toBeUndefined();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+
+    const { renderRestartDiagnostics } = await import("./restart-health.js");
+    expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
+      "Activated plugin load errors:\n- telegram: failed to install bundled runtime deps: ENOSPC",
+    );
+  });
+
+  it("stops waiting once the expected-version gateway reports activated plugin errors", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+      health: {
+        ok: true,
+        plugins: {
+          errors: [
+            {
+              id: "telegram",
+              origin: "bundled",
+              activated: true,
+              error: "failed to install bundled runtime deps: ENOSPC",
+            },
+          ],
+        },
+      },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: "plugin-errors",
+      elapsedMs: 0,
+      activatedPluginErrors: [expect.objectContaining({ id: "telegram" })],
+    });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
     const service = {
       readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),

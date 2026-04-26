@@ -96,5 +96,6 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
