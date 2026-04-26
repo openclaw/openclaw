@@ -10,7 +10,7 @@ vi.mock("./register.runtime.js", () => ({
   fetchCopilotUsage: vi.fn(),
 }));
 
-import plugin from "./index.js";
+import plugin, { mapCopilotWireModel } from "./index.js";
 
 function _registerProvider() {
   return registerProviderWithPluginConfig({});
@@ -115,5 +115,94 @@ describe("github-copilot plugin", () => {
         models: [],
       },
     });
+  });
+
+  it("maps Copilot /models capabilities into provider catalog metadata", () => {
+    const result = mapCopilotWireModel({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      capabilities: {
+        limits: {
+          max_context_window_tokens: 400_000,
+          max_output_tokens: 128_000,
+          vision: {
+            max_prompt_images: 1,
+          },
+        },
+        supports: {
+          reasoning_effort: ["none", "low", "medium", "high", "xhigh"],
+          vision: true,
+        },
+      },
+      supported_endpoints: ["/responses", "ws:/responses"],
+    });
+
+    expect(result).toMatchObject({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      metadataSource: "github-copilot:/models",
+    });
+  });
+
+  it("fetches Copilot /models during catalog discovery", async () => {
+    resolveCopilotApiTokenMock.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({});
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "gpt-5.5",
+                capabilities: {
+                  limits: {
+                    max_context_window_tokens: 400_000,
+                    max_output_tokens: 128_000,
+                  },
+                  supports: {
+                    reasoning_effort: ["none", "high"],
+                  },
+                },
+                supported_endpoints: ["/responses"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const result = await provider.catalog.run({
+      config: {},
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      fetchFn: fetchMock,
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.githubcopilot.live/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer copilot_api_token",
+          "Copilot-Integration-Id": "vscode-chat",
+        }),
+      }),
+    );
+    expect(result.provider.models).toEqual([
+      expect.objectContaining({
+        id: "gpt-5.5",
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    ]);
   });
 });
