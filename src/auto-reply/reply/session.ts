@@ -397,7 +397,7 @@ export async function initSessionState(params: {
   const sessionKey: string | undefined = canonicalizeMainSessionAlias({
     cfg,
     agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
   });
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
     sessionCfg,
