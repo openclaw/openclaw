@@ -583,8 +583,13 @@ export function applyJobResult(
 }
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
-  clearCronJobActive(result.jobId);
+  // Finalize the task ledger BEFORE clearing the active-jobs flag. The task
+  // registry maintenance sweep treats cron tasks as "lost" when they are still
+  // running AND `isCronJobActive(jobId)` returns false — clearing the flag
+  // first opens a tiny but real window where an in-flight sweep can
+  // mis-attribute a successful run as lost. See #71963.
   tryFinishCronTaskRun(state, result);
+  clearCronJobActive(result.jobId);
   const store = state.store;
   if (!store) {
     return;
