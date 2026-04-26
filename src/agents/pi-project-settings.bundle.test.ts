@@ -13,11 +13,11 @@ vi.mock("../infra/boundary-file-read.js", async () => {
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async () => {
+vi.mock("../plugins/manifest-registry-installed.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   return {
-    loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
+    loadPluginManifestRegistryForInstalledIndex: (params: { workspaceDir?: string }) => {
       const rootDir = path.join(
         params.workspaceDir ?? "",
         ".openclaw",
@@ -44,6 +44,10 @@ vi.mock("../plugins/manifest-registry.js", async () => {
     },
   };
 });
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+}));
 
 vi.mock("./embedded-pi-mcp.js", async () => {
   const fs = await import("node:fs");
