@@ -160,9 +160,13 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-The official OpenClaw Docker release image includes `diagnostics-otel`
-dependencies. To enable export, allow and enable the `diagnostics-otel` plugin
-in config, then set `diagnostics.otel.enabled=true` or use the config example in
+The official OpenClaw Docker release image includes the bundled
+`diagnostics-otel` plugin source. Depending on the image and cache state, the
+Gateway may still stage plugin-local OpenTelemetry runtime dependencies the
+first time the plugin is enabled, so allow that first boot to reach the package
+registry or prewarm the image in your release lane. To enable export, allow and
+enable the `diagnostics-otel` plugin in config, then set
+`diagnostics.otel.enabled=true` or use the config example in
 [OpenTelemetry export](/gateway/opentelemetry). Collector auth headers are
 configured through `diagnostics.otel.headers`, not through Docker environment
 variables.

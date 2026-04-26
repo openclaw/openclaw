@@ -123,6 +123,7 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
     providerAuthEnvVars: {
       demo: ["DEMO_API_KEY"],
     },
+    syntheticAuthRefs: ["demo", "demo-cli"],
     channelEnvVars: {
       "demo-chat": ["DEMO_CHAT_TOKEN"],
     },
@@ -182,6 +183,7 @@ describe("installed plugin index", () => {
           rootDir: fixture.rootDir,
           source: path.join(fixture.rootDir, "index.ts"),
           enabled: true,
+          syntheticAuthRefs: ["demo", "demo-cli"],
           packageInstall: {
             defaultChoice: "npm",
             npm: {
