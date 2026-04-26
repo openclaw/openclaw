@@ -119,9 +119,9 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown } {
+function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent };
+  return { agent: options.agent, wsConfig: options.wsConfig };
 }
 
 beforeAll(async () => {
@@ -345,6 +345,16 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
+  it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
+    await createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    expect(options.wsConfig).toEqual({
+      PingInterval: 30,
+      PingTimeout: 3,
+    });
+  });
+
   it("does not set a ws proxy agent when proxy env is absent", async () => {
     await createFeishuWSClient(baseAccount);
 
