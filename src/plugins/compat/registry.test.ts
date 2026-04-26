@@ -35,8 +35,12 @@ describe("plugin compatibility registry", () => {
       expect(record.deprecated, record.code).toMatch(datePattern);
       expect(record.warningStarts, record.code).toMatch(datePattern);
       expect(record.removeAfter, record.code).toMatch(datePattern);
+      if (!record.warningStarts || !record.removeAfter) {
+        throw new Error(`${record.code} is missing deprecation window dates`);
+      }
       const maxRemoveAfter = addUtcMonths(parseDate(record.warningStarts), 3);
-      expect(parseDate(record.removeAfter) <= maxRemoveAfter, record.code).toBe(true);
+      const removeAfter = parseDate(record.removeAfter);
+      expect(removeAfter <= maxRemoveAfter, record.code).toBe(true);
       expect(record.replacement, record.code).toBeTruthy();
       expect(record.docsPath, record.code).toMatch(/^\//u);
     }
