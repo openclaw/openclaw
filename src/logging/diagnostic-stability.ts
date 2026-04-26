@@ -345,6 +345,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.pluginId = event.pluginId;
       assignReasonCode(record, event.reason);
       break;
+    case "telemetry.exporter":
+      record.source = event.exporter;
+      record.target = event.signal;
+      record.outcome = event.status;
+      assignReasonCode(record, event.reason ?? event.errorCategory);
+      break;
   }
 
   return record;

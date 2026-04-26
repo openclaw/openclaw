@@ -166,6 +166,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
               },
+              tracesEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Traces Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+              },
+              metricsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Metrics Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+              },
+              logsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Logs Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
+              },
               protocol: {
                 anyOf: [
                   {
@@ -23451,6 +23469,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.otel.endpoint": {
       label: "OpenTelemetry Endpoint",
       help: "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.tracesEndpoint": {
+      label: "OpenTelemetry Traces Endpoint",
+      help: "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.metricsEndpoint": {
+      label: "OpenTelemetry Metrics Endpoint",
+      help: "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.logsEndpoint": {
+      label: "OpenTelemetry Logs Endpoint",
+      help: "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
       tags: ["observability"],
     },
     "diagnostics.otel.protocol": {
