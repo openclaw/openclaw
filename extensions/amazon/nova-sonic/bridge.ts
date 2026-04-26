@@ -8,8 +8,8 @@ import type {
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { getAwsClient } from "../shared/client-cache.js";
 import { mulawToPcm16, pcm16ToMulaw } from "../shared/audio-utils.js";
+import { getAwsClient } from "../shared/client-cache.js";
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -83,9 +83,11 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     throw new Error("Nova Sonic does not support text-only input; use audio");
   }
 
-  triggerGreeting?(instructions?: string): void {
+  triggerGreeting?(_instructions?: string): void {
     // Send a brief silent frame to prompt Nova Sonic to begin with its system prompt
-    if (!this.connected) { return; }
+    if (!this.connected) {
+      return;
+    }
     const silentPcm = Buffer.alloc(3200); // 100ms of silence at 16kHz 16-bit mono
     this.enqueueEvent({
       event: { type: "audioInput" },
@@ -104,7 +106,9 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   }
 
   acknowledgeMark(): void {
-    if (this.markQueue.length === 0) { return; }
+    if (this.markQueue.length === 0) {
+      return;
+    }
     this.markQueue.shift();
     if (this.markQueue.length === 0) {
       this.responseStartTimestamp = null;
@@ -146,9 +150,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
           },
           sessionAttributes: {},
         },
-        ...(this.config.instructions
-          ? { systemPrompt: { text: this.config.instructions } }
-          : {}),
+        ...(this.config.instructions ? { systemPrompt: { text: this.config.instructions } } : {}),
         ...(this.config.tools && this.config.tools.length > 0
           ? {
               toolConfig: {
@@ -168,16 +170,28 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
 
   private async doConnect(): Promise<void> {
     const sessionConfig = this.buildSessionConfig();
-    const self = this;
+    // Capture instance properties needed by the generator (generators cannot
+    // use arrow syntax, so direct `this` access is unavailable).
+    const bridge = {
+      intentionallyClosed: () => this.intentionallyClosed,
+      inputStream: this.inputStream,
+      setInputResolve: (resolve: (v: boolean) => void) => {
+        this.inputResolve = resolve;
+      },
+    };
 
     async function* inputGenerator() {
       yield { chunk: { bytes: encodeEvent(sessionConfig) } };
-      while (!self.intentionallyClosed) {
-        if (self.inputStream.length > 0) {
-          const batch = self.inputStream.splice(0);
-          for (const item of batch) { yield item; }
+      while (!bridge.intentionallyClosed()) {
+        if (bridge.inputStream.length > 0) {
+          const batch = bridge.inputStream.splice(0);
+          for (const item of batch) {
+            yield item;
+          }
         } else {
-          await new Promise<boolean>((resolve) => { self.inputResolve = resolve; });
+          await new Promise<boolean>((resolve) => {
+            bridge.setInputResolve(resolve);
+          });
         }
       }
       yield { chunk: { bytes: encodeEvent({ event: { type: "sessionEnd" } }) } };
@@ -216,7 +230,9 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private async attemptReconnect(): Promise<void> {
-    if (this.intentionallyClosed) { return; }
+    if (this.intentionallyClosed) {
+      return;
+    }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.config.onClose?.("error");
       return;
@@ -224,7 +240,9 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     this.reconnectAttempts += 1;
     const delay = BASE_RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
     await new Promise((resolve) => setTimeout(resolve, delay));
-    if (this.intentionallyClosed) { return; }
+    if (this.intentionallyClosed) {
+      return;
+    }
     try {
       await this.doConnect();
     } catch {
@@ -238,19 +256,29 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     this.inputResolve = null;
   }
 
-  private async processOutputStream(response: InvokeModelWithBidirectionalStreamCommandOutput): Promise<void> {
+  private async processOutputStream(
+    response: InvokeModelWithBidirectionalStreamCommandOutput,
+  ): Promise<void> {
     try {
       const body = response.body;
-      if (!body) { return; }
+      if (!body) {
+        return;
+      }
 
       for await (const event of body) {
-        if (this.intentionallyClosed) { break; }
+        if (this.intentionallyClosed) {
+          break;
+        }
         const bytes = (event as { chunk?: { bytes?: Uint8Array } }).chunk?.bytes;
-        if (!bytes) { continue; }
+        if (!bytes) {
+          continue;
+        }
 
         const decoded = new TextDecoder().decode(bytes);
         for (const line of decoded.split("\n")) {
-          if (!line.trim()) { continue; }
+          if (!line.trim()) {
+            continue;
+          }
           try {
             this.handleOutputEvent(JSON.parse(line));
           } catch {
@@ -274,14 +302,19 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private handleOutputEvent(event: { event?: { type?: string }; data?: Record<string, unknown> }): void {
+  private handleOutputEvent(event: {
+    event?: { type?: string };
+    data?: Record<string, unknown>;
+  }): void {
     const type = event.event?.type;
     const data = event.data;
 
     switch (type) {
       case "audioOutput": {
         const chunk = data?.audioChunk as string | undefined;
-        if (!chunk) { return; }
+        if (!chunk) {
+          return;
+        }
         // Convert PCM output to mu-law for OpenClaw telephony
         const pcmAudio = Buffer.from(chunk, "base64");
         const mulawAudio = pcm16ToMulaw(pcmAudio);
@@ -296,9 +329,11 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
       case "textOutput":
       case "transcriptOutput": {
         const text = (data?.text ?? data?.transcript) as string | undefined;
-        if (!text) { return; }
-        const role = (data?.role as string) === "user" ? "user" as const : "assistant" as const;
-        const isFinal = (data?.isFinal as boolean) ?? (type === "textOutput");
+        if (!text) {
+          return;
+        }
+        const role = (data?.role as string) === "user" ? ("user" as const) : ("assistant" as const);
+        const isFinal = (data?.isFinal as boolean) ?? type === "textOutput";
         this.config.onTranscript?.(role, text, isFinal);
         return;
       }
