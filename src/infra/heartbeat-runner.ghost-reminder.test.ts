@@ -550,7 +550,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(options?.messageThreadId).toBeUndefined();
     });
   });
-  it("keeps exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
+  it("keeps failed exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -586,7 +586,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const getReplySpy = vi.fn().mockResolvedValue({
         text: "The review-worker spawn finished successfully.",
       });
-      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+      enqueueSystemEvent("Exec failed (review-run, code 1) :: review worker failed", {
         sessionKey,
         trusted: false,
         deliveryContext: {
@@ -614,6 +614,75 @@ describe("Ghost reminder bug (issue #13317)", () => {
         "The review-worker spawn finished successfully.",
         expect.objectContaining({ messageThreadId: 47 }),
       );
+    });
+  });
+
+  it("keeps successful exec completions internal even when a chat target is available", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:telegram:direct:123";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:123",
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "123",
+      });
+      const getReplySpy = vi.fn().mockResolvedValue({
+        text: "The async command completed successfully.",
+      });
+      enqueueSystemEvent("Exec completed (abc12345, code 0) :: tests passed", {
+        sessionKey,
+        trusted: false,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Provider: "exec-event",
+          Body: expect.stringContaining("reply HEARTBEAT_OK only"),
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(getReplySpy.mock.calls[0]?.[0]?.Body).not.toContain("tests passed");
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 

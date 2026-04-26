@@ -4,6 +4,8 @@ import {
   buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isSuccessfulExecCompletionEvent,
+  shouldRelayExecCompletionEvents,
 } from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
@@ -46,12 +48,19 @@ describe("heartbeat event prompts", () => {
 
   it.each([
     {
+      name: "keeps structured successful exec completions internal by default",
+      events: ["Exec completed (abc12345, code 0) :: tests passed"],
+      opts: undefined,
+      expected: ["completed successfully", "reply HEARTBEAT_OK only"],
+      unexpected: ["tests passed", "Please relay the command output to the user"],
+    },
+    {
       name: "builds user-relay exec prompt by default",
-      events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
+      events: ["Exec failed (abc12345, code 1) :: Upload failed"],
       opts: undefined,
       expected: [
-        "Exec finished",
-        "Uploaded file",
+        "Exec failed",
+        "Upload failed",
         "Please relay the command output to the user",
         "If it failed",
       ],
@@ -86,10 +95,34 @@ describe("heartbeat event prompts", () => {
   });
 
   it("truncates oversized user-relay exec prompt output", () => {
-    const prompt = buildExecEventPrompt([`Exec finished: ${"x".repeat(8_100)}`]);
+    const prompt = buildExecEventPrompt([`Exec failed (abc12345, code 1) :: ${"x".repeat(8_100)}`]);
 
     expect(prompt).toContain("[truncated]");
     expect(prompt.length).toBeLessThan(8_500);
+  });
+
+  it("strips successful exec completion output from mixed user-relay batches", () => {
+    const prompt = buildExecEventPrompt([
+      "Exec completed (success1, code 0) :: secret success output",
+      "Exec failed (failed1, code 1) :: actionable failure",
+    ]);
+
+    expect(prompt).toContain("Exec failed");
+    expect(prompt).toContain("actionable failure");
+    expect(prompt).not.toContain("secret success output");
+  });
+
+  it("only relays exec completions with failures or ambiguous legacy status", () => {
+    expect(shouldRelayExecCompletionEvents(["Exec completed (abc12345, code 0) :: ok"])).toBe(
+      false,
+    );
+    expect(shouldRelayExecCompletionEvents(["Exec failed (abc12345, code 1) :: failed"])).toBe(
+      true,
+    );
+    expect(shouldRelayExecCompletionEvents(["Exec completed (abc12345, signal SIGTERM)"])).toBe(
+      true,
+    );
+    expect(shouldRelayExecCompletionEvents(["Exec finished: legacy completion"])).toBe(true);
   });
 });
 
@@ -106,6 +139,16 @@ describe("heartbeat event classification", () => {
     { value: "cron finished", expected: false },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
     expect(isExecCompletionEvent(value)).toBe(expected);
+  });
+
+  it.each([
+    { value: "Exec completed (abc12345, code 0)", expected: true },
+    { value: "Exec completed (abc12345, code 0) :: output", expected: true },
+    { value: "Exec completed (abc12345, code 1)", expected: false },
+    { value: "Exec failed (abc12345, code 0)", expected: false },
+    { value: "Exec finished: legacy completion", expected: false },
+  ])("classifies successful exec completion events for %j", ({ value, expected }) => {
+    expect(isSuccessfulExecCompletionEvent(value)).toBe(expected);
   });
 
   it.each([

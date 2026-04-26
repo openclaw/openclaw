@@ -73,6 +73,7 @@ import {
   buildCronEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  shouldRelayExecCompletionEvents,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
@@ -644,6 +645,7 @@ type HeartbeatPromptResolution = {
   prompt: string | null;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  suppressUserDelivery: boolean;
 };
 
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
@@ -709,19 +711,34 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }
       }
-      return { prompt, hasExecCompletion: false, hasCronEvents: false };
+      return {
+        prompt,
+        hasExecCompletion: false,
+        hasCronEvents: false,
+        suppressUserDelivery: false,
+      };
     }
-    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      hasCronEvents: false,
+      suppressUserDelivery: false,
+    };
   }
 
+  const shouldRelayExecEvents = hasExecCompletion && shouldRelayExecCompletionEvents(execEvents);
+  const suppressUserDelivery = hasExecCompletion && !shouldRelayExecEvents;
+
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(execEvents, {
+        deliverToUser: params.canRelayToUser && shouldRelayExecEvents,
+      })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
 
-  return { prompt, hasExecCompletion, hasCronEvents };
+  return { prompt, hasExecCompletion, hasCronEvents, suppressUserDelivery };
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -841,15 +858,16 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    workspaceDir,
-    startedAt,
-    heartbeatFileContent: preflight.heartbeatFileContent,
-  });
+  const { prompt, hasExecCompletion, hasCronEvents, suppressUserDelivery } =
+    resolveHeartbeatRunPrompt({
+      cfg,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      workspaceDir,
+      startedAt,
+      heartbeatFileContent: preflight.heartbeatFileContent,
+    });
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1194,6 +1212,21 @@ export async function runHeartbeatOnce(opts: {
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
+        accountId: delivery.accountId,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
+    if (suppressUserDelivery) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "internal-exec-completion",
+        preview: previewText?.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        hasMedia: mediaUrls.length > 0,
+        channel: delivery.channel,
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();

@@ -2,6 +2,10 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+const STRUCTURED_EXEC_COMPLETION_RE =
+  /^exec (completed|failed) \([a-z0-9_-]{1,64}, (code -?\d+|signal [^)]+)\)( :: .*)?$/;
+const SUCCESSFUL_STRUCTURED_EXEC_COMPLETION_RE =
+  /^exec completed \([a-z0-9_-]{1,64}, code 0\)( :: .*)?$/;
 
 // Build a dynamic prompt for cron events by embedding the actual event content.
 // This ensures the model sees the reminder text directly instead of relying on
@@ -44,8 +48,12 @@ export function buildExecEventPrompt(
   pendingEvents: string[],
   opts?: { deliverToUser?: boolean },
 ): string {
-  const deliverToUser = opts?.deliverToUser ?? true;
-  const rawEventText = pendingEvents.join("\n").trim();
+  const deliverToUser =
+    (opts?.deliverToUser ?? true) && shouldRelayExecCompletionEvents(pendingEvents);
+  const relayedEvents = deliverToUser
+    ? pendingEvents.filter((event) => !isSuccessfulExecCompletionEvent(event))
+    : pendingEvents;
+  const rawEventText = relayedEvents.join("\n").trim();
   const eventText =
     rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
       ? `${rawEventText.slice(0, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
@@ -54,6 +62,13 @@ export function buildExecEventPrompt(
     return (
       "An async command completion event was triggered, but no command output was found. " +
       "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
+    );
+  }
+  if (shouldKeepExecCompletionInternal(pendingEvents)) {
+    return (
+      "An async command completed successfully. " +
+      "Handle the result internally and reply HEARTBEAT_OK only unless you need to continue the task with tools. " +
+      "Do not relay, summarize, or reuse the command output in a user-facing reply."
     );
   }
   if (!deliverToUser) {
@@ -105,11 +120,26 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 export function isExecCompletionEvent(evt: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(evt).trimStart();
   return (
-    /^exec finished(?::|\s*\()/.test(normalized) ||
-    /^exec (completed|failed) \([a-z0-9_-]{1,64}, (code -?\d+|signal [^)]+)\)( :: .*)?$/.test(
-      normalized,
-    )
+    /^exec finished(?::|\s*\()/.test(normalized) || STRUCTURED_EXEC_COMPLETION_RE.test(normalized)
   );
+}
+
+export function isSuccessfulExecCompletionEvent(evt: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(evt).trimStart();
+  return SUCCESSFUL_STRUCTURED_EXEC_COMPLETION_RE.test(normalized);
+}
+
+export function shouldRelayExecCompletionEvents(events: string[]): boolean {
+  const execEvents = events.filter(isExecCompletionEvent);
+  if (execEvents.length === 0) {
+    return true;
+  }
+  return execEvents.some((event) => !isSuccessfulExecCompletionEvent(event));
+}
+
+function shouldKeepExecCompletionInternal(events: string[]): boolean {
+  const execEvents = events.filter(isExecCompletionEvent);
+  return execEvents.length > 0 && execEvents.every(isSuccessfulExecCompletionEvent);
 }
 
 // Returns true when a system event should be treated as real cron reminder content.
