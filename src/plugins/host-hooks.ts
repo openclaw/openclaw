@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
@@ -7,12 +6,25 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
+import { isPluginJsonValue } from "./host-hook-json.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
+import type {
+  PluginAgentTurnPrepareResult,
+  PluginNextTurnInjectionRecord,
+} from "./host-hook-turn-types.js";
 
-export type PluginJsonPrimitive = string | number | boolean | null;
-export type PluginJsonValue =
-  | PluginJsonPrimitive
-  | PluginJsonValue[]
-  | { [key: string]: PluginJsonValue };
+export { isPluginJsonValue } from "./host-hook-json.js";
+export type { PluginJsonPrimitive, PluginJsonValue } from "./host-hook-json.js";
+export type {
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionPlacement,
+  PluginNextTurnInjectionRecord,
+} from "./host-hook-turn-types.js";
 
 export type PluginHostCleanupReason = "disable" | "reset" | "delete" | "restart";
 
@@ -43,31 +55,6 @@ export type PluginSessionExtensionPatchParams = {
   namespace: string;
   value?: PluginJsonValue;
   unset?: boolean;
-};
-
-export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
-
-export type PluginNextTurnInjection = {
-  sessionKey: string;
-  text: string;
-  idempotencyKey?: string;
-  placement?: PluginNextTurnInjectionPlacement;
-  ttlMs?: number;
-  metadata?: PluginJsonValue;
-};
-
-export type PluginNextTurnInjectionRecord = Omit<PluginNextTurnInjection, "sessionKey"> & {
-  id: string;
-  pluginId: string;
-  pluginName?: string;
-  createdAt: number;
-  placement: PluginNextTurnInjectionPlacement;
-};
-
-export type PluginNextTurnInjectionEnqueueResult = {
-  enqueued: boolean;
-  id: string;
-  sessionKey: string;
 };
 
 export type PluginToolPolicyDecision =
@@ -166,52 +153,8 @@ export type PluginSessionSchedulerJobHandle = {
   kind: string;
 };
 
-export type PluginAgentTurnPrepareEvent = {
-  prompt: string;
-  messages: AgentMessage[] | unknown[];
-  queuedInjections: PluginNextTurnInjectionRecord[];
-};
-
-export type PluginAgentTurnPrepareResult = {
-  prependContext?: string;
-  appendContext?: string;
-};
-
-export type PluginHeartbeatPromptContributionEvent = {
-  sessionKey?: string;
-  agentId?: string;
-  heartbeatName?: string;
-};
-
-export type PluginHeartbeatPromptContributionResult = {
-  prependContext?: string;
-  appendContext?: string;
-};
-
 export function normalizePluginHostHookId(value: string | undefined): string {
   return (value ?? "").trim();
-}
-
-export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return typeof value !== "number" || Number.isFinite(value);
-  }
-  if (Array.isArray(value)) {
-    return value.every(isPluginJsonValue);
-  }
-  if (typeof value !== "object") {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    return false;
-  }
-  return Object.values(value as Record<string, unknown>).every(isPluginJsonValue);
 }
 
 export function buildPluginAgentTurnPrepareContext(params: {

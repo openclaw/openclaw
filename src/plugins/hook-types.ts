@@ -34,7 +34,7 @@ import type {
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
-} from "./host-hooks.js";
+} from "./host-hook-turn-types.js";
 
 export type {
   PluginHookBeforeAgentStartEvent,
@@ -55,7 +55,7 @@ export type {
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
-} from "./host-hooks.js";
+} from "./host-hook-turn-types.js";
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
