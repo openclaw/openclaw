@@ -127,6 +127,12 @@ describe("memory_search unavailable payloads", () => {
       expect.any(Number),
     );
   });
+});
+
+describe("memory_search corpus labels", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
 
   it("uses explicit plugin context agent over synthetic active-memory session keys", async () => {
     const tool = createMemorySearchToolOrThrow({
