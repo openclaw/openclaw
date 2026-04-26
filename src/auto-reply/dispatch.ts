@@ -22,11 +22,7 @@ import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
-function resolveDispatcherSilentReplyContext(
-  ctx: MsgContext | FinalizedMsgContext,
-  cfg: OpenClawConfig,
-) {
-  const finalized = finalizeInboundContext(ctx);
+function resolveDispatcherSilentReplyContext(finalized: FinalizedMsgContext, cfg: OpenClawConfig) {
   const policySessionKey =
     finalized.CommandSource === "native"
       ? (finalized.CommandTargetSessionKey ?? finalized.SessionKey)
@@ -64,14 +60,13 @@ function resolveInboundReplyHookTarget(
 }
 
 function buildMessageSendingBeforeDeliver(
-  ctx: MsgContext | FinalizedMsgContext,
+  finalized: FinalizedMsgContext,
 ): ReplyDispatchBeforeDeliver | undefined {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("message_sending")) {
     return undefined;
   }
 
-  const finalized = finalizeInboundContext(ctx);
   const hookCtx = deriveInboundMessageHookContext(finalized);
   const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
 
@@ -118,19 +113,18 @@ function finalizeDispatchResult(
   };
 }
 
-export async function dispatchInboundMessage(params: {
-  ctx: MsgContext | FinalizedMsgContext;
+async function runInboundDispatch(params: {
+  ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const finalized = finalizeInboundContext(params.ctx);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
       dispatchReplyFromConfig({
-        ctx: finalized,
+        ctx: params.ctx,
         cfg: params.cfg,
         dispatcher: params.dispatcher,
         replyOptions: params.replyOptions,
@@ -140,6 +134,19 @@ export async function dispatchInboundMessage(params: {
   return finalizeDispatchResult(result, params.dispatcher);
 }
 
+export async function dispatchInboundMessage(params: {
+  ctx: MsgContext | FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  replyResolver?: GetReplyFromConfig;
+}): Promise<DispatchInboundResult> {
+  return runInboundDispatch({
+    ...params,
+    ctx: finalizeInboundContext(params.ctx),
+  });
+}
+
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -147,9 +154,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const finalized = finalizeInboundContext(params.ctx);
+  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const beforeDeliver =
-    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx);
+    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
@@ -157,8 +165,8 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   try {
-    return await dispatchInboundMessage({
-      ctx: params.ctx,
+    return await runInboundDispatch({
+      ctx: finalized,
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
@@ -180,15 +188,16 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const finalized = finalizeInboundContext(params.ctx);
+  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
     beforeDeliver:
-      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx),
+      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized),
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
-  return await dispatchInboundMessage({
-    ctx: params.ctx,
+  return await runInboundDispatch({
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,

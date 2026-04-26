@@ -213,7 +213,39 @@ describe("withReplyDispatcher", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 
+  it("finalizes buffered dispatcher context once across setup and dispatch", async () => {
+    const ctx = buildTestCtx();
+    hoisted.finalizeInboundContextMock.mockClear();
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(hoisted.finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
+    const ctx = buildTestCtx({
+      From: "whatsapp:+15551234567",
+      To: "whatsapp:+15557654321",
+      OriginatingTo: "whatsapp:+15551234567",
+    });
+    hoisted.finalizeInboundContextMock.mockClear();
     const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
@@ -223,11 +255,7 @@ describe("withReplyDispatcher", () => {
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
     await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({
-        From: "whatsapp:+15551234567",
-        To: "whatsapp:+15557654321",
-        OriginatingTo: "whatsapp:+15551234567",
-      }),
+      ctx,
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
         deliver: async () => undefined,
@@ -252,6 +280,7 @@ describe("withReplyDispatcher", () => {
         conversationId: "conv-1",
       },
     );
+    expect(hoisted.finalizeInboundContextMock).toHaveBeenCalledTimes(1);
   });
 
   it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {
