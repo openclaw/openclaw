@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -38,6 +39,16 @@ export type InboundDedupeClaimResult =
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
+function resolveInboundContentFingerprint(ctx: MsgContext): string | null {
+  const body = normalizeOptionalString(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body);
+  if (!body) {
+    return null;
+  }
+  const timestamp =
+    ctx.Timestamp !== undefined && ctx.Timestamp !== null ? String(ctx.Timestamp) : "";
+  return createHash("sha256").update(`${timestamp}|${body}`, "utf8").digest("hex").slice(0, 32);
+}
+
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
     resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
@@ -57,11 +68,15 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);
-  if (!provider || !messageId) {
+  if (!provider) {
     return null;
   }
   const peerId = resolveInboundPeerId(ctx);
   if (!peerId) {
+    return null;
+  }
+  const messageKey = messageId ?? `content:${resolveInboundContentFingerprint(ctx) ?? ""}`;
+  if (messageKey === "content:") {
     return null;
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
@@ -72,7 +87,7 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     accountId,
     threadId: ctx.MessageThreadId,
   });
-  return JSON.stringify([sessionScope, routeKey, messageId]);
+  return JSON.stringify([sessionScope, routeKey, messageKey]);
 }
 
 export function shouldSkipDuplicateInbound(
