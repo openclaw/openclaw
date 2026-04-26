@@ -76,6 +76,7 @@ type PendingPrompt = {
   disconnectContext?: DisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
+  sentMessageId?: string;
   sentTextLength?: number;
   sentText?: string;
   sentThoughtLength?: number;
@@ -167,12 +168,17 @@ type GatewayChatContentBlock = {
   type?: string;
   text?: string;
   thinking?: string;
+  url?: unknown;
+  openUrl?: unknown;
+  uri?: unknown;
 };
 
 type ReplayChunk = {
   sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
   text: string;
 };
+
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f-\x9f]/g;
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
@@ -340,6 +346,15 @@ function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
       });
       continue;
     }
+    const mediaLinkText =
+      role === "assistant" ? formatGeneratedMediaLinkText(typedBlock) : undefined;
+    if (mediaLinkText) {
+      replayChunks.push({
+        sessionUpdate: "agent_message_chunk",
+        text: mediaLinkText,
+      });
+      continue;
+    }
     if (
       role === "assistant" &&
       typedBlock.type === "thinking" &&
@@ -353,6 +368,62 @@ function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
     }
   }
   return replayChunks;
+}
+
+function normalizeDisplayUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(CONTROL_CHAR_RE, "").trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function formatGeneratedMediaLinkText(block: GatewayChatContentBlock): string | undefined {
+  if (block.type !== "image") {
+    return undefined;
+  }
+  const url =
+    normalizeDisplayUrl(block.openUrl) ??
+    normalizeDisplayUrl(block.url) ??
+    normalizeDisplayUrl(block.uri);
+  return url ? `Generated image: ${url}` : undefined;
+}
+
+function formatAssistantMessageText(content: GatewayChatContentBlock[] | undefined) {
+  const parts: string[] = [];
+  for (const block of content ?? []) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      continue;
+    }
+    const typedBlock = block as GatewayChatContentBlock;
+    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
+      parts.push(typedBlock.text);
+      continue;
+    }
+    const mediaLinkText = formatGeneratedMediaLinkText(typedBlock);
+    if (mediaLinkText) {
+      parts.push(mediaLinkText);
+    }
+  }
+  const text = parts.join("\n").trimEnd();
+  return text || undefined;
+}
+
+function readGatewayMessageId(messageData: Record<string, unknown>): string | undefined {
+  const openclaw = messageData.__openclaw;
+  if (openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)) {
+    const id = (openclaw as { id?: unknown }).id;
+    if (typeof id === "string" && id.trim()) {
+      return id;
+    }
+  }
+  for (const key of ["messageId", "id", "idempotencyKey"]) {
+    const value = messageData[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function buildSessionMetadata(params: {
@@ -980,6 +1051,14 @@ export class AcpGatewayAgent implements Agent {
     if (!pending) {
       return;
     }
+    const messageId = readGatewayMessageId(messageData);
+    if (messageId && pending.sentMessageId !== messageId) {
+      pending.sentMessageId = messageId;
+      pending.sentTextLength = 0;
+      pending.sentText = undefined;
+      pending.sentThoughtLength = 0;
+      pending.sentThought = undefined;
+    }
 
     const fullThought = content
       ?.filter((block) => block?.type === "thinking")
@@ -1000,11 +1079,7 @@ export class AcpGatewayAgent implements Agent {
       });
     }
 
-    const fullText = content
-      ?.filter((block) => block?.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n")
-      .trimEnd();
+    const fullText = formatAssistantMessageText(content);
     const sentSoFar = pending.sentTextLength ?? 0;
     if (!fullText || fullText.length <= sentSoFar) {
       return;

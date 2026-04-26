@@ -375,6 +375,18 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("prints a generated image link for ACP image results after a silent marker", async () => {
+    await withAcpSessionEnv(async () => {
+      const imageLink =
+        "Generated image: /api/chat/media/outgoing/agent%3Amain%3Atui/test-attachment/full";
+      const result = await runAcpTurnWithAssistantEvents(["NO_REPLY", imageLink]);
+
+      expect(result.assistantEvents).toEqual([{ text: imageLink, delta: imageLink }]);
+      expect(result.logLines).toContain(imageLink);
+      expect(result.logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+    });
+  });
+
   it("fails closed for ACP-shaped session keys missing ACP metadata", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

@@ -291,7 +291,10 @@ describe("acp session UX bridge behavior", () => {
               ],
             },
             { role: "system", content: [{ type: "text", text: "ignore me" }] },
-            { role: "assistant", content: [{ type: "image", image: "skip" }] },
+            {
+              role: "assistant",
+              content: [{ type: "image", openUrl: "/api/chat/media/outgoing/session/att/full" }],
+            },
           ],
         };
       }
@@ -350,6 +353,16 @@ describe("acp session UX bridge behavior", () => {
       update: {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "Answer" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "Generated image: /api/chat/media/outgoing/session/att/full",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
