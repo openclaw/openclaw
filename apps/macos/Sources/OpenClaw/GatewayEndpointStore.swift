@@ -80,7 +80,7 @@ actor GatewayEndpointStore {
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
     }
 
-    struct SecretInputResolver: Sendable {
+    struct SecretInputResolver {
         typealias SecurityRunner = @Sendable (_ service: String, _ account: String) -> String?
 
         let securityRunner: SecurityRunner
@@ -99,7 +99,9 @@ actor GatewayEndpointStore {
 
         func resolve(_ input: Any?) async -> String? {
             guard let secret = self.parse(input) else { return self.resolvePlainString(input) }
-            guard let raw = await Task.detached(priority: .utility, operation: { self.securityRunner(secret.service, secret.account) }).value else { return nil }
+            guard let raw = await Task.detached(
+                priority: .utility,
+                operation: { self.securityRunner(secret.service, secret.account) }).value else { return nil }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
@@ -120,12 +122,15 @@ actor GatewayEndpointStore {
         private func parse(_ input: Any?) -> (service: String, account: String)? {
             guard let ref = input as? [String: Any] else { return nil }
             guard (ref["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "exec",
-                  (ref["provider"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keychain"
+                  (ref[
+                      "provider",
+                  ] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keychain"
             else { return nil }
             guard let rawID = ref["id"] as? String else { return nil }
             let account = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !account.isEmpty else { return nil }
-            let service = ((ref["service"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "openclaw"
+            let service = ((ref["service"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "openclaw"
             return (service: service, account: account)
         }
 
@@ -288,7 +293,6 @@ actor GatewayEndpointStore {
         return nil
     }
 
-
     private static func resolveGatewayPasswordSync(
         isRemote: Bool,
         root: [String: Any],
@@ -299,11 +303,17 @@ actor GatewayEndpointStore {
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        if let configPassword = self.resolveConfigPasswordSync(isRemote: isRemote, root: root, secretResolver: secretResolver) {
+        if let configPassword = self.resolveConfigPasswordSync(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
+        {
             return configPassword
         }
         guard !isRemote else { return nil }
-        if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+        if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !password.isEmpty
+        {
             return password
         }
         return nil
@@ -315,10 +325,12 @@ actor GatewayEndpointStore {
         secretResolver: SecretInputResolver = .blocking) -> String?
     {
         if isRemote {
-            guard let gateway = root["gateway"] as? [String: Any], let remote = gateway["remote"] as? [String: Any] else { return nil }
+            guard let gateway = root["gateway"] as? [String: Any],
+                  let remote = gateway["remote"] as? [String: Any] else { return nil }
             return secretResolver.resolveSync(remote["password"] as? String)
         }
-        guard let gateway = root["gateway"] as? [String: Any], let auth = gateway["auth"] as? [String: Any] else { return nil }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any] else { return nil }
         return secretResolver.resolveSync(auth["password"])
     }
 
@@ -332,7 +344,11 @@ actor GatewayEndpointStore {
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        if let configToken = self.resolveConfigTokenSync(isRemote: isRemote, root: root, secretResolver: secretResolver) {
+        if let configToken = self.resolveConfigTokenSync(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
+        {
             return configToken
         }
         guard !isRemote else { return nil }
@@ -348,7 +364,8 @@ actor GatewayEndpointStore {
         secretResolver: SecretInputResolver = .blocking) -> String?
     {
         if isRemote { return GatewayRemoteConfig.resolveTokenString(root: root) }
-        guard let gateway = root["gateway"] as? [String: Any], let auth = gateway["auth"] as? [String: Any] else { return nil }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any] else { return nil }
         return secretResolver.resolveSync(auth["token"])
     }
 
