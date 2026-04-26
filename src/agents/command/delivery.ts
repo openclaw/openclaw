@@ -317,7 +317,7 @@ function readBoundaryDeliverySeed(entry: SessionEntry | undefined): BoundaryDeli
   const outbound = isPlainBoundaryObject(state.outbound) ? state.outbound : {};
   const binding = isPlainBoundaryObject(state.sessionBinding) ? state.sessionBinding : {};
   const channel = nonEmptyString(outbound.channel) ?? nonEmptyString(binding.channel);
-  const to = nonEmptyString(outbound.targetId) ?? nonEmptyString(binding.targetId);
+  const to = nonEmptyString(outbound.targetId);
   const accountId = nonEmptyString(binding.accountId);
   const threadId = nonEmptyString(outbound.threadId) ?? nonEmptyString(binding.threadId);
   if (!channel && !to && !accountId && !threadId) {
