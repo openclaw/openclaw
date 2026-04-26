@@ -137,6 +137,18 @@ export type SessionResetByTypeConfig = {
   thread?: SessionResetConfig;
 };
 
+export type SessionChannelGroupPeerConfig = {
+  channel: string;
+  accountId?: string;
+  kind: "group" | "channel";
+  id: string;
+};
+
+export type SessionChannelGroupConfig = {
+  key: string;
+  peers: SessionChannelGroupPeerConfig[];
+};
+
 export type SessionThreadBindingsConfig = {
   /**
    * Master switch for thread-bound session routing features.
@@ -161,6 +173,8 @@ export type SessionConfig = {
   dmScope?: DmScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
+  /** Opt-in shared non-direct session groups for selected group/channel/thread peers. */
+  channelGroups?: SessionChannelGroupConfig[];
   resetTriggers?: string[];
   idleMinutes?: number;
   reset?: SessionResetConfig;

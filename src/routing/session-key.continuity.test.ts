@@ -9,6 +9,7 @@ describe("Channel Session Key Continuity", () => {
   function buildChannelSessionKey(params: {
     peer: { kind: "direct" | "channel"; id: string };
     dmScope?: "main" | "per-peer";
+    channelGroup?: string;
   }) {
     return buildAgentSessionKey({
       agentId,
@@ -16,6 +17,7 @@ describe("Channel Session Key Continuity", () => {
       accountId,
       dmScope: params.dmScope ?? "main",
       peer: params.peer,
+      channelGroup: params.channelGroup,
     });
   }
 
@@ -63,5 +65,21 @@ describe("Channel Session Key Continuity", () => {
 
   it.each(["", "   "] as const)("handles invalid channel id %j without collision", (channelId) => {
     expectUnknownChannelKeyCase(channelId);
+  });
+
+  it("uses an explicit shared channel group only for non-direct peers", () => {
+    expect(
+      buildChannelSessionKey({
+        peer: { kind: "channel", id: "channel456" },
+        channelGroup: "Project Ops",
+      }),
+    ).toBe("agent:main:channel-groups:group:project-ops");
+
+    expect(
+      buildChannelSessionKey({
+        peer: { kind: "direct", id: "user123" },
+        channelGroup: "Project Ops",
+      }),
+    ).toBe("agent:main:main");
   });
 });

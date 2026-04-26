@@ -241,6 +241,135 @@ describe("resolveAgentRoute", () => {
     );
   });
 
+  test("session channelGroups shares selected non-direct peers while preserving default isolation", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        channelGroups: [
+          {
+            key: "ops-rooms",
+            peers: [
+              { channel: "discord", kind: "channel", id: "1494710434396110868" },
+              { channel: "slack", accountId: "work", kind: "channel", id: "C024BE91L" },
+            ],
+          },
+        ],
+      },
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "1494710434396110868" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:channel-groups:group:ops-rooms",
+        matchedBy: "default",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "channel", id: "C024BE91L" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:channel-groups:group:ops-rooms",
+        matchedBy: "default",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "personal",
+        peer: { kind: "channel", id: "C024BE91L" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:c024be91l",
+        matchedBy: "default",
+        lastRoutePolicy: "session",
+      },
+    );
+  });
+
+  test("route binding session channelGroup shares matched thread peers without changing dmScope", () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-123:thread:thread-456" },
+          },
+          session: { channelGroup: "incident-room" },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "C123:thread:1700000000.000100" },
+          },
+          session: { channelGroup: "incident-room" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        peer: { kind: "channel", id: "parent-123:thread:thread-456" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:channel-groups:group:incident-room",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        peer: { kind: "channel", id: "C123:thread:1700000000.000100" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:channel-groups:group:incident-room",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        peer: { kind: "direct", id: "1497598990336790559" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        matchedBy: "default",
+        lastRoutePolicy: "main",
+      },
+    );
+  });
+
   test.each([
     {
       name: "collapses inbound last-route session keys to main when policy is main",

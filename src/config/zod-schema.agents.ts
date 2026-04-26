@@ -45,6 +45,7 @@ const BindingSessionSchema = z
         z.literal("per-account-channel-peer"),
       ])
       .optional(),
+    channelGroup: z.string().min(1).optional(),
   })
   .strict();
 

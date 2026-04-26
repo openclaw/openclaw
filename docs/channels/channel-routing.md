@@ -36,6 +36,12 @@ Groups and channels remain isolated per channel:
 - Groups: `agent:<agentId>:<channel>:group:<id>`
 - Channels/rooms: `agent:<agentId>:<channel>:channel:<id>`
 
+You can opt selected group/channel/thread peers into a shared session with
+`session.channelGroups` or a matching route binding's `session.channelGroup`.
+Grouped peers use `agent:<agentId>:channel-groups:group:<key>`. Unlisted
+non-direct peers keep their default isolated keys, and DMs continue to follow
+`session.dmScope` and `session.identityLinks`.
+
 Threads:
 
 - Slack/Discord threads append `:thread:<threadId>` to the base key.

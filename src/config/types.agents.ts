@@ -55,6 +55,8 @@ export type AgentRouteBinding = {
   session?: {
     /** Optional session scoping override for conversations matched by this binding. */
     dmScope?: DmScope;
+    /** Optional shared non-direct session group key for conversations matched by this binding. */
+    channelGroup?: string;
   };
 };
 

@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { SessionChannelGroupConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -98,6 +99,8 @@ export function buildAgentSessionKey(params: {
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
+  channelGroups?: SessionChannelGroupConfig[];
+  channelGroup?: string | null;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
@@ -110,6 +113,8 @@ export function buildAgentSessionKey(params: {
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
+    channelGroups: params.channelGroups,
+    channelGroup: params.channelGroup,
   });
 }
 
@@ -622,6 +627,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
+  const channelGroups = input.cfg.session?.channelGroups;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
     ? {
@@ -657,7 +663,10 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const choose = (
     agentId: string,
     matchedBy: ResolvedAgentRoute["matchedBy"],
-    sessionOverride?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] },
+    sessionOverride?: {
+      dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"];
+      channelGroup?: string;
+    },
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
@@ -669,6 +678,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         peer,
         dmScope: effectiveDmScope,
         identityLinks,
+        channelGroups,
+        channelGroup: sessionOverride?.channelGroup,
       }),
     );
     const mainSessionKey = normalizeLowercaseStringOrEmpty(

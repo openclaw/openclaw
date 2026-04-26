@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { SessionChannelGroupConfig } from "../config/types.base.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
@@ -27,6 +28,7 @@ const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
+const MAX_CHANNEL_GROUP_KEY_LENGTH = 64;
 
 function normalizeToken(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
@@ -135,6 +137,8 @@ export function buildAgentPeerSessionKey(params: {
   peerKind?: ChatType | null;
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
+  channelGroups?: SessionChannelGroupConfig[];
+  channelGroup?: string | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 }): string {
@@ -173,7 +177,69 @@ export function buildAgentPeerSessionKey(params: {
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const channelGroupKey =
+    normalizeChannelGroupKey(params.channelGroup) ??
+    resolveConfiguredChannelGroupKey({
+      channelGroups: params.channelGroups,
+      channel,
+      accountId: params.accountId,
+      peerKind,
+      peerId,
+    });
+  if (channelGroupKey) {
+    return `agent:${normalizeAgentId(params.agentId)}:channel-groups:group:${channelGroupKey}`;
+  }
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
+}
+
+function normalizeChannelGroupKey(value: string | undefined | null): string | null {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return null;
+  }
+  return (
+    normalized
+      .replace(INVALID_CHARS_RE, "-")
+      .replace(LEADING_DASH_RE, "")
+      .replace(TRAILING_DASH_RE, "")
+      .slice(0, MAX_CHANNEL_GROUP_KEY_LENGTH) || null
+  );
+}
+
+function resolveConfiguredChannelGroupKey(params: {
+  channelGroups?: SessionChannelGroupConfig[];
+  channel: string;
+  accountId?: string | null;
+  peerKind: ChatType;
+  peerId: string;
+}): string | null {
+  if (params.peerKind === "direct") {
+    return null;
+  }
+  const groups = params.channelGroups;
+  if (!groups || groups.length === 0) {
+    return null;
+  }
+  const accountId = normalizeAccountId(params.accountId);
+  for (const group of groups) {
+    const groupKey = normalizeChannelGroupKey(group.key);
+    if (!groupKey || !Array.isArray(group.peers)) {
+      continue;
+    }
+    const matchesPeer = group.peers.some((peer) => {
+      const peerAccountId = normalizeChannelGroupKey(peer.accountId);
+      return (
+        normalizeLowercaseStringOrEmpty(peer.channel) === params.channel &&
+        (!peerAccountId || peerAccountId === accountId) &&
+        peer.kind === params.peerKind &&
+        normalizeLowercaseStringOrEmpty(peer.id) === params.peerId
+      );
+    });
+    if (matchesPeer) {
+      return groupKey;
+    }
+  }
+  return null;
 }
 
 function resolveLinkedPeerId(params: {

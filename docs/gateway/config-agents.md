@@ -1132,6 +1132,15 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
+    channelGroups: [
+      {
+        key: "ops-rooms",
+        peers: [
+          { channel: "discord", kind: "channel", id: "1494710434396110868" },
+          { channel: "slack", accountId: "work", kind: "channel", id: "C024BE91L" },
+        ],
+      },
+    ],
     reset: {
       mode: "daily", // daily | idle
       atHour: 4,
@@ -1180,6 +1189,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`channelGroups`**: opt selected group/channel/thread peers into one shared non-main session key (`agent:<agentId>:channel-groups:group:<key>`). Unlisted non-direct peers stay isolated by channel and peer. Direct-message sharing still uses `dmScope` and `identityLinks`.
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).

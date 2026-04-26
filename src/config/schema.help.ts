@@ -524,6 +524,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
   "bindings[].session.dmScope":
     'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+  "bindings[].session.channelGroup":
+    "Optional shared non-direct session group key for this route binding. Use the same key on selected group/channel/thread peer bindings when they should share conversation history.",
   "bindings[].match":
     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
   "bindings[].match.channel":
@@ -1335,6 +1337,20 @@ export const FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
   "session.identityLinks":
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
+  "session.channelGroups":
+    "Opt-in shared session groups for selected group, channel, or thread peers. Unlisted non-direct peers keep their default isolated channel-specific session keys.",
+  "session.channelGroups[].key":
+    "Stable shared session group key used in the generated channel-groups session key. Keep it unique and durable so grouped history remains continuous.",
+  "session.channelGroups[].peers":
+    "List of non-direct peers that share this session group. Include only peers where cross-chat context sharing is intentional.",
+  "session.channelGroups[].peers[].channel":
+    "Channel/provider id for a peer included in a shared session group, for example discord or slack.",
+  "session.channelGroups[].peers[].accountId":
+    "Optional account id constraint for a grouped peer. Omit it only when the peer should match across all accounts on that channel.",
+  "session.channelGroups[].peers[].kind":
+    'Non-direct peer kind included in a shared session group: "group" or "channel". Direct-message sharing remains controlled by dmScope and identityLinks.',
+  "session.channelGroups[].peers[].id":
+    "Provider peer id included in a shared session group. For thread-scoped peers, use the same normalized id the channel passes into routing.",
   "session.resetTriggers":
     "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
   "session.idleMinutes":

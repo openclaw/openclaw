@@ -18480,6 +18480,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
                     },
+                    channelGroup: {
+                      type: "string",
+                      minLength: 1,
+                      title: "Binding Session Channel Group",
+                      description:
+                        "Optional shared non-direct session group key for this route binding. Use the same key on selected group/channel/thread peer bindings when they should share conversation history.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Binding Session",
@@ -20112,6 +20119,76 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Session Identity Links",
             description:
               "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
+          },
+          channelGroups: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                key: {
+                  type: "string",
+                  minLength: 1,
+                  title: "Session Channel Group Key",
+                  description:
+                    "Stable shared session group key used in the generated channel-groups session key. Keep it unique and durable so grouped history remains continuous.",
+                },
+                peers: {
+                  minItems: 1,
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      channel: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Session Channel Group Peer Channel",
+                        description:
+                          "Channel/provider id for a peer included in a shared session group, for example discord or slack.",
+                      },
+                      accountId: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Session Channel Group Peer Account",
+                        description:
+                          "Optional account id constraint for a grouped peer. Omit it only when the peer should match across all accounts on that channel.",
+                      },
+                      kind: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "group",
+                          },
+                          {
+                            type: "string",
+                            const: "channel",
+                          },
+                        ],
+                        title: "Session Channel Group Peer Kind",
+                        description:
+                          'Non-direct peer kind included in a shared session group: "group" or "channel". Direct-message sharing remains controlled by dmScope and identityLinks.',
+                      },
+                      id: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Session Channel Group Peer ID",
+                        description:
+                          "Provider peer id included in a shared session group. For thread-scoped peers, use the same normalized id the channel passes into routing.",
+                      },
+                    },
+                    required: ["channel", "kind", "id"],
+                    additionalProperties: false,
+                  },
+                  title: "Session Channel Group Peers",
+                  description:
+                    "List of non-direct peers that share this session group. Include only peers where cross-chat context sharing is intentional.",
+                },
+              },
+              required: ["key", "peers"],
+              additionalProperties: false,
+            },
+            title: "Session Channel Groups",
+            description:
+              "Opt-in shared session groups for selected group, channel, or thread peers. Unlisted non-direct peers keep their default isolated channel-specific session keys.",
           },
           resetTriggers: {
             type: "array",
@@ -25688,6 +25765,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
       tags: ["storage"],
     },
+    "bindings[].session.channelGroup": {
+      label: "Binding Session Channel Group",
+      help: "Optional shared non-direct session group key for this route binding. Use the same key on selected group/channel/thread peer bindings when they should share conversation history.",
+      tags: ["storage"],
+    },
     "bindings[].match": {
       label: "Binding Match Rule",
       help: "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
@@ -27167,6 +27249,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "session.identityLinks": {
       label: "Session Identity Links",
       help: "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
+      tags: ["storage"],
+    },
+    "session.channelGroups": {
+      label: "Session Channel Groups",
+      help: "Opt-in shared session groups for selected group, channel, or thread peers. Unlisted non-direct peers keep their default isolated channel-specific session keys.",
+      tags: ["storage"],
+    },
+    "session.channelGroups[].key": {
+      label: "Session Channel Group Key",
+      help: "Stable shared session group key used in the generated channel-groups session key. Keep it unique and durable so grouped history remains continuous.",
+      tags: ["storage"],
+    },
+    "session.channelGroups[].peers": {
+      label: "Session Channel Group Peers",
+      help: "List of non-direct peers that share this session group. Include only peers where cross-chat context sharing is intentional.",
+      tags: ["storage"],
+    },
+    "session.channelGroups[].peers[].channel": {
+      label: "Session Channel Group Peer Channel",
+      help: "Channel/provider id for a peer included in a shared session group, for example discord or slack.",
+      tags: ["storage"],
+    },
+    "session.channelGroups[].peers[].accountId": {
+      label: "Session Channel Group Peer Account",
+      help: "Optional account id constraint for a grouped peer. Omit it only when the peer should match across all accounts on that channel.",
+      tags: ["storage"],
+    },
+    "session.channelGroups[].peers[].kind": {
+      label: "Session Channel Group Peer Kind",
+      help: 'Non-direct peer kind included in a shared session group: "group" or "channel". Direct-message sharing remains controlled by dmScope and identityLinks.',
+      tags: ["storage"],
+    },
+    "session.channelGroups[].peers[].id": {
+      label: "Session Channel Group Peer ID",
+      help: "Provider peer id included in a shared session group. For thread-scoped peers, use the same normalized id the channel passes into routing.",
       tags: ["storage"],
     },
     "session.resetTriggers": {

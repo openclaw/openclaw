@@ -22,6 +22,22 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+const SessionChannelGroupPeerSchema = z
+  .object({
+    channel: z.string().min(1),
+    accountId: z.string().min(1).optional(),
+    kind: z.union([z.literal("group"), z.literal("channel")]),
+    id: z.string().min(1),
+  })
+  .strict();
+
+const SessionChannelGroupSchema = z
+  .object({
+    key: z.string().min(1),
+    peers: z.array(SessionChannelGroupPeerSchema).min(1),
+  })
+  .strict();
+
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
@@ -36,6 +52,7 @@ export const SessionSchema = z
       ])
       .optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
+    channelGroups: z.array(SessionChannelGroupSchema).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     reset: SessionResetConfigSchema.optional(),
