@@ -28,7 +28,7 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).toContain("workspace-state.json");
       expect(script, scriptPath).toContain("IDENTITY.md");
       expect(script, scriptPath).toContain("BOOTSTRAP.md");
-      expect(script, scriptPath).toContain("--session-id parallels-");
+      expect(script, scriptPath).toMatch(/--session-id\s+['"]?parallels-/);
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap true --strict-json");
     }
   });
