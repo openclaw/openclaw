@@ -740,41 +740,47 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    // Capture stream content BEFORE clearing chatStream so the silent-reply
+    // fallback path still has the streamed text to commit. Clearing chatStream
+    // before chatMessages prevents Lit's async batching from rendering both
+    // the stream bubble AND the final assistant message in the same pass —
+    // that race manifested as every assistant reply appearing twice. (#71992)
+    const streamedFallback = state.chatStream;
+    state.chatStream = null;
+    state.chatRunId = null;
+    state.chatStreamStartedAt = null;
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+    } else if (streamedFallback?.trim() && !isSilentReplyStream(streamedFallback)) {
       state.chatMessages = [
         ...state.chatMessages,
         {
           role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
+          content: [{ type: "text", text: streamedFallback }],
           timestamp: Date.now(),
         },
       ];
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
-    } else {
-      const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
-      }
-    }
+    // Same ordering invariant as `final`: clear chatStream first to prevent
+    // the duplicate-render race in Lit's async batching window. (#71992)
+    const streamedFallback = state.chatStream ?? "";
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+      state.chatMessages = [...state.chatMessages, normalizedMessage];
+    } else if (streamedFallback.trim() && !isSilentReplyStream(streamedFallback)) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: streamedFallback }],
+          timestamp: Date.now(),
+        },
+      ];
+    }
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;

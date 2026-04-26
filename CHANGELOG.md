@@ -683,6 +683,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI/webchat: clear `chatStream` before appending the final assistant message so Lit's async batching can't render both the streaming bubble and the committed message in the same pass. Fixes the "every assistant reply appears twice" regression. Fixes #71992. Thanks @hclsys.
 - TTS/WhatsApp: add `/tts latest` read-aloud support with duplicate suppression and `/tts chat on|off|default` session-scoped auto-TTS overrides, completing the on-demand voice-note UX for current-chat replies. Fixes #66032.
 - TTS/channels: resolve channel and account TTS overrides generically, enabling Feishu and QQBot accounts to deep-merge `channels.<channel>.accounts.<id>.tts` over global and per-agent TTS config. Thanks @sahilsatralkar.
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices, and make `/tts audio`, `/tts status`, and the `tts` agent tool honor the active voice/provider override while keeping shared provider credentials and preferences in the existing TTS config surface.

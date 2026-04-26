@@ -361,6 +361,52 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears chatStream before appending final message to prevent duplicate-render race (#71992)", () => {
+    // Lit batches reactive updates: if chatMessages is mutated while
+    // chatStream still holds the streaming text, the next render pass shows
+    // BOTH the stream bubble AND the committed assistant message — every
+    // assistant reply appears exactly twice. The invariant is: chatStream
+    // must be null at the moment chatMessages gets the new entry.
+    const observations: Array<{ stream: string | null; messageCount: number }> = [];
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Streaming text...",
+      chatStreamStartedAt: 50,
+    });
+    const baseMessages = state.chatMessages;
+    Object.defineProperty(state, "chatMessages", {
+      configurable: true,
+      get() {
+        return baseMessages;
+      },
+      set(next: typeof baseMessages) {
+        observations.push({ stream: state.chatStream, messageCount: next.length });
+        Object.defineProperty(state, "chatMessages", {
+          configurable: true,
+          writable: true,
+          value: next,
+        });
+      },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final reply" }],
+        timestamp: 60,
+      },
+    };
+    handleChatEvent(state, payload);
+    // Exactly one chatMessages mutation at the final step, observed with
+    // chatStream already cleared:
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toEqual({ stream: null, messageCount: 1 });
+    expect(state.chatStream).toBe(null);
+  });
+
   it("processes aborted from own run and keeps partial assistant message", () => {
     const existingMessage = {
       role: "user",
