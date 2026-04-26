@@ -24,17 +24,17 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
     - `openai/<model>` uses the direct OpenAI API-key provider in PI.
     - `openai-codex/<model>` uses Codex OAuth in PI.
-    - `openai/<model>` plus `agents.defaults.embeddedHarness.runtime: "codex"` uses the native Codex app-server harness.
+    - `openai/<model>` plus `agents.defaults.agentRuntime.id: "codex"` uses the native Codex app-server harness.
 
     See [OpenAI](/providers/openai) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
 
-    Plugin auto-enable follows the same boundary: `openai-codex/<model>` belongs to the OpenAI plugin, while the Codex plugin is enabled by `embeddedHarness.runtime: "codex"` or legacy `codex/<model>` refs.
+    Plugin auto-enable follows the same boundary: `openai-codex/<model>` belongs to the OpenAI plugin, while the Codex plugin is enabled by `agentRuntime.id: "codex"` or legacy `codex/<model>` refs.
 
-    GPT-5.5 is available through `openai/gpt-5.5` for direct API-key traffic, `openai-codex/gpt-5.5` in PI for Codex OAuth, and the native Codex app-server harness when `embeddedHarness.runtime: "codex"` is set.
+    GPT-5.5 is available through `openai/gpt-5.5` for direct API-key traffic, `openai-codex/gpt-5.5` in PI for Codex OAuth, and the native Codex app-server harness when `agentRuntime.id: "codex"` is set.
 
   </Accordion>
   <Accordion title="CLI runtimes">
-    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set `agents.defaults.embeddedHarness.runtime` to `claude-cli`, `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
+    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set `agents.defaults.agentRuntime.id` to `claude-cli`, `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
 
     Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately.
 
@@ -108,6 +108,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no** `models.
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
+- Preferred Claude CLI config keeps the model ref canonical and selects the CLI
+  backend separately: `anthropic/claude-opus-4-7` with
+  `agents.defaults.agentRuntime.id: "claude-cli"`. Legacy
+  `claude-cli/claude-opus-4-7` refs still work for compatibility.
 
 <Note>
 Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy. Anthropic setup-token remains available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
@@ -124,7 +128,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
 - PI model ref: `openai-codex/gpt-5.5`
-- Native Codex app-server harness ref: `openai/gpt-5.5` with `agents.defaults.embeddedHarness.runtime: "codex"`
+- Native Codex app-server harness ref: `openai/gpt-5.5` with `agents.defaults.agentRuntime.id: "codex"`
 - Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
 - Legacy model refs: `codex/gpt-*`
 - Plugin boundary: `openai-codex/*` loads the OpenAI plugin; the native Codex app-server plugin is selected only by the Codex harness runtime or legacy `codex/*` refs.

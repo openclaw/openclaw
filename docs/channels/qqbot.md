@@ -122,10 +122,10 @@ openclaw channels add --channel qqbot --account bot2 --token "222222222:secret-o
 
 STT and TTS support two-level configuration with priority fallback:
 
-| Setting | Plugin-specific      | Framework fallback            |
-| ------- | -------------------- | ----------------------------- |
-| STT     | `channels.qqbot.stt` | `tools.media.audio.models[0]` |
-| TTS     | `channels.qqbot.tts` | `messages.tts`                |
+| Setting | Plugin-specific                                          | Framework fallback            |
+| ------- | -------------------------------------------------------- | ----------------------------- |
+| STT     | `channels.qqbot.stt`                                     | `tools.media.audio.models[0]` |
+| TTS     | `channels.qqbot.tts`, `channels.qqbot.accounts.<id>.tts` | `messages.tts`                |
 
 ```json5
 {
@@ -140,12 +140,23 @@ STT and TTS support two-level configuration with priority fallback:
         model: "your-tts-model",
         voice: "your-voice",
       },
+      accounts: {
+        qq-main: {
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
+        },
+      },
     },
   },
 }
 ```
 
 Set `enabled: false` on either to disable.
+Account-level TTS overrides use the same shape as `messages.tts` and deep-merge
+over the channel/global TTS config.
 
 Inbound QQ voice attachments are exposed to agents as audio media metadata while
 keeping raw voice files out of generic `MediaPaths`. `[[audio_as_voice]]` plain

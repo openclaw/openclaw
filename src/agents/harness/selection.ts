@@ -1,9 +1,11 @@
-import type { AgentEmbeddedHarnessConfig } from "../../config/types.agents-shared.js";
+import type { AgentRuntimePolicyConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -314,10 +316,16 @@ export function resolveAgentHarnessPolicy(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const defaultsPolicy = params.config?.agents?.defaults?.embeddedHarness;
+  const defaultsPolicy = resolveAgentRuntimePolicy(params.config?.agents?.defaults);
   const runtime = env.OPENCLAW_AGENT_RUNTIME?.trim()
     ? resolveEmbeddedAgentRuntime(env)
-    : normalizeEmbeddedAgentRuntime(agentPolicy?.runtime ?? defaultsPolicy?.runtime);
+    : normalizeEmbeddedAgentRuntime(agentPolicy?.id ?? defaultsPolicy?.id);
+  if (isCliRuntimeAlias(runtime)) {
+    return {
+      runtime: "pi",
+      fallback: "pi",
+    };
+  }
   return {
     runtime,
     fallback: resolveAgentHarnessFallbackPolicy({
@@ -332,8 +340,8 @@ export function resolveAgentHarnessPolicy(params: {
 function resolveAgentHarnessFallbackPolicy(params: {
   env: NodeJS.ProcessEnv;
   runtime: EmbeddedAgentRuntime;
-  agentPolicy?: AgentEmbeddedHarnessConfig;
-  defaultsPolicy?: AgentEmbeddedHarnessConfig;
+  agentPolicy?: AgentRuntimePolicyConfig;
+  defaultsPolicy?: AgentRuntimePolicyConfig;
 }): EmbeddedAgentHarnessFallback {
   const envFallback = resolveEmbeddedAgentHarnessFallback(params.env);
   if (envFallback) {
@@ -345,7 +353,7 @@ function resolveAgentHarnessFallbackPolicy(params: {
     return normalizeAgentHarnessFallback(undefined, params.runtime);
   }
 
-  if (params.agentPolicy?.runtime) {
+  if (params.agentPolicy?.id) {
     return normalizeAgentHarnessFallback(params.agentPolicy.fallback, params.runtime);
   }
 
@@ -362,7 +370,7 @@ function isPluginAgentRuntime(runtime: EmbeddedAgentRuntime): boolean {
 function resolveAgentEmbeddedHarnessConfig(
   config: OpenClawConfig | undefined,
   params: { agentId?: string; sessionKey?: string },
-): AgentEmbeddedHarnessConfig | undefined {
+): AgentRuntimePolicyConfig | undefined {
   if (!config) {
     return undefined;
   }
@@ -371,12 +379,13 @@ function resolveAgentEmbeddedHarnessConfig(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  return listAgentEntries(config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
-    ?.embeddedHarness;
+  return resolveAgentRuntimePolicy(
+    listAgentEntries(config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId),
+  );
 }
 
 function normalizeAgentHarnessFallback(
-  value: AgentEmbeddedHarnessConfig["fallback"] | undefined,
+  value: AgentRuntimePolicyConfig["fallback"] | undefined,
   runtime: EmbeddedAgentRuntime,
 ): EmbeddedAgentHarnessFallback {
   if (value) {

@@ -147,6 +147,9 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa che
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -784,6 +787,9 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
+  }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
   }
@@ -1153,6 +1159,29 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  if (
+    allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
+    /Internal task completion event/i.test(allInputText)
+  ) {
+    return buildAssistantEvents("");
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+        runTimeoutSeconds: 30,
+      });
+    }
+    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+      });
+    }
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }

@@ -231,6 +231,9 @@ Prefer the narrowest metadata that already describes ownership. Use
 `providers`, `channels`, `commandAliases`, setup descriptors, or `contracts`
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
+Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
+`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
@@ -250,18 +253,21 @@ change correctness while legacy manifest ownership fallbacks still exist.
 }
 ```
 
-| Field            | Required | Type                                                 | What it means                                                                                           |
-| ---------------- | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `onProviders`    | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                  |
-| `onCommands`     | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                   |
-| `onChannels`     | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                   |
-| `onRoutes`       | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                   |
-| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible. |
+| Field              | Required | Type                                                 | What it means                                                                                                                                     |
+| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                            |
+| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases. |
+| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                             |
+| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                             |
+| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                             |
+| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                           |
 
 Current live consumers:
 
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
+- agent-runtime startup planning uses `activation.onAgentHarnesses` for
+  embedded harnesses and top-level `cliBackends[]` for CLI runtime aliases
 - channel-triggered setup/channel planning falls back to legacy `channels[]`
   ownership when explicit channel activation metadata is missing
 - provider-triggered setup/runtime planning falls back to legacy
@@ -524,6 +530,12 @@ Non-bundled plugins that declare `channels[]` should also declare matching
 cold-path config schema, setup, and Control UI surfaces cannot know the
 channel-owned option shape until plugin runtime executes.
 
+`channelConfigs.<channel-id>.commands.nativeCommandsAutoEnabled` and
+`nativeSkillsAutoEnabled` can declare static `auto` defaults for command config
+checks that run before channel runtime loads. Bundled channels can also publish
+the same defaults through `package.json#openclaw.channel.commands` alongside
+their other package-owned channel catalog metadata.
+
 ```json
 {
   "channelConfigs": {
@@ -543,6 +555,10 @@ channel-owned option shape until plugin runtime executes.
       },
       "label": "Matrix",
       "description": "Matrix homeserver connection",
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      },
       "preferOver": ["matrix-legacy"]
     }
   }
@@ -557,6 +573,7 @@ Each channel entry can include:
 | `uiHints`     | `Record<string, object>` | Optional UI labels/placeholders/sensitive hints for that channel config section.          |
 | `label`       | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready. |
 | `description` | `string`                 | Short channel description for inspect and catalog surfaces.                               |
+| `commands`    | `object`                 | Static native command and native skill auto-defaults for pre-runtime config checks.       |
 | `preferOver`  | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.    |
 
 ### Replacing another channel plugin
@@ -792,6 +809,7 @@ Important examples:
 | `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory. |
 | `openclaw.runtimeSetupEntry`                                      | Declares the built JavaScript setup entrypoint for installed packages. Must stay inside the plugin package directory.                                                                |
 | `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                                                                 |
+| `openclaw.channel.commands`                                       | Static native command and native skill auto-default metadata used by config, audit, and command-list surfaces before channel runtime loads.                                          |
 | `openclaw.channel.configuredState`                                | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime.                                         |
 | `openclaw.channel.persistedAuthState`                             | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.                                               |
 | `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                                                                                                                   |

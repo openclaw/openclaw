@@ -113,7 +113,7 @@ function resolveAgentHarnessOwnerPluginIds(
   }
   return registry.plugins
     .filter((plugin) =>
-      (plugin.activation?.onAgentHarnesses ?? []).some(
+      [...(plugin.activation?.onAgentHarnesses ?? []), ...(plugin.cliBackends ?? [])].some(
         (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
       ),
     )
@@ -476,7 +476,7 @@ export function resolvePluginAutoEnableCandidateReason(
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
     case "agent-harness-runtime-configured":
-      return `${candidate.runtime} agent harness runtime configured`;
+      return `${candidate.runtime} agent runtime configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":

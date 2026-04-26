@@ -11,6 +11,7 @@ import {
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
+  formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -48,6 +49,8 @@ type ModelCallEndedHookFields = Pick<
 >;
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
+const TRACEPARENT_HEADER_NAME = "traceparent";
+type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) {
@@ -197,6 +200,29 @@ function emitModelCallError(
   });
 }
 
+function withDiagnosticTraceparentHeader(
+  options: ModelCallStreamOptions,
+  trace: DiagnosticTraceContext,
+): ModelCallStreamOptions {
+  const traceparent = formatDiagnosticTraceparent(trace);
+  if (!traceparent) {
+    return options;
+  }
+
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(options?.headers ?? {})) {
+    if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
+      continue;
+    }
+    headers[key] = value;
+  }
+  headers[TRACEPARENT_HEADER_NAME] = traceparent;
+  return {
+    ...options,
+    headers,
+  };
+}
+
 async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<void> {
   let returnResult: unknown;
   try {
@@ -316,9 +342,10 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const eventBase = baseModelCallEvent(ctx, callId, trace);
     emitModelCallStarted(eventBase);
     const startedAt = Date.now();
+    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace);
 
     try {
-      const result = streamFn(model, streamContext, options);
+      const result = streamFn(model, streamContext, propagatedOptions);
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt),

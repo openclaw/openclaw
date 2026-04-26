@@ -213,10 +213,13 @@ describe("handleTtsCommands status fallback reporting", () => {
     const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(ttsMocks.resolveTtsConfig).toHaveBeenCalledWith(cfg, "reader");
+    expect(ttsMocks.resolveTtsConfig).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({ agentId: "reader", channelId: "forum" }),
+    );
   });
 
-  it("passes the active agent id to /tts audio synthesis", async () => {
+  it("passes the active agent and account ids to /tts audio synthesis", async () => {
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/reader.ogg",
@@ -227,7 +230,12 @@ describe("handleTtsCommands status fallback reporting", () => {
       agents: { list: [{ id: "reader", tts: { provider: PRIMARY_TTS_PROVIDER } }] },
     } as OpenClawConfig;
 
-    const result = await handleTtsCommands(buildTtsParams("/tts audio hello", cfg, "reader"), true);
+    const result = await handleTtsCommands(
+      buildTtsParams("/tts audio hello", cfg, "reader", {
+        ctx: { AccountId: "feishu-main" },
+      }),
+      true,
+    );
 
     expect(result?.shouldContinue).toBe(false);
     expect(ttsMocks.textToSpeech).toHaveBeenCalledWith(
@@ -235,6 +243,7 @@ describe("handleTtsCommands status fallback reporting", () => {
         text: "hello",
         cfg,
         agentId: "reader",
+        accountId: "feishu-main",
       }),
     );
   });

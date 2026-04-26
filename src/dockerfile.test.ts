@@ -67,6 +67,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+    );
   });
 
   it("keeps package manager patch files in runtime images", async () => {

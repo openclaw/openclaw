@@ -8,6 +8,7 @@ import {
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -20,13 +21,9 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
-  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
-  globalInstallArgs,
-  globalInstallFallbackArgs,
-  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
@@ -1297,83 +1294,39 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const steps: UpdateStepResult[] = [];
     const globalInstallEnv = await createGlobalInstallEnv();
     const spec = resolveGlobalInstallSpec({
       packageName,
       tag,
       env: globalInstallEnv,
     });
-    const updateStep = await runStep({
+    const packageUpdate = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: spec,
+      packageName,
+      packageRoot: pkgRoot,
       runCommand,
-      name: "global update",
-      argv: globalInstallArgs(installTarget, spec),
-      cwd: pkgRoot,
       timeoutMs,
-      env: globalInstallEnv,
-      progress,
-      stepIndex: 0,
-      totalSteps: 1,
-    });
-    steps.push(updateStep);
-
-    let finalStep = updateStep;
-    if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
-      if (fallbackArgv) {
-        const fallbackStep = await runStep({
+      ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
+      installCwd: pkgRoot,
+      runStep: (stepParams) =>
+        runStep({
           runCommand,
-          name: "global update (omit optional)",
-          argv: fallbackArgv,
-          cwd: pkgRoot,
-          timeoutMs,
-          env: globalInstallEnv,
+          ...stepParams,
+          cwd: stepParams.cwd ?? pkgRoot,
           progress,
           stepIndex: 0,
           totalSteps: 1,
-        });
-        steps.push(fallbackStep);
-        finalStep = fallbackStep;
-      }
-    }
-
-    const verifiedPackageRoot =
-      (
-        await resolveGlobalInstallTarget({
-          manager: installTarget,
-          runCommand,
-          timeoutMs,
-        })
-      ).packageRoot ?? pkgRoot;
-    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
-    const verificationErrors = await collectInstalledGlobalPackageErrors({
-      packageRoot: verifiedPackageRoot,
-      expectedVersion,
+        }),
     });
-    if (verificationErrors.length > 0) {
-      steps.push({
-        name: "global install verify",
-        command: `verify ${verifiedPackageRoot}`,
-        cwd: verifiedPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-      });
-    }
-    const afterVersion = await readPackageVersion(verifiedPackageRoot);
-    const failedStep =
-      finalStep.exitCode !== 0
-        ? finalStep
-        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
-          null);
     return {
-      status: failedStep ? "error" : "ok",
+      status: packageUpdate.failedStep ? "error" : "ok",
       mode: globalManager,
-      root: verifiedPackageRoot,
-      reason: failedStep ? failedStep.name : undefined,
+      root: packageUpdate.verifiedPackageRoot ?? pkgRoot,
+      reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
       before: { version: beforeVersion },
-      after: { version: afterVersion },
-      steps,
+      after: { version: packageUpdate.afterVersion },
+      steps: packageUpdate.steps,
       durationMs: Date.now() - startedAt,
     };
   }
