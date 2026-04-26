@@ -69,7 +69,12 @@ Docs: https://docs.openclaw.ai
 - ACP: wait for the configured runtime backend to become healthy before startup identity reconciliation, avoiding transient acpx warnings during Gateway boot. Fixes #40566.
 - Channels/ACP bindings: time out configured binding readiness checks instead of letting Discord preflight hang forever when an ACP target never settles. Fixes #68776.
 - Control UI: hide the chat loading skeleton during background history reloads when existing messages or active stream content are already visible, avoiding reload flashes on high-latency local gateways. Fixes #71844. Thanks @WolvenRA.
-- CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure` and show daemon state separately when available, so `gateway.tailscale.mode:
+- Agents/images: scrub old `[media attached: ...]`, `[Image: source: ...]`,
+  and `media://inbound/...` markers from pruned model replay context so stale
+  media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks
+  @jmeadlock.
+- CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure`
+  and show daemon state separately when available, so `gateway.tailscale.mode:
 "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
   Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables itself for the current Gateway process after repeated failed restarts while the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux, @FiredMosquito831, and @spikefcz.

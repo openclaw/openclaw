@@ -297,7 +297,10 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
-import { pruneProcessedHistoryImages } from "./history-image-prune.js";
+import {
+  installHistoryImagePruneContextTransform,
+  pruneProcessedHistoryImages,
+} from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
@@ -1450,6 +1453,14 @@ export async function runEmbeddedAttempt(
             }),
         });
       }
+      const removeLoopContextGuard = removeToolResultContextGuard;
+      const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
+        activeSession.agent,
+      );
+      removeToolResultContextGuard = () => {
+        removeHistoryImagePruneContextTransform();
+        removeLoopContextGuard?.();
+      };
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
@@ -2216,9 +2227,11 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
+        const promptBuildMessages =
+          pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
-          messages: activeSession.messages,
+          messages: promptBuildMessages,
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -2362,14 +2375,6 @@ export async function runEmbeddedAttempt(
             : undefined;
 
         try {
-          // Idempotent cleanup: prune old image blocks to limit context
-          // growth. Only mutates turns older than a few assistant replies;
-          // the delay also reduces prompt-cache churn.
-          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
-          if (didPruneImages) {
-            activeSession.agent.state.messages = activeSession.messages;
-          }
-
           const filteredMessages = filterHeartbeatPairs(
             activeSession.messages,
             heartbeatSummary?.ackMaxChars,

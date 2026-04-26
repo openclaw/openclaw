@@ -658,7 +658,8 @@ vi.mock("./compaction-timeout.js", () => ({
 }));
 
 vi.mock("./history-image-prune.js", () => ({
-  pruneProcessedHistoryImages: <T>(messages: T) => messages,
+  installHistoryImagePruneContextTransform: () => () => {},
+  pruneProcessedHistoryImages: () => null,
 }));
 
 export type MutableSession = {
