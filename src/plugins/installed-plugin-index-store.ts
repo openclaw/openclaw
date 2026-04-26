@@ -48,6 +48,11 @@ const InstalledPluginIndexStartupSchema = z
 const InstalledPluginIndexRecordSchema = z
   .object({
     pluginId: z.string(),
+    contributionMetadataVersion: z.number().optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    manifestVersion: z.string().optional(),
+    legacyPluginIds: StringArraySchema.optional(),
     packageName: z.string().optional(),
     packageVersion: z.string().optional(),
     installRecord: z.record(z.string(), z.unknown()).optional(),
@@ -58,6 +63,16 @@ const InstalledPluginIndexRecordSchema = z
     manifestHash: z.string(),
     format: z.string().optional(),
     bundleFormat: z.string().optional(),
+    bundleCapabilities: StringArraySchema.optional(),
+    kind: z.unknown().optional(),
+    channels: StringArraySchema.optional(),
+    providers: StringArraySchema.optional(),
+    cliBackends: StringArraySchema.optional(),
+    setupProviders: StringArraySchema.optional(),
+    channelConfigs: StringArraySchema.optional(),
+    modelCatalogProviders: StringArraySchema.optional(),
+    commandAliases: StringArraySchema.optional(),
+    contractKeys: StringArraySchema.optional(),
     source: z.string().optional(),
     setupSource: z.string().optional(),
     packageJson: z

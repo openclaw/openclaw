@@ -12,6 +12,7 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
+  INSTALLED_PLUGIN_CONTRIBUTION_METADATA_VERSION,
   getInstalledPluginRecord,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   isInstalledPluginEnabled,
@@ -207,6 +208,48 @@ function listManifestContributionIds(
   return [];
 }
 
+function hasIndexedContributionMetadata(plugin: InstalledPluginIndexRecord): boolean {
+  return plugin.contributionMetadataVersion === INSTALLED_PLUGIN_CONTRIBUTION_METADATA_VERSION;
+}
+
+function listIndexedContributionIds(
+  plugin: InstalledPluginIndexRecord,
+  contribution: PluginRegistryContributionKey,
+): readonly string[] {
+  switch (contribution) {
+    case "providers":
+      return plugin.providers ?? [];
+    case "channels":
+      return plugin.channels ?? [];
+    case "channelConfigs":
+      return plugin.channelConfigs ?? [];
+    case "setupProviders":
+      return plugin.setupProviders ?? [];
+    case "cliBackends":
+      return plugin.cliBackends ?? [];
+    case "modelCatalogProviders":
+      return plugin.modelCatalogProviders ?? [];
+    case "commandAliases":
+      return plugin.commandAliases ?? [];
+    case "contracts":
+      return plugin.contractKeys ?? [];
+  }
+  return [];
+}
+
+function listContributionIndexRecords(params: {
+  index: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): readonly InstalledPluginIndexRecord[] {
+  if (params.includeDisabled) {
+    return params.index.plugins;
+  }
+  return params.index.plugins.filter((plugin) =>
+    isInstalledPluginEnabled(params.index, plugin.pluginId, params.config),
+  );
+}
+
 function resolveContributionPluginIds(params: {
   index: PluginRegistrySnapshot;
   includeDisabled?: boolean;
@@ -263,6 +306,35 @@ export function createPluginRegistryIdNormalizer(
     if (pluginId) {
       aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
     }
+  }
+  if (index.plugins.every(hasIndexedContributionMetadata)) {
+    for (const plugin of [...index.plugins].toSorted((left, right) =>
+      left.pluginId.localeCompare(right.pluginId),
+    )) {
+      const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
+      if (!pluginId) {
+        continue;
+      }
+      for (const alias of [
+        plugin.pluginId,
+        ...(plugin.providers ?? []),
+        ...(plugin.channels ?? []),
+        ...(plugin.setupProviders ?? []),
+        ...(plugin.cliBackends ?? []),
+        ...(plugin.modelCatalogProviders ?? []),
+        ...(plugin.legacyPluginIds ?? []),
+      ]) {
+        const normalizedAlias = normalizePluginRegistryAlias(alias);
+        const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
+        if (normalizedAlias && !aliases.has(normalizedAliasKey)) {
+          aliases.set(normalizedAliasKey, pluginId);
+        }
+      }
+    }
+    return (pluginId: string) => {
+      const trimmed = normalizePluginRegistryAlias(pluginId);
+      return aliases.get(normalizePluginRegistryAliasKey(trimmed)) ?? trimmed;
+    };
   }
   const registry = loadPluginManifestRegistryForInstalledIndex({
     index,
@@ -405,6 +477,16 @@ export function listPluginContributionIds(
   params: ListPluginContributionIdsParams,
 ): readonly string[] {
   const index = resolveSnapshot(params);
+  const records = listContributionIndexRecords({
+    index,
+    includeDisabled: params.includeDisabled,
+    config: params.config,
+  });
+  if (records.every(hasIndexedContributionMetadata)) {
+    return sortUnique(
+      records.flatMap((plugin) => listIndexedContributionIds(plugin, params.contribution)),
+    );
+  }
   const registry = loadContributionManifestRegistry({
     ...params,
     index,
@@ -422,6 +504,20 @@ export function resolvePluginContributionOwners(
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
   const index = resolveSnapshot(params);
+  const records = listContributionIndexRecords({
+    index,
+    includeDisabled: params.includeDisabled,
+    config: params.config,
+  });
+  if (records.every(hasIndexedContributionMetadata)) {
+    return sortUnique(
+      records.flatMap((plugin) =>
+        listIndexedContributionIds(plugin, params.contribution).some(matcher)
+          ? [plugin.pluginId]
+          : [],
+      ),
+    );
+  }
   const registry = loadContributionManifestRegistry({
     ...params,
     index,

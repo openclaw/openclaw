@@ -175,8 +175,18 @@ describe("installed plugin index", () => {
       plugins: [
         {
           pluginId: "demo",
+          contributionMetadataVersion: 1,
+          name: "Demo",
           packageName: "@vendor/demo-plugin",
           packageVersion: "1.2.3",
+          channels: ["demo-chat"],
+          channelConfigs: ["demo-chat"],
+          cliBackends: ["demo-cli", "setup-cli"],
+          commandAliases: ["demo-command"],
+          contractKeys: ["tools"],
+          modelCatalogProviders: ["demo"],
+          providers: ["demo"],
+          setupProviders: ["demo"],
           origin: "global",
           rootDir: fixture.rootDir,
           source: path.join(fixture.rootDir, "index.ts"),
