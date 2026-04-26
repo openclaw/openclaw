@@ -585,8 +585,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               type: "base64",
               media_type: "audio/mpeg",
             },
-          ],
-        },
+          },
+        ],
       },
     });
   });

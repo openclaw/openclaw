@@ -7,7 +7,7 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const freshDirectoryModulePath = "./directory.js?directory-test";
+const freshDirectoryModulePath = "./directory.ts?directory-test";
 const {
   listFeishuDirectoryGroups,
   listFeishuDirectoryGroupsLive,
