@@ -261,8 +261,16 @@ export async function drainPluginNextTurnInjections(params: {
     if (!entry?.pluginNextTurnInjections) {
       return [];
     }
+    const activePluginIds = new Set(
+      (getActivePluginRegistry()?.plugins ?? [])
+        .filter((plugin) => plugin.status === "loaded")
+        .map((plugin) => plugin.id),
+    );
     const drained: PluginNextTurnInjectionRecord[] = [];
-    for (const entries of Object.values(entry.pluginNextTurnInjections)) {
+    for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
+      if (!activePluginIds.has(pluginId)) {
+        continue;
+      }
       const liveEntries = entries.filter((candidate) => !isExpired(candidate, now));
       drained.push(...liveEntries);
     }

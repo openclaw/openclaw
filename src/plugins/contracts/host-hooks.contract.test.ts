@@ -28,6 +28,7 @@ import {
   listPluginSessionSchedulerJobs,
 } from "../host-hook-runtime.js";
 import {
+  drainPluginNextTurnInjections,
   enqueuePluginNextTurnInjection,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
@@ -379,6 +380,85 @@ describe("host-hook fixture plugin contract", () => {
           expect(
             stored["agent:main:main"]?.pluginNextTurnInjections?.["approval-fixture"],
           ).toHaveLength(1);
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "active-injector",
+        name: "Active Injector",
+        status: "loaded",
+      }),
+      createPluginRecord({
+        id: "disabled-injector",
+        name: "Disabled Injector",
+        status: "disabled",
+      }),
+    );
+    setActivePluginRegistry(registry);
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-stale-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: storePath },
+        },
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              pluginNextTurnInjections: {
+                "active-injector": [
+                  {
+                    id: "active",
+                    pluginId: "active-injector",
+                    text: "active prompt contribution",
+                    placement: "append_context",
+                    createdAt: 1,
+                  },
+                ],
+                "disabled-injector": [
+                  {
+                    id: "stale",
+                    pluginId: "disabled-injector",
+                    text: "stale prompt contribution",
+                    placement: "prepend_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            };
+            return undefined;
+          });
+
+          await expect(
+            drainPluginNextTurnInjections({
+              sessionKey: "agent:main:main",
+              now: 2,
+            }),
+          ).resolves.toEqual([
+            expect.objectContaining({
+              id: "active",
+              pluginId: "active-injector",
+              text: "active prompt contribution",
+            }),
+          ]);
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
         },
       });
     } finally {

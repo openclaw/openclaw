@@ -141,12 +141,12 @@ The contracts intentionally split authority:
 
 Examples of non-Plan consumers:
 
-| Plugin archetype             | Hooks used                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------- |
-| Approval workflow            | Session extension, command continuation, next-turn injection, UI descriptor |
-| Budget/workspace policy gate | Trusted tool policy, tool metadata, session projection                      |
-| Background lifecycle monitor | Runtime lifecycle cleanup, heartbeat prompt contribution, UI descriptor     |
-| Setup or onboarding wizard   | Session extension, scoped commands, Control UI descriptor                   |
+| Plugin archetype             | Hooks used                                                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Approval workflow            | Session extension, command continuation, next-turn injection, UI descriptor                                                            |
+| Budget/workspace policy gate | Trusted tool policy, tool metadata, session projection                                                                                 |
+| Background lifecycle monitor | Runtime lifecycle cleanup, agent event subscription, session scheduler ownership/cleanup, heartbeat prompt contribution, UI descriptor |
+| Setup or onboarding wizard   | Session extension, scoped commands, Control UI descriptor                                                                              |
 
 <Note>
   Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
