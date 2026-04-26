@@ -122,6 +122,9 @@ installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at
+the extracted plugin root; archives that only contain `package.json` are
+rejected before OpenClaw writes install records.
 
 Claude marketplace installs are also supported.
 
@@ -244,6 +247,9 @@ metadata, including records for broken or missing plugin manifests. The
 `plugins` array is the manifest-derived cold registry cache. The file includes a
 do-not-edit warning and is used by `openclaw plugins update`, uninstall,
 diagnostics, and the cold plugin registry.
+When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves
+them into the plugin index and removes the config key; if either write fails,
+the config records are kept so the install metadata is not lost.
 
 ### Uninstall
 
@@ -255,12 +261,9 @@ openclaw plugins uninstall <id> --keep-files
 
 `uninstall` removes plugin records from `plugins.entries`, the persisted plugin
 index, the plugin allowlist, and linked `plugins.load.paths` entries when
-applicable.
+applicable. Unless `--keep-files` is set, uninstall also removes the tracked
+managed install directory when it is inside OpenClaw's plugin extensions root.
 For active memory plugins, the memory slot resets to `memory-core`.
-
-By default, uninstall also removes the plugin install directory under the active
-state-dir plugin root. Use
-`--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
 

@@ -232,12 +232,12 @@ describe("config plugin validation", () => {
     clearPluginManifestRegistryCache();
   });
 
-  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+  it("reports missing plugin refs across entries and allowlist surfaces", async () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
-        enabled: false,
+        enabled: true,
         load: { paths: [missingPath] },
         entries: { "missing-plugin": { enabled: true } },
         allow: ["missing-allow"],

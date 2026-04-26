@@ -680,7 +680,15 @@ for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
 provide expressive tags (laughter, singing cues, etc) that should only appear in
 the audio.
 
+Streaming block delivery strips these directives from visible text before the
+channel sees them, even when a directive is split across adjacent blocks. Final
+mode still parses the accumulated raw reply for TTS synthesis.
+
 `provider=...` directives are ignored unless `modelOverrides.allowProvider: true`.
+When a reply declares `provider=...`, the other keys in that directive are
+parsed only by that provider. Unsupported keys are stripped from visible text
+and reported as TTS directive warnings instead of being routed to another
+provider.
 
 Example reply payload:
 
@@ -789,6 +797,9 @@ When enabled, OpenClaw:
 - skips very short replies (< 10 chars).
 - summarizes long replies when enabled using `agents.defaults.model.primary` (or `summaryModel`).
 - attaches the generated audio to the reply.
+- in `mode: "final"`, still sends audio-only TTS for streamed final replies
+  after the text stream completes; the generated media goes through the same
+  channel media normalization as normal reply attachments.
 
 If the reply exceeds `maxLength` and summary is off (or no API key for the
 summary model), audio

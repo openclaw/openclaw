@@ -69,6 +69,7 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+    loadPluginManifestRegistryForPluginRegistry: () => loadPluginManifestRegistry(),
   };
 });
 vi.mock("../plugins/provider-runtime.js", () => ({

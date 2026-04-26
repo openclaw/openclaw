@@ -96,6 +96,7 @@ export type SpeechDirectiveTokenParseContext = {
   key: string;
   value: string;
   policy: SpeechModelOverridePolicy;
+  selectedProvider?: SpeechProviderId;
   providerConfig?: SpeechProviderConfig;
   currentOverrides?: SpeechProviderOverrides;
 };

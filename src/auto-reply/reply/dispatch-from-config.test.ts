@@ -363,6 +363,7 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
 }));
 
@@ -2351,6 +2352,47 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBeUndefined();
   });
 
+  it("normalizes accumulated block TTS-only media before final delivery", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
+      async (payload: ReplyPayload) => ({
+        ...payload,
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+      }),
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:main:feishu:ou_user",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from block streaming." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(replyMediaPathMocks.createReplyMediaPathNormalizer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "feishu",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+        audioAsVoice: true,
+        spokenText: "Hello from block streaming.",
+      }),
+    );
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);
@@ -3329,6 +3371,45 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("strips split TTS directives from streamed block text before delivery", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Intro [[tts:te" });
+      await opts?.onBlockReply?.({ text: "xt]]hidden[[/tts:text]] visible" });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(blockReplySentTexts).toEqual(["Intro ", " visible"]);
+    expect(blockReplySentTexts.join("")).not.toContain("[[tts");
+    expect(blockReplySentTexts.join("")).not.toContain("hidden");
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "Intro [[tts:text]]hidden[[/tts:text]] visible" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/tts-synth.opus" }),
+    );
   });
 
   it("forwards generated-media block replies in WhatsApp group sessions", async () => {

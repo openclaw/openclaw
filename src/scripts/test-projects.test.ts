@@ -474,9 +474,9 @@ describe("test-projects args", () => {
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
       expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-      expect(configs).toContain("test/vitest/vitest.agents.config.ts");
-      expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");
     } finally {
       if (originalVitestMaxWorkers === undefined) {
         delete process.env.OPENCLAW_VITEST_MAX_WORKERS;

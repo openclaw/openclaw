@@ -4,7 +4,7 @@ const getPluginRegistryState = vi.hoisted(() => vi.fn());
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginRegistrySnapshot: vi.fn((_params?: unknown) => ({ plugins: [] })),
 }));
 
 vi.mock("./runtime-state.js", () => ({
@@ -17,9 +17,9 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
 import { resolveRuntimeSyntheticAuthProviderRefs } from "./synthetic-auth.runtime.js";

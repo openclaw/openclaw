@@ -269,6 +269,7 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>

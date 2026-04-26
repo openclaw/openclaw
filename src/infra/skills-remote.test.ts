@@ -297,4 +297,69 @@ describe("skills-remote", () => {
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("records bins from system.which object-map responses", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      const invokeCalls: string[] = [];
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          return {
+            ok: true,
+            payload: { bins: { [bin]: `/opt/homebrew/bin/${bin}`, missing: "" } },
+            payloadJSON: JSON.stringify({ bins: { [bin]: `/opt/homebrew/bin/${bin}` } }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      const before = getSkillsSnapshotVersion(workspaceDir);
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCalls).toEqual(["system.which"]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+      expect(getRemoteSkillEligibility()?.hasBin("missing")).toBe(false);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
 });

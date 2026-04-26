@@ -16,6 +16,7 @@ const providerDiscoveryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: providerDiscoveryMocks.loadPluginRegistrySnapshot,
   resolvePluginContributionOwners: providerDiscoveryMocks.resolvePluginContributionOwners,
   resolveProviderOwners: providerDiscoveryMocks.resolveProviderOwners,
