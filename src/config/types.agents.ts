@@ -135,4 +135,6 @@ export type AgentConfig = {
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  /** Override the default agent ID when agents.list is empty or has no default-flagged entry. */
+  defaultAgentId?: string;
 };

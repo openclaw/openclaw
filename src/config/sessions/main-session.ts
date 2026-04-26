@@ -11,16 +11,26 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
   return `agent:${normalizeAgentId(agentId)}:${normalizeMainKey(mainKey)}`;
 }
 
-export function resolveMainSessionKey(cfg?: {
-  session?: { scope?: SessionScope; mainKey?: string };
-  agents?: { list?: Array<{ id?: string; default?: boolean }> };
-}): string {
+export function resolveMainSessionKey(
+  cfg?: {
+    session?: { scope?: SessionScope; mainKey?: string };
+    agents?: {
+      list?: Array<{ id?: string; default?: boolean }>;
+      defaultAgentId?: string;
+    };
+  },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   if (cfg?.session?.scope === "global") {
     return "global";
   }
   const agents = cfg?.agents?.list ?? [];
+  const explicitDefault = agents.find((agent) => agent?.default)?.id;
+  const firstAgent = agents[0]?.id;
+  const configDefault = cfg?.agents?.defaultAgentId?.trim();
+  const envDefault = env.OPENCLAW_DEFAULT_AGENT_ID?.trim();
   const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
+    explicitDefault ?? firstAgent ?? configDefault ?? envDefault ?? FALLBACK_DEFAULT_AGENT_ID;
   return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);
 }
 

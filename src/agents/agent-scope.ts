@@ -24,6 +24,7 @@ import {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
@@ -35,6 +36,7 @@ export {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";

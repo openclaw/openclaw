@@ -47,9 +47,11 @@ vi.mock("../agents/auth-profiles.js", () => ({
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
+const resolveDefaultAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentDir,
+  resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
 }));
 

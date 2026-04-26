@@ -8417,6 +8417,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
           },
+          defaultAgentId: {
+            type: "string",
+          },
         },
         additionalProperties: false,
         title: "Agents",

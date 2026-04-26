@@ -8,6 +8,7 @@ export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    defaultAgentId: z.string().optional(),
   })
   .strict()
   .optional();

@@ -79,6 +79,7 @@ vi.mock("../agents/agent-paths.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/openclaw-agents/${agentId}`,
+  resolveDefaultAgentDir: () => process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent",
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
 }));

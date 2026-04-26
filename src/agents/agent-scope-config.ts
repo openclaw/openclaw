@@ -64,7 +64,7 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
 export function listAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
-    return [DEFAULT_AGENT_ID];
+    return [resolveDefaultAgentId(cfg)];
   }
   const seen = new Set<string>();
   const ids: string[] = [];
@@ -76,21 +76,32 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
     seen.add(id);
     ids.push(id);
   }
-  return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
+  return ids.length > 0 ? ids : [resolveDefaultAgentId(cfg)];
 }
 
-export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
+export function resolveDefaultAgentId(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return DEFAULT_AGENT_ID;
+  if (agents.length > 0) {
+    const defaults = agents.filter((agent) => agent?.default);
+    if (defaults.length > 1 && !defaultAgentWarned) {
+      defaultAgentWarned = true;
+      warnMultipleDefaultAgents();
+    }
+    const chosen = (defaults[0] ?? agents[0])?.id?.trim();
+    return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
   }
-  const defaults = agents.filter((agent) => agent?.default);
-  if (defaults.length > 1 && !defaultAgentWarned) {
-    defaultAgentWarned = true;
-    warnMultipleDefaultAgents();
+  const configDefault = cfg.agents?.defaultAgentId?.trim();
+  if (configDefault) {
+    return normalizeAgentId(configDefault);
   }
-  const chosen = (defaults[0] ?? agents[0])?.id?.trim();
-  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+  const envDefault = env.OPENCLAW_DEFAULT_AGENT_ID?.trim();
+  if (envDefault) {
+    return normalizeAgentId(envDefault);
+  }
+  return DEFAULT_AGENT_ID;
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -188,4 +199,11 @@ export function resolveAgentDir(
   }
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
+}
+
+export function resolveDefaultAgentDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg, env), env);
 }
