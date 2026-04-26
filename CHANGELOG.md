@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Bonjour: suppress known @homebridge/ciao cancellation and network assertion failures through scoped process handlers so malformed mDNS packets or restricted VPS networking disable/restart Bonjour instead of crashing the gateway. Fixes #67578. Thanks @zenassist26-create.
 - Discord: keep late clicks on already-resolved exec approval buttons quiet when elevated mode auto-resolved the request, while still surfacing real approval submission failures. Fixes #66906. Thanks @rlerikse.
 
 ## 2026.4.25

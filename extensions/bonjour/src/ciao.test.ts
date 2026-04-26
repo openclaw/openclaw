@@ -21,6 +21,23 @@ describe("bonjour-ciao", () => {
     });
   });
 
+  it("classifies ciao netmask assertions separately from side effects", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        Object.assign(
+          new Error(
+            "IP address version must match. Netmask cannot have a version different from the address!",
+          ),
+          { name: "AssertionError" },
+        ),
+      ),
+    ).toEqual({
+      kind: "netmask-assertion",
+      formatted:
+        "AssertionError: IP address version must match. Netmask cannot have a version different from the address!",
+    });
+  });
+
   it("suppresses ciao announcement cancellation rejections", () => {
     expect(ignoreCiaoUnhandledRejection(new Error("Ciao announcement cancelled by shutdown"))).toBe(
       true,
@@ -38,6 +55,17 @@ describe("bonjour-ciao", () => {
   it("suppresses ciao interface assertion rejections as non-fatal", () => {
     const error = Object.assign(
       new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
+      { name: "AssertionError" },
+    );
+
+    expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
+  });
+
+  it("suppresses ciao netmask assertion errors as non-fatal", () => {
+    const error = Object.assign(
+      new Error(
+        "IP address version must match. Netmask cannot have a version different from the address!",
+      ),
       { name: "AssertionError" },
     );
 
