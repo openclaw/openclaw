@@ -542,6 +542,62 @@ Environment overrides remain available for local testing:
 preferred for repeatable deployments because it keeps the plugin behavior in the
 same reviewed file as the rest of the Codex harness setup.
 
+## Computer Use
+
+Computer Use is a Codex-native MCP plugin. OpenClaw does not vendor the desktop
+control app or execute desktop actions itself; it enables Codex app-server
+plugins, installs the configured Codex marketplace plugin when requested, checks
+that the `computer-use` MCP server is available, and then lets Codex handle the
+native MCP tool calls during Codex-mode turns.
+
+Set `plugins.entries.codex.config.computerUse` when you want Codex-mode turns to
+require Computer Use:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplaceSource: "github:example/codex-plugins",
+          },
+        },
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: "openai/gpt-5.5",
+      embeddedHarness: {
+        runtime: "codex",
+      },
+    },
+  },
+}
+```
+
+Use `marketplaceSource` for a Codex marketplace source that app-server can add,
+or `marketplacePath` for a local marketplace file that already exists on the
+machine. If the marketplace is already registered with Codex app-server, use
+`marketplaceName` instead. The defaults are `pluginName: "computer-use"` and
+`mcpServerName: "computer-use"`.
+
+The same setup can be checked or installed from the command surface:
+
+- `/codex computer-use status`
+- `/codex computer-use install`
+- `/codex computer-use install --source <marketplace-source>`
+- `/codex computer-use install --marketplace-path <path>`
+
+Computer Use is macOS-specific and may require local OS permissions before the
+Codex MCP server can control apps. If `computerUse.enabled` is true and the MCP
+server is unavailable, Codex-mode turns fail before the thread starts instead of
+silently running without the native Computer Use tools.
+
 ## Common recipes
 
 Local Codex with default stdio transport:
@@ -644,6 +700,8 @@ Common forms:
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an existing Codex thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
 - `/codex review` starts Codex native review for the attached thread.
+- `/codex computer-use status` checks the configured Computer Use plugin and MCP server.
+- `/codex computer-use install` installs the configured Computer Use plugin and reloads MCP servers.
 - `/codex account` shows account and rate-limit status.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.

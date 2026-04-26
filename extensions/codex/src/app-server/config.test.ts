@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
+  CODEX_COMPUTER_USE_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexComputerUseConfig,
 } from "./config.js";
 
 describe("Codex app-server config", () => {
@@ -130,6 +132,45 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("resolves Computer Use setup from plugin config and environment fallbacks", () => {
+    expect(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {
+          computerUse: {
+            autoInstall: true,
+            marketplaceName: "desktop-tools",
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "ignored-plugin",
+        },
+      }),
+    ).toEqual({
+      enabled: true,
+      autoInstall: true,
+      pluginName: "ignored-plugin",
+      mcpServerName: "computer-use",
+      marketplaceName: "desktop-tools",
+    });
+
+    expect(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {},
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE: "1",
+          OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE: "github:example/plugins",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL: "true",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        autoInstall: true,
+        marketplaceSource: "github:example/plugins",
+      }),
+    );
+  });
+
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
@@ -246,6 +287,7 @@ describe("Codex app-server config", () => {
       configSchema: {
         properties: {
           appServer: { properties: Record<string, unknown> };
+          computerUse: { properties: Record<string, unknown> };
         };
       };
       uiHints: Record<string, unknown>;
@@ -257,6 +299,13 @@ describe("Codex app-server config", () => {
     expect(manifestKeys).toEqual([...CODEX_APP_SERVER_CONFIG_KEYS].toSorted());
     for (const key of CODEX_APP_SERVER_CONFIG_KEYS) {
       expect(manifest.uiHints[`appServer.${key}`]).toBeTruthy();
+    }
+    const computerUseManifestKeys = Object.keys(
+      manifest.configSchema.properties.computerUse.properties,
+    ).toSorted();
+    expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
+    for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
+      expect(manifest.uiHints[`computerUse.${key}`]).toBeTruthy();
     }
   });
 
