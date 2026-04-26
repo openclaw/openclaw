@@ -656,6 +656,8 @@ function buildAssistantText(
   const toolJson = parseToolOutputJson(toolOutput);
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
+  const threadMemoryPromptSeen =
+    /thread memory check/i.test(prompt) || /thread memory check/i.test(allInputText);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =
@@ -744,7 +746,7 @@ function buildAssistantText(
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (threadMemoryPromptSeen && orbitCode) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
@@ -1153,6 +1155,8 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const threadMemoryPromptSeen =
+    /thread memory check/i.test(prompt) || /thread memory check/i.test(allInputText);
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
@@ -1428,7 +1432,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (threadMemoryPromptSeen) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",

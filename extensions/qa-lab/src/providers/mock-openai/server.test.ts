@@ -930,6 +930,64 @@ describe("qa mock openai server", () => {
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
+    const threadMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Thread memory check: what is the hidden thread codename stored only in memory?",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySearch.status).toBe(200);
+    const threadMemorySearchText = await threadMemorySearch.text();
+    expect(threadMemorySearchText).toContain('"name":"memory_search"');
+    expect(threadMemorySearchText).toContain("hidden thread codename ORBIT-22");
+
+    const threadMemoryFinal = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Thread memory check: what is the hidden thread codename stored only in memory?",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({ text: "Thread-hidden codename: ORBIT-22." }),
+          },
+        ],
+      }),
+    });
+    expect(threadMemoryFinal.status).toBe(200);
+    expect(await threadMemoryFinal.text()).toContain(
+      "Protocol note: I checked memory in-thread and the hidden thread codename is ORBIT-22.",
+    );
+
     const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
