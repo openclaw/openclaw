@@ -57,7 +57,7 @@ describe("huggingface image-generation provider", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer hf_test_token");
     expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("accept")).toBe("image/png");
+    expect(headers.get("accept")).toBe("image/*");
 
     expect(result.model).toBe("black-forest-labs/FLUX.1-Krea-dev");
     expect(result.images).toHaveLength(1);
@@ -169,6 +169,39 @@ describe("huggingface image-generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow(/returned no image data/);
+  });
+
+  it("rejects model ids that contain path-traversal segments", async () => {
+    mockHuggingfaceApiKey();
+    const fetchMock = mockSuccessfulImageResponse();
+
+    const provider = buildHuggingfaceImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "huggingface",
+        model: "../../admin",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/Invalid Hugging Face model id/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects requests that carry input images (edit is unsupported)", async () => {
+    mockHuggingfaceApiKey();
+    const fetchMock = mockSuccessfulImageResponse();
+
+    const provider = buildHuggingfaceImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "huggingface",
+        model: "",
+        prompt: "draw a cat",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow(/does not support input images/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("declares the hf-inference text-to-image capability surface", () => {
