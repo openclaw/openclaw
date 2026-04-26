@@ -155,6 +155,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 - Env keys: check `~/.profile`.
+- Supply chain: no runtime package-resolution escape hatches in repo scripts, CI, or docs. Do not add `pnpm dlx`, `npx`, ad-hoc `npm install`, raw `pip install`, `curl | sh`, or one-off downloads when a workspace-managed dependency can be used. Route Node tools through `package.json`/`pnpm-lock.yaml` and `pnpm exec`; route Python tools through `pyproject.toml`/uv policy.
+- CI/pre-commit: new third-party GitHub Actions `uses: owner/repo@...` refs in `.github/workflows/**`/`.github/actions/**` and pre-commit `repo:` hook `rev`s in `.pre-commit-config.yaml` must be pinned to immutable commit SHAs, with human-readable tag/version comments when helpful. Local actions may stay path-based.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm.patchedDependencies` exact versions only.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Release docs: `docs/reference/RELEASING.md`; use `$openclaw-release-maintainer`.
