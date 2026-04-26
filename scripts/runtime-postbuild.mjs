@@ -81,9 +81,37 @@ export function writeStableRootRuntimeAliases(params = {}) {
   }
 }
 
+export function copyBundledHookMetadata(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  const warn = params.warn ?? console.warn;
+  const srcRoot = path.join(rootDir, "src", "hooks", "bundled");
+  const distRoot = path.join(rootDir, "dist", "bundled");
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(srcRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const srcMd = path.join(srcRoot, entry.name, "HOOK.md");
+    const destMd = path.join(distRoot, entry.name, "HOOK.md");
+    if (!fsImpl.existsSync(srcMd)) {
+      warn(`[runtime-postbuild] HOOK.md not found, skipping: ${entry.name}`);
+      continue;
+    }
+    fsImpl.mkdirSync(path.dirname(destMd), { recursive: true });
+    fsImpl.copyFileSync(srcMd, destMd);
+  }
+}
+
 export function runRuntimePostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
+  copyBundledHookMetadata(params);
   writeOfficialChannelCatalog(params);
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  copyBundledHookMetadata,
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
   writeStableRootRuntimeAliases,
@@ -78,5 +79,54 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
     await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+  });
+});
+
+describe("copyBundledHookMetadata", () => {
+  it("copies HOOK.md files from src/hooks/bundled/<hook>/ into dist/bundled/<hook>/", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    const srcHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
+    await fs.mkdir(srcHookDir, { recursive: true });
+    await fs.writeFile(
+      path.join(srcHookDir, "HOOK.md"),
+      "---\nname: session-memory\n---\n",
+      "utf8",
+    );
+    // dist/bundled/session-memory/handler.js already exists from a tsdown build;
+    // simulate that so we cover the "alongside-handler" case rather than a clean dest.
+    const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
+    await fs.mkdir(distHookDir, { recursive: true });
+    await fs.writeFile(path.join(distHookDir, "handler.js"), "export default () => {};\n", "utf8");
+
+    copyBundledHookMetadata({ rootDir });
+
+    expect(await fs.readFile(path.join(distHookDir, "HOOK.md"), "utf8")).toBe(
+      "---\nname: session-memory\n---\n",
+    );
+    // handler.js untouched
+    expect(await fs.readFile(path.join(distHookDir, "handler.js"), "utf8")).toBe(
+      "export default () => {};\n",
+    );
+  });
+
+  it("warns and skips when a bundled hook directory has no HOOK.md", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-missing-");
+    const srcHookDir = path.join(rootDir, "src", "hooks", "bundled", "incomplete");
+    await fs.mkdir(srcHookDir, { recursive: true });
+    const warn = vi.fn();
+
+    copyBundledHookMetadata({ rootDir, warn });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[runtime-postbuild] HOOK.md not found, skipping: incomplete",
+    );
+    await expect(
+      fs.stat(path.join(rootDir, "dist", "bundled", "incomplete", "HOOK.md")),
+    ).rejects.toThrow();
+  });
+
+  it("returns silently when src/hooks/bundled does not exist", () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-empty-");
+    expect(() => copyBundledHookMetadata({ rootDir })).not.toThrow();
   });
 });

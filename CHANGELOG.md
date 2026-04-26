@@ -296,6 +296,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Claude CLI: apply the configured 1M context window override to eligible Claude CLI Opus and Sonnet models when `context1m` is enabled. (#70863) Thanks @bidadh.
 - Models/status: report fresh Claude CLI native auth instead of stale stored `anthropic:claude-cli` profile expiry when local credentials are current. Fixes #71256. (#71332) Thanks @matthiasjanke and @neeravmakwana.
 - CLI backends: compact OpenClaw transcripts after over-budget CLI turns and reseed fresh CLI sessions from the compacted transcript instead of stale external resume state. Fixes #68329. (#71916) Thanks @obviyus.
+- Build/runtime-postbuild: copy bundled hook `HOOK.md` manifests into `dist/bundled/<hook>/` as part of `runRuntimePostBuild` so `pnpm gateway:watch` (which invokes the runtime postbuild but skips the standalone `copy-hook-metadata` step from `BUILD_ALL_PROFILES.gatewayWatch`) ships the manifests its hook discovery scans for. Without this, all bundled internal hooks (e.g. `session-memory`) registered zero handlers in dev. Thanks @jtatum.
 
 ## 2026.4.24
 
