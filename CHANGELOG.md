@@ -3327,6 +3327,10 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 1
 - Channels/iMessage: remove the bundled BlueBubbles channel surface and deprecate BlueBubbles-backed iMessage setup in OpenClaw. Existing `channels.bluebubbles` configs must migrate to `channels.imessage` using `imsg` on a signed-in Mac or an SSH wrapper, and non-macOS default `imsg` configs now report remote-Mac wrapper guidance.
 - Proxy: replace OpenClaw managed HTTP/WebSocket/fetch interception internals with Proxyline while preserving Gateway loopback routing policy. (#79857) Thanks @jesse-merhi.
 
+### Changes
+
+- Bonjour: add `plugins.entries.bonjour.config.instanceName` to override the mDNS service instance name, so multi-gateway hosts can advertise distinct names instead of relying on the shared machine display name and getting auto-suffixed `(2)` on every restart. Fixes #54467. Thanks @jeffjhunter.
+
 ### Fixes
 
 - Agents: honor `OPENCLAW_WORKSPACE_DIR` when resolving the default agent workspace, preserving explicit config precedence while keeping env-backed deployments out of the system prompt fallback path. Fixes #66786.

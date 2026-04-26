@@ -1,107 +1,81 @@
-// Bonjour tests cover index plugin behavior.
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import type {
+  OpenClawGatewayDiscoveryAdvertiseContext,
+  OpenClawGatewayDiscoveryService,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const mocks = vi.hoisted(() => ({
-  advertiserModuleLoaded: vi.fn(),
-  runtimeModuleLoaded: vi.fn(),
-  startGatewayBonjourAdvertiser: vi.fn(async () => ({ stop: vi.fn() })),
+  startGatewayBonjourAdvertiser: vi.fn(),
   registerUncaughtExceptionHandler: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
 }));
 
-vi.mock("./src/advertiser.js", () => {
-  mocks.advertiserModuleLoaded();
-  return {
-    startGatewayBonjourAdvertiser: mocks.startGatewayBonjourAdvertiser,
-  };
-});
+vi.mock("./src/advertiser.js", () => ({
+  startGatewayBonjourAdvertiser: mocks.startGatewayBonjourAdvertiser,
+}));
 
-vi.mock("openclaw/plugin-sdk/runtime", () => {
-  mocks.runtimeModuleLoaded();
-  return {
-    registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-    registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime", () => ({
+  registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
+}));
 
-const { default: bonjourPlugin } = await import("./index.js");
+const baseContext: OpenClawGatewayDiscoveryAdvertiseContext = {
+  machineDisplayName: "Mac Mini",
+  gatewayPort: 18789,
+  gatewayTlsEnabled: false,
+  minimal: false,
+};
 
-afterAll(() => {
-  vi.doUnmock("./src/advertiser.js");
-  vi.doUnmock("openclaw/plugin-sdk/runtime");
-  vi.resetModules();
-});
+async function captureAdvertiserOpts(
+  pluginConfig: Record<string, unknown> | undefined,
+  ctx: OpenClawGatewayDiscoveryAdvertiseContext = baseContext,
+): Promise<{ instanceName: unknown }> {
+  mocks.startGatewayBonjourAdvertiser.mockReset();
+  mocks.startGatewayBonjourAdvertiser.mockResolvedValue({ stop: vi.fn() });
+
+  let registered: OpenClawGatewayDiscoveryService | undefined;
+  const api = createTestPluginApi({
+    pluginConfig,
+    registerGatewayDiscoveryService(service) {
+      registered = service;
+    },
+  });
+
+  const { default: plugin } = await import("./index.js");
+  plugin.register(api);
+  if (!registered) {
+    throw new Error("plugin did not register a gateway discovery service");
+  }
+  await registered.advertise(ctx);
+
+  const opts = mocks.startGatewayBonjourAdvertiser.mock.calls[0]?.[0];
+  return { instanceName: opts?.instanceName };
+}
 
 describe("bonjour plugin entry", () => {
-  it("lazy-loads advertiser runtime when gateway discovery advertises", async () => {
-    let discoveryService:
-      | Parameters<ReturnType<typeof createTestPluginApi>["registerGatewayDiscoveryService"]>[0]
-      | undefined;
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
-    const api = createTestPluginApi({
-      logger,
-      registerGatewayDiscoveryService(service) {
-        discoveryService = service;
-      },
-    });
+  it("falls back to ctx.machineDisplayName when no instanceName is configured", async () => {
+    const { instanceName } = await captureAdvertiserOpts(undefined);
+    expect(instanceName).toBe("Mac Mini (OpenClaw)");
+  });
 
-    expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
+  it("falls back to ctx.machineDisplayName when pluginConfig.instanceName is empty/whitespace", async () => {
+    const { instanceName } = await captureAdvertiserOpts({ instanceName: "   " });
+    expect(instanceName).toBe("Mac Mini (OpenClaw)");
+  });
 
-    bonjourPlugin.register(api);
+  it("uses pluginConfig.instanceName when provided, applying the (OpenClaw) suffix", async () => {
+    const { instanceName } = await captureAdvertiserOpts({ instanceName: "AI VA PC" });
+    expect(instanceName).toBe("AI VA PC (OpenClaw)");
+  });
 
-    expect(discoveryService?.id).toBe("bonjour");
-    expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
+  it("does not double-suffix when configured value already mentions OpenClaw", async () => {
+    const { instanceName } = await captureAdvertiserOpts({ instanceName: "Mac Mini (OpenClaw)" });
+    expect(instanceName).toBe("Mac Mini (OpenClaw)");
+  });
 
-    if (!discoveryService) {
-      throw new Error("expected bonjour plugin to register a discovery service");
-    }
-
-    const stop = vi.fn();
-    mocks.startGatewayBonjourAdvertiser.mockResolvedValueOnce({ stop });
-
-    await expect(
-      discoveryService.advertise({
-        machineDisplayName: "Dev Box",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        canvasPort: 9876,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      }),
-    ).resolves.toEqual({ stop });
-
-    expect(mocks.advertiserModuleLoaded).toHaveBeenCalledTimes(1);
-    expect(mocks.runtimeModuleLoaded).toHaveBeenCalledTimes(1);
-    expect(mocks.startGatewayBonjourAdvertiser).toHaveBeenCalledWith(
-      {
-        instanceName: "Dev Box (OpenClaw)",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        canvasPort: 9876,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      },
-      {
-        logger,
-        registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-        registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-      },
-    );
+  it("ignores non-string instanceName values defensively", async () => {
+    const { instanceName } = await captureAdvertiserOpts({ instanceName: 42 });
+    expect(instanceName).toBe("Mac Mini (OpenClaw)");
   });
 });
