@@ -29,8 +29,8 @@ export function splitTrailingAuthProfile(raw: string): {
   // of the model id. These often use '@' (ex: gemma-4-31b-it@q8_0) which would
   // otherwise be misinterpreted as an auth profile delimiter.
   //
-  // Covers standard GGUF quant tags (q4_0, q8_0, q4_k_xl, …) and importance-
-  // quantization variants (iq3_xxs, iq4_xs, …) used by llama.cpp / LM Studio.
+  // Covers standard GGUF quant tags (q4_0, q8_0, q4_k_xl, ...) and importance-
+  // quantization variants (iq3_xxs, iq4_xs, ...) used by llama.cpp / LM Studio.
   //
   // If an auth profile is needed, it can still be specified as a second suffix:
   //   lmstudio/foo@q8_0@work   lmstudio/foo@iq3_xxs@work
