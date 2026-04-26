@@ -18,8 +18,8 @@ vi.mock("./document-extractor-public-artifacts.js", () => ({
   ),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: vi.fn(() => ({
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(() => ({
     plugins: [
       {
         id: "document-extract",
@@ -43,6 +43,13 @@ vi.mock("./manifest-registry.js", () => ({
       },
     ],
   })),
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+}));
+
+vi.mock("./manifest-registry.js", () => ({
   resolveManifestContractOwnerPluginId: vi.fn(() => undefined),
 }));
 

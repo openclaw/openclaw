@@ -3,15 +3,20 @@ import type { PluginManifestRegistry } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
   findBundledPluginMetadataById: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
 }));
 
 vi.mock("./bundled-plugin-metadata.js", () => ({
   findBundledPluginMetadataById: mocks.findBundledPluginMetadataById,
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 
 import { resolvePluginConfigContractsById } from "./config-contracts.js";
@@ -26,12 +31,14 @@ function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManif
 describe("resolvePluginConfigContractsById", () => {
   beforeEach(() => {
     mocks.findBundledPluginMetadataById.mockReset();
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue(createRegistry([]));
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(createRegistry([]));
+    mocks.loadPluginRegistrySnapshot.mockReset();
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });
 
   it("does not fall back to bundled metadata when registry already resolved a plugin without config contracts", () => {
-    mocks.loadPluginManifestRegistry.mockReturnValue(
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
         {
           id: "brave",

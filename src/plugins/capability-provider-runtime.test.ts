@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   loadPluginManifestRegistry: vi.fn<() => MockManifestRegistry>(() =>
     createEmptyMockManifestRegistry(),
   ),
@@ -36,8 +37,12 @@ vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 
 vi.mock("./bundled-compat.js", () => ({
@@ -68,8 +73,10 @@ function expectBundledCompatLoadPath(params: {
   };
 }) {
   expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+    index: expect.anything(),
     config: params.cfg,
     env: process.env,
+    includeDisabled: true,
   });
   expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
     config: params.allowlistCompat,
@@ -158,6 +165,8 @@ describe("resolvePluginCapabilityProviders", () => {
   beforeEach(() => {
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.loadPluginRegistrySnapshot.mockReset();
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     mocks.loadPluginManifestRegistry.mockReset();
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.withBundledPluginAllowlistCompat.mockClear();
@@ -533,8 +542,10 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["google"]);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      index: expect.anything(),
       config: undefined,
       env: process.env,
+      includeDisabled: true,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: compatConfig,
