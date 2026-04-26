@@ -34,6 +34,7 @@ function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate 
     ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
     ...(record.packageName ? { packageName: record.packageName } : {}),
     ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
+    ...(record.packageChannel ? { packageManifest: { channel: record.packageChannel } } : {}),
     packageDir: rootDir,
   };
 }

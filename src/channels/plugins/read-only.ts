@@ -188,21 +188,36 @@ function buildManifestChannelPlugin(params: {
   if (!isSafeManifestChannelId(params.channelId)) {
     return undefined;
   }
+  const catalogMeta =
+    params.record.channelCatalogMeta?.id === params.channelId
+      ? params.record.channelCatalogMeta
+      : undefined;
   const channelConfigValue = params.record.channelConfigs
     ? readOwnRecordValue(params.record.channelConfigs as Record<string, unknown>, params.channelId)
     : undefined;
   if (
-    !channelConfigValue ||
-    typeof channelConfigValue !== "object" ||
-    Array.isArray(channelConfigValue)
+    !catalogMeta &&
+    (!channelConfigValue ||
+      typeof channelConfigValue !== "object" ||
+      Array.isArray(channelConfigValue))
   ) {
     return undefined;
   }
-  const channelConfig = channelConfigValue as ManifestChannelConfigRecord;
+  const channelConfig =
+    channelConfigValue &&
+    typeof channelConfigValue === "object" &&
+    !Array.isArray(channelConfigValue)
+      ? (channelConfigValue as ManifestChannelConfigRecord)
+      : undefined;
   const label =
-    normalizeManifestText(channelConfig.label, params.record.name || params.channelId) ||
-    params.channelId;
-  const blurb = normalizeManifestText(channelConfig.description, params.record.description || "");
+    normalizeManifestText(
+      channelConfig?.label ?? catalogMeta?.label,
+      params.record.name || params.channelId,
+    ) || params.channelId;
+  const blurb = normalizeManifestText(
+    channelConfig?.description ?? catalogMeta?.blurb,
+    params.record.description || "",
+  );
   return {
     id: params.channelId,
     meta: {
@@ -211,14 +226,22 @@ function buildManifestChannelPlugin(params: {
       selectionLabel: label,
       docsPath: `/channels/${encodeURIComponent(params.channelId)}`,
       blurb,
-      ...(channelConfig.preferOver?.length ? { preferOver: channelConfig.preferOver } : {}),
+      ...(channelConfig?.preferOver?.length
+        ? { preferOver: channelConfig.preferOver }
+        : catalogMeta?.preferOver?.length
+          ? { preferOver: catalogMeta.preferOver }
+          : {}),
     },
     capabilities: { chatTypes: ["direct"] },
-    configSchema: {
-      schema: channelConfig.schema,
-      ...(channelConfig.uiHints ? { uiHints: channelConfig.uiHints } : {}),
-      ...(channelConfig.runtime ? { runtime: channelConfig.runtime } : {}),
-    },
+    ...(channelConfig
+      ? {
+          configSchema: {
+            schema: channelConfig.schema,
+            ...(channelConfig.uiHints ? { uiHints: channelConfig.uiHints } : {}),
+            ...(channelConfig.runtime ? { runtime: channelConfig.runtime } : {}),
+          },
+        }
+      : {}),
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: () => DEFAULT_ACCOUNT_ID,
@@ -245,8 +268,14 @@ function buildManifestChannelPlugin(params: {
   };
 }
 
-function canUseManifestChannelPlugin(record: PluginManifestRecord): boolean {
-  return record.setup?.requiresRuntime === false || !record.setupSource;
+function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: string): boolean {
+  const hasChannelConfig = Boolean(
+    record.channelConfigs && Object.prototype.hasOwnProperty.call(record.channelConfigs, channelId),
+  );
+  if (hasChannelConfig) {
+    return record.setup?.requiresRuntime === false || !record.setupSource;
+  }
+  return record.channelCatalogMeta?.id === channelId;
 }
 
 function rebindChannelPluginConfig(
@@ -439,14 +468,14 @@ function addManifestChannelPlugins(
     if (!options.pluginIds.has(record.id)) {
       continue;
     }
-    if (!canUseManifestChannelPlugin(record)) {
-      continue;
-    }
     for (const channelId of record.channels) {
       if (!isSafeManifestChannelId(channelId)) {
         continue;
       }
       if (!channelIds.has(channelId)) {
+        continue;
+      }
+      if (!canUseManifestChannelPlugin(record, channelId)) {
         continue;
       }
       addChannelPlugins(byId, [buildManifestChannelPlugin({ record, channelId })], {
@@ -468,6 +497,23 @@ function listExternalChannelManifestRecords(
   records: readonly PluginManifestRecord[],
 ): PluginManifestRecord[] {
   return records.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
+}
+
+function listBundledChannelManifestRecords(
+  records: readonly PluginManifestRecord[],
+): PluginManifestRecord[] {
+  return records.filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0);
+}
+
+function listPluginIdsForChannels(
+  records: readonly PluginManifestRecord[],
+  channelIds: readonly string[],
+): string[] {
+  const requestedChannelIds = new Set(channelIds);
+  return records
+    .filter((plugin) => plugin.channels.some((channelId) => requestedChannelIds.has(channelId)))
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveExternalReadOnlyChannelPluginIds(params: {
@@ -527,6 +573,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
     cache: options.cache,
     includeDisabled: true,
   }).plugins;
+  const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const configuredChannelIds = [
     ...new Set(
@@ -545,12 +592,24 @@ export function resolveReadOnlyChannelPluginsForConfig(
 
   addChannelPlugins(byId, listChannelPlugins());
 
-  for (const channelId of configuredChannelIds) {
-    if (byId.has(channelId)) {
-      continue;
+  if (options.includeSetupRuntimeFallback === true) {
+    for (const channelId of configuredChannelIds) {
+      if (byId.has(channelId)) {
+        continue;
+      }
+      addChannelPlugins(byId, [getBundledChannelSetupPlugin(channelId)]);
     }
-    addChannelPlugins(byId, [getBundledChannelSetupPlugin(channelId)]);
   }
+
+  const bundledManifestMissingChannelIds = configuredChannelIds.filter(
+    (channelId) => !byId.has(channelId),
+  );
+  addManifestChannelPlugins(byId, bundledManifestRecords, {
+    pluginIds: new Set(
+      listPluginIdsForChannels(bundledManifestRecords, bundledManifestMissingChannelIds),
+    ),
+    channelIds: bundledManifestMissingChannelIds,
+  });
 
   const missingConfiguredChannelIds = configuredChannelIds.filter(
     (channelId) => !byId.has(channelId),
@@ -566,27 +625,22 @@ export function resolveReadOnlyChannelPluginsForConfig(
   });
   if (externalPluginIds.length > 0) {
     const externalPluginIdSet = new Set(externalPluginIds);
-    addManifestChannelPlugins(byId, externalManifestRecords, {
-      pluginIds: externalPluginIdSet,
-      channelIds: missingConfiguredChannelIds,
-    });
-
-    const setupMissingChannelIds = missingConfiguredChannelIds.filter(
-      (channelId) => !byId.has(channelId),
-    );
-    const missingChannelIdSet = new Set(setupMissingChannelIds);
     const ownedChannelIdsByPluginId = new Map(
       externalManifestRecords
         .filter((record) => externalPluginIdSet.has(record.id))
         .map((record) => [record.id, record.channels] as const),
     );
-    const ownedMissingChannelIdsByPluginId = new Map(
-      [...ownedChannelIdsByPluginId].map(
-        ([pluginId, channelIds]) =>
-          [pluginId, channelIds.filter((channelId) => missingChannelIdSet.has(channelId))] as const,
-      ),
-    );
-    if (setupMissingChannelIds.length > 0 && options.includeSetupRuntimeFallback === true) {
+    if (missingConfiguredChannelIds.length > 0 && options.includeSetupRuntimeFallback === true) {
+      const missingChannelIdSet = new Set(missingConfiguredChannelIds);
+      const ownedMissingChannelIdsByPluginId = new Map(
+        [...ownedChannelIdsByPluginId].map(
+          ([pluginId, channelIds]) =>
+            [
+              pluginId,
+              channelIds.filter((channelId) => missingChannelIdSet.has(channelId)),
+            ] as const,
+        ),
+      );
       const registry = loadOpenClawPlugins({
         config: cfg,
         activationSourceConfig: options.activationSourceConfig ?? cfg,
@@ -604,6 +658,13 @@ export function resolveReadOnlyChannelPluginsForConfig(
         ownedMissingChannelIdsByPluginId,
       });
     }
+    const externalManifestMissingChannelIds = missingConfiguredChannelIds.filter(
+      (channelId) => !byId.has(channelId),
+    );
+    addManifestChannelPlugins(byId, externalManifestRecords, {
+      pluginIds: externalPluginIdSet,
+      channelIds: externalManifestMissingChannelIds,
+    });
   }
 
   const plugins = [...byId.values()];
