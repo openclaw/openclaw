@@ -198,6 +198,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   ) => {
     const hasPreviewButtons = Boolean(previewButtons && previewButtons.length > 0);
     return (
+      lane.hasStreamedMessage &&
       isDraftPreviewLane(lane) &&
       !hasPreviewButtons &&
       typeof lane.stream?.materialize === "function"
@@ -385,7 +386,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       stopBeforeEdit,
       context,
     });
-    if (previewTargetBeforeStop.stopCreatesFirstPreview) {
+    if (previewTargetBeforeStop.stopCreatesFirstPreview && lane.hasStreamedMessage) {
       // Final stop() can create the first visible preview message.
       // Prime pending text so the stop flush sends the final text snapshot.
       lane.stream.update(text);

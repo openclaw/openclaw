@@ -1201,12 +1201,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await replyOptions?.onPartialReply?.({ text: "Message A partial" });
         await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
         const startPromise = replyOptions?.onAssistantMessageStart?.();
+        const partialPromise = replyOptions?.onPartialReply?.({ text: "Message B partial" });
         const finalPromise = dispatcherOptions.deliver(
           { text: "Message B final" },
           { kind: "final" },
         );
         resolveMaterialize?.(1001);
         await startPromise;
+        await partialPromise;
         await finalPromise;
         return { queuedFinal: true };
       },
@@ -1368,7 +1370,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(boundaryRotationOrder).toBeLessThan(secondUpdateOrder);
   });
 
-  it("keeps final-only preview lane finalized until a real boundary rotation happens", async () => {
+  it("sends final-only text without creating a synthetic preview before real partials", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
@@ -1392,17 +1394,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Message A final" })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
       1,
       123,
       1001,
-      "Message A final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      2,
-      123,
-      1002,
       "Message B final",
       expect.any(Object),
     );
