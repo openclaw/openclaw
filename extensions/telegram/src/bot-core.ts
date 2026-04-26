@@ -1,7 +1,9 @@
 import {
   isNativeCommandsExplicitlyDisabled,
+  loadSessionStore,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveChannelGroupPolicy,
@@ -15,6 +17,7 @@ import {
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -43,6 +46,7 @@ import { tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { createTelegramSequentialKey } from "./sequential-key.runtime.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -383,8 +387,6 @@ export function createTelegramBotCore(
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
-
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
   const MAX_RAW_UPDATE_STRING = 500;
@@ -541,6 +543,18 @@ export function createTelegramBotCore(
       messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
     return { groupConfig, topicConfig };
   };
+
+  bot.use(
+    botRuntime.sequentialize(
+      createTelegramSequentialKey({
+        accountId: account.accountId,
+        loadRuntimeConfig: () => getRuntimeConfigSnapshot() ?? telegramDeps.loadConfig(),
+        loadSessionStore: telegramDeps.loadSessionStore ?? loadSessionStore,
+        resolveTelegramGroupConfig,
+        resolveStorePath: telegramDeps.resolveStorePath ?? resolveStorePath,
+      }),
+    ),
+  );
 
   // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
   // Created BEFORE the message processor so it can be injected into every message context.

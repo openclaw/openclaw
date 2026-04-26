@@ -2,6 +2,7 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramBotOptions } from "./bot.types.js";
+import type { TelegramSequentialKeyContext } from "./sequential-key.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
@@ -21,6 +22,7 @@ const {
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
+  isReplyRunActiveForSessionKeySpy,
   listSkillCommandsForAgents,
   makeForumGroupMessageCtx,
   middlewareUseSpy,
@@ -234,7 +236,166 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    const ctx = makeForumGroupMessageCtx({
+      threadId: 9,
+      text: "hello",
+    }) as unknown as TelegramSequentialKeyContext;
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+  });
+
+  it.each(["steer", "queued", "steer-backlog", "interrupt"] as const)(
+    "routes busy %s-mode Telegram messages onto a session control lane",
+    (mode) => {
+      loadConfig.mockReturnValue({
+        messages: {
+          queue: {
+            mode,
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const ctx = makeForumGroupMessageCtx({
+        threadId: 99,
+        text: "follow up please",
+      }) as unknown as TelegramSequentialKeyContext;
+      isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+      const key = harness.sequentializeKey?.(ctx);
+
+      expect(key).toMatch(/^telegram:session-control:/);
+      expect(key).not.toBe(getTelegramSequentialKey(ctx));
+      expect(isReplyRunActiveForSessionKeySpy).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("routes busy media-only Telegram messages onto a session control lane", () => {
+    loadConfig.mockReturnValue({
+      messages: {
+        queue: {
+          mode: "interrupt",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const baseCtx = makeForumGroupMessageCtx({
+      threadId: 99,
+      text: "",
+    }) as unknown as TelegramSequentialKeyContext;
+    const ctx = {
+      ...baseCtx,
+      message: {
+        ...baseCtx.message,
+        text: undefined,
+        voice: { file_id: "voice-1" },
+      },
+    } as unknown as TelegramSequentialKeyContext;
+    isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+    const key = harness.sequentializeKey?.(ctx);
+
+    expect(key).toMatch(/^telegram:session-control:/);
+    expect(key).not.toBe(getTelegramSequentialKey(ctx));
+    expect(isReplyRunActiveForSessionKeySpy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps busy collect-mode Telegram messages on the ordinary topic lane", () => {
+    loadConfig.mockReturnValue({
+      messages: {
+        queue: {
+          mode: "collect",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const ctx = makeForumGroupMessageCtx({
+      threadId: 99,
+      text: "follow up please",
+    }) as unknown as TelegramSequentialKeyContext;
+    isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+  });
+
+  it.each(["coalesce", "followups", "follow-ups"] as const)(
+    "keeps busy Telegram messages on the ordinary topic lane when %s overrides a lower-precedence immediate mode",
+    (mode) => {
+      loadConfig.mockReturnValue({
+        messages: {
+          queue: {
+            mode: "interrupt",
+            byChannel: {
+              telegram: mode,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const ctx = makeForumGroupMessageCtx({
+        threadId: 99,
+        text: "follow up please",
+      }) as unknown as TelegramSequentialKeyContext;
+      isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+      expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+    },
+  );
+
+  it("does not reroute whole-message control commands through the busy session lane", () => {
+    loadConfig.mockReturnValue({
+      messages: {
+        queue: {
+          mode: "interrupt",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const ctx = makeForumGroupMessageCtx({
+      threadId: 99,
+      text: "/queue interrupt",
+    }) as unknown as TelegramSequentialKeyContext;
+    isReplyRunActiveForSessionKeySpy.mockReturnValue(true);
+
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {
