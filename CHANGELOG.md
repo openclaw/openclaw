@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
+- Models/auth: accept standard `sk-ant-api03-…` Anthropic API keys via `openclaw models auth paste-token --provider anthropic` in addition to the existing `sk-ant-oat01-…` setup-token prefix. The validation error now lists both supported prefixes instead of only mentioning the OAuth one. Fixes #72121. Thanks @hclsys.
 - Plugins/startup: load the default `memory-core` slot during Gateway startup when permitted so active-memory recall can call `memory_search` and `memory_get` without requiring an explicit `plugins.slots.memory` entry, while preserving `plugins.slots.memory: "none"`. Thanks @codex.
 - Plugins/CLI: prefer native require for compiled bundled plugin JavaScript before jiti so read-only config, status, device, and node commands avoid unnecessary transform overhead on slow hosts. Fixes #62842. Thanks @Effet.
 - Plugins/compat: inventory doctor-side deprecation migrations separately from runtime plugin compatibility so release sweeps preserve needed repairs while enforcing dated removal windows. Thanks @vincentkoc.
