@@ -10,12 +10,14 @@ type CapturedReplyPayload = {
   mediaUrls?: string[];
 };
 
-const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
-    capturedDispatchParams = params;
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-  }),
-}));
+const { dispatchReplyWithBufferedBlockDispatcherMock, resolveAgentScopedOutboundMediaAccessMock } =
+  vi.hoisted(() => ({
+    dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
+      capturedDispatchParams = params;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    }),
+    resolveAgentScopedOutboundMediaAccessMock: vi.fn(() => ({ localRoots: [] })),
+  }));
 
 vi.mock("./runtime-api.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
@@ -29,7 +31,7 @@ vi.mock("./runtime-api.js", () => ({
           : "",
   }),
   getAgentScopedMediaLocalRoots: () => [],
-  resolveAgentScopedOutboundMediaAccess: () => ({ localRoots: [] }),
+  resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
   jidToE164: (value: string) => {
     const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
     return phone ? `+${phone}` : null;
@@ -155,6 +157,7 @@ describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+    resolveAgentScopedOutboundMediaAccessMock.mockReset().mockReturnValue({ localRoots: [] });
   });
 
   it("builds a finalized inbound context payload", () => {
@@ -433,6 +436,39 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(4);
     expect(rememberSentText).toHaveBeenCalledTimes(4);
+  });
+
+  it("passes route and sender context into outbound media access", async () => {
+    await dispatchBufferedReply({
+      conversationId: "123@g.us",
+      msg: makeMsg({
+        accountId: "work",
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatId: "123@g.us",
+        chatType: "group",
+        senderJid: "15550002222@s.whatsapp.net",
+        senderE164: "+15550002222",
+        senderName: "Alice",
+      }),
+      route: makeRoute({
+        accountId: "work",
+        sessionKey: "agent:main:whatsapp:group:123@g.us",
+      }),
+    });
+
+    expect(resolveAgentScopedOutboundMediaAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:group:123@g.us",
+        messageProvider: undefined,
+        accountId: "work",
+        groupId: "123@g.us",
+        requesterSenderId: "15550002222@s.whatsapp.net",
+        requesterSenderName: "Alice",
+        requesterSenderE164: "+15550002222",
+      }),
+    );
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {

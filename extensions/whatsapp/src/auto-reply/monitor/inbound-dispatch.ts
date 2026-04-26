@@ -102,6 +102,7 @@ export function buildWhatsAppInboundContext(params: {
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
   transcript?: string;
+  mediaTranscribedIndexes?: number[];
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
@@ -132,6 +133,7 @@ export function buildWhatsAppInboundContext(params: {
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
+    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
     ChatType: params.msg.chatType,
     Timestamp: params.msg.timestamp,
     ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
@@ -277,9 +279,22 @@ export async function dispatchWhatsAppBufferedReply(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
+  const requesterSenderId =
+    params.msg.senderJid ??
+    params.msg.senderE164 ??
+    (params.msg.chatType === "direct" ? params.msg.from : undefined);
+  const requesterSenderE164 =
+    params.msg.senderE164 ?? (params.msg.chatType === "direct" ? params.msg.from : undefined);
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.cfg,
     agentId: params.route.agentId,
+    sessionKey: params.route.sessionKey,
+    messageProvider: params.route.sessionKey ? undefined : "whatsapp",
+    accountId: params.route.accountId ?? params.msg.accountId,
+    groupId: params.msg.chatType === "group" ? params.conversationId : undefined,
+    requesterSenderId,
+    requesterSenderName: params.msg.senderName ?? params.msg.pushName,
+    requesterSenderE164,
   });
   const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;

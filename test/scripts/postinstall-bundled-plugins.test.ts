@@ -550,11 +550,39 @@ describe("bundled plugin postinstall", () => {
     const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
     const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
     const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    const installStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
+    const retryInstallStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage-retry",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
     await fs.mkdir(path.dirname(staleFile), { recursive: true });
     await fs.mkdir(path.dirname(packageJson), { recursive: true });
     await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(path.dirname(installStageFile), { recursive: true });
+    await fs.mkdir(path.dirname(retryInstallStageFile), { recursive: true });
     await fs.writeFile(staleFile, "export {};\n");
     await fs.writeFile(packageJson, "{}\n");
+    await fs.writeFile(installStageFile, "export {};\n");
+    await fs.writeFile(retryInstallStageFile, "export {};\n");
     await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
 
     expect(
@@ -564,6 +592,8 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
+    await expect(fs.stat(installStageFile)).resolves.toBeDefined();
+    await expect(fs.stat(retryInstallStageFile)).resolves.toBeDefined();
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {

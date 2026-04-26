@@ -838,6 +838,14 @@ export const AgentEmbeddedHarnessSchema = z
   .strict()
   .optional();
 
+export const AgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+    fallback: z.enum(["pi", "none"]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -846,6 +854,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     thinkingDefault: z

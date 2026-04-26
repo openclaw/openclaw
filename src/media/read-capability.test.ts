@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -47,6 +49,61 @@ describe("createAgentScopedHostMediaReadFile", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+
+  it("continues past missing configured directory roots and reads from later roots", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-roots-"));
+    try {
+      const existingRoot = path.join(tempRoot, "existing");
+      const missingRoot = path.join(tempRoot, "missing");
+      const filePath = path.join(existingRoot, "reply.txt");
+      await fs.mkdir(existingRoot, { recursive: true });
+      await fs.writeFile(filePath, "ok");
+
+      const readFile = createAgentScopedHostMediaReadFile({
+        cfg: {
+          tools: {
+            fs: {
+              roots: [
+                { path: missingRoot, kind: "dir", access: "ro" },
+                { path: existingRoot, kind: "dir", access: "ro" },
+              ],
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      await expect(readFile!(filePath)).resolves.toEqual(Buffer.from("ok"));
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves not-found errors inside an existing configured directory root", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-roots-"));
+    try {
+      const existingRoot = path.join(tempRoot, "existing");
+      await fs.mkdir(existingRoot, { recursive: true });
+
+      const readFile = createAgentScopedHostMediaReadFile({
+        cfg: {
+          tools: {
+            fs: {
+              roots: [
+                { path: path.join(tempRoot, "missing"), kind: "dir", access: "ro" },
+                { path: existingRoot, kind: "dir", access: "ro" },
+              ],
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      await expect(readFile!(path.join(existingRoot, "missing.txt"))).rejects.toMatchObject({
+        code: "not-found",
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -188,6 +245,31 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
     expect(result.localRoots).toEqual([path.resolve("/packs/shared")]);
+  });
+
+  it("ignores configured roots when the requester session is sandboxed", () => {
+    const stateDir = path.join("/tmp", "openclaw-sandbox-media-access-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all" },
+          },
+        },
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      mediaSources: [path.join(stateDir, "sandboxes", "session-1", "photo.png")],
+    });
+
+    expect(result.localRoots).toContain(path.join(stateDir, "sandboxes"));
+    expect(result.localRoots).not.toContain(path.resolve("/packs/shared"));
   });
 
   it("keeps host reads enabled for DM sender when no group context exists", () => {

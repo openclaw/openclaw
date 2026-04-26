@@ -80,6 +80,12 @@ async function main() {
       },
       agents: {
         defaults: {
+          heartbeat: {
+            every: "0m",
+          },
+          skipBootstrap: true,
+          contextInjection: "never",
+          skills: [],
           subagents: {
             runTimeoutSeconds: 8,
           },
@@ -87,11 +93,15 @@ async function main() {
       },
       tools: {
         profile: "coding",
+        alsoAllow: ["bundle-mcp"],
         subagents: {
           tools: {
             alsoAllow: ["bundle-mcp"],
           },
         },
+      },
+      plugins: {
+        enabled: false,
       },
       mcp: {
         servers: {

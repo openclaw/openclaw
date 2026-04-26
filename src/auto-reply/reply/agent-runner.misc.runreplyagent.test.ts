@@ -334,6 +334,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(usageEvent).toMatchObject({
       type: "model.usage",
+      agentId: "main",
       usage: {
         input: 75_000,
         output: 5_000,
@@ -1666,7 +1667,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { embeddedHarness: { runtime: "claude-cli" } } } },
+        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus-4-7",

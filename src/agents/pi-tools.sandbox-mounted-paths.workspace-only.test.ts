@@ -112,8 +112,7 @@ describe("tools.fs.workspaceOnly", () => {
 
       await editTool?.execute("t-roots-edit", {
         path: "/agent/secret.txt",
-        oldText: "shh",
-        newText: "ok",
+        edits: [{ oldText: "shh", newText: "ok" }],
       });
       expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("ok");
     });
@@ -138,7 +137,10 @@ describe("tools.fs.workspaceOnly", () => {
       });
 
       await expect(
-        editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+        editTool?.execute("t3", {
+          path: "/agent/secret.txt",
+          edits: [{ oldText: "shh", newText: "nope" }],
+        }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
     });

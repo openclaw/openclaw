@@ -27,6 +27,7 @@ import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../i
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
@@ -621,6 +622,9 @@ export async function startGatewayServer(
     await runClosePrelude();
     await createCloseHandler()({ reason: "gateway startup failed" });
   };
+  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
+    broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
+  };
 
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -771,6 +775,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
+      broadcastVoiceWakeRoutingChanged,
     });
 
     setFallbackGatewayContextResolver(() => gatewayRequestContext);

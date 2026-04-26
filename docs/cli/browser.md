@@ -55,6 +55,7 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 ```bash
 openclaw browser status
 openclaw browser doctor
+openclaw browser doctor --deep
 openclaw browser start
 openclaw browser start --headless
 openclaw browser stop
@@ -63,6 +64,8 @@ openclaw browser --browser-profile openclaw reset-profile
 
 Notes:
 
+- `doctor --deep` adds a live snapshot probe. It is useful when basic CDP
+  readiness is green but you want proof that the current tab can be inspected.
 - For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
   active control session and clears temporary emulation overrides even when
   OpenClaw did not launch the browser process itself.

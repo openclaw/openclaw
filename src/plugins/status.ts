@@ -159,12 +159,19 @@ function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
   manifest?: PluginManifestRecord,
 ): PluginRecord {
+  const format = plugin.format ?? manifest?.format ?? "openclaw";
+  const bundleFormat = plugin.bundleFormat ?? manifest?.bundleFormat;
   return {
     id: plugin.pluginId,
-    name: plugin.pluginId,
-    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
-    format: "openclaw",
-    source: plugin.manifestPath,
+    name: manifest?.name ?? plugin.packageName ?? plugin.pluginId,
+    ...(plugin.packageVersion || manifest?.version
+      ? { version: plugin.packageVersion ?? manifest?.version }
+      : {}),
+    ...(manifest?.description ? { description: manifest.description } : {}),
+    format,
+    ...(bundleFormat ? { bundleFormat } : {}),
+    ...(manifest?.kind ? { kind: manifest.kind } : {}),
+    source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,

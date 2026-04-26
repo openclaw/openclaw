@@ -185,4 +185,32 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("User: Actual user text");
   });
+
+  it("skips inter-session user messages", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "A background task completed. Internal relay text.",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "User-facing summary." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Actual user follow-up." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "inter-session-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
+    expect(entry!.lineMap).toEqual([2, 3]);
+  });
 });

@@ -166,6 +166,9 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
   const seen = new Set<string>();
   const blocks: Array<Record<string, unknown>> = [];
   for (const payload of payloads) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
       const url = raw.trim();
@@ -198,6 +201,9 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   let hasImage = false;
 
   for (const payload of payloads) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const visibleText = payload.text?.trim();
     const text =
       visibleText && !isSuppressedControlReplyText(visibleText) ? visibleText : undefined;
