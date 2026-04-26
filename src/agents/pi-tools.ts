@@ -621,89 +621,92 @@ export function createOpenClawCodingTools(options?: {
           roots: resolvedRoots && !sandboxRoot ? resolvedRoots : undefined,
           rootsValidator: patchRootsValidator,
         });
-  const tools: AnyAgentTool[] = [
-    ...base,
-    ...(sandboxRoot
-      ? allowWorkspaceWrites
-        ? [
-            workspaceOnly
-              ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-                  sandboxRoot,
-                  {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  },
-                )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-            workspaceOnly
-              ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-                  sandboxRoot,
-                  {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  },
-                )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-          ]
-        : []
-      : []),
-    ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
-    execTool as unknown as AnyAgentTool,
-    processTool as unknown as AnyAgentTool,
-    // Channel docking: include channel-defined agent tools (login, etc.).
-    ...listChannelAgentTools({ cfg: options?.config }),
-    ...createOpenClawTools({
-      sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
-      allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-      agentSessionKey: options?.sessionKey,
-      agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.messageTo,
-      agentThreadId: options?.messageThreadId,
-      agentGroupId: options?.groupId ?? null,
-      agentGroupChannel: options?.groupChannel ?? null,
-      agentGroupSpace: options?.groupSpace ?? null,
-      agentMemberRoleIds: options?.memberRoleIds,
-      agentDir: options?.agentDir,
-      sandboxRoot,
-      sandboxContainerWorkdir: sandbox?.containerWorkdir,
-      sandboxFsBridge,
-      fsPolicy,
-      workspaceDir: workspaceRoot,
-      spawnWorkspaceDir: options?.spawnWorkspaceDir
-        ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
-        : undefined,
-      sandboxed: !!sandbox,
-      config: options?.config,
-      pluginToolAllowlist: collectExplicitAllowlist([
-        profilePolicy,
-        providerProfilePolicy,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        sandboxToolPolicy,
-        subagentPolicy,
-      ]),
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      currentMessageId: options?.currentMessageId,
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      replyToMode: options?.replyToMode,
-      hasRepliedRef: options?.hasRepliedRef,
-      modelHasVision: options?.modelHasVision,
-      requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-      disableMessageTool: options?.disableMessageTool,
-      requesterAgentIdOverride: agentId,
-      requesterSenderId: options?.senderId,
-      senderIsOwner: options?.senderIsOwner,
-      sessionId: options?.sessionId,
-      onYield: options?.onYield,
-      allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
-    }),
-  ];
+  const sandboxWriteTools: AnyAgentTool[] =
+    sandboxRoot && allowWorkspaceWrites
+      ? [
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                sandboxRoot,
+                {
+                  containerWorkdir: sandbox.containerWorkdir,
+                },
+              )
+            : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                sandboxRoot,
+                {
+                  containerWorkdir: sandbox.containerWorkdir,
+                },
+              )
+            : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+        ]
+      : [];
+  const fsTools = [...base, ...sandboxWriteTools];
+  const tools: AnyAgentTool[] =
+    isMemoryFlushRun && memoryFlushWritePath
+      ? fsTools
+      : [
+          ...fsTools,
+          ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
+          execTool as unknown as AnyAgentTool,
+          processTool as unknown as AnyAgentTool,
+          // Channel docking: include channel-defined agent tools (login, etc.).
+          ...listChannelAgentTools({ cfg: options?.config }),
+          ...createOpenClawTools({
+            sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+            allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+            agentSessionKey: options?.sessionKey,
+            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentAccountId: options?.agentAccountId,
+            agentTo: options?.messageTo,
+            agentThreadId: options?.messageThreadId,
+            agentGroupId: options?.groupId ?? null,
+            agentGroupChannel: options?.groupChannel ?? null,
+            agentGroupSpace: options?.groupSpace ?? null,
+            agentMemberRoleIds: options?.memberRoleIds,
+            agentDir: options?.agentDir,
+            sandboxRoot,
+            sandboxContainerWorkdir: sandbox?.containerWorkdir,
+            sandboxFsBridge,
+            fsPolicy,
+            workspaceDir: workspaceRoot,
+            spawnWorkspaceDir: options?.spawnWorkspaceDir
+              ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
+              : undefined,
+            sandboxed: !!sandbox,
+            config: options?.config,
+            pluginToolAllowlist: collectExplicitAllowlist([
+              profilePolicy,
+              providerProfilePolicy,
+              globalPolicy,
+              globalProviderPolicy,
+              agentPolicy,
+              agentProviderPolicy,
+              groupPolicy,
+              sandboxToolPolicy,
+              subagentPolicy,
+            ]),
+            currentChannelId: options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
+            modelProvider: options?.modelProvider,
+            modelId: options?.modelId,
+            replyToMode: options?.replyToMode,
+            hasRepliedRef: options?.hasRepliedRef,
+            modelHasVision: options?.modelHasVision,
+            requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+            disableMessageTool: options?.disableMessageTool,
+            requesterAgentIdOverride: agentId,
+            requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
+            sessionId: options?.sessionId,
+            onYield: options?.onYield,
+            allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+          }),
+        ];
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {
