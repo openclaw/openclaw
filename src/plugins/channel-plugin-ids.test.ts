@@ -97,6 +97,30 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
+        id: "anthropic",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["anthropic"],
+        cliBackends: ["claude-cli"],
+      },
+      {
+        id: "openai",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["openai", "openai-codex"],
+        cliBackends: ["codex-cli"],
+      },
+      {
+        id: "google",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["google", "google-gemini-cli"],
+        cliBackends: ["google-gemini-cli"],
+      },
+      {
         id: "codex",
         channels: [],
         activation: {
@@ -669,6 +693,52 @@ describe("resolveGatewayStartupPluginIds", () => {
       }),
       env: { OPENCLAW_AGENT_RUNTIME: "codex" },
       expected: ["demo-channel", "browser", "codex"],
+    });
+  });
+
+  it("includes required CLI backend owner plugins when the default runtime is forced", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        agentRuntimeId: "demo-cli",
+        enabledPluginIds: ["demo-provider-plugin"],
+      }),
+      expected: ["demo-channel", "browser", "demo-provider-plugin"],
+    });
+  });
+
+  it.each([
+    ["claude-cli", "anthropic"],
+    ["codex-cli", "openai"],
+    ["google-gemini-cli", "google"],
+  ] as const)("includes the bundled %s CLI backend owner at startup", (runtime, pluginId) => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        agentRuntimeId: runtime,
+      }),
+      expected: ["demo-channel", "browser", pluginId],
+    });
+  });
+
+  it("does not include required CLI backend owner plugins when they are explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "demo-cli",
+              fallback: "none",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "demo-provider-plugin": {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser"],
     });
   });
 

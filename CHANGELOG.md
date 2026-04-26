@@ -82,10 +82,7 @@ Docs: https://docs.openclaw.ai
 - UI/Windows: quote resolved pnpm `.cmd` launcher paths before spawning UI install/build/test commands so Node installs under `C:\Program Files` no longer fail as `C:\Program`. Fixes #45275. Thanks @Kobevictor, @stoppieboy, and @iubns.
 - Codex/agent: translate `--thinking minimal` to `low` for modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) at request build time so the first turn is accepted instead of paying a wasted call + retry-with-low fallback. Older Codex models still receive `minimal` directly. Fixes #71946. Thanks @hclsys.
 - Plugins/uninstall: remove tracked plugin files from their recorded managed extensions root even when the current state directory points somewhere else, so `openclaw plugins uninstall --force` does not leave the plugin discoverable. Thanks @shakkernerd.
-- Agents/runtime: add `agentRuntime.id` as the canonical config key, migrate
-  legacy runtime-policy configs with `openclaw doctor --fix`, and route
-  canonical Anthropic models through `claude-cli` without passing CLI backend
-  aliases to embedded harness selection. Fixes #71957. Thanks @WolvenRA.
+- Agents/runtime: add `agentRuntime.id` as the canonical config key, migrate legacy runtime-policy configs with `openclaw doctor --fix`, route canonical Anthropic models through `claude-cli` without passing CLI backend aliases to embedded harness selection, and load CLI backend owner plugins before channel startup. Fixes #71957. Thanks @WolvenRA.
 - CLI/update: guard Windows scheduled-task stops by state and timeout so auto-update restart cannot hang indefinitely on `schtasks /End` before stale-listener cleanup. Fixes #69970. Thanks @yangswld and @sherlock-huang.
 - Windows install/Lobster: execute `pnpm.exe` directly when `npm_execpath` points at the native pnpm binary, add an installed-package fallback for the Lobster embedded runtime, and include the Lobster runner regression test in Windows CI. Fixes #69456. Thanks @igormf.
 - Gateway/install: refresh loaded gateway service installs when the current service embeds stale gateway auth instead of returning already-installed, avoiding LaunchAgent token-mismatch loops after token rotation. Fixes #70752. Thanks @hyspacex.

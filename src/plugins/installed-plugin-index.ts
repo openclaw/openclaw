@@ -205,7 +205,10 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: sortUnique(record.activation?.onAgentHarnesses ?? []),
+    agentHarnesses: sortUnique([
+      ...(record.activation?.onAgentHarnesses ?? []),
+      ...(record.cliBackends ?? []),
+    ]),
   };
 }
 
