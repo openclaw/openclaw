@@ -223,7 +223,7 @@ do not run in live chat traffic, check these first:
   `openclaw gateway run` process.
 - Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
   diagnostics. Non-bundled conversation hooks such as `llm_input`,
-  `llm_output`, and `agent_end` need
+  `llm_output`, `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
   resolution for agent turns; `llm_output` only runs after a model attempt
