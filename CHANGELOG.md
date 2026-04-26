@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/update: guard Windows scheduled-task stops by state and timeout so auto-update restart cannot hang indefinitely on `schtasks /End` before stale-listener cleanup. Fixes #69970. Thanks @yangswld and @sherlock-huang.
 - Gateway/install: refresh loaded gateway service installs when the current service embeds stale gateway auth instead of returning already-installed, avoiding LaunchAgent token-mismatch loops after token rotation. Fixes #70752. Thanks @hyspacex.
 - Update: ignore bundled plugin `.openclaw-install-stage` directories during global install verification and packaged dist pruning so leftover runtime-dep staging files do not turn successful updates into `unexpected packaged dist file` failures. Fixes #71752. Thanks @waynegault.
 - Node runtime: keep node-host retry timers alive across Gateway restarts and exit on terminal credential pauses so supervised nodes do not become silent zombies. Fixes #69800. Thanks @meroli28.
