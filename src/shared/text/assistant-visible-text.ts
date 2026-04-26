@@ -427,29 +427,18 @@ export function stripDowngradedToolCallText(text: string): string {
       return false;
     }
     const functionValue = value.function;
-    if (
-      isRecord(functionValue) &&
-      (value.type === "function" || typeof value.id === "string") &&
-      (typeof functionValue.name === "string" ||
-        typeof functionValue.arguments === "string" ||
-        isRecord(functionValue.arguments))
-    ) {
-      return true;
-    }
     return (
-      value.type === "function_call" &&
-      typeof value.name === "string" &&
-      (typeof value.arguments === "string" || isRecord(value.arguments) || "call_id" in value)
+      value.type === "function" &&
+      isRecord(functionValue) &&
+      typeof functionValue.name === "string" &&
+      (typeof functionValue.arguments === "string" || isRecord(functionValue.arguments))
     );
   };
 
   const hasToolCallsArray = (value: unknown): boolean =>
-    Array.isArray(value) && value.some((item) => isToolCallObject(item));
+    Array.isArray(value) && value.length > 0 && value.every((item) => isToolCallObject(item));
 
   const isBareToolCallJsonPayload = (value: unknown): boolean => {
-    if (hasToolCallsArray(value) || isToolCallObject(value)) {
-      return true;
-    }
     if (!isRecord(value)) {
       return false;
     }
@@ -473,9 +462,6 @@ export function stripDowngradedToolCallText(text: string): string {
     return false;
   };
 
-  const looksLikeBareToolCallJsonFragment = (value: string): boolean =>
-    /^\s*\{[\s\S]*"tool_calls"\s*:\s*\[/i.test(value);
-
   const skipOneRedundantNewline = (input: string, start: number, result: string): number => {
     let index = start;
     while (index < input.length && (input[index] === " " || input[index] === "\t")) {
@@ -495,14 +481,27 @@ export function stripDowngradedToolCallText(text: string): string {
     return index;
   };
 
-  const stripBareToolCallJsonPayloads = (input: string): string => {
+  const findNextLineBreak = (input: string, start: number): number => {
+    const nextNewline = input.indexOf("\n", start);
+    const nextCarriage = input.indexOf("\r", start);
+    if (nextNewline === -1) {
+      return nextCarriage;
+    }
+    if (nextCarriage === -1) {
+      return nextNewline;
+    }
+    return Math.min(nextNewline, nextCarriage);
+  };
+
+  const stripBareToolCallJsonPayloads = (input: string): { text: string; changed: boolean } => {
     if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(input)) {
-      return input;
+      return { text: input, changed: false };
     }
 
     const codeRegions = findCodeRegions(input);
     let result = "";
     let cursor = 0;
+    let changed = false;
     for (let index = 0; index < input.length; index += 1) {
       const ch = input[index];
       if ((ch !== "{" && ch !== "[") || index < cursor || isInsideCode(index, codeRegions)) {
@@ -511,7 +510,6 @@ export function stripDowngradedToolCallText(text: string): string {
 
       const end = consumeJsonish(input, index);
       let shouldStrip = false;
-      let stripEnd = end ?? input.length;
       if (end !== null) {
         const raw = input.slice(index, end);
         if (!BARE_TOOL_CALL_JSON_QUICK_RE.test(raw)) {
@@ -528,7 +526,12 @@ export function stripDowngradedToolCallText(text: string): string {
           continue;
         }
       } else {
-        shouldStrip = looksLikeBareToolCallJsonFragment(input.slice(index));
+        const nextLineBreak = findNextLineBreak(input, index + 1);
+        if (nextLineBreak === -1) {
+          break;
+        }
+        index = nextLineBreak;
+        continue;
       }
 
       if (!shouldStrip) {
@@ -536,12 +539,16 @@ export function stripDowngradedToolCallText(text: string): string {
       }
 
       result += input.slice(cursor, index);
-      stripEnd = skipOneRedundantNewline(input, stripEnd, result);
+      const stripEnd = skipOneRedundantNewline(input, end, result);
       cursor = stripEnd;
+      changed = true;
       index = Math.max(index, cursor - 1);
     }
+    if (!changed) {
+      return { text: input, changed: false };
+    }
     result += input.slice(cursor);
-    return result;
+    return { text: result, changed: true };
   };
 
   const stripToolCalls = (input: string): string => {
@@ -599,7 +606,8 @@ export function stripDowngradedToolCallText(text: string): string {
     return result;
   };
 
-  let cleaned = stripBareToolCallJsonPayloads(text);
+  const bareToolCallJsonResult = stripBareToolCallJsonPayloads(text);
+  let cleaned = bareToolCallJsonResult.text;
 
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
   cleaned = stripToolCalls(cleaned);
@@ -610,7 +618,7 @@ export function stripDowngradedToolCallText(text: string): string {
   // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
 
-  return cleaned.trim();
+  return cleaned === text && !bareToolCallJsonResult.changed ? text : cleaned.trim();
 }
 
 function stripRelevantMemoriesTags(text: string): string {

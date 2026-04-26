@@ -515,12 +515,27 @@ describe("stripDowngradedToolCallText", () => {
     expect(stripDowngradedToolCallText(input)).toBe("Aku submit issue-nya sekarang.");
   });
 
-  it("strips incomplete bare tool_calls JSON fragments to the end of the chunk", () => {
-    expect(
-      stripDowngradedToolCallText(
-        'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}',
-      ),
-    ).toBe("Before");
+  it("preserves incomplete bare tool_calls JSON fragments", () => {
+    const input = 'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}';
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves no-op bare JSON scans without trimming history whitespace", () => {
+    const input = '  {"type":"function","description":"example"}  ';
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
+  });
+
+  it("requires strict OpenAI-style tool call entries before stripping", () => {
+    const input = [
+      "Before",
+      '{"tool_calls":[{"id":"123","function":{"name":"report","arguments":"{}"}}]}',
+      "After",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
   });
 
   it("preserves bare tool_calls JSON inside fenced and inline code examples", () => {
