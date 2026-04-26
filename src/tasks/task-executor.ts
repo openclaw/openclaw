@@ -27,6 +27,7 @@ import {
   deleteTaskFlowRecordById,
   getTaskFlowById,
   requestFlowCancel,
+  resolveManagedFlowResidue,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
@@ -355,6 +356,14 @@ export function retryBlockedFlowAsRunningTaskRun(
 type CancelFlowResult = {
   found: boolean;
   cancelled: boolean;
+  reason?: string;
+  flow?: TaskFlowRecord;
+  tasks?: TaskRecord[];
+};
+
+type ResidueResolutionResult = {
+  found: boolean;
+  applied: boolean;
   reason?: string;
   flow?: TaskFlowRecord;
   tasks?: TaskRecord[];
@@ -693,4 +702,12 @@ export async function cancelDetachedTaskRunById(params: { cfg: OpenClawConfig; t
     }
   }
   return cancelTaskById(params);
+}
+
+export function resolveFlowResidueById(params: {
+  flowId: string;
+  disposition: string;
+  reason?: string | null;
+}): ResidueResolutionResult {
+  return resolveManagedFlowResidue(params);
 }

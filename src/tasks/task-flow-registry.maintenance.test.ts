@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { createQueuedTaskRun, createRunningTaskRun } from "./task-executor.js";
 import {
   createFlowRecord,
   createManagedTaskFlow,
+  finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
@@ -70,11 +71,13 @@ describe("task-flow-registry maintenance", () => {
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
+        invariantStamped: 0,
         pruned: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
+        invariantStamped: 0,
         pruned: 0,
       });
       expect(getTaskFlowById(flow.flowId)).toMatchObject({
@@ -100,11 +103,13 @@ describe("task-flow-registry maintenance", () => {
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 1,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 1,
       });
       expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
@@ -126,11 +131,13 @@ describe("task-flow-registry maintenance", () => {
       expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(1);
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
+        invariantStamped: 0,
         pruned: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
+        invariantStamped: 0,
         pruned: 0,
       });
       expect(getTaskFlowById(flow.flowId)).toMatchObject({
@@ -181,11 +188,13 @@ describe("task-flow-registry maintenance", () => {
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 0,
       });
       expect(getTaskFlowById(flow.flowId)).toMatchObject({
@@ -194,6 +203,61 @@ describe("task-flow-registry maintenance", () => {
         cancelRequestedAt: 100,
       });
       expect(child.parentFlowId).toBe(flow.flowId);
+    });
+  });
+
+  it("stamps unresolved terminal managed residue without resolving it", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Terminal residue",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+      createQueuedTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "queued-residue",
+        task: "Queued child residue",
+      });
+      const finished = finishFlow({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        updatedAt: 200,
+        endedAt: 200,
+      });
+      expect(finished).toMatchObject({ applied: true });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        invariantStamped: 1,
+        pruned: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        invariantStamped: 1,
+        pruned: 0,
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        stateJson: {
+          residueInvariant: {
+            status: "unresolved",
+            activeTaskIds: expect.any(Array),
+            activeTaskStatuses: expect.any(Array),
+            detectedAt: expect.any(Number),
+          },
+        },
+      });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        invariantStamped: 0,
+        pruned: 0,
+      });
     });
   });
 
@@ -234,11 +298,13 @@ describe("task-flow-registry maintenance", () => {
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 25,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
+        invariantStamped: 0,
         pruned: 25,
       });
 

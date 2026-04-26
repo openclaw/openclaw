@@ -3,13 +3,18 @@ import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
+import {
+  cancelFlowById,
+  getFlowTaskSummary,
+  resolveFlowResidueById,
+} from "../tasks/task-executor.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { getFlowResidueResolution } from "../tasks/task-flow-state-json.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -103,37 +108,14 @@ function formatFlowListSummary(flows: TaskFlowRecord[]) {
   return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
-function summarizeWait(flow: TaskFlowRecord): string {
-  if (flow.waitJson == null) {
+function formatResidueResolutionValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
     return "n/a";
   }
-  if (
-    typeof flow.waitJson === "string" ||
-    typeof flow.waitJson === "number" ||
-    typeof flow.waitJson === "boolean"
-  ) {
-    return String(flow.waitJson);
-  }
-  if (Array.isArray(flow.waitJson)) {
-    return `array(${flow.waitJson.length})`;
-  }
-  return Object.keys(flow.waitJson).toSorted().join(", ") || "object";
-}
-
-function summarizeFlowState(flow: TaskFlowRecord): string | null {
-  if (flow.status === "blocked") {
-    if (flow.blockedSummary) {
-      return flow.blockedSummary;
-    }
-    if (flow.blockedTaskId) {
-      return `blocked by ${flow.blockedTaskId}`;
-    }
-    return "blocked";
-  }
-  if (flow.status === "waiting" && flow.waitJson != null) {
-    return summarizeWait(flow);
-  }
-  return null;
+  return JSON.stringify(value);
 }
 
 export async function flowsListCommand(
@@ -194,7 +176,7 @@ export async function flowsShowCommand(
   }
   const tasks = listTasksForFlowId(flow.flowId);
   const taskSummary = getFlowTaskSummary(flow.flowId);
-  const stateSummary = summarizeFlowState(flow);
+  const residueResolution = getFlowResidueResolution(flow);
 
   if (opts.json) {
     runtime.log(
@@ -219,7 +201,24 @@ export async function flowsShowCommand(
     `currentStep: ${safeFlowDisplayText(flow.currentStep)}`,
     `owner: ${safeFlowDisplayText(flow.ownerKey)}`,
     `notify: ${flow.notifyPolicy}`,
-    ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
+    ...(flow.blockedSummary ? [`state: ${safeFlowDisplayText(flow.blockedSummary)}`] : []),
+    ...(residueResolution?.disposition
+      ? [
+          `residueDisposition: ${safeFlowDisplayText(
+            formatResidueResolutionValue(residueResolution.disposition),
+          )}`,
+        ]
+      : []),
+    ...(residueResolution?.reason
+      ? [
+          `residueReason: ${safeFlowDisplayText(
+            formatResidueResolutionValue(residueResolution.reason),
+          )}`,
+        ]
+      : []),
+    ...(typeof residueResolution?.resolvedAt === "number"
+      ? [`residueResolvedAt: ${new Date(residueResolution.resolvedAt).toISOString()}`]
+      : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
       : []),
@@ -265,4 +264,50 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
   }
   const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
   runtime.log(`Cancelled ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
+}
+
+export async function flowsResolveResidueCommand(
+  opts: { json?: boolean; lookup: string; disposition: string; reason?: string },
+  runtime: RuntimeEnv,
+) {
+  const flow = resolveTaskFlowForLookupToken(opts.lookup);
+  if (!flow) {
+    runtime.error(`Flow not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const result = resolveFlowResidueById({
+    flowId: flow.flowId,
+    disposition: opts.disposition,
+    reason: opts.reason,
+  });
+  if (!result.found) {
+    runtime.error(result.reason ?? `Flow not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  if (!result.applied || !result.flow) {
+    runtime.error(result.reason ?? `Could not resolve residue for TaskFlow: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  if (opts.json) {
+    runtime.log(JSON.stringify({ flow: result.flow, tasks: result.tasks ?? [] }, null, 2));
+    return;
+  }
+  const residueResolution = getFlowResidueResolution(result.flow);
+  runtime.log(`Resolved residue for ${result.flow.flowId} (${result.flow.status}).`);
+  runtime.log(
+    `residueDisposition: ${safeFlowDisplayText(
+      formatResidueResolutionValue(residueResolution?.disposition),
+    )}`,
+  );
+  if (residueResolution?.reason) {
+    runtime.log(
+      `residueReason: ${safeFlowDisplayText(formatResidueResolutionValue(residueResolution.reason))}`,
+    );
+  }
+  if (typeof residueResolution?.resolvedAt === "number") {
+    runtime.log(`residueResolvedAt: ${new Date(residueResolution.resolvedAt).toISOString()}`);
+  }
 }

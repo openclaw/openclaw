@@ -19,12 +19,15 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
+  deriveTaskFlowStatusFromTask,
   getTaskFlowById,
-  syncFlowFromTask,
+  resolveFlowBlockedSummary,
+  setTaskFlowLinkedTasksResolverForRuntime,
   updateFlowRecordByIdExpectedRevision,
-} from "./task-flow-runtime-internal.js";
+} from "./task-flow-registry.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskFlowSyncTask } from "./task-flow-sync.types.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import {
   getTaskRegistryObservers,
@@ -119,9 +122,19 @@ function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
 
-function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
+function isClosedFlowStatus(status: TaskFlowRecord["status"]): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
+
+function isEndedFlowStatus(status: TaskFlowRecord["status"]): boolean {
+  return (
+    status === "succeeded" ||
+    status === "blocked" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "lost"
   );
 }
 
@@ -130,6 +143,42 @@ function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind })
   if (!ownerKey && params.scopeKind !== "system") {
     throw new Error("Task ownerKey is required.");
   }
+}
+
+function syncFlowFromTask(task: TaskFlowSyncTask): TaskFlowRecord | null {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return null;
+  }
+  const flow = getTaskFlowById(flowId);
+  if (!flow) {
+    return null;
+  }
+  if (flow.syncMode !== "task_mirrored") {
+    return flow;
+  }
+  const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
+  const isTerminal = isEndedFlowStatus(terminalFlowStatus);
+  const result = updateFlowRecordByIdExpectedRevision({
+    flowId,
+    expectedRevision: flow.revision,
+    patch: {
+      status: terminalFlowStatus,
+      notifyPolicy: task.notifyPolicy,
+      goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
+      blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
+      blockedSummary:
+        terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
+      waitJson: null,
+      updatedAt: task.lastEventAt ?? Date.now(),
+      ...(isTerminal
+        ? {
+            endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
+          }
+        : { endedAt: null }),
+    },
+  });
+  return result.applied ? result.flow : (getTaskFlowById(flowId) ?? flow);
 }
 
 function assertParentFlowLinkAllowed(params: {
@@ -168,7 +217,7 @@ function assertParentFlowLinkAllowed(params: {
       { flowId, status: flow.status },
     );
   }
-  if (isTerminalFlowStatus(flow.status)) {
+  if (isClosedFlowStatus(flow.status)) {
     throw new ParentFlowLinkError("terminal", `Parent flow is already ${flow.status}.`, {
       flowId,
       status: flow.status,
@@ -232,6 +281,8 @@ function cloneTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
     ...(state.requesterOrigin ? { requesterOrigin: { ...state.requesterOrigin } } : {}),
   };
 }
+
+setTaskFlowLinkedTasksResolverForRuntime((flowId) => listTasksForFlowId(flowId));
 
 function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
   return [...source.values()].map((record) => cloneTaskRecord(record));
@@ -895,7 +946,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
     !flow ||
     flow.syncMode !== "managed" ||
     flow.cancelRequestedAt == null ||
-    isTerminalFlowStatus(flow.status)
+    isClosedFlowStatus(flow.status)
   ) {
     return;
   }
@@ -924,7 +975,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
       !flow ||
       flow.syncMode !== "managed" ||
       flow.cancelRequestedAt == null ||
-      isTerminalFlowStatus(flow.status)
+      isClosedFlowStatus(flow.status)
     ) {
       return;
     }
@@ -1876,6 +1927,23 @@ export async function cancelTaskById(params: {
   try {
     if (task.runtime !== "cli") {
       if (!childSessionKey) {
+        if (task.status === "queued") {
+          const now = Date.now();
+          const updated = updateTask(task.taskId, {
+            status: "cancelled",
+            endedAt: now,
+            lastEventAt: now,
+            error: "Cancelled queued task before child session start.",
+          });
+          if (updated) {
+            void maybeDeliverTaskTerminalUpdate(updated.taskId);
+          }
+          return {
+            found: true,
+            cancelled: true,
+            task: updated ?? cloneTaskRecord(task),
+          };
+        }
         return {
           found: true,
           cancelled: false,

@@ -1,6 +1,7 @@
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { getFlowResidueResolution } from "./task-flow-state-json.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type TaskFlowAuditSeverity = "warn" | "error";
@@ -12,6 +13,7 @@ export type TaskFlowAuditCode =
   | "cancel_stuck"
   | "missing_linked_tasks"
   | "blocked_task_missing"
+  | "terminal_residue_unresolved"
   | "inconsistent_timestamps";
 
 export type TaskFlowAuditFinding = {
@@ -90,6 +92,15 @@ function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
   );
 }
 
+function isTerminalFlow(flow: TaskFlowRecord): boolean {
+  return (
+    flow.status === "succeeded" ||
+    flow.status === "failed" ||
+    flow.status === "cancelled" ||
+    flow.status === "lost"
+  );
+}
+
 function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding | null {
   if (flow.updatedAt < flow.createdAt) {
     return createFinding({
@@ -131,6 +142,7 @@ export function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
       cancel_stuck: 0,
       missing_linked_tasks: 0,
       blocked_task_missing: 0,
+      terminal_residue_unresolved: 0,
       inconsistent_timestamps: 0,
     },
   };
@@ -258,6 +270,23 @@ export function listTaskFlowAuditFindings(
           }),
         );
       }
+    }
+
+    if (
+      flow.syncMode === "managed" &&
+      isTerminalFlow(flow) &&
+      activeTasks.length > 0 &&
+      !getFlowResidueResolution(flow)
+    ) {
+      findings.push(
+        createFinding({
+          severity: "warn",
+          code: "terminal_residue_unresolved",
+          flow,
+          ageMs,
+          detail: `terminal managed TaskFlow still has ${activeTasks.length} active linked task(s) without residue disposition`,
+        }),
+      );
     }
 
     const inconsistency = findTimestampInconsistency(flow);
