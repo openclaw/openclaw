@@ -95,6 +95,12 @@ export function isIncompleteTerminalAssistantTurn(params: {
 
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
+// Short, confident "I'm doing it" narration that asserts ongoing action without
+// taking a tool call. Distinct from PLANNING_ONLY_PROMISE_RE because these forms
+// imply the action is already in progress, so they should bypass the action-verb
+// requirement that filters out vague planning prose.
+const PLANNING_ONLY_ACTIVE_NARRATION_RE =
+  /\b(?:on it|got it|doing (?:that|it) now|running (?:that|it) now|i(?:'m| am)\s+(?:running|doing|working|starting|handling|processing|polishing|rewriting|drafting|writing|reading|checking|looking|making|building|sending|posting|taking))\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
@@ -174,12 +180,12 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "계속해",
 ]);
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
-  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare)\b/i;
+  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|do|put|post|draft|polish|rewrite|pass|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed|go)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
+  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|do|put|post|draft|polish|rewrite|pass|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed)\b/i;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+  "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. A blocker is ONLY an external technical obstacle outside your control - a missing file path, a failed API response, a denied permission, a tool that returns an error. Restating the task ('I haven't done it yet', 'I need to run X', 'I'm waiting to execute'), asking the user to confirm again, or describing what you intend to do is NOT a blocker and will be treated as another planning-only turn. Your reply this turn must contain either (a) a tool call, or (b) a single sentence naming a specific external obstacle with the exact error or resource that is blocking you.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -842,12 +848,18 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     return null;
   }
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
-  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat) {
+  const isActiveNarration = PLANNING_ONLY_ACTIVE_NARRATION_RE.test(text);
+  if (
+    !PLANNING_ONLY_PROMISE_RE.test(text) &&
+    !hasStructuredPlanningFormat &&
+    !isActiveNarration
+  ) {
     return null;
   }
   if (
     !hasStructuredPlanningFormat &&
     !singleActionNarrative &&
+    !isActiveNarration &&
     !PLANNING_ONLY_ACTION_VERB_RE.test(text)
   ) {
     return null;
