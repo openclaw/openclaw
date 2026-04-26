@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auto-reply: dedupe idless inbound retries with a route-scoped content/timestamp fingerprint while preserving provider message-id keys, so channels that retry without stable IDs no longer inject duplicate turns. (#72314) Thanks @mjamiv.
 - Agents/commitments: keep inferred follow-ups internal when heartbeat target is none, strip raw source text from stored commitments, disable tools during due-commitment heartbeat turns, bound hidden extraction queue growth, expire stale commitments, and add QA/Docker safety coverage. Thanks @vignesh07.
 - Plugins/runtime-deps: accept already materialized package-level runtime-deps supersets as converged, so later lazy plugin activation no longer prunes and relaunches `pnpm install` after gateway startup pre-staging. Fixes #75283. Thanks @brokemac79.
 - TTS/providers: keep bundled speech-provider compat fallback available when plugins are globally disabled, so cold gateway and CLI startup can still resolve fallback speech providers instead of leaving explicit TTS provider selection with no registered providers. Refs #75265. Thanks @sliekens.
