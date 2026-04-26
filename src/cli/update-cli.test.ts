@@ -1283,6 +1283,76 @@ describe("update-cli", () => {
     ).not.toContain("already-current");
   });
 
+  it("retries package updates without optional deps when npm global update fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-optional-"));
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv.includes("-g") &&
+        !argv.includes("--omit=optional")
+      ) {
+        return {
+          stdout: "",
+          stderr: "node-gyp failed",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        "npm",
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--omit=optional",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+      ],
+      expect.any(Object),
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("uses the owning npm binary for package updates when PATH npm points elsewhere", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const brewPrefix = createCaseDir("brew-prefix");
