@@ -352,6 +352,77 @@ describe("host-hook fixture plugin contract", () => {
     ).resolves.toEqual([]);
   });
 
+  it("skips throwing session extension projectors without losing other projections", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "throwing-projector-fixture",
+        name: "Throwing Projector Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Throwing workflow state",
+          project: () => {
+            throw new Error("projection failed");
+          },
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "healthy-projector-fixture",
+        name: "Healthy Projector Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Healthy workflow state",
+          project: ({ state }) => state,
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    const entry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      pluginExtensions: {
+        "throwing-projector-fixture": {
+          workflow: { state: "hidden" },
+        },
+        "healthy-projector-fixture": {
+          workflow: { state: "visible" },
+        },
+      },
+    };
+
+    expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual([
+      {
+        pluginId: "healthy-projector-fixture",
+        namespace: "workflow",
+        value: { state: "visible" },
+      },
+    ]);
+    const row = buildGatewaySessionRow({
+      cfg: config,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry,
+    });
+    expect(row.pluginExtensions).toEqual([
+      {
+        pluginId: "healthy-projector-fixture",
+        namespace: "workflow",
+        value: { state: "visible" },
+      },
+    ]);
+  });
+
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -627,6 +698,90 @@ describe("host-hook fixture plugin contract", () => {
           ]);
           const stored = loadSessionStore(storePath, { skipCache: true });
           expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves global enqueue order when draining live next-turn injections", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "injector-a",
+        name: "Injector A",
+        status: "loaded",
+      }),
+      createPluginRecord({
+        id: "injector-b",
+        name: "Injector B",
+        status: "loaded",
+      }),
+    );
+    setActivePluginRegistry(registry);
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-order-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: storePath },
+        },
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              pluginNextTurnInjections: {
+                "injector-a": [
+                  {
+                    id: "a1",
+                    pluginId: "injector-a",
+                    text: "first",
+                    placement: "append_context",
+                    createdAt: 1,
+                  },
+                  {
+                    id: "a2",
+                    pluginId: "injector-a",
+                    text: "third",
+                    placement: "append_context",
+                    createdAt: 3,
+                  },
+                ],
+                "injector-b": [
+                  {
+                    id: "b1",
+                    pluginId: "injector-b",
+                    text: "second",
+                    placement: "append_context",
+                    createdAt: 2,
+                  },
+                ],
+              },
+            };
+            return undefined;
+          });
+
+          await expect(
+            drainPluginNextTurnInjections({
+              sessionKey: "agent:main:main",
+              now: 4,
+            }),
+          ).resolves.toEqual([
+            expect.objectContaining({ id: "a1", text: "first" }),
+            expect.objectContaining({ id: "b1", text: "second" }),
+            expect.objectContaining({ id: "a2", text: "third" }),
+          ]);
         },
       });
     } finally {

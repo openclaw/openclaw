@@ -11,6 +11,7 @@ import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../gateway/session-store-key.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -27,6 +28,9 @@ import {
   type PluginSessionExtensionProjection,
 } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
+
+const log = createSubsystemLogger("plugins/host-hook-state");
+const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
 
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
@@ -274,6 +278,7 @@ export async function drainPluginNextTurnInjections(params: {
       const liveEntries = entries.filter((candidate) => !isExpired(candidate, now));
       drained.push(...liveEntries);
     }
+    drained.sort((left, right) => left.createdAt - right.createdAt);
     delete entry.pluginNextTurnInjections;
     if (drained.length > 0) {
       entry.updatedAt = now;
@@ -369,13 +374,17 @@ export async function projectPluginSessionExtensions(params: {
     if (state === undefined) {
       continue;
     }
-    const projected = registration.extension.project
-      ? registration.extension.project({
-          sessionKey: params.sessionKey,
-          sessionId: params.entry.sessionId,
-          state,
-        })
-      : state;
+    const projected = projectSessionExtensionValue({
+      pluginId: registration.pluginId,
+      namespace: registration.extension.namespace,
+      project: registration.extension.project,
+      sessionKey: params.sessionKey,
+      sessionId: params.entry.sessionId,
+      state,
+    });
+    if (projected === PROJECTION_FAILED) {
+      continue;
+    }
     if (isPromiseLike(projected)) {
       discardUnexpectedPromiseProjection(projected);
       continue;
@@ -399,6 +408,34 @@ function discardUnexpectedPromiseProjection(value: PromiseLike<unknown>): void {
   void Promise.resolve(value).catch(() => undefined);
 }
 
+function projectSessionExtensionValue(params: {
+  pluginId: string;
+  namespace: string;
+  project?: (ctx: {
+    sessionKey: string;
+    sessionId?: string;
+    state: PluginJsonValue | undefined;
+  }) => PluginJsonValue | undefined;
+  sessionKey: string;
+  sessionId?: string;
+  state: PluginJsonValue;
+}): PluginJsonValue | undefined | PromiseLike<unknown> | typeof PROJECTION_FAILED {
+  try {
+    return params.project
+      ? (params.project({
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          state: params.state,
+        }) as PluginJsonValue | undefined | PromiseLike<unknown>)
+      : params.state;
+  } catch (error) {
+    log.warn(
+      `plugin session extension projection failed: plugin=${params.pluginId} namespace=${params.namespace} error=${String(error)}`,
+    );
+    return PROJECTION_FAILED;
+  }
+}
+
 export function projectPluginSessionExtensionsSync(params: {
   sessionKey: string;
   entry: SessionEntry;
@@ -416,13 +453,17 @@ export function projectPluginSessionExtensionsSync(params: {
     if (state === undefined) {
       continue;
     }
-    const projected = registration.extension.project
-      ? registration.extension.project({
-          sessionKey: params.sessionKey,
-          sessionId: params.entry.sessionId,
-          state,
-        })
-      : state;
+    const projected = projectSessionExtensionValue({
+      pluginId: registration.pluginId,
+      namespace: registration.extension.namespace,
+      project: registration.extension.project,
+      sessionKey: params.sessionKey,
+      sessionId: params.entry.sessionId,
+      state,
+    });
+    if (projected === PROJECTION_FAILED) {
+      continue;
+    }
     if (isPromiseLike(projected)) {
       discardUnexpectedPromiseProjection(projected);
       continue;
