@@ -4,10 +4,20 @@ import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.GatewayEventQueue
 import ai.openclaw.android.gateway.ProxyGatewayConfigPayload
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+
+internal interface WearProxyEventSession {
+  val events: Flow<GatewayEvent>
+  fun close()
+}
 
 internal class WearProxyBridge(
   private val scope: CoroutineScope,
@@ -17,13 +27,58 @@ internal class WearProxyBridge(
   private val statusText: () -> String,
   private val gatewayConfig: () -> ProxyGatewayConfigPayload?,
 ) {
-  // Queue/coalesce to keep terminal states when Data Layer backpressures.
-  private val eventQueue = GatewayEventQueue(scope = scope, json = json, logTag = "WearProxy")
+  private data class ActiveSession(
+    val queue: GatewayEventQueue,
+    val forwardJob: Job,
+    val outboundEvents: Channel<GatewayEvent>,
+  )
 
-  val events: SharedFlow<GatewayEvent> = eventQueue.events
+  private val sessionLock = Any()
+  private val activeSessions = linkedSetOf<ActiveSession>()
 
   fun emit(event: String, payloadJson: String?) {
-    eventQueue.emit(event, payloadJson)
+    emit(GatewayEvent(event, payloadJson))
+  }
+
+  fun emit(event: GatewayEvent) {
+    val sessions =
+      synchronized(sessionLock) {
+        activeSessions.toList()
+      }
+    sessions.forEach { session ->
+      session.queue.emit(event)
+    }
+  }
+
+  fun openEventSession(logTag: String = "WearProxy"): WearProxyEventSession {
+    val sessionQueue = GatewayEventQueue(scope = scope, json = json, logTag = logTag)
+    val outboundEvents = Channel<GatewayEvent>(capacity = Channel.UNLIMITED)
+    val forwardJob =
+      scope.launch {
+        sessionQueue.events.collect { event ->
+          outboundEvents.send(event)
+        }
+      }
+    val activeSession =
+      ActiveSession(
+        queue = sessionQueue,
+        forwardJob = forwardJob,
+        outboundEvents = outboundEvents,
+      )
+    synchronized(sessionLock) {
+      activeSessions += activeSession
+    }
+    return object : WearProxyEventSession {
+      override val events: Flow<GatewayEvent> = outboundEvents.receiveAsFlow()
+
+      override fun close() {
+        synchronized(sessionLock) {
+          activeSessions.remove(activeSession)
+        }
+        activeSession.forwardJob.cancel()
+        activeSession.outboundEvents.close()
+      }
+    }
   }
 
   fun handshakePayload(): String {

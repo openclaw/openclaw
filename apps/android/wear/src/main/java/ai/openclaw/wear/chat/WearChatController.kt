@@ -113,21 +113,28 @@ class WearChatController(
   }
 
   fun switchClient(newClient: GatewayClientInterface) {
+    val preservePendingState = hasPendingRuns()
+    val previousAppliedMainSessionKey = appliedMainSessionKey
+    val wasFollowingMainSession = normalizeRequestedSessionKey(_sessionKey.value) == previousAppliedMainSessionKey
     eventsJob?.cancel()
     historyLoadJob?.cancel()
     historyLoadJob = null
     historyRequestVersion.incrementAndGet()
     client = newClient
+    if (wasFollowingMainSession && previousAppliedMainSessionKey != "main") {
+      rebindPendingSessionKey(from = previousAppliedMainSessionKey, to = "main")
+      _sessionKey.value = "main"
+    }
     appliedMainSessionKey = "main"
-    _messages.value = emptyList()
+    if (!preservePendingState) {
+      _messages.value = emptyList()
+    }
     _streamingText.value = null
     _errorText.value = null
-    _isSending.value = false
     _isLoading.value = false
     lastSyncedHistory = emptyList()
     hasSyncedHistory = false
-    clearPendingRuns()
-    clearQueuedOutboundMessages()
+    cancelDispatchesForClientSwitch()
     clearSideResults()
     startEventsCollection()
   }
@@ -302,8 +309,9 @@ class WearChatController(
             armPendingRunTimeout(runId)
             ensurePendingHistoryRefreshLoop()
 
+            val dispatchSessionKey = resolveDispatchSessionKey(sessionKey)
             val params = buildJsonObject {
-              put("sessionKey", JsonPrimitive(sessionKey))
+              put("sessionKey", JsonPrimitive(dispatchSessionKey))
               put("message", JsonPrimitive(text))
               put("thinking", JsonPrimitive("off"))
               put("timeoutMs", JsonPrimitive(30_000))
@@ -356,6 +364,7 @@ class WearChatController(
       "mainSessionKey" -> {
         val key = event.payloadJson?.trim()
         if (!key.isNullOrEmpty()) {
+          val previousSessionKey = _sessionKey.value
           val nextState =
             applyMainSessionKey(
               currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
@@ -365,13 +374,20 @@ class WearChatController(
           appliedMainSessionKey = nextState.appliedMainSessionKey
           if (_sessionKey.value != nextState.currentSessionKey) {
             _sessionKey.value = nextState.currentSessionKey
-            _messages.value = emptyList()
+            if (previousSessionKey == "main") {
+              rebindPendingSessionKey(from = "main", to = nextState.currentSessionKey)
+            }
             _streamingText.value = null
             _errorText.value = null
             lastSyncedHistory = emptyList()
             hasSyncedHistory = false
-            clearPendingRuns()
-            clearQueuedOutboundMessages()
+            if (previousSessionKey != "main" || !hasPendingRuns()) {
+              _messages.value = emptyList()
+              clearPendingRuns()
+              clearQueuedOutboundMessages()
+            } else {
+              cancelDispatchesForClientSwitch()
+            }
             clearSideResults()
             lastAnnouncedAssistantId = null
             loadHistory()
@@ -683,6 +699,11 @@ class WearChatController(
     return key
   }
 
+  private fun resolveDispatchSessionKey(sessionKey: String): String {
+    if (sessionKey != "main") return sessionKey
+    return appliedMainSessionKey.takeIf { it.isNotBlank() } ?: sessionKey
+  }
+
   private fun isPendingRun(runId: String): Boolean {
     return synchronized(pendingRuns) { pendingRuns.containsKey(runId) }
   }
@@ -781,13 +802,18 @@ class WearChatController(
     if (!hasPendingRuns()) pendingHistoryRefreshJob?.cancel()
   }
 
-  private fun clearPendingRuns() {
+  private fun cancelDispatchesForClientSwitch() {
     pendingHistoryRefreshJob?.cancel()
     pendingHistoryRefreshJob = null
     synchronized(dispatchJobs) {
       dispatchJobs.values.forEach { it.cancel() }
       dispatchJobs.clear()
     }
+    _isSending.value = hasPendingRuns()
+  }
+
+  private fun clearPendingRuns() {
+    cancelDispatchesForClientSwitch()
     clearPendingRunTimeouts()
     synchronized(pendingRuns) {
       pendingRuns.clear()
@@ -798,6 +824,26 @@ class WearChatController(
   private fun clearQueuedOutboundMessages() {
     synchronized(queuedOutboundMessages) {
       queuedOutboundMessages.clear()
+    }
+  }
+
+  private fun rebindPendingSessionKey(from: String, to: String) {
+    if (from == to) return
+    synchronized(pendingRuns) {
+      val rebound =
+        pendingRuns.mapValuesTo(linkedMapOf()) { (_, snapshot) ->
+          if (snapshot.sessionKey == from) snapshot.copy(sessionKey = to) else snapshot
+        }
+      pendingRuns.clear()
+      pendingRuns.putAll(rebound)
+    }
+    synchronized(queuedOutboundMessages) {
+      val rebound =
+        queuedOutboundMessages.mapValuesTo(linkedMapOf()) { (_, queued) ->
+          if (queued.sessionKey == from) queued.copy(sessionKey = to) else queued
+        }
+      queuedOutboundMessages.clear()
+      queuedOutboundMessages.putAll(rebound)
     }
   }
 

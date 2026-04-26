@@ -293,6 +293,44 @@ class PhoneProxyClientTest {
   }
 
   @Test
+  fun `active ready false pong fails every in flight request immediately`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val client = connectedProxyClient(scope, messageTransport)
+
+    val firstRequest = scope.async { client.request("chat.history", "{}", timeoutMs = 1_000) }
+    val secondRequest = scope.async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    runCurrent()
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "phone-node",
+        data = """{"ready":false,"statusText":"Gateway unavailable"}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertFalse(client.connected.value)
+    assertEquals("Gateway unavailable", client.statusText.value)
+    assertTrue(firstRequest.isCompleted)
+    assertTrue(secondRequest.isCompleted)
+    try {
+      firstRequest.await()
+      fail("Expected first request to fail")
+    } catch (e: Throwable) {
+      assertEquals("Gateway unavailable", e.message)
+    }
+    try {
+      secondRequest.await()
+      fail("Expected second request to fail")
+    } catch (e: Throwable) {
+      assertEquals("Gateway unavailable", e.message)
+    }
+    scope.cancel()
+  }
+
+  @Test
   fun `proxy error responses drop the phone connection immediately`() = runTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val messageTransport = FakeProxyMessageTransport()

@@ -10,6 +10,9 @@ import ai.openclaw.android.gateway.GatewayDeviceAuthPayload
 import ai.openclaw.android.gateway.GatewayDeviceIdentityStore
 import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.GatewayEventQueue
+import ai.openclaw.android.gateway.asArrayOrNull
+import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asStringOrNull
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -41,6 +44,13 @@ import ai.openclaw.wear.R
 
 private const val TAG = "WearGateway"
 
+internal class GatewayRpcException(
+  val code: String,
+  override val message: String,
+  val detailCode: String? = null,
+  val recommendedNextStep: String? = null,
+) : Exception(message)
+
 internal fun isCurrentSocketFrame(
   frameEpoch: Long,
   currentEpoch: Long,
@@ -48,6 +58,38 @@ internal fun isCurrentSocketFrame(
   sourceSocket: WebSocket,
 ): Boolean {
   return frameEpoch == currentEpoch && activeSocket === sourceSocket
+}
+
+internal fun shouldPauseReconnectAfterConnectFailure(error: Throwable): Boolean {
+  val rpcError = error as? GatewayRpcException ?: return false
+  val code = rpcError.detailCode ?: rpcError.code
+  return when {
+    rpcError.recommendedNextStep == "update_auth_configuration" -> true
+    rpcError.recommendedNextStep == "update_auth_credentials" -> true
+    rpcError.recommendedNextStep == "review_auth_configuration" -> true
+    rpcError.recommendedNextStep == "wait_then_retry" -> true
+    code == "AUTH_REQUIRED" -> true
+    code == "AUTH_UNAUTHORIZED" -> true
+    code == "AUTH_TOKEN_MISSING" -> true
+    code == "AUTH_TOKEN_MISMATCH" -> true
+    code == "AUTH_TOKEN_NOT_CONFIGURED" -> true
+    code == "AUTH_BOOTSTRAP_TOKEN_INVALID" -> true
+    code == "AUTH_PASSWORD_MISSING" -> true
+    code == "AUTH_PASSWORD_MISMATCH" -> true
+    code == "AUTH_PASSWORD_NOT_CONFIGURED" -> true
+    code == "AUTH_RATE_LIMITED" -> true
+    code == "PAIRING_REQUIRED" -> true
+    code == "CONTROL_UI_DEVICE_IDENTITY_REQUIRED" -> true
+    code == "DEVICE_IDENTITY_REQUIRED" -> true
+    code == "DEVICE_AUTH_INVALID" -> true
+    code == "DEVICE_AUTH_DEVICE_ID_MISMATCH" -> true
+    code == "DEVICE_AUTH_SIGNATURE_EXPIRED" -> true
+    code == "DEVICE_AUTH_NONCE_REQUIRED" -> true
+    code == "DEVICE_AUTH_NONCE_MISMATCH" -> true
+    code == "DEVICE_AUTH_SIGNATURE_INVALID" -> true
+    code == "DEVICE_AUTH_PUBLIC_KEY_INVALID" -> true
+    else -> false
+  }
 }
 
 /**
@@ -68,6 +110,8 @@ interface GatewayClientInterface {
 class WearGatewayClient internal constructor(
   private val context: Context,
   private val tlsPinStore: WearGatewayTlsPinStore = SharedPrefsWearGatewayTlsPinStore(context.applicationContext),
+  private val persistConfig: (WearGatewayConfig) -> Unit =
+    WearGatewayConfigStore(context.applicationContext)::save,
 ) : GatewayClientInterface {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
@@ -79,6 +123,7 @@ class WearGatewayClient internal constructor(
   private var httpClient = buildHttpClient()
   private var reconnectJob: Job? = null
   private var deviceId: String = UUID.randomUUID().toString()
+  @Volatile private var reconnectPausedForAuthFailure = false
   @Volatile private var connectionEpoch = 0L
 
   private val _connected = MutableStateFlow(false)
@@ -96,6 +141,7 @@ class WearGatewayClient internal constructor(
 
   fun connect() {
     disconnect()
+    reconnectPausedForAuthFailure = false
     if (!config.isValid) {
       _statusText.value = context.getString(R.string.wear_status_no_gateway_configured)
       return
@@ -108,6 +154,7 @@ class WearGatewayClient internal constructor(
   fun disconnect() {
     reconnectJob?.cancel()
     reconnectJob = null
+    reconnectPausedForAuthFailure = false
     connectionEpoch += 1
     val socket = ws
     ws = null
@@ -231,6 +278,7 @@ class WearGatewayClient internal constructor(
           }
           _connected.value = true
           _statusText.value = context.getString(R.string.wear_status_connected)
+          persistIssuedWearDeviceToken(result)
           // Extract mainSessionKey from connect response
           val resultObj = try { json.parseToJsonElement(result) as? JsonObject } catch (_: Throwable) { null }
           val snapshot = (resultObj?.get("snapshot") as? JsonObject)
@@ -243,7 +291,11 @@ class WearGatewayClient internal constructor(
           handleDisconnect("Connect timed out", epoch)
         }
       } catch (e: Throwable) {
-        handleDisconnect("Connect failed: ${e.message}", epoch)
+        handleDisconnect(
+          message = "Connect failed: ${e.message}",
+          epoch = epoch,
+          shouldReconnect = !shouldPauseReconnectAfterConnectFailure(e),
+        )
       } finally {
         pendingRequests.remove(idStr)
       }
@@ -274,7 +326,18 @@ class WearGatewayClient internal constructor(
       val error = frame["error"] as? JsonObject
       val code = (error?.get("code") as? JsonPrimitive)?.content ?: "UNKNOWN"
       val message = (error?.get("message") as? JsonPrimitive)?.content ?: "Request failed"
-      pendingRequests.remove(id)?.completeExceptionally(Exception("$code: $message"))
+      val details = error?.get("details") as? JsonObject
+      val detailCode = (details?.get("code") as? JsonPrimitive)?.content?.trim()?.ifEmpty { null }
+      val recommendedNextStep =
+        (details?.get("recommendedNextStep") as? JsonPrimitive)?.content?.trim()?.ifEmpty { null }
+      pendingRequests.remove(id)?.completeExceptionally(
+        GatewayRpcException(
+          code = code,
+          message = "$code: $message",
+          detailCode = detailCode,
+          recommendedNextStep = recommendedNextStep,
+        ),
+      )
     }
   }
 
@@ -296,16 +359,23 @@ class WearGatewayClient internal constructor(
     eventQueue.emit(event, payloadJson)
   }
 
-  private fun handleDisconnect(message: String, epoch: Long) {
+  private fun handleDisconnect(message: String, epoch: Long, shouldReconnect: Boolean = true) {
     if (epoch != connectionEpoch) return
+    if (!shouldReconnect) {
+      reconnectPausedForAuthFailure = true
+    }
     _connected.value = false
     _statusText.value = message
     ws = null
     pendingRequests.values.forEach { it.completeExceptionally(Exception(message)) }
     pendingRequests.clear()
 
-    // Auto-reconnect
+    // Auto-reconnect only for failures that can plausibly self-heal.
     reconnectJob?.cancel()
+    if (!shouldReconnect || reconnectPausedForAuthFailure) {
+      reconnectJob = null
+      return
+    }
     reconnectJob = scope.launch {
       delay(3000)
       if (epoch == connectionEpoch && !_connected.value && config.isValid) {
@@ -324,9 +394,12 @@ class WearGatewayClient internal constructor(
     val tlsParams = resolveWearGatewayTlsParams(config, tlsPinStore)
     if (tlsParams != null) {
       val tlsConfig =
-        buildWearGatewayTlsConfig(tlsParams) { fingerprint ->
-          tlsPinStore.save(tlsParams.stableId, fingerprint)
-        }
+        buildWearGatewayTlsConfig(
+          params = tlsParams,
+          onStore = { fingerprint ->
+            tlsPinStore.save(tlsParams.stableId, fingerprint)
+          },
+        )
       builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
       builder.hostnameVerifier(tlsConfig.hostnameVerifier)
     }
@@ -376,6 +449,12 @@ class WearGatewayClient internal constructor(
       signedAtMs = signedAtMs,
       nonce = nonce,
     )
+  }
+
+  private fun persistIssuedWearDeviceToken(connectPayloadJson: String) {
+    val nextConfig = applyIssuedWearDeviceToken(config, connectPayloadJson) ?: return
+    persistConfig(nextConfig)
+    config = nextConfig
   }
 }
 
@@ -427,6 +506,36 @@ internal fun buildWearConnectParams(
         }
       },
   )
+}
+
+internal fun applyIssuedWearDeviceToken(
+  config: WearGatewayConfig,
+  connectPayloadJson: String,
+  json: Json = Json { ignoreUnknownKeys = true },
+): WearGatewayConfig? {
+  val deviceToken = extractIssuedWearDeviceToken(connectPayloadJson, json) ?: return null
+  val nextConfig = config.copy(token = deviceToken, bootstrapToken = "")
+  return nextConfig.takeUnless { it == config }
+}
+
+internal fun extractIssuedWearDeviceToken(
+  connectPayloadJson: String,
+  json: Json = Json { ignoreUnknownKeys = true },
+): String? {
+  val payload = runCatching { json.parseToJsonElement(connectPayloadJson) }.getOrNull()?.asObjectOrNull() ?: return null
+  val auth = payload["auth"].asObjectOrNull() ?: return null
+  val authRole = auth["role"].asStringOrNull()?.trim()?.ifEmpty { null }
+  val directDeviceToken = auth["deviceToken"].asStringOrNull()?.trim()?.ifEmpty { null }
+  if (directDeviceToken != null && (authRole == null || authRole == "operator")) {
+    return directDeviceToken
+  }
+  return auth["deviceTokens"].asArrayOrNull()
+    ?.mapNotNull { it.asObjectOrNull() }
+    ?.firstNotNullOfOrNull { tokenEntry ->
+      val role = tokenEntry["role"].asStringOrNull()?.trim()
+      val deviceToken = tokenEntry["deviceToken"].asStringOrNull()?.trim()?.ifEmpty { null }
+      if (role == "operator") deviceToken else null
+    }
 }
 
 internal fun resolveWearVersionName(context: Context): String {

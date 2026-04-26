@@ -8,13 +8,16 @@ import java.security.Principal
 import java.security.PublicKey
 import java.security.cert.X509Certificate
 import java.util.Date
+import javax.net.ssl.X509TrustManager
 import javax.security.auth.x500.X500Principal
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -133,11 +136,10 @@ class WearGatewayClientTest {
 
     assertEquals("manual|fd7a:115c:a1e0::1234|18789", params?.stableId)
     assertEquals("sha256:ABCD1234", params?.expectedFingerprint)
-    assertFalse(params?.allowTOFU == true)
   }
 
   @Test
-  fun `wear tls params fall back to tofu when no fingerprint is stored`() {
+  fun `wear tls params leave first direct connection unpinned when no fingerprint is stored`() {
     val params =
       resolveWearGatewayTlsParams(
         WearGatewayConfig(host = "gateway.example", port = 443, useTls = true),
@@ -146,27 +148,149 @@ class WearGatewayClientTest {
 
     assertEquals("manual|gateway.example|443", params?.stableId)
     assertEquals(null, params?.expectedFingerprint)
-    assertTrue(params?.allowTOFU == true)
   }
 
   @Test
-  fun `wear tls config stores fingerprint during tofu handshake`() {
+  fun `wear tls config delegates unpinned connections to platform trust and does not persist a pin`() {
     val certificateBytes = byteArrayOf(1, 2, 3, 4)
     val observedFingerprints = mutableListOf<String>()
+    val trustManager = FakeTrackingTrustManager()
     val tlsConfig =
       buildWearGatewayTlsConfig(
         WearGatewayTlsParams(
           expectedFingerprint = null,
-          allowTOFU = true,
           stableId = "manual|gateway.example|443",
         ),
-      ) { fingerprint ->
-        observedFingerprints += fingerprint
-      }
+        onStore = { fingerprint ->
+          observedFingerprints += fingerprint
+        },
+        baseTrustManager = trustManager,
+      )
 
     tlsConfig.trustManager.checkServerTrusted(arrayOf(FakeX509Certificate(certificateBytes)), "RSA")
 
-    assertEquals(listOf(sha256Hex(certificateBytes)), observedFingerprints)
+    assertTrue(trustManager.serverTrustedCalled)
+    assertTrue(observedFingerprints.isEmpty())
+  }
+
+  @Test
+  fun `wear tls config rejects pinned fingerprint mismatches`() {
+    val certificateBytes = byteArrayOf(1, 2, 3, 4)
+    val tlsConfig =
+      buildWearGatewayTlsConfig(
+        WearGatewayTlsParams(
+          expectedFingerprint = "deadbeef",
+          stableId = "manual|gateway.example|443",
+        ),
+        baseTrustManager = FakeTrackingTrustManager(),
+      )
+
+    try {
+      tlsConfig.trustManager.checkServerTrusted(arrayOf(FakeX509Certificate(certificateBytes)), "RSA")
+      fail("Expected fingerprint mismatch")
+    } catch (e: java.security.cert.CertificateException) {
+      assertEquals("gateway TLS fingerprint mismatch", e.message)
+    }
+  }
+
+  @Test
+  fun `wear direct reconnect pauses for non recoverable auth failures`() {
+    assertTrue(
+      shouldPauseReconnectAfterConnectFailure(
+        GatewayRpcException(code = "AUTH_UNAUTHORIZED", message = "AUTH_UNAUTHORIZED: nope"),
+      ),
+    )
+    assertTrue(
+      shouldPauseReconnectAfterConnectFailure(
+        GatewayRpcException(
+          code = "UNKNOWN",
+          message = "UNKNOWN: nope",
+          detailCode = "AUTH_TOKEN_MISMATCH",
+        ),
+      ),
+    )
+    assertTrue(
+      shouldPauseReconnectAfterConnectFailure(
+        GatewayRpcException(
+          code = "UNKNOWN",
+          message = "UNKNOWN: wait",
+          recommendedNextStep = "wait_then_retry",
+        ),
+      ),
+    )
+    assertFalse(
+      shouldPauseReconnectAfterConnectFailure(
+        Exception("socket closed"),
+      ),
+    )
+  }
+
+  @Test
+  fun `issued wear device token replaces bootstrap auth`() {
+    val nextConfig =
+      applyIssuedWearDeviceToken(
+        config = WearGatewayConfig(host = "gateway.example", bootstrapToken = "bootstrap-token"),
+        connectPayloadJson =
+          """
+            {
+              "auth": {
+                "role": "operator",
+                "deviceToken": "durable-device-token"
+              }
+            }
+          """.trimIndent(),
+      )
+
+    assertEquals("durable-device-token", nextConfig?.token)
+    assertEquals("", nextConfig?.bootstrapToken)
+  }
+
+  @Test
+  fun `issued wear operator handoff token is preferred from device tokens`() {
+    val nextConfig =
+      applyIssuedWearDeviceToken(
+        config = WearGatewayConfig(host = "gateway.example", bootstrapToken = "bootstrap-token"),
+        connectPayloadJson =
+          """
+            {
+              "auth": {
+                "role": "node",
+                "deviceTokens": [
+                  {
+                    "role": "node",
+                    "deviceToken": "node-token"
+                  },
+                  {
+                    "role": "operator",
+                    "deviceToken": "operator-token"
+                  }
+                ]
+              }
+            }
+          """.trimIndent(),
+      )
+
+    assertEquals("operator-token", nextConfig?.token)
+    assertEquals("", nextConfig?.bootstrapToken)
+  }
+
+  @Test
+  fun `wear connect payload without operator device auth leaves config unchanged`() {
+    val nextConfig =
+      applyIssuedWearDeviceToken(
+        config = WearGatewayConfig(host = "gateway.example", token = "existing-token"),
+        connectPayloadJson =
+          """
+            {
+              "auth": {
+                "role": "node",
+                "deviceToken": "node-token"
+              }
+            }
+          """.trimIndent(),
+      )
+
+    assertNull(nextConfig)
   }
 }
 
@@ -192,6 +316,21 @@ private class FakeWearGatewayTlsPinStore : WearGatewayTlsPinStore {
   override fun save(stableId: String, fingerprint: String) {
     values[stableId] = fingerprint
   }
+}
+
+private class FakeTrackingTrustManager : X509TrustManager {
+  var serverTrustedCalled = false
+  var clientTrustedCalled = false
+
+  override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+    clientTrustedCalled = true
+  }
+
+  override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+    serverTrustedCalled = true
+  }
+
+  override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 }
 
 private class FakeX509Certificate(

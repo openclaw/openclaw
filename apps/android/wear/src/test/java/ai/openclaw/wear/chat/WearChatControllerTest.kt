@@ -278,6 +278,98 @@ class WearChatControllerTest {
   }
 
   @Test
+  fun `switchClient rebinds followed main session to the new transport main session`() = runTest {
+    val oldClient = FakeGatewayClient().apply {
+      historyResponse = historyJson(userText = "Direct", assistantText = "From direct")
+    }
+    val newClient = FakeGatewayClient().apply {
+      historyResponse = historyJson(userText = "Proxy", assistantText = "From proxy")
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, oldClient, ::testString)
+    advanceUntilIdle()
+
+    oldClient.emitEvent(
+      GatewayEvent(
+        event = "mainSessionKey",
+        payloadJson = "agent:direct-main",
+      ),
+    )
+    advanceUntilIdle()
+    assertEquals("agent:direct-main", controller.sessionKey.value)
+
+    controller.switchClient(newClient)
+    assertEquals("main", controller.sessionKey.value)
+
+    newClient.emitEvent(
+      GatewayEvent(
+        event = "mainSessionKey",
+        payloadJson = "agent:proxy-main",
+      ),
+    )
+    advanceUntilIdle()
+
+    assertEquals("agent:proxy-main", controller.sessionKey.value)
+    assertEquals(listOf("Proxy", "From proxy"), controller.messages.value.map { it.text })
+    controllerScope.cancel()
+  }
+
+  @Test
+  fun `switchClient preserves queued outbound message and retargets it to the new main session`() = runTest {
+    val oldClient = FakeGatewayClient().apply {
+      historyResponse = """{"messages":[]}"""
+      setConnected(false)
+    }
+    val newClient = FakeGatewayClient().apply {
+      historyResponse = """{"messages":[]}"""
+      setConnected(true)
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, oldClient, ::testString)
+    advanceUntilIdle()
+
+    oldClient.emitEvent(
+      GatewayEvent(
+        event = "mainSessionKey",
+        payloadJson = "agent:direct-main",
+      ),
+    )
+    advanceUntilIdle()
+
+    controller.sendMessage("Retry later")
+    runCurrent()
+    assertTrue(controller.isSending.value)
+    assertEquals(listOf("Retry later"), controller.messages.value.map { it.text })
+
+    controller.switchClient(newClient)
+    assertEquals("main", controller.sessionKey.value)
+    assertEquals(listOf("Retry later"), controller.messages.value.map { it.text })
+
+    newClient.emitEvent(
+      GatewayEvent(
+        event = "mainSessionKey",
+        payloadJson = "agent:proxy-main",
+      ),
+    )
+    runCurrent()
+
+    controller.onConnected()
+    runCurrent()
+
+    val chatSendParams =
+      newClient.requests.last { it.first == "chat.send" }.second ?: error("missing chat.send params")
+    val sessionKey =
+      Json.parseToJsonElement(chatSendParams)
+        .jsonObject["sessionKey"]
+        ?.jsonPrimitive
+        ?.content ?: error("missing sessionKey")
+
+    assertEquals("agent:proxy-main", sessionKey)
+    assertTrue(controller.messages.value.any { it.text == "Retry later" })
+    controllerScope.cancel()
+  }
+
+  @Test
   fun `history polling resolves reply when final event is missed`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendResponse = """{"runId":"server-run"}"""
@@ -594,6 +686,10 @@ private class FakeGatewayClient : GatewayClientInterface {
       "sessions.list" -> """{"sessions":[]}"""
       else -> """{}"""
     }
+  }
+
+  fun setConnected(value: Boolean) {
+    _connected.value = value
   }
 
   suspend fun emitEvent(event: GatewayEvent) {

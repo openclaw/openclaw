@@ -371,14 +371,12 @@ class PhoneProxyClient internal constructor(
     }
 
     if (!handshake.ready) {
-      livenessJob?.cancel()
-      livenessJob = null
-      phoneNodeId = null
-      _connected.value = false
-      _statusText.value =
-        handshake.statusText?.takeIf { it.isNotBlank() }
-          ?: stringResolver(R.string.wear_status_phone_gateway_unavailable)
-      scheduleReconnect()
+      handleTransportFailure(
+        statusText =
+          handshake.statusText?.takeIf { it.isNotBlank() }
+            ?: stringResolver(R.string.wear_status_phone_gateway_unavailable),
+        generation = connectionGeneration,
+      )
       return
     }
 

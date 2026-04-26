@@ -27,15 +27,17 @@ class NodeRuntimeMainSessionTest {
   fun syncMainSessionKey_forwardsUpdatedSessionToWearProxy() =
     runBlocking {
       val runtime = newRuntime()
+      val session = runtime.openWearProxyEventSession(logTag = "WearProxy:test")
 
       invokePrivate(runtime, "syncMainSessionKey", "gateway-selected")
 
       val forwarded =
         withTimeout(2_000) {
-          runtime.wearProxyEvents.first { it.event == "mainSessionKey" }
+          session.events.first { it.event == "mainSessionKey" }
         }
 
       assertEquals(runtime.mainSessionKey.value, forwarded.payloadJson)
+      session.close()
     }
 
   private fun newRuntime(): NodeRuntime {

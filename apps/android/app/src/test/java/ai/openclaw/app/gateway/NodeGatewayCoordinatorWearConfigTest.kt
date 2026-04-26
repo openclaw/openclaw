@@ -78,6 +78,36 @@ class NodeGatewayCoordinatorWearConfigTest {
   }
 
   @Test
+  fun buildWearProxyGatewayConfig_usesStoredOperatorTokenWhenNoSharedTokenExists() {
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    prefs.saveGatewayTlsFingerprint("_openclaw-gw._tcp.|local.|test", "0123abcd")
+    val identityStore = DeviceIdentityStore(context)
+    val identity = identityStore.loadOrCreate()
+    DeviceAuthStore(prefs).saveToken(
+      identity.deviceId,
+      role = "operator",
+      token = "stored-operator-token",
+      scopes = listOf("operator.read"),
+    )
+    val coordinator = newCoordinator(prefs, identityStore)
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|test",
+        name = "Test",
+        host = "10.0.0.2",
+        port = 18789,
+        tlsEnabled = true,
+      )
+
+    val payload = coordinator.buildWearProxyGatewayConfig(endpoint)
+
+    requireNotNull(payload)
+    assertEquals("stored-operator-token", payload.token)
+    assertNull(payload.bootstrapToken)
+    assertNull(payload.password)
+  }
+
+  @Test
   fun refreshOperatorPlanAfterNodeBootstrap_promotesStoredOperatorSessionAuth() {
     val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
     val identityStore = DeviceIdentityStore(context)

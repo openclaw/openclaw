@@ -16,7 +16,6 @@ import javax.net.ssl.X509TrustManager
 
 internal data class WearGatewayTlsParams(
   val expectedFingerprint: String?,
-  val allowTOFU: Boolean,
   val stableId: String,
 )
 
@@ -61,7 +60,6 @@ internal fun resolveWearGatewayTlsParams(
   val expectedFingerprint = pinStore.load(stableId)?.trim()?.ifEmpty { null }
   return WearGatewayTlsParams(
     expectedFingerprint = expectedFingerprint,
-    allowTOFU = expectedFingerprint == null,
     stableId = stableId,
   )
 }
@@ -69,14 +67,14 @@ internal fun resolveWearGatewayTlsParams(
 internal fun buildWearGatewayTlsConfig(
   params: WearGatewayTlsParams,
   onStore: ((String) -> Unit)? = null,
+  baseTrustManager: X509TrustManager = defaultTrustManager(),
 ): WearGatewayTlsConfig {
   val expected = params.expectedFingerprint?.let(::normalizeFingerprint)
-  val defaultTrust = defaultTrustManager()
   @SuppressLint("CustomX509TrustManager")
   val trustManager =
     object : X509TrustManager {
       override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
-        defaultTrust.checkClientTrusted(chain, authType)
+        baseTrustManager.checkClientTrusted(chain, authType)
       }
 
       override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
@@ -88,21 +86,19 @@ internal fun buildWearGatewayTlsConfig(
           }
           return
         }
-        if (params.allowTOFU) {
-          onStore?.invoke(fingerprint)
-          return
-        }
-        defaultTrust.checkServerTrusted(chain, authType)
+        // Without an explicit pin, rely on the platform trust store and do
+        // not persist a first-seen certificate fingerprint implicitly.
+        baseTrustManager.checkServerTrusted(chain, authType)
       }
 
-      override fun getAcceptedIssuers(): Array<X509Certificate> = defaultTrust.acceptedIssuers
+      override fun getAcceptedIssuers(): Array<X509Certificate> = baseTrustManager.acceptedIssuers
     }
 
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val hostnameVerifier =
-    if (expected != null || params.allowTOFU) {
-      // Pinned/TOFU flows intentionally allow IP-based/manual host connections.
+    if (expected != null) {
+      // Explicitly pinned flows intentionally allow IP-based/manual host connections.
       HostnameVerifier { _, _ -> true }
     } else {
       HttpsURLConnection.getDefaultHostnameVerifier()

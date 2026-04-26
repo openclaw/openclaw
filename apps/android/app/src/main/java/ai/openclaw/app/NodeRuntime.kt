@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearProxyEventSession
 import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
@@ -519,8 +520,7 @@ class NodeRuntime(
   fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
-    deviceAuthStore.clearToken(deviceId, "node")
-    deviceAuthStore.clearToken(deviceId, "operator")
+    gatewayCoordinator.clearStoredDeviceTokens(deviceId)
   }
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
@@ -1036,11 +1036,13 @@ class NodeRuntime(
       statusText = { statusText.value },
       gatewayConfig = { gatewayCoordinator.buildWearProxyGatewayConfig() },
     )
-  val wearProxyEvents: kotlinx.coroutines.flow.SharedFlow<GatewayEvent> =
-    wearProxyBridge.events
 
   internal fun emitWearProxyEvent(event: String, payloadJson: String?) {
     wearProxyBridge.emit(event, payloadJson)
+  }
+
+  internal fun openWearProxyEventSession(logTag: String = "WearProxy"): WearProxyEventSession {
+    return wearProxyBridge.openEventSession(logTag = logTag)
   }
 
   fun wearProxyHandshakePayload(): String {
