@@ -1980,6 +1980,56 @@ describe("update-cli", () => {
     ).toContain("- telegram: failed to install bundled runtime deps: ENOSPC");
   });
 
+  it("fails a package update when the restarted gateway reports channel probe errors", async () => {
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: createCaseDir("openclaw-updated-root"),
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    readPackageVersion.mockResolvedValue("2026.4.24");
+    serviceLoaded.mockResolvedValue(true);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.24",
+        connId: "updated-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: {
+        ok: true,
+        channels: {
+          telegram: {
+            configured: true,
+            probe: { ok: false, error: "This operation was aborted" },
+          },
+        },
+      },
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(runRestartScript).toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain("- telegram: This operation was aborted");
+  });
+
   it.each([
     {
       name: "updateCommand refreshes service env from updated install root when available",

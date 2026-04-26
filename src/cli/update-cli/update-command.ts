@@ -786,6 +786,10 @@ async function maybeRestartService(params: {
       }
     }
 
+    if (isPackageManagerUpdateMode(params.result.mode)) {
+      return false;
+    }
+
     return !(health.versionMismatch || health.activatedPluginErrors?.length);
   };
 
