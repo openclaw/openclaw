@@ -476,8 +476,12 @@ export async function createBackupArchive(
     await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
-      runTar: () =>
-        tar.c(
+      runTar: () => {
+        // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
+        // attempt, so reset the closure counter here or retries would report
+        // cumulative skip counts across attempts instead of the final one.
+        skippedVolatileCount = 0;
+        return tar.c(
           {
             file: tempArchivePath,
             gzip: true,
@@ -493,7 +497,8 @@ export async function createBackupArchive(
             },
           },
           [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-        ),
+        );
+      },
     });
     result.skippedVolatileCount = skippedVolatileCount;
     if (skippedVolatileCount > 0) {
