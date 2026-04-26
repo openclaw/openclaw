@@ -11,6 +11,11 @@ type ExecuteWithApiKeyRotationOptions<T> = {
   provider: string;
   apiKeys: string[];
   execute: (apiKey: string) => Promise<T>;
+  // Permit a single empty-key invocation when the deduped key list is empty.
+  // Used by SDK-managed credential paths (e.g. amazon-bedrock auth-mode
+  // aws-sdk) where the empty string signals "let the provider's SDK chain
+  // resolve auth at call time."
+  allowEmptyKey?: boolean;
   shouldRetry?: (params: ApiKeyRetryParams & { message: string }) => boolean;
   onRetry?: (params: ApiKeyRetryParams & { message: string }) => void;
 };
@@ -42,6 +47,9 @@ export async function executeWithApiKeyRotation<T>(
 ): Promise<T> {
   const keys = dedupeApiKeys(params.apiKeys);
   if (keys.length === 0) {
+    if (params.allowEmptyKey) {
+      return await params.execute("");
+    }
     throw new Error(`No API keys configured for provider "${params.provider}".`);
   }
 
