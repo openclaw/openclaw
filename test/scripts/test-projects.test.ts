@@ -634,7 +634,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(3);
   });
 
-  it("splits untargeted runs into fixed core shards and per-extension configs", () => {
+  it("keeps serial untargeted runs on aggregate shards", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
@@ -652,45 +652,9 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-contracts.config.ts",
         "test/vitest/vitest.full-core-bundled.config.ts",
         "test/vitest/vitest.full-core-runtime.config.ts",
-        "test/vitest/vitest.gateway-core.config.ts",
-        "test/vitest/vitest.gateway-client.config.ts",
-        "test/vitest/vitest.gateway-methods.config.ts",
-        "test/vitest/vitest.gateway-server.config.ts",
-        "test/vitest/vitest.cli.config.ts",
-        "test/vitest/vitest.commands-light.config.ts",
-        "test/vitest/vitest.commands.config.ts",
-        "test/vitest/vitest.agents.config.ts",
-        "test/vitest/vitest.daemon.config.ts",
-        "test/vitest/vitest.plugin-sdk-light.config.ts",
-        "test/vitest/vitest.plugin-sdk.config.ts",
-        "test/vitest/vitest.plugins.config.ts",
-        "test/vitest/vitest.channels.config.ts",
+        "test/vitest/vitest.full-agentic.config.ts",
         "test/vitest/vitest.full-auto-reply.config.ts",
-        "test/vitest/vitest.extension-acpx.config.ts",
-        "test/vitest/vitest.extension-bluebubbles.config.ts",
-        "test/vitest/vitest.extension-diffs.config.ts",
-        "test/vitest/vitest.extension-discord.config.ts",
-        "test/vitest/vitest.extension-feishu.config.ts",
-        "test/vitest/vitest.extension-imessage.config.ts",
-        "test/vitest/vitest.extension-irc.config.ts",
-        "test/vitest/vitest.extension-line.config.ts",
-        "test/vitest/vitest.extension-mattermost.config.ts",
-        "test/vitest/vitest.extension-matrix.config.ts",
-        "test/vitest/vitest.extension-memory.config.ts",
-        "test/vitest/vitest.extension-messaging.config.ts",
-        "test/vitest/vitest.extension-msteams.config.ts",
-        "test/vitest/vitest.extension-provider-openai.config.ts",
-        "test/vitest/vitest.extension-providers.config.ts",
-        "test/vitest/vitest.extension-signal.config.ts",
-        "test/vitest/vitest.extension-slack.config.ts",
-        "test/vitest/vitest.extension-telegram.config.ts",
-        "test/vitest/vitest.extension-voice-call.config.ts",
-        "test/vitest/vitest.extension-whatsapp.config.ts",
-        "test/vitest/vitest.extension-zalo.config.ts",
-        "test/vitest/vitest.extension-browser.config.ts",
-        "test/vitest/vitest.extension-qa.config.ts",
-        "test/vitest/vitest.extension-media.config.ts",
-        "test/vitest/vitest.extension-misc.config.ts",
+        "test/vitest/vitest.full-extensions.config.ts",
       ]);
     } finally {
       if (previousParallel === undefined) {
