@@ -688,6 +688,10 @@ export function registerPluginsCli(program: Command) {
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       });
+      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      for (const warning of directoryResult.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
       await refreshPluginRegistryAfterConfigMutation({
         config: nextConfig,
         reason: "source-changed",
@@ -696,10 +700,6 @@ export function registerPluginsCli(program: Command) {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
       });
-      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-      for (const warning of directoryResult.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
 
       const removed = formatUninstallActionLabels({
         ...plan.actions,

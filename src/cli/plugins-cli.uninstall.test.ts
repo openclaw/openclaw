@@ -258,8 +258,11 @@ describe("plugins cli uninstall", () => {
     const configWriteOrder = writeConfigFile.mock.invocationCallOrder[0] ?? 0;
     const deleteOrder =
       applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const refreshOrder =
+      refreshPluginRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     expect(configWriteOrder).toBeGreaterThan(0);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
+    expect(refreshOrder).toBeGreaterThan(deleteOrder);
     expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
       target: ALPHA_INSTALL_PATH,
     });
