@@ -192,12 +192,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     return undefined;
   };
 
-  let lifecycleTerminalEmitted = false;
   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
-    if (lifecycleTerminalEmitted) {
+    if (ctx.state.lifecycleTerminalEmitted) {
       return;
     }
-    lifecycleTerminalEmitted = true;
+    ctx.state.lifecycleTerminalEmitted = true;
     let beforeLifecycleTerminal: void | Promise<void> = undefined;
     try {
       beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
@@ -248,4 +247,88 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   }
 
   return emitLifecycleTerminalOnce();
+}
+
+/**
+ * Emit a synthetic terminal lifecycle event during teardown when the underlying
+ * pi-agent never delivered `agent_end` to this subscription. Without this, the
+ * fire-and-forget `activeSession.abort()` in the embedded runner can race past
+ * the subscription's listener removal, leaving Control UI runs stuck on Stop.
+ * Idempotent with `handleAgentEnd` via the shared `lifecycleTerminalEmitted` flag.
+ */
+export function emitFallbackTerminalLifecycle(ctx: EmbeddedPiSubscribeContext): void {
+  if (ctx.state.lifecycleTerminalEmitted) {
+    return;
+  }
+  ctx.state.lifecycleTerminalEmitted = true;
+
+  const lastAssistant = ctx.state.lastAssistant;
+  const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  const replayInvalid = true;
+  const livenessState =
+    ctx.state.livenessState && ctx.state.livenessState !== "working"
+      ? ctx.state.livenessState
+      : isError
+        ? "blocked"
+        : "abandoned";
+
+  let errorText: string | undefined;
+  if (isError && lastAssistant) {
+    const friendlyError = formatAssistantErrorText(lastAssistant, {
+      cfg: ctx.params.config,
+      sessionKey: ctx.params.sessionKey,
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
+    });
+    errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+  }
+
+  try {
+    const beforeResult = ctx.params.onBeforeLifecycleTerminal?.();
+    if (isPromiseLike<void>(beforeResult)) {
+      void Promise.resolve(beforeResult).catch((err) => {
+        ctx.log.debug(`fallback before lifecycle terminal failed: ${String(err)}`);
+      });
+    }
+  } catch (err) {
+    ctx.log.debug(`fallback before lifecycle terminal failed: ${String(err)}`);
+  }
+
+  const phase = isError ? "error" : "end";
+  const data = {
+    phase,
+    ...(errorText ? { error: errorText } : {}),
+    livenessState,
+    replayInvalid,
+    endedAt: Date.now(),
+  };
+
+  try {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "lifecycle",
+      data,
+    });
+  } catch (err) {
+    ctx.log.warn(`fallback lifecycle terminal emit failed: ${String(err)}`);
+  }
+
+  try {
+    const onAgentEventResult = ctx.params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: {
+        phase,
+        ...(errorText ? { error: errorText } : {}),
+        livenessState,
+        replayInvalid,
+      },
+    });
+    if (isPromiseLike<void>(onAgentEventResult)) {
+      void Promise.resolve(onAgentEventResult).catch((err) => {
+        ctx.log.warn(`fallback onAgentEvent rejected: ${String(err)}`);
+      });
+    }
+  } catch (err) {
+    ctx.log.warn(`fallback onAgentEvent threw: ${String(err)}`);
+  }
 }

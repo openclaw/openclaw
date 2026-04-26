@@ -69,6 +69,7 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
+  lifecycleTerminalEmitted: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
   hadDeterministicSideEffect?: boolean;

@@ -21,6 +21,7 @@ import {
 } from "./pi-embedded-runner/replay-state.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
+import { emitFallbackTerminalLifecycle } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
@@ -123,6 +124,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    lifecycleTerminalEmitted: false,
     replayState: createEmbeddedRunReplayState(params.initialReplayState),
     livenessState: "working",
     hadDeterministicSideEffect: false,
@@ -826,6 +828,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    // Synthesize a terminal lifecycle event when the underlying pi-agent never
+    // delivered `agent_end` — otherwise an embedded run aborted via the
+    // fire-and-forget `activeSession.abort()` path can leave Control UI stuck
+    // on Stop because the gateway only finalizes the chat run on phase=end/error.
+    // Idempotent with handleAgentEnd via state.lifecycleTerminalEmitted.
+    emitFallbackTerminalLifecycle(ctx);
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {
