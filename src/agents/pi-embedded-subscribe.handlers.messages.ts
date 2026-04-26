@@ -199,6 +199,8 @@ export function consumePendingToolMediaIntoReply(
     return payload;
   }
   if (hasReplyMedia(payload)) {
+    // Pending tool media is a fallback delivery queue; explicit final media is
+    // the assistant's user-visible selection, while tool output remains in the transcript.
     clearPendingToolMedia(state);
     return payload;
   }

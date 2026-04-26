@@ -96,6 +96,9 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
   if (!normalized) {
     return true;
   }
+  if (!normalized.includes(".")) {
+    return true;
+  }
   if (
     normalized === "localhost" ||
     normalized === "localhost.localdomain" ||

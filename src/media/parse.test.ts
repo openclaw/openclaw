@@ -69,6 +69,8 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     "MEDIA:http://example.com/a.png",
+    "MEDIA:https://intranet/a.png",
+    "MEDIA:https://printer/a.png",
     "MEDIA:https://localhost/a.png",
     "MEDIA:https://localhost../a.png",
     "MEDIA:https://127.0.0.1/a.png",
