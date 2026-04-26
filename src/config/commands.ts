@@ -25,7 +25,13 @@ function resolveAutoDefault(
     return options.autoDefault;
   }
   const commandDefaults =
-    getLoadedChannelPlugin(id)?.commands ?? resolveReadOnlyChannelCommandDefaults(id, options);
+    getLoadedChannelPlugin(id)?.commands ??
+    (options?.config
+      ? resolveReadOnlyChannelCommandDefaults(id, {
+          ...options,
+          config: options.config,
+        })
+      : undefined);
   if (kind === "native") {
     return commandDefaults?.nativeCommandsAutoEnabled === true;
   }

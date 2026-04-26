@@ -59,8 +59,8 @@ export function resolveReadOnlyChannelCommandDefaults(
     env?: NodeJS.ProcessEnv;
     stateDir?: string;
     workspaceDir?: string;
-    config?: OpenClawConfig;
-  } = {},
+    config: OpenClawConfig;
+  },
 ): ChannelCommandDefaults | undefined {
   const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
