@@ -3,12 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
-  loadPluginInstallRecords,
-  PLUGIN_INSTALLS_CONFIG_PATH,
+  loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../plugins/install-ledger-store.js";
+} from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
@@ -18,6 +16,7 @@ import {
   logHookPackRestartHint,
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
+import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 
 function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -46,22 +45,23 @@ export async function persistPluginInstall(params: {
     addInstalledPluginToAllowlist(params.config, params.pluginId),
     params.pluginId,
   ).config;
-  const installRecords = await loadPluginInstallRecords({ config: params.config });
+  const installRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
   const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
   next = withoutPluginInstallRecords(slotResult.config);
-  await writePersistedPluginInstallLedger(nextInstallRecords);
-  await replaceConfigFile({
+  await commitPluginInstallRecordsWithConfig({
+    previousInstallRecords: installRecords,
+    nextInstallRecords,
     nextConfig: next,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
-    writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
+    installRecords: nextInstallRecords,
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
     },

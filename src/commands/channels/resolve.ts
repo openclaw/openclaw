@@ -5,15 +5,12 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import {
-  PLUGIN_INSTALLS_CONFIG_PATH,
-  withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../plugins/install-ledger-store.js";
+import { withoutPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -148,21 +145,25 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     const shouldMovePluginInstalls = Boolean(
       cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
     );
+    const nextInstallRecords = cfg.plugins?.installs ?? {};
     if (shouldMovePluginInstalls) {
-      await writePersistedPluginInstallLedger(cfg.plugins?.installs ?? {});
       cfg = withoutPluginInstallRecords(cfg);
+      await commitPluginInstallRecordsWithConfig({
+        nextInstallRecords,
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
     }
-    await replaceConfigFile({
-      nextConfig: cfg,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-      ...(shouldMovePluginInstalls
-        ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
-        : {}),
-    });
     if (shouldMovePluginInstalls || resolvedExplicit.pluginInstalled) {
       await refreshPluginRegistryAfterConfigMutation({
         config: cfg,
         reason: "source-changed",
+        ...(shouldMovePluginInstalls ? { installRecords: nextInstallRecords } : {}),
         logger: { warn: (message) => runtime.log(message) },
       });
     }

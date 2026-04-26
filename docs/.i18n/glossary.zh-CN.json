@@ -12,6 +12,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Azure Speech",
+    "target": "Azure Speech"
+  },
+  {
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },

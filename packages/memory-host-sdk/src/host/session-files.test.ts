@@ -43,6 +43,7 @@ describe("listSessionFilesForAgent", () => {
       "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
     ];
     const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
+    excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
 
     for (const fileName of [...included, ...excluded]) {
       fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
@@ -113,6 +114,30 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("");
     expect(entry!.lineMap).toEqual([]);
+  });
+
+  it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
+    const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const checkpointPath = path.join(
+      tmpDir,
+      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
+    const content = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "This should never reach the dreaming corpus." },
+    });
+    fsSync.writeFileSync(deletedPath, content);
+    fsSync.writeFileSync(checkpointPath, content);
+
+    const deletedEntry = await buildSessionEntry(deletedPath);
+    const checkpointEntry = await buildSessionEntry(checkpointPath);
+
+    expect(deletedEntry).not.toBeNull();
+    expect(deletedEntry?.content).toBe("");
+    expect(deletedEntry?.lineMap).toEqual([]);
+    expect(checkpointEntry).not.toBeNull();
+    expect(checkpointEntry?.content).toBe("");
+    expect(checkpointEntry?.lineMap).toEqual([]);
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {

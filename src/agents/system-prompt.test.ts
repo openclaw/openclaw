@@ -317,13 +317,14 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      nativeCommandNames: ["codex"],
     });
 
+    expect(prompt).toContain("Native Codex app-server plugin is available");
+    expect(prompt).toContain("prefer `/codex bind`, `/codex threads`, `/codex resume`");
+    expect(prompt).toContain("Use ACP for Codex only when the user explicitly asks for ACP/acpx");
     expect(prompt).toContain(
-      'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
-    );
-    expect(prompt).toContain(
-      "For Codex conversation binding/control, prefer the native Codex app-server plugin path",
+      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -344,8 +345,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
     );
+    expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
     expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
@@ -364,7 +366,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
     expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).not.toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
@@ -941,7 +943,7 @@ describe("buildSubagentSystemPrompt", () => {
     );
     expect(prompt).toContain("sessions_spawn");
     expect(prompt).toContain('runtime: "acp"');
-    expect(prompt).toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).toContain("For ACP harness sessions (claudecode/gemini/opencode");
     expect(prompt).toContain("set `agentId` unless `acp.defaultAgent` is configured");
     expect(prompt).toContain("Do not ask users to run slash commands or CLI");
     expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
@@ -974,9 +976,22 @@ describe("buildSubagentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain('runtime: "acp"');
-    expect(prompt).not.toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).not.toContain("For ACP harness sessions (claudecode/gemini/opencode");
     expect(prompt).not.toContain("set `agentId` unless `acp.defaultAgent` is configured");
     expect(prompt).toContain("You CAN spawn your own sub-agents");
+  });
+
+  it("prefers native Codex commands over Codex ACP when available", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+      nativeCommandNames: ["codex"],
+    });
+
+    expect(prompt).toContain("Native Codex app-server plugin is available");
+    expect(prompt).toContain("use Codex ACP only when explicitly requested");
   });
 
   it("renders depth-2 leaf guidance with parent orchestrator labels", () => {

@@ -29,6 +29,7 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
+import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlerRegistrations,
   clearPluginInteractiveHandlers,
@@ -4026,18 +4027,22 @@ module.exports = { id: "throws-after-import", register() {} };`,
           body: `module.exports = { id: "tracked-install-cache", register() {} };`,
         });
 
+        writePersistedInstalledPluginIndexInstallRecordsSync(
+          {
+            "tracked-install-cache": {
+              source: "path" as const,
+              installPath: "~/plugins/tracked-install-cache",
+              sourcePath: "~/plugins/tracked-install-cache",
+            },
+          },
+          { stateDir },
+        );
+
         const options = {
           config: {
             plugins: {
               load: { paths: [plugin.file] },
               allow: ["tracked-install-cache"],
-              installs: {
-                "tracked-install-cache": {
-                  source: "path" as const,
-                  installPath: "~/plugins/tracked-install-cache",
-                  sourcePath: "~/plugins/tracked-install-cache",
-                },
-              },
             },
           },
         };
@@ -5880,6 +5885,7 @@ module.exports = {
       body: `module.exports = { id: "conversation-hooks", register(api) {
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
+  api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
 } };`,
     });
@@ -5897,7 +5903,7 @@ module.exports = {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(3);
+    expect(blockedDiagnostics).toHaveLength(4);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -5908,6 +5914,7 @@ module.exports = {
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
+  api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
 } };`,
     });
@@ -5929,6 +5936,7 @@ module.exports = {
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "llm_input",
       "llm_output",
+      "before_agent_finalize",
       "agent_end",
     ]);
   });
@@ -6357,18 +6365,21 @@ module.exports = {
               dir: globalDir,
               filename: "index.cjs",
             });
+            writePersistedInstalledPluginIndexInstallRecordsSync(
+              {
+                "demo-installed-duplicate": {
+                  source: "npm",
+                  installPath: globalDir,
+                },
+              },
+              { stateDir },
+            );
 
             return loadOpenClawPlugins({
               cache: false,
               config: {
                 plugins: {
                   allow: ["demo-installed-duplicate"],
-                  installs: {
-                    "demo-installed-duplicate": {
-                      source: "npm",
-                      installPath: globalDir,
-                    },
-                  },
                   entries: {
                     "demo-installed-duplicate": { enabled: true },
                   },

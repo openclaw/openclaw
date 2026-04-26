@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  loadPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../../plugins/install-ledger-store.js";
+  extractShippedPluginInstallConfigRecords,
+  stripShippedPluginInstallConfigRecords,
+} from "../../../config/plugin-install-config-migration.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -225,6 +226,9 @@ export function listMigrationRelevantPluginRecords(params: {
     if (plugin.origin !== "bundled") {
       return true;
     }
+    if (plugin.enabledByDefault && plugin.contributions.providers.length > 0) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }
@@ -255,11 +259,16 @@ export async function migratePluginRegistryForInstall(
     return { status: "dry-run", migrated: false, preflight };
   }
 
-  const config = await readMigrationConfig(params);
-  const installRecords = await loadPluginInstallRecords({ ...params, config });
+  const rawConfig = await readMigrationConfig(params);
+  const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const installRecords = {
+    ...extractShippedPluginInstallConfigRecords(rawConfig),
+    ...(await loadInstalledPluginIndexInstallRecords(params)),
+  };
   const migrationParams = {
     ...params,
     config,
+    installRecords,
   };
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
@@ -275,9 +284,6 @@ export async function migratePluginRegistryForInstall(
       installRecords,
     }),
   };
-  if (Object.keys(installRecords).length > 0) {
-    await writePersistedPluginInstallLedger(installRecords, params);
-  }
   await writePersistedInstalledPluginIndex(current, params);
   return {
     status: "migrated",

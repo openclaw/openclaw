@@ -33,6 +33,7 @@ describe("plugins cli policy mutations", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
+      installRecords: {},
       reason: "policy-changed",
     });
   });
@@ -52,6 +53,7 @@ describe("plugins cli policy mutations", () => {
     expect(nextConfig.plugins?.entries?.alpha?.enabled).toBe(false);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
+      installRecords: {},
       reason: "policy-changed",
     });
   });

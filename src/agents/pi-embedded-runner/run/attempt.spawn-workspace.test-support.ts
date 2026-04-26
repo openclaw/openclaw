@@ -675,6 +675,15 @@ export type MutableSession = {
     };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  sendCustomMessage: (
+    message: {
+      customType: string;
+      content: string;
+      display: boolean;
+      details?: Record<string, unknown>;
+    },
+    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
+  ) => Promise<void>;
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
@@ -798,6 +807,11 @@ export function createDefaultEmbeddedSession(params?: {
         ...session.messages,
         { role: "assistant", content: "done", timestamp: 2 },
       ];
+    },
+    sendCustomMessage: async (message, options) => {
+      if (options?.deliverAs === "nextTurn") {
+        session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
+      }
     },
     abort: async () => {},
     dispose: () => {},

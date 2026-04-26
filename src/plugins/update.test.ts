@@ -1040,7 +1040,7 @@ describe("syncPluginsForUpdateChannel", () => {
     }
   });
 
-  it("installs an externalized bundled plugin and rewrites its old bundled path ledger", async () => {
+  it("installs an externalized bundled plugin and rewrites its old bundled path plugin index", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({

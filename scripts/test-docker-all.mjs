@@ -25,6 +25,7 @@ const DEFAULT_RESOURCE_LIMITS = {
   live: 9,
   "live:claude": 4,
   "live:codex": 4,
+  "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
   npm: 10,
@@ -66,6 +67,9 @@ function liveProviderResource(provider) {
   }
   if (provider === "codex-cli" || provider === "codex") {
     return "live:codex";
+  }
+  if (provider === "droid") {
+    return "live:droid";
   }
   if (provider === "google-gemini-cli" || provider === "gemini") {
     return "live:gemini";
@@ -254,6 +258,10 @@ const lanes = [
     "crestodian-first-run",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
   ),
+  lane(
+    "session-runtime-context",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+  ),
   lane("qr", "pnpm test:docker:qr"),
 ];
 
@@ -309,6 +317,17 @@ const exclusiveLanes = [
     {
       cacheKey: "acp-bind-codex",
       provider: "codex-cli",
+      resources: ["npm"],
+      timeoutMs: LIVE_ACP_TIMEOUT_MS,
+      weight: 3,
+    },
+  ),
+  liveLane(
+    "live-acp-bind-droid",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:droid",
+    {
+      cacheKey: "acp-bind-droid",
+      provider: "droid",
       resources: ["npm"],
       timeoutMs: LIVE_ACP_TIMEOUT_MS,
       weight: 3,

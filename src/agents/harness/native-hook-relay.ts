@@ -7,6 +7,7 @@ import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
+import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 
 export type JsonValue =
   | null
@@ -20,6 +21,7 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
+  "before_agent_finalize",
 ] as const;
 
 export const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
@@ -38,6 +40,11 @@ export type NativeHookRelayInvocation = {
   runId: string;
   cwd?: string;
   model?: string;
+  turnId?: string;
+  transcriptPath?: string;
+  permissionMode?: string;
+  stopHookActive?: boolean;
+  lastAssistantMessage?: string;
   toolName?: string;
   toolUseId?: string;
   rawPayload: JsonValue;
@@ -93,7 +100,19 @@ export type InvokeNativeHookRelayParams = {
 };
 
 type NativeHookRelayInvocationMetadata = Partial<
-  Pick<NativeHookRelayInvocation, "nativeEventName" | "cwd" | "model" | "toolName" | "toolUseId">
+  Pick<
+    NativeHookRelayInvocation,
+    | "nativeEventName"
+    | "cwd"
+    | "model"
+    | "turnId"
+    | "transcriptPath"
+    | "permissionMode"
+    | "stopHookActive"
+    | "lastAssistantMessage"
+    | "toolName"
+    | "toolUseId"
+  >
 >;
 
 type NativeHookRelayProviderAdapter = {
@@ -102,6 +121,8 @@ type NativeHookRelayProviderAdapter = {
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
   renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
   renderPermissionDecisionResponse: (
     decision: NativeHookRelayPermissionDecision,
     message?: string,
@@ -181,6 +202,22 @@ const nativeHookRelayProviderAdapters: Record<
           permissionDecision: "deny",
           permissionDecisionReason: reason,
         },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    }),
+    renderBeforeAgentFinalizeReviseResponse: (reason) => ({
+      stdout: `${JSON.stringify({
+        decision: "block",
+        reason,
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    }),
+    renderBeforeAgentFinalizeStopResponse: (reason) => ({
+      stdout: `${JSON.stringify({
+        continue: false,
+        ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
       })}\n`,
       stderr: "",
       exitCode: 0,
@@ -367,6 +404,9 @@ async function processNativeHookRelayInvocation(params: {
   if (params.invocation.event === "post_tool_use") {
     return runNativeHookRelayPostToolUse(params);
   }
+  if (params.invocation.event === "before_agent_finalize") {
+    return runNativeHookRelayBeforeAgentFinalize(params);
+  }
   return runNativeHookRelayPermissionRequest(params);
 }
 
@@ -461,6 +501,46 @@ async function runNativeHookRelayPermissionRequest(params: {
   }
   // A PermissionRequest no-op is not an allow decision. Codex interprets it as
   // "no hook decision" and falls through to its normal guardian/user approval path.
+  return params.adapter.renderNoopResponse(params.invocation.event);
+}
+
+async function runNativeHookRelayBeforeAgentFinalize(params: {
+  registration: NativeHookRelayRegistration;
+  invocation: NativeHookRelayInvocation;
+  adapter: NativeHookRelayProviderAdapter;
+}): Promise<NativeHookRelayProcessResponse> {
+  const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+    event: {
+      runId: params.registration.runId,
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
+      provider: params.registration.provider,
+      ...(params.invocation.model ? { model: params.invocation.model } : {}),
+      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.transcriptPath
+        ? { transcriptPath: params.invocation.transcriptPath }
+        : {}),
+      stopHookActive: params.invocation.stopHookActive === true,
+      ...(params.invocation.lastAssistantMessage
+        ? { lastAssistantMessage: params.invocation.lastAssistantMessage }
+        : {}),
+    },
+    ctx: {
+      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      sessionId: params.registration.sessionId,
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      runId: params.registration.runId,
+      ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
+      ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
+    },
+  });
+  if (outcome.action === "revise") {
+    return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
+  }
+  if (outcome.action === "finalize") {
+    return params.adapter.renderBeforeAgentFinalizeStopResponse(outcome.reason);
+  }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
@@ -720,6 +800,26 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   if (model) {
     metadata.model = model;
   }
+  const turnId = readOptionalString(payload.turn_id);
+  if (turnId) {
+    metadata.turnId = turnId;
+  }
+  const transcriptPath = readOptionalString(payload.transcript_path);
+  if (transcriptPath) {
+    metadata.transcriptPath = transcriptPath;
+  }
+  const permissionMode = readOptionalString(payload.permission_mode);
+  if (permissionMode) {
+    metadata.permissionMode = permissionMode;
+  }
+  const stopHookActive = readOptionalBoolean(payload.stop_hook_active);
+  if (stopHookActive !== undefined) {
+    metadata.stopHookActive = stopHookActive;
+  }
+  const lastAssistantMessage = readOptionalString(payload.last_assistant_message);
+  if (lastAssistantMessage) {
+    metadata.lastAssistantMessage = lastAssistantMessage;
+  }
   const toolName = readOptionalString(payload.tool_name);
   if (toolName) {
     metadata.toolName = toolName;
@@ -950,7 +1050,12 @@ function readNativeHookRelayProvider(value: unknown): NativeHookRelayProvider {
 }
 
 function readNativeHookRelayEvent(value: unknown): NativeHookRelayEvent {
-  if (value === "pre_tool_use" || value === "post_tool_use" || value === "permission_request") {
+  if (
+    value === "pre_tool_use" ||
+    value === "post_tool_use" ||
+    value === "permission_request" ||
+    value === "before_agent_finalize"
+  ) {
     return value;
   }
   throw new Error("unsupported native hook relay event");
@@ -965,6 +1070,10 @@ function readNonEmptyString(value: unknown, name: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

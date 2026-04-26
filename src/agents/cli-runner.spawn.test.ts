@@ -498,6 +498,22 @@ describe("runCliAgent spawn path", () => {
     expect(params.extraSystemPromptStatic).toBe("static");
   });
 
+  it("forwards cron jobId through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-jobid-wrapper",
+      trigger: "cron",
+      jobId: "cron-job-123",
+    });
+
+    expect(params.trigger).toBe("cron");
+    expect(params.jobId).toBe("cron-job-123");
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

@@ -70,6 +70,7 @@ cat ~/.openclaw/openclaw.json
 - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
+- Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -316,6 +317,15 @@ the path, PID, whether the PID is still alive, lock age, and whether it is
 considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair`
 mode it removes stale lock files automatically; otherwise it prints a note and
 instructs you to rerun with `--fix`.
+
+### 3d) Session transcript branch repair
+
+Doctor scans agent session JSONL files for the duplicated branch shape created
+by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with
+OpenClaw internal runtime context plus an active sibling containing the same
+visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected
+file next to the original and rewrites the transcript to the active branch so
+gateway history and memory readers no longer see duplicate turns.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 

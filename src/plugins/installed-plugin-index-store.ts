@@ -1,10 +1,14 @@
-import path from "node:path";
 import { z } from "zod";
-import { resolveStateDir } from "../config/paths.js";
+import { saveJsonFile } from "../infra/json-file.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
+import {
   diffInstalledPluginIndexInvalidationReasons,
+  extractPluginInstallRecordsFromInstalledPluginIndex,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -15,14 +19,11 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-
-export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installed-index.json");
-
-export type InstalledPluginIndexStoreOptions = {
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  filePath?: string;
-};
+export {
+  INSTALLED_PLUGIN_INDEX_STORE_PATH,
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
@@ -83,6 +84,8 @@ const InstalledPluginIndexRecordSchema = z
   })
   .passthrough();
 
+const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
+
 const PluginDiagnosticSchema = z
   .object({
     level: z.union([z.literal("warn"), z.literal("error")]),
@@ -102,24 +105,27 @@ const InstalledPluginIndexSchema = z
     policyHash: z.string(),
     generatedAtMs: z.number(),
     refreshReason: z.string().optional(),
+    installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
     plugins: z.array(InstalledPluginIndexRecordSchema),
     diagnostics: z.array(PluginDiagnosticSchema),
   })
   .passthrough();
 
 function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
-  return safeParseWithSchema(InstalledPluginIndexSchema, value) as InstalledPluginIndex | null;
-}
-
-export function resolveInstalledPluginIndexStorePath(
-  options: InstalledPluginIndexStoreOptions = {},
-): string {
-  if (options.filePath) {
-    return options.filePath;
+  const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
+    | (Omit<InstalledPluginIndex, "installRecords"> & {
+        installRecords?: InstalledPluginIndex["installRecords"];
+      })
+    | null;
+  if (!parsed) {
+    return null;
   }
-  const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
-  return path.join(stateDir, INSTALLED_PLUGIN_INDEX_STORE_PATH);
+  return {
+    ...parsed,
+    installRecords:
+      parsed.installRecords ??
+      extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
+  };
 }
 
 export async function readPersistedInstalledPluginIndex(
@@ -153,11 +159,24 @@ export async function writePersistedInstalledPluginIndex(
   return filePath;
 }
 
+export function writePersistedInstalledPluginIndexSync(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions = {},
+): string {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
+  return filePath;
+}
+
 export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
   const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex(params);
+  const current = loadInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   if (!persisted) {
     return {
       state: "missing",
@@ -179,7 +198,25 @@ export async function inspectPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<InstalledPluginIndex> {
-  const index = refreshInstalledPluginIndex(params);
+  const persisted = params.installRecords ? null : await readPersistedInstalledPluginIndex(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   await writePersistedInstalledPluginIndex(index, params);
+  return index;
+}
+
+export function refreshPersistedInstalledPluginIndexSync(
+  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+): InstalledPluginIndex {
+  const persisted = params.installRecords ? null : readPersistedInstalledPluginIndexSync(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
+  writePersistedInstalledPluginIndexSync(index, params);
   return index;
 }

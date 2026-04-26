@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import {
+  classifyPackageJsonChangeFromGit,
   detectChangedLanes,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -19,6 +20,14 @@ import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+];
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -65,6 +74,15 @@ export function createChangedCheckPlan(result, options = {}) {
   const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
       commands.push({ name, args, ...(env ? { env } : {}) });
+    }
+  };
+  const addCommand = (name, bin, args, env) => {
+    if (
+      !commands.some(
+        (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
+      )
+    ) {
+      commands.push({ name, bin, args, ...(env ? { env } : {}) });
     }
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
@@ -138,10 +156,17 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.core || lanes.coreTests) {
     addLint("lint core", ["lint:core"]);
   }
+  if (
+    lanes.liveDockerTooling &&
+    result.paths.some((changedPath) => changedPath.startsWith("src/"))
+  ) {
+    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+    addLint("lint core", ["lint:core"]);
+  }
   if (lanes.extensions || lanes.extensionTests) {
     addLint("lint extensions", ["lint:extensions"]);
   }
-  if (lanes.tooling) {
+  if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
   }
   if (lanes.apps) {
@@ -155,6 +180,21 @@ export function createChangedCheckPlan(result, options = {}) {
     add("webhook body guard", ["lint:webhook:no-low-level-body-read"]);
     add("pairing store guard", ["lint:auth:no-pairing-store-group"]);
     add("pairing account guard", ["lint:auth:pairing-account-scope"]);
+  }
+
+  if (lanes.liveDockerTooling) {
+    addCommand("live Docker shell syntax", "bash", ["-n", ...LIVE_DOCKER_AUTH_SHELL_TARGETS]);
+    addCommand("live Docker scheduler dry run", "node", ["scripts/test-docker-all.mjs"], {
+      ...baseEnv,
+      OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+      OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
+    });
+    add(
+      "ACP bind unit tests",
+      ["test", "src/gateway/live-agent-probes.test.ts", "src/agents/acp-spawn.test.ts"],
+      createChangedCheckVitestEnv(baseEnv),
+    );
+    add("ACPX extension tests", ["test:extension", "acpx"], createChangedCheckVitestEnv(baseEnv));
   }
 
   const testPlan = resolveChangedTestTargetPlan(result.paths);
@@ -197,7 +237,7 @@ export async function runChangedCheck(result, options = {}) {
 
     const timings = [];
     for (const command of plan.commands) {
-      const status = await runPnpm(command, timings);
+      const status = await runPlanCommand(command, timings);
       if (status !== 0) {
         printSummary(timings, options);
         return status;
@@ -291,6 +331,13 @@ async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
 }
 
+async function runPlanCommand(command, timings) {
+  if (command.bin) {
+    return await runCommand(command, timings);
+  }
+  return await runPnpm(command, timings);
+}
+
 async function runCommand(command, timings) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
@@ -338,6 +385,9 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
+        if (arg === "--") {
+          return "handled";
+        }
         target.paths.push(normalizeChangedPath(arg));
         return "handled";
       },
@@ -358,7 +408,14 @@ if (isDirectRun()) {
       : args.staged
         ? listStagedChangedPaths()
         : listChangedPathsFromGit({ base: args.base, head: args.head });
-  const result = detectChangedLanes(paths);
+  const packageJsonChangeKind = paths.includes("package.json")
+    ? classifyPackageJsonChangeFromGit({
+        base: args.base,
+        head: args.head,
+        staged: args.staged,
+      })
+    : null;
+  const result = detectChangedLanes(paths, { packageJsonChangeKind });
   process.exitCode = await runChangedCheck(result, {
     ...args,
     explicitPaths: args.paths.length > 0,

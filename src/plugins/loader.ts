@@ -63,7 +63,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { loadPluginInstallRecordsSync } from "./install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
   listPluginInteractiveHandlers,
@@ -1217,7 +1217,10 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const shouldInstallBundledRuntimeDeps = options.installBundledRuntimeDeps !== false;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
-  const installRecords = loadPluginInstallRecordsSync({ config: cfg, env });
+  const installRecords = {
+    ...loadInstalledPluginIndexInstallRecordsSync({ env }),
+    ...cfg.plugins?.installs,
+  };
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
@@ -1255,6 +1258,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     shouldLoadModules: options.loadModules !== false,
     shouldInstallBundledRuntimeDeps,
     runtimeSubagentMode,
+    installRecords,
     cacheKey,
   };
 }
@@ -1930,10 +1934,7 @@ function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = loadPluginInstallRecordsSync({
-    config: params.config,
-    env: params.env,
-  });
+  const installs = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,
@@ -2160,6 +2161,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     shouldInstallBundledRuntimeDeps,
     cacheKey,
     runtimeSubagentMode,
+    installRecords,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -2319,6 +2321,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
+      installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
     });
     pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
@@ -3183,12 +3186,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  const { env, cfg, normalized, activationSource, autoEnabledReasons, onlyPluginIds, cacheKey } =
-    resolvePluginLoadCacheContext({
-      ...options,
-      activate: false,
-      cache: false,
-    });
+  const {
+    env,
+    cfg,
+    normalized,
+    activationSource,
+    autoEnabledReasons,
+    onlyPluginIds,
+    cacheKey,
+    installRecords,
+  } = resolvePluginLoadCacheContext({
+    ...options,
+    activate: false,
+    cache: false,
+  });
   const logger = options.logger ?? defaultLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const getJiti = createPluginJitiLoader(options);
@@ -3212,6 +3223,7 @@ export async function loadOpenClawPluginCliRegistry(
     env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
+    installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({

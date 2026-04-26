@@ -7,11 +7,12 @@ read_when:
 title: "Text-to-speech"
 ---
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Inworld, Local CLI, Microsoft, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo.
+OpenClaw can convert outbound replies into audio using Azure Speech, ElevenLabs, Google Gemini, Gradium, Inworld, Local CLI, Microsoft, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
 
+- **Azure Speech** (primary or fallback provider; uses the Azure AI Speech REST API)
 - **ElevenLabs** (primary or fallback provider)
 - **Google Gemini** (primary or fallback provider; uses Gemini API TTS)
 - **Gradium** (primary or fallback provider; supports voice-note and telephony output)
@@ -40,8 +41,10 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo:
+If you want Azure Speech, ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo:
 
+- `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (also accepts
+  `AZURE_SPEECH_API_KEY`, `SPEECH_KEY`, and `SPEECH_REGION`)
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
 - `GRADIUM_API_KEY`
@@ -67,6 +70,8 @@ so that provider must also be authenticated if you enable summaries.
 
 - [OpenAI Text-to-Speech guide](https://platform.openai.com/docs/guides/text-to-speech)
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
+- [Azure Speech REST text-to-speech](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech)
+- [Azure Speech provider](/providers/azure-speech)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [Gradium](/providers/gradium)
@@ -144,6 +149,36 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   },
 }
 ```
+
+### Azure Speech primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "azure-speech",
+      providers: {
+        "azure-speech": {
+          // apiKey falls back to AZURE_SPEECH_KEY.
+          // region falls back to AZURE_SPEECH_REGION.
+          voice: "en-US-JennyNeural",
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+        },
+      },
+    },
+  },
+}
+```
+
+Azure Speech uses a Speech resource key, not an Azure OpenAI key. Resolution
+order is `messages.tts.providers.azure-speech.apiKey` ->
+`AZURE_SPEECH_KEY` -> `AZURE_SPEECH_API_KEY` -> `SPEECH_KEY`, plus
+`messages.tts.providers.azure-speech.region` -> `AZURE_SPEECH_REGION` ->
+`SPEECH_REGION` for the region. New config should use `azure-speech`; `azure`
+is accepted as a provider alias.
 
 ### Microsoft primary (no API key)
 
@@ -495,7 +530,21 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `INWORLD_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`). Volcengine uses `appId`/`token` instead.
+- `apiKey` values fall back to env vars (`AZURE_SPEECH_KEY`/`AZURE_SPEECH_API_KEY`/`SPEECH_KEY`, `ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `INWORLD_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`). Volcengine uses `appId`/`token` instead.
+- `providers.azure-speech.apiKey`: Azure Speech resource key (env:
+  `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`).
+- `providers.azure-speech.region`: Azure Speech region such as `eastus` (env:
+  `AZURE_SPEECH_REGION` or `SPEECH_REGION`).
+- `providers.azure-speech.endpoint` / `providers.azure-speech.baseUrl`: optional
+  Azure Speech endpoint/base URL override.
+- `providers.azure-speech.voice`: Azure voice ShortName (default
+  `en-US-JennyNeural`).
+- `providers.azure-speech.lang`: SSML language code (default `en-US`).
+- `providers.azure-speech.outputFormat`: Azure `X-Microsoft-OutputFormat` for
+  standard audio output (default `audio-24khz-48kbitrate-mono-mp3`).
+- `providers.azure-speech.voiceNoteOutputFormat`: Azure
+  `X-Microsoft-OutputFormat` for voice-note output (default
+  `ogg-24khz-16bit-mono-opus`).
 - `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
