@@ -32,6 +32,8 @@ const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
 // from the same baseline; tests that need to simulate deeper ancestor chains
 // override it via `mockImplementation` / `mockImplementationOnce`.
 const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockReadDirSync = vi.hoisted(() => vi.fn());
+const mockReadLinkSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:fs", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -46,6 +48,10 @@ vi.mock("node:fs", async () => {
       // reads); the cast is a precise retype, not `any`.
       readFileSync: ((path: unknown, encoding?: unknown) =>
         mockReadFileSync(path, encoding)) as typeof actual.readFileSync,
+      readdirSync: ((path: unknown, options?: unknown) =>
+        mockReadDirSync(path, options)) as typeof actual.readdirSync,
+      readlinkSync: ((path: unknown, options?: unknown) =>
+        mockReadLinkSync(path, options)) as typeof actual.readlinkSync,
     }),
   );
 });
@@ -167,9 +173,21 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockReadWindowsProcessArgs.mockReset();
     mockReadWindowsProcessArgsResult.mockReset();
     mockReadFileSync.mockReset();
+    mockReadDirSync.mockReset();
+    mockReadLinkSync.mockReset();
     mockReadFileSync.mockImplementation(() => {
       // Default: simulate /proc unavailable. Walks that reach this mock
       // degrade silently and return whatever set they collected so far.
+      const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+      error.code = "ENOENT";
+      throw error;
+    });
+    mockReadDirSync.mockImplementation(() => {
+      const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+      error.code = "ENOENT";
+      throw error;
+    });
+    mockReadLinkSync.mockImplementation(() => {
       const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
       error.code = "ENOENT";
       throw error;
@@ -229,6 +247,92 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(mockRestartWarn).toHaveBeenCalledWith(
         expect.stringContaining("lsof failed during initial stale-pid scan"),
       );
+    });
+
+    it("prefers native /proc socket discovery before lsof on linux", () => {
+      const stalePid = process.pid + 777;
+      mockReadFileSync.mockImplementation((path: unknown) => {
+        if (path === "/proc/net/tcp") {
+          return [
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+            "   0: 00000000:4965 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12345 1 0000000000000000 100 0 0 10 0",
+          ].join("\n");
+        }
+        if (path === "/proc/net/tcp6") {
+          return "";
+        }
+        if (path === `/proc/${stalePid}/cmdline`) {
+          return "openclaw-gateway\0";
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+        error.code = "ENOENT";
+        throw error;
+      });
+      mockReadDirSync.mockImplementation((path: unknown) => {
+        if (path === "/proc") {
+          return [String(stalePid)];
+        }
+        if (path === `/proc/${stalePid}/fd`) {
+          return ["21"];
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+        error.code = "ENOENT";
+        throw error;
+      });
+      mockReadLinkSync.mockImplementation((path: unknown) => {
+        if (path === `/proc/${stalePid}/fd/21`) {
+          return "socket:[12345]";
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+        error.code = "ENOENT";
+        throw error;
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    });
+
+    it("falls back to ss when lsof is unavailable and /proc cannot inspect listener owners", () => {
+      const stalePid = process.pid + 778;
+      mockReadFileSync.mockImplementation((path: unknown) => {
+        if (path === "/proc/net/tcp") {
+          return [
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+            "   0: 00000000:4965 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 22345 1 0000000000000000 100 0 0 10 0",
+          ].join("\n");
+        }
+        if (path === "/proc/net/tcp6") {
+          return "";
+        }
+        if (path === `/proc/${stalePid}/cmdline`) {
+          return "openclaw-gateway\0";
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+        error.code = "ENOENT";
+        throw error;
+      });
+      mockReadDirSync.mockImplementation((path: unknown) => {
+        if (path === "/proc") {
+          return [String(stalePid)];
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+        error.code = "ENOENT";
+        throw error;
+      });
+      mockSpawnSync.mockImplementation((command: string) => {
+        if (command === "lsof") {
+          return createErrnoResult("ENOENT", "lsof missing");
+        }
+        if (command === "ss") {
+          return createLsofResult({
+            status: 0,
+            stdout: `LISTEN 0 511 0.0.0.0:18789 0.0.0.0:* users:(("openclaw-gateway",pid=${stalePid},fd=22))`,
+          });
+        }
+        return createLsofResult({ status: 1 });
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
     });
 
     it("parses openclaw-gateway pids and excludes the current process", () => {
@@ -735,43 +839,48 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const events: string[] = [];
       events.push("initial-find");
       installInitialBusyPoll(stalePid, (call) => {
-        // Permanent ENOENT — lsof is not installed
-        events.push(`enoent-poll-${call}`);
-        return createErrnoResult("ENOENT", "lsof not found");
+        events.push(`poll-${call}`);
+        if (call % 2 === 0) {
+          return createErrnoResult("ENOENT", "lsof not found");
+        }
+        return createErrnoResult("ENOENT", "ss not found");
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
 
       // Must bail after first ENOENT poll — no point retrying a missing binary
-      const enoentPolls = events.filter((e) => e.startsWith("enoent-poll"));
-      expect(enoentPolls.length).toBe(1);
+      const polls = events.filter((e) => e.startsWith("poll-"));
+      expect(polls.length).toBe(2);
     });
 
     it("bails immediately when lsof is permanently unavailable (EPERM) — SELinux/AppArmor", () => {
       // EPERM occurs when lsof exists but a MAC policy (SELinux/AppArmor) blocks
       // execution. Like ENOENT/EACCES, this is permanent — retrying is pointless.
       const stalePid = process.pid + 305;
-      const getCallCount = installInitialBusyPoll(stalePid, () =>
-        createErrnoResult("EPERM", "lsof eperm"),
+      const getCallCount = installInitialBusyPoll(stalePid, (call) =>
+        call % 2 === 0
+          ? createErrnoResult("EPERM", "lsof eperm")
+          : createErrnoResult("EPERM", "ss eperm"),
       );
       vi.spyOn(process, "kill").mockReturnValue(true);
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
-      // Must bail after exactly 1 EPERM poll — same as ENOENT/EACCES
-      expect(getCallCount()).toBe(2); // 1 initial find + 1 EPERM poll
+      // Initial stale-pid scan uses lsof then ss; first poll does same and then bails.
+      expect(getCallCount()).toBe(3);
     });
 
     it("bails immediately when lsof is permanently unavailable (EACCES) — same as ENOENT", () => {
       // EACCES and EPERM are also permanent conditions — lsof exists but the
       // process has no permission to run it. No point retrying.
       const stalePid = process.pid + 302;
-      const getCallCount = installInitialBusyPoll(stalePid, () =>
-        createErrnoResult("EACCES", "lsof permission denied"),
+      const getCallCount = installInitialBusyPoll(stalePid, (call) =>
+        call % 2 === 0
+          ? createErrnoResult("EACCES", "lsof permission denied")
+          : createErrnoResult("EACCES", "ss permission denied"),
       );
       vi.spyOn(process, "kill").mockReturnValue(true);
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
-      // Should have bailed after exactly 1 poll call (the EACCES one)
-      expect(getCallCount()).toBe(2); // 1 initial find + 1 EACCES poll
+      expect(getCallCount()).toBe(3);
     });
 
     it("proceeds with warning when polling budget is exhausted — fake clock, no real 2s wait", () => {

@@ -29,6 +29,7 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import { resolveDaemonProbeAuth } from "./status.gather.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -82,9 +83,15 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   const cfg = await readBestEffortConfig().catch(() => undefined);
   const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
   const scheme = tlsEnabled ? "wss" : "ws";
+  const probeAuth = cfg
+    ? await resolveDaemonProbeAuth({
+        cfg,
+        env: process.env,
+      }).catch(() => undefined)
+    : undefined;
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
-    auth: {
+    auth: probeAuth?.auth ?? {
       token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN),
       password: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD),
     },
@@ -190,6 +197,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  const restartProbeAuth = cfg
+    ? await resolveDaemonProbeAuth({
+        cfg,
+        env: process.env,
+      }).catch(() => undefined)
+    : undefined;
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -214,6 +228,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: restartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          auth: restartProbeAuth?.auth,
         });
         if (health.healthy) {
           return undefined;
