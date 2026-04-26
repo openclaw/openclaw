@@ -80,14 +80,23 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   const legacyStorePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: DEFAULT_AGENT_ID,
   });
-  if (legacyStorePath === opts.storePath) {
-    return undefined;
-  }
-  const legacyStore = loadSessionStore(legacyStorePath);
   const legacyKeys = [
     buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: opts.mainKey }),
     buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: "main" }),
   ];
+  if (legacyStorePath === opts.storePath) {
+    for (const legacyKey of legacyKeys) {
+      if (opts.sessionStore[legacyKey]) {
+        return {
+          sessionKey: legacyKey,
+          sessionStore: opts.sessionStore,
+          storePath: opts.storePath,
+        };
+      }
+    }
+    return undefined;
+  }
+  const legacyStore = loadSessionStore(legacyStorePath);
   for (const legacyKey of legacyKeys) {
     if (legacyStore[legacyKey]) {
       return { sessionKey: legacyKey, sessionStore: legacyStore, storePath: legacyStorePath };

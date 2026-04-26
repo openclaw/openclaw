@@ -38,6 +38,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
   const MYBOT_STORE_PATH = "/tmp/mybot-store.json";
+  const SHARED_STORE_PATH = "/tmp/shared-store.json";
   type SessionStoreEntry = { sessionId: string; updatedAt: number };
   type SessionStoreMap = Record<string, SessionStoreEntry>;
 
@@ -116,6 +117,29 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionStore).toBe(mainStore);
     expect(result.storePath).toBe(MAIN_STORE_PATH);
+  });
+
+  it("resumes legacy main-key sessions for plain --to default-agent requests with a literal shared store", async () => {
+    const sharedStore = {
+      "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
+    };
+    mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
+    mocks.resolveStorePath.mockReturnValue(SHARED_STORE_PATH);
+    mocks.loadSessionStore.mockReturnValue(sharedStore);
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+        session: { store: SHARED_STORE_PATH },
+      } satisfies OpenClawConfig,
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:main");
+    expect(result.sessionStore).toBe(sharedStore);
+    expect(result.storePath).toBe(SHARED_STORE_PATH);
+    expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith(SHARED_STORE_PATH);
   });
 
   it("prefers the configured default-agent session over legacy main-store rows", async () => {
