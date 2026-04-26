@@ -20,6 +20,27 @@ If you are trying to orient yourself, start with
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
 Discord, Slack, or another channel remains the communication surface.
 
+## What this plugin changes
+
+The bundled `codex` plugin contributes several separate capabilities:
+
+| Capability                        | How you use it                                      | What it does                                                                  |
+| --------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Native embedded runtime           | `embeddedHarness.runtime: "codex"`                  | Runs OpenClaw embedded agent turns through Codex app-server.                  |
+| Native chat-control commands      | `/codex bind`, `/codex resume`, `/codex steer`, ... | Binds and controls Codex app-server threads from a messaging conversation.    |
+| Codex app-server provider/catalog | `codex` internals, surfaced through the harness     | Lets the runtime discover and validate app-server models.                     |
+| Codex media-understanding path    | `codex/*` image-model compatibility paths           | Runs bounded Codex app-server turns for supported image understanding models. |
+| Native hook relay                 | Plugin hooks around Codex-native events             | Lets OpenClaw observe/block supported Codex-native tool/finalization events.  |
+
+Enabling the plugin makes those capabilities available. It does **not**:
+
+- start using Codex for every OpenAI model
+- convert `openai-codex/*` model refs into the native runtime
+- make ACP/acpx the default Codex path
+- hot-switch existing sessions that already recorded a PI runtime
+- replace OpenClaw channel delivery, session files, auth-profile storage, or
+  message routing
+
 The same plugin also owns the native `/codex` chat-control command surface. If
 the plugin is enabled and the user asks to bind, resume, steer, stop, or inspect
 Codex threads from chat, agents should prefer `/codex ...` over ACP. ACP remains
@@ -58,6 +79,27 @@ If the `codex` plugin is enabled but the primary model is still
 intentional: `openai-codex/*` remains the PI Codex OAuth/subscription path, and
 native app-server execution stays an explicit runtime choice.
 
+## Route map
+
+Use this table before changing config:
+
+| Desired behavior                            | Model ref                  | Runtime config                         | Plugin requirement          | Expected status label          |
+| ------------------------------------------- | -------------------------- | -------------------------------------- | --------------------------- | ------------------------------ |
+| OpenAI API through normal OpenClaw runner   | `openai/gpt-*`             | omitted or `runtime: "pi"`             | OpenAI provider             | `Runtime: OpenClaw Pi Default` |
+| Codex OAuth/subscription through PI         | `openai-codex/gpt-*`       | omitted or `runtime: "pi"`             | OpenAI Codex OAuth provider | `Runtime: OpenClaw Pi Default` |
+| Native Codex app-server embedded turns      | `openai/gpt-*`             | `embeddedHarness.runtime: "codex"`     | `codex` plugin              | `Runtime: OpenAI Codex`        |
+| Mixed providers with conservative auto mode | provider-specific refs     | `runtime: "auto", fallback: "pi"`      | Optional plugin runtimes    | Depends on selected runtime    |
+| Explicit Codex ACP adapter session          | ACP prompt/model dependent | `sessions_spawn` with `runtime: "acp"` | healthy `acpx` backend      | ACP task/session status        |
+
+The important split is provider versus runtime:
+
+- `openai-codex/*` answers "which provider/auth route should PI use?"
+- `embeddedHarness.runtime: "codex"` answers "which loop should execute this
+  embedded turn?"
+- `/codex ...` answers "which native Codex conversation should this chat bind
+  or control?"
+- ACP answers "which external harness process should acpx launch?"
+
 ## Pick the right model prefix
 
 OpenAI-family routes are prefix-specific. Use `openai-codex/*` when you want
@@ -95,6 +137,25 @@ selection is surprising, enable debug logging for the `agents/harness` subsystem
 and inspect the gateway's structured `agent harness selected` record. It
 includes the selected harness id, selection reason, runtime/fallback policy, and,
 in `auto` mode, each plugin candidate's support result.
+
+### What doctor warnings mean
+
+`openclaw doctor` warns when all of these are true:
+
+- the bundled `codex` plugin is enabled or allowed
+- an agent's primary model is `openai-codex/*`
+- that agent's effective runtime is not `codex`
+
+That warning exists because users often expect "Codex plugin enabled" to imply
+"native Codex app-server runtime." OpenClaw does not make that leap. The warning
+means:
+
+- **No change is required** if you intended ChatGPT/Codex OAuth through PI.
+- Change the model to `openai/<model>` and set
+  `embeddedHarness.runtime: "codex"` if you intended native app-server
+  execution.
+- Existing sessions still need `/new` or `/reset` after a runtime change,
+  because session runtime pins are sticky.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for
@@ -231,6 +292,25 @@ With this shape:
 - The `codex` agent uses the Codex app-server harness.
 - If Codex is missing or unsupported for the `codex` agent, the turn fails
   instead of quietly using PI.
+
+## Agent command routing
+
+Agents should route user requests by intent, not by the word "Codex" alone:
+
+| User asks for...                                         | Agent should use...                              |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| "Bind this chat to Codex"                                | `/codex bind`                                    |
+| "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                             |
+| "Show Codex threads"                                     | `/codex threads`                                 |
+| "Use Codex as the runtime for this agent"                | config change to `embeddedHarness.runtime`       |
+| "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                      |
+| "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`    |
+| "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents |
+
+OpenClaw only advertises ACP spawn guidance to agents when ACP is enabled,
+dispatchable, and backed by a loaded runtime backend. If ACP is not available,
+the system prompt and plugin skills should not teach the agent about ACP
+routing.
 
 ## Codex-only deployments
 

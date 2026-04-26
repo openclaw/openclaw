@@ -269,6 +269,18 @@ warns and points to the explicit app-server shape:
 `openai/*` plus `embeddedHarness.runtime: "codex"` or
 `OPENCLAW_AGENT_RUNTIME=codex`.
 
+Doctor does not repair this automatically because both routes are valid:
+
+- `openai-codex/*` + PI means "use Codex OAuth/subscription auth through the
+  normal OpenClaw runner."
+- `openai/*` + `runtime: "codex"` means "run the embedded turn through native
+  Codex app-server."
+- `/codex ...` means "control or bind a native Codex conversation from chat."
+- `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
+
+If the warning appears, choose the route you intended and edit config manually.
+Keep the warning as-is when PI Codex OAuth is intentional.
+
 ### 3) Legacy state migrations (disk layout)
 
 Doctor can migrate older on-disk layouts into the current structure:

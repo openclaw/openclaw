@@ -11,6 +11,20 @@ For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-ag
 
 The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
+Use this page only when you are setting up the ACP/acpx route. For native Codex
+app-server runtime config, use [Codex harness](/plugins/codex-harness). For
+OpenAI API keys or Codex OAuth model-provider config, use
+[OpenAI](/providers/openai).
+
+Codex has two OpenClaw routes:
+
+| Route                      | Config/command                                         | Setup page                              |
+| -------------------------- | ------------------------------------------------------ | --------------------------------------- |
+| Native Codex app-server    | `/codex ...`, `embeddedHarness.runtime: "codex"`       | [Codex harness](/plugins/codex-harness) |
+| Explicit Codex ACP adapter | `/acp spawn codex`, `runtime: "acp", agentId: "codex"` | This page                               |
+
+Prefer the native route unless you explicitly need ACP/acpx behavior.
+
 ## acpx harness support (current)
 
 Current acpx built-in harness aliases:
