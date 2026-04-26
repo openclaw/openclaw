@@ -11,6 +11,8 @@ export type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;

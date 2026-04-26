@@ -8,6 +8,10 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearGatewaySubagentRuntime,
+  setGatewaySubagentRuntime,
+} from "../../../src/plugins/runtime/index.js";
 import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
   appendNarrativeEntry,
@@ -30,6 +34,7 @@ const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearGatewaySubagentRuntime();
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
 });
 
@@ -557,17 +562,30 @@ describe("appendNarrativeEntry", () => {
 });
 
 describe("generateAndAppendDreamNarrative", () => {
+  function createSessionResult(responseText: string) {
+    return {
+      messages: [
+        { role: "user", content: "prompt" },
+        { role: "assistant", content: responseText },
+      ],
+    };
+  }
+
   function createMockSubagent(responseText: string) {
+    const sessionResult = createSessionResult(responseText);
     return {
       run: vi.fn().mockResolvedValue({ runId: "run-123" }),
       waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
-      getSessionMessages: vi.fn().mockResolvedValue({
-        messages: [
-          { role: "user", content: "prompt" },
-          { role: "assistant", content: responseText },
-        ],
-      }),
+      getSessionMessages: vi.fn().mockResolvedValue(sessionResult),
       deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  function createMockGatewaySubagent(responseText: string) {
+    const sessionResult = createSessionResult(responseText);
+    return {
+      ...createMockSubagent(responseText),
+      getSession: vi.fn().mockResolvedValue(sessionResult),
     };
   }
 
@@ -603,8 +621,8 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
       idempotencyKey: expectedSessionKey,
       sessionKey: expectedSessionKey,
-      lane: `dreaming-narrative:${expectedSessionKey}`,
-      lightContext: true,
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
@@ -657,10 +675,12 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(exists).toBe(false);
   });
 
-  it("skips extra settle waits after timeout and still attempts cleanup", async () => {
+  it("waits once more before cleanup after timeout and logs cleanup failures", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
-    subagent.waitForRun.mockResolvedValueOnce({ status: "timeout" });
+    subagent.waitForRun
+      .mockResolvedValueOnce({ status: "timeout" })
+      .mockResolvedValueOnce({ status: "ok" });
     subagent.deleteSession.mockRejectedValue(new Error("still active"));
     const logger = createMockLogger();
 
@@ -671,8 +691,8 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 15_000 });
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
+    expect(subagent.waitForRun.mock.calls[1][0]).toMatchObject({ timeoutMs: 120_000 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed for rem phase"),
     );
@@ -721,7 +741,105 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(content).toContain("API endpoints need authentication");
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("switches to the background gateway runtime when the request runtime is scoped", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const backgroundSubagent = createMockGatewaySubagent(
+      "A background narrative turned the fragments into prose.",
+    );
+    setGatewaySubagentRuntime(backgroundSubagent);
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["background retries should stay narrative-first"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(backgroundSubagent.run).toHaveBeenCalledOnce();
+    expect(backgroundSubagent.run.mock.calls[0][0]).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+    });
+    expect(backgroundSubagent.waitForRun).toHaveBeenCalledOnce();
+    expect(backgroundSubagent.getSessionMessages).toHaveBeenCalledOnce();
+    expect(backgroundSubagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("switched to background gateway runtime"),
+    );
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A background narrative turned the fragments into prose.");
+  });
+
+  it("surfaces non-transient background gateway failures instead of silently falling back", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const backgroundSubagent = createMockGatewaySubagent("");
+    backgroundSubagent.run.mockRejectedValue(new Error("schema validation exploded"));
+    setGatewaySubagentRuntime(backgroundSubagent);
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["background retries should not hide real failures"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(backgroundSubagent.run).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("narrative generation failed for light phase"),
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative generation used fallback"),
+    );
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("best-effort cleans up the background session after transient retry fallback without a run id", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const backgroundSubagent = createMockGatewaySubagent("");
+    backgroundSubagent.run.mockRejectedValue(new Error("fetch failed"));
+    setGatewaySubagentRuntime(backgroundSubagent);
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["transient retries should still clean up"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(backgroundSubagent.deleteSession).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("background gateway runtime failed for light phase"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("narrative generation used fallback for light phase"),
+    );
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("transient retries should still clean up");
   });
 
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {

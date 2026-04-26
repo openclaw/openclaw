@@ -53,6 +53,8 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /** Classifies the bootstrap run so downstream runtimes can tailor retrieval and prompts. */
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   /**

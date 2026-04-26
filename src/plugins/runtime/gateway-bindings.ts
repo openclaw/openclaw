@@ -28,6 +28,10 @@ export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): 
   gatewaySubagentState.subagent = subagent;
 }
 
+export function getGatewaySubagentRuntime(): PluginRuntime["subagent"] | undefined {
+  return gatewaySubagentState.subagent;
+}
+
 export function setGatewayNodesRuntime(nodes: PluginRuntime["nodes"]): void {
   gatewaySubagentState.nodes = nodes;
 }

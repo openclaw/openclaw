@@ -17,7 +17,10 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { createAsyncLock } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  getGatewaySubagentRuntime,
+  resolveStateDir,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -27,8 +30,8 @@ type SubagentSurface = {
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
-    lane?: string;
-    lightContext?: boolean;
+    bootstrapContextMode?: "full" | "lightweight";
+    bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
@@ -86,10 +89,8 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-// Narrative generation is best-effort. Keep the timeout short so a stalled
-// diary subagent does not leave the parent dreaming cron job "running" for
-// minutes after the reports have already been written.
-const NARRATIVE_TIMEOUT_MS = 15_000;
+const NARRATIVE_TIMEOUT_MS = 60_000;
+const NARRATIVE_DELETE_SETTLE_TIMEOUT_MS = 120_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -113,6 +114,34 @@ function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
     (err instanceof Error &&
       err.name === "RequestScopedSubagentRuntimeError" &&
       extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE)
+  );
+}
+
+function isTransientBackgroundGatewayError(err: unknown): boolean {
+  if (isRequestScopedSubagentRuntimeError(err)) {
+    return true;
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = (extractErrorCode(err) ?? "").toLowerCase();
+  const name = err.name.toLowerCase();
+  const message = err.message.toLowerCase();
+  return (
+    code.includes("timeout") ||
+    code.includes("timed_out") ||
+    code.includes("network") ||
+    code.includes("econn") ||
+    code.includes("fetch") ||
+    name.includes("timeout") ||
+    name.includes("network") ||
+    name.includes("abort") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("fetch failed") ||
+    message.includes("socket hang up") ||
+    message.includes("econn")
   );
 }
 
@@ -148,21 +177,47 @@ async function startNarrativeRunOrFallback(params: {
   nowMs: number;
   timezone?: string;
   logger: Logger;
-}): Promise<string | null> {
-  try {
-    const run = await params.subagent.run({
+}): Promise<
+  | { kind: "started"; runId: string; subagent: SubagentSurface }
+  | { kind: "fallback"; cleanupSubagent?: SubagentSurface }
+> {
+  const startNarrativeRun = async (
+    subagent: SubagentSurface,
+  ): Promise<{ kind: "started"; runId: string; subagent: SubagentSurface }> => {
+    const run = await subagent.run({
       idempotencyKey: params.sessionKey,
       sessionKey: params.sessionKey,
       message: params.message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      lane: `dreaming-narrative:${params.sessionKey}`,
-      lightContext: true,
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
       deliver: false,
     });
-    return run.runId;
+    return { kind: "started", runId: run.runId, subagent };
+  };
+
+  try {
+    return await startNarrativeRun(params.subagent);
   } catch (runErr) {
     if (!isRequestScopedSubagentRuntimeError(runErr)) {
       throw runErr;
+    }
+    const backgroundSubagent = getGatewaySubagentRuntime();
+    if (backgroundSubagent && backgroundSubagent !== params.subagent) {
+      try {
+        const backgroundRun = await startNarrativeRun(backgroundSubagent);
+        params.logger.info(
+          `memory-core: narrative generation switched to background gateway runtime for ${params.data.phase} phase.`,
+        );
+        return backgroundRun;
+      } catch (backgroundErr) {
+        if (!isTransientBackgroundGatewayError(backgroundErr)) {
+          throw backgroundErr;
+        }
+        params.logger.warn(
+          `memory-core: background gateway runtime failed for ${params.data.phase} phase: ${formatErrorMessage(backgroundErr)}`,
+        );
+      }
     }
     try {
       await appendNarrativeEntry({
@@ -179,7 +234,11 @@ async function startNarrativeRunOrFallback(params: {
         `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
       );
     }
-    return null;
+    return {
+      kind: "fallback",
+      cleanupSubagent:
+        backgroundSubagent && backgroundSubagent !== params.subagent ? backgroundSubagent : undefined,
+    };
   }
 }
 
@@ -861,8 +920,12 @@ export async function generateAndAppendDreamNarrative(params: {
   });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
+  let waitStatus: string | null = null;
+  let activeSubagent: SubagentSurface = params.subagent;
+  let cleanupSubagent: SubagentSurface | null = null;
+
   try {
-    runId = await startNarrativeRunOrFallback({
+    const run = await startNarrativeRunOrFallback({
       subagent: params.subagent,
       sessionKey,
       message,
@@ -872,14 +935,19 @@ export async function generateAndAppendDreamNarrative(params: {
       timezone: params.timezone,
       logger: params.logger,
     });
-    if (!runId) {
+    if (run.kind === "fallback") {
+      cleanupSubagent = run.cleanupSubagent ?? null;
       return;
     }
+    runId = run.runId;
+    activeSubagent = run.subagent;
+    cleanupSubagent = run.subagent;
 
-    const result = await params.subagent.waitForRun({
+    const result = await activeSubagent.waitForRun({
       runId,
       timeoutMs: NARRATIVE_TIMEOUT_MS,
     });
+    waitStatus = result.status;
 
     if (result.status !== "ok") {
       params.logger.warn(
@@ -888,7 +956,7 @@ export async function generateAndAppendDreamNarrative(params: {
       return;
     }
 
-    const { messages } = await params.subagent.getSessionMessages({
+    const { messages } = await activeSubagent.getSessionMessages({
       sessionKey,
       limit: 5,
     });
@@ -917,10 +985,28 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
-    if (params.subagent) {
+    if (runId && waitStatus === "timeout") {
       try {
-        await params.subagent.deleteSession({ sessionKey });
+        const settle = await activeSubagent.waitForRun({
+          runId,
+          timeoutMs: NARRATIVE_DELETE_SETTLE_TIMEOUT_MS,
+        });
+        if (settle.status !== "ok" && settle.status !== "error") {
+          params.logger.warn(
+            `memory-core: narrative cleanup wait ended with status=${settle.status} for ${params.data.phase} phase.`,
+          );
+        }
+      } catch (cleanupWaitErr) {
+        params.logger.warn(
+          `memory-core: narrative cleanup wait failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupWaitErr)}`,
+        );
+      }
+    }
+
+    // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
+    if (cleanupSubagent) {
+      try {
+        await cleanupSubagent.deleteSession({ sessionKey });
       } catch (cleanupErr) {
         params.logger.warn(
           `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,

@@ -1041,11 +1041,20 @@ export async function runAgentTurnWithFallback(params: {
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
+                const cliBootstrapRunKind = params.isHeartbeat
+                  ? "heartbeat"
+                  : params.opts?.bootstrapContextRunKind ?? "default";
+                const cliTrigger =
+                  cliBootstrapRunKind === "cron"
+                    ? "cron"
+                    : cliBootstrapRunKind === "heartbeat"
+                      ? "heartbeat"
+                      : "user";
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
-                  trigger: params.isHeartbeat ? "heartbeat" : "user",
+                  trigger: cliTrigger,
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
@@ -1160,10 +1169,19 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              const embeddedBootstrapRunKind = params.isHeartbeat
+                ? "heartbeat"
+                : params.opts?.bootstrapContextRunKind ?? "default";
+              const embeddedTrigger =
+                embeddedBootstrapRunKind === "cron"
+                  ? "cron"
+                  : embeddedBootstrapRunKind === "heartbeat"
+                    ? "heartbeat"
+                    : "user";
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
-                trigger: params.isHeartbeat ? "heartbeat" : "user",
+                trigger: embeddedTrigger,
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??
@@ -1193,7 +1211,7 @@ export async function runAgentTurnWithFallback(params: {
                 })(),
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
-                bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                bootstrapContextRunKind: embeddedBootstrapRunKind,
                 images: params.opts?.images,
                 imageOrder: params.opts?.imageOrder,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
