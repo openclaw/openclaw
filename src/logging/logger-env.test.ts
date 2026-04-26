@@ -167,7 +167,7 @@ describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
     }
   });
 
-  it("floors fractional env values", () => {
+  it("floors fractional env values above the 1 MiB minimum", () => {
     setLoggerOverride({
       level: "info",
       consoleLevel: "warn",
@@ -175,9 +175,10 @@ describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
       file: testLogPath,
       maxFileBytes: defaultMaxFileBytes,
     });
-    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = "1024.7";
+    // 100 MiB + 0.7 byte → 100 MiB (Math.floor + above min).
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = String(100 * 1024 * 1024 + 0.7);
 
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(1024);
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(100 * 1024 * 1024);
   });
 
   it("clamps env override to 2 GiB to prevent disk-fill DoS via env injection (CWE-400)", () => {
@@ -205,5 +206,32 @@ describe("OPENCLAW_LOG_MAX_FILE_BYTES (#71800)", () => {
     process.env.OPENCLAW_LOG_MAX_FILE_BYTES = String(2 * 1024 * 1024 * 1024);
 
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  it("rejects env values below the 1 MiB minimum to prevent audit-log suppression (CWE-15)", () => {
+    for (const tiny of ["1", "10", "1024", String(1024 * 1024 - 1)]) {
+      process.env.OPENCLAW_LOG_MAX_FILE_BYTES = tiny;
+      setLoggerOverride({
+        level: "info",
+        consoleLevel: "warn",
+        consoleStyle: "compact",
+        file: testLogPath,
+        maxFileBytes: defaultMaxFileBytes,
+      });
+      expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
+    }
+  });
+
+  it("respects env values at exactly the 1 MiB minimum", () => {
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    process.env.OPENCLAW_LOG_MAX_FILE_BYTES = String(1024 * 1024);
+
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(1024 * 1024);
   });
 });

@@ -460,6 +460,13 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 // Operators that need an even larger cap should configure
 // `logging.maxFileBytes` in openclaw.json instead.
 const MAX_ENV_LOG_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+// Floor the env override at 1 MiB so a malformed env (`=1`, `=10`, etc.)
+// cannot suppress all file writes by tripping the size cap on the first
+// log line. Tiny values are rejected and we fall through to the on-disk
+// config / default. The on-disk `logging.maxFileBytes` path is intentionally
+// unbounded — operators that want a small file cap can still set it there.
+// (CWE-15 audit-log suppression, aisle finding on PR #71917)
+const MIN_ENV_LOG_FILE_BYTES = 1 * 1024 * 1024;
 
 function resolveMaxLogFileBytesFromEnv(): number | undefined {
   // Env override mirrors OPENCLAW_LOG_LEVEL: read at logger init so plist /
@@ -473,7 +480,11 @@ function resolveMaxLogFileBytesFromEnv(): number | undefined {
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return undefined;
   }
-  return Math.min(Math.floor(parsed), MAX_ENV_LOG_FILE_BYTES);
+  const floored = Math.floor(parsed);
+  if (floored < MIN_ENV_LOG_FILE_BYTES) {
+    return undefined;
+  }
+  return Math.min(floored, MAX_ENV_LOG_FILE_BYTES);
 }
 
 function resolveMaxLogFileBytes(raw: unknown): number {
