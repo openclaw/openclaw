@@ -6,6 +6,7 @@ import {
   stripSilentToken,
 } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
+import { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -566,12 +567,51 @@ export async function runSubagentAnnounceFlow(params: {
     });
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
+    emitContinuityDiagnostic({
+      type: "diag.subagent.announce_delivery_outcome",
+      severity: delivery.delivered ? "info" : "warn",
+      sessionKey: params.childSessionKey,
+      runId: params.childRunId,
+      phase: "announce_delivery",
+      correlation: {
+        runId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: targetRequesterSessionKey,
+        announceId,
+        path: delivery.path,
+      },
+      details: {
+        delivered: delivery.delivered,
+        path: delivery.path,
+        error: delivery.error,
+        announceType,
+        requesterIsSubagent,
+        expectsCompletionMessage,
+        targetRequesterSessionKey,
+      },
+    });
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
       );
     }
   } catch (err) {
+    emitContinuityDiagnostic({
+      type: "diag.subagent.announce_flow_error",
+      severity: "warn",
+      sessionKey: params.childSessionKey,
+      runId: params.childRunId,
+      phase: "announce_delivery",
+      correlation: {
+        runId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: params.requesterSessionKey,
+      },
+      details: {
+        error: err instanceof Error ? err.message : String(err),
+        announceType,
+      },
+    });
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {

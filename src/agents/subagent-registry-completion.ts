@@ -1,3 +1,4 @@
+import { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
@@ -9,6 +10,22 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+function sameShallowRecord(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  if (!a) {
+    return false;
+  }
+  for (const key of keys) {
+    if (a[key] !== b[key]) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function runOutcomesEqual(
   a: SubagentRunOutcome | undefined,
@@ -61,6 +78,112 @@ export function resolveLifecycleOutcomeFromRunOutcome(
     return SUBAGENT_ENDED_OUTCOME_TIMEOUT;
   }
   return SUBAGENT_ENDED_OUTCOME_OK;
+}
+
+export function recordSubagentTerminalState(
+  entry: SubagentRunRecord,
+  params: {
+    reason: SubagentLifecycleEndedReason;
+    outcome?: SubagentRunOutcome;
+    endedAt?: number;
+  },
+): boolean {
+  const outcome = params.outcome ?? { status: "unknown" };
+  const next = {
+    type: "subagent.child.terminal_state" as const,
+    status: typeof outcome.status === "string" ? outcome.status : "unknown",
+    reason: params.reason,
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    startedAt: typeof outcome.startedAt === "number" ? outcome.startedAt : entry.startedAt,
+    endedAt: params.endedAt,
+    elapsedMs: typeof outcome.elapsedMs === "number" ? outcome.elapsedMs : undefined,
+    error: typeof outcome.error === "string" ? outcome.error : undefined,
+    recordedAt: Date.now(),
+  };
+  const comparableKeys = ["status", "reason", "startedAt", "endedAt", "elapsedMs", "error"];
+  if (sameShallowRecord(entry.childTerminalState, next, comparableKeys)) {
+    return false;
+  }
+  const previous = entry.childTerminalState;
+  entry.childTerminalState = next;
+  emitContinuityDiagnostic({
+    type: "diag.subagent.child_terminal_state",
+    severity: next.status === "error" || next.status === "timeout" ? "warn" : "info",
+    sessionKey: entry.childSessionKey,
+    runId: entry.runId,
+    phase: "subagent_terminal",
+    correlation: {
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+      requesterSessionKey: entry.requesterSessionKey,
+    },
+    details: {
+      terminalState: next,
+      previousStatus: previous?.status,
+      previousReason: previous?.reason,
+    },
+  });
+  return true;
+}
+
+export function recordSubagentAnnounceOutcome(
+  entry: SubagentRunRecord,
+  params: {
+    status: "delivered" | "deferred" | "failed" | "skipped";
+    reason: string;
+    delivered: boolean;
+    cleanup: "delete" | "keep";
+    nextDelayMs?: number;
+  },
+): boolean {
+  const next = {
+    type: "subagent.announce_outcome" as const,
+    status: params.status,
+    reason: params.reason,
+    delivered: params.delivered,
+    cleanup: params.cleanup,
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    completionAnnouncedAt: entry.completionAnnouncedAt,
+    retryCount: entry.announceRetryCount,
+    nextDelayMs: params.nextDelayMs,
+    recordedAt: Date.now(),
+  };
+  const comparableKeys = [
+    "status",
+    "reason",
+    "delivered",
+    "cleanup",
+    "completionAnnouncedAt",
+    "retryCount",
+    "nextDelayMs",
+  ];
+  if (sameShallowRecord(entry.announceOutcome, next, comparableKeys)) {
+    return false;
+  }
+  const previous = entry.announceOutcome;
+  entry.announceOutcome = next;
+  emitContinuityDiagnostic({
+    type: "diag.subagent.announce_outcome",
+    severity: params.status === "failed" ? "warn" : "info",
+    sessionKey: entry.childSessionKey,
+    runId: entry.runId,
+    phase: "subagent_announce",
+    correlation: {
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+      requesterSessionKey: entry.requesterSessionKey,
+    },
+    details: {
+      announceOutcome: next,
+      previousStatus: previous?.status,
+      previousReason: previous?.reason,
+    },
+  });
+  return true;
 }
 
 export async function emitSubagentEndedHookOnce(params: {

@@ -3,6 +3,35 @@ import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
+export type SubagentChildTerminalState = {
+  type: "subagent.child.terminal_state";
+  status: string;
+  reason: SubagentLifecycleEndedReason;
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
+  error?: string;
+  recordedAt: number;
+};
+
+export type SubagentAnnounceOutcomeRecord = {
+  type: "subagent.announce_outcome";
+  status: "delivered" | "deferred" | "failed" | "skipped";
+  reason: string;
+  delivered: boolean;
+  cleanup: "delete" | "keep";
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  completionAnnouncedAt?: number;
+  retryCount?: number;
+  nextDelayMs?: number;
+  recordedAt: number;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   childSessionKey: string;
@@ -23,6 +52,8 @@ export type SubagentRunRecord = {
   accumulatedRuntimeMs?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;
+  childTerminalState?: SubagentChildTerminalState;
+  announceOutcome?: SubagentAnnounceOutcomeRecord;
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;

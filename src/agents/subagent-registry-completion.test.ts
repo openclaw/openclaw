@@ -5,6 +5,11 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const lifecycleMocks = vi.hoisted(() => ({
   getGlobalHookRunner: vi.fn(),
   runSubagentEnded: vi.fn(async () => {}),
+  emitContinuityDiagnostic: vi.fn(),
+}));
+
+vi.mock("../infra/continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: lifecycleMocks.emitContinuityDiagnostic,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -47,6 +52,7 @@ describe("emitSubagentEndedHookOnce", () => {
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
+    lifecycleMocks.emitContinuityDiagnostic.mockClear();
   });
 
   it("treats timing differences as different only after both outcomes have timing", () => {
@@ -80,6 +86,47 @@ describe("emitSubagentEndedHookOnce", () => {
         { status: "ok" },
       ),
     ).toBe(false);
+  });
+
+  it("records child terminal state separately from announce outcome", () => {
+    const entry = createRunEntry();
+
+    expect(
+      mod.recordSubagentTerminalState(entry, {
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        outcome: { status: "ok", startedAt: 10, endedAt: 20, elapsedMs: 10 },
+        endedAt: 20,
+      }),
+    ).toBe(true);
+    expect(entry.childTerminalState).toMatchObject({
+      type: "subagent.child.terminal_state",
+      status: "ok",
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+    });
+
+    expect(
+      mod.recordSubagentAnnounceOutcome(entry, {
+        status: "delivered",
+        reason: "announce-delivered",
+        delivered: true,
+        cleanup: "keep",
+      }),
+    ).toBe(true);
+    expect(entry.announceOutcome).toMatchObject({
+      type: "subagent.announce_outcome",
+      status: "delivered",
+      delivered: true,
+      cleanup: "keep",
+    });
+    expect(entry.childTerminalState?.status).toBe("ok");
+    expect(lifecycleMocks.emitContinuityDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "diag.subagent.child_terminal_state" }),
+    );
+    expect(lifecycleMocks.emitContinuityDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "diag.subagent.announce_outcome" }),
+    );
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {

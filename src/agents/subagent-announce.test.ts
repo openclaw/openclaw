@@ -16,6 +16,7 @@ const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw sub
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
+const emitContinuityDiagnosticMock = vi.hoisted(() => vi.fn());
 let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
@@ -34,6 +35,10 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
     replaceSubagentRunAfterSteer: vi.fn(() => true),
     resolveRequesterForChildSession: vi.fn(() => null),
   },
+}));
+
+vi.mock("../infra/continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: emitContinuityDiagnosticMock,
 }));
 
 vi.mock("./subagent-announce.runtime.js", () => ({
@@ -228,6 +233,7 @@ describe("subagent announce seam flow", () => {
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
     queueEmbeddedPiMessageMock.mockReset().mockReturnValue(false);
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
+    emitContinuityDiagnosticMock.mockClear();
     mockConfig = {
       session: {
         mainKey: "main",
@@ -250,6 +256,32 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReturnValue(true);
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReset();
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReturnValue(null);
+  });
+
+  it("emits announce delivery outcome diagnostics", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:child",
+      childRunId: "run-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize results",
+      timeoutMs: 100,
+      cleanup: "keep",
+      roundOneReply: "done",
+      waitForCompletion: false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(emitContinuityDiagnosticMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.subagent.announce_delivery_outcome",
+        severity: "info",
+        sessionKey: "agent:main:subagent:child",
+        runId: "run-child",
+        phase: "announce_delivery",
+        details: expect.objectContaining({ delivered: true, path: "direct" }),
+      }),
+    );
   });
 
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {

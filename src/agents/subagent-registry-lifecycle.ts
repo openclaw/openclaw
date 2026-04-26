@@ -20,7 +20,11 @@ import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
+import {
+  recordSubagentAnnounceOutcome,
+  recordSubagentTerminalState,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -475,6 +479,16 @@ export function createSubagentRegistryLifecycleController(params: {
     if (didAnnounce) {
       if (!options?.skipAnnounce) {
         entry.completionAnnouncedAt = Date.now();
+      }
+      if (
+        recordSubagentAnnounceOutcome(entry, {
+          status: options?.skipAnnounce ? "skipped" : "delivered",
+          reason: options?.skipAnnounce ? "already-announced" : "announce-delivered",
+          delivered: true,
+          cleanup,
+        }) ||
+        !options?.skipAnnounce
+      ) {
         params.persist();
       }
       safeSetSubagentTaskDeliveryStatus({
@@ -521,6 +535,13 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.lastAnnounceRetryAt = now;
       entry.wakeOnDescendantSettle = true;
       entry.cleanupHandled = false;
+      recordSubagentAnnounceOutcome(entry, {
+        status: "deferred",
+        reason: "pending-descendants",
+        delivered: false,
+        cleanup,
+        nextDelayMs: deferredDecision.delayMs,
+      });
       params.resumedRuns.delete(runId);
       params.persist();
       scheduleResumeSubagentRun(runId, entry, deferredDecision.delayMs);
@@ -533,6 +554,12 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      recordSubagentAnnounceOutcome(entry, {
+        status: "failed",
+        reason: deferredDecision.reason,
+        delivered: false,
+        cleanup,
+      });
       safeSetSubagentTaskDeliveryStatus({
         runId,
         childSessionKey: entry.childSessionKey,
@@ -560,6 +587,13 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
+    recordSubagentAnnounceOutcome(entry, {
+      status: "deferred",
+      reason: deferredDecision.kind,
+      delivered: false,
+      cleanup,
+      nextDelayMs: deferredDecision.resumeDelayMs,
+    });
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
     params.persist();
@@ -703,6 +737,15 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
+      mutated = true;
+    }
+    if (
+      recordSubagentTerminalState(entry, {
+        reason: completeParams.reason,
+        outcome,
+        endedAt,
+      })
+    ) {
       mutated = true;
     }
 
