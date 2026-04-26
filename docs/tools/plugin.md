@@ -226,8 +226,8 @@ do not run in live chat traffic, check these first:
   `llm_output`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
-  resolution for agent turns; `llm_output` only runs after a model attempt
-  produces assistant output.
+  resolution for agent turns and can also prefer an auth profile; `llm_output`
+  only runs after a model attempt produces assistant output.
 - For proof of the effective session model, use `openclaw sessions` or the
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.

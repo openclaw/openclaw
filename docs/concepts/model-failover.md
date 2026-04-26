@@ -33,7 +33,8 @@ High-level sequence:
 4. If that provider is exhausted with a failover-worthy error, move to the next
    model candidate.
 5. Persist the selected fallback override before the retry starts so other
-   session readers see the same provider/model the runner is about to use.
+   session readers see the same provider/model/auth profile the runner is about
+   to use.
 6. If the fallback candidate fails, roll back only the fallback-owned session
    override fields when they still match that failed candidate.
 7. If every candidate fails, throw a `FallbackSummaryError` with per-attempt

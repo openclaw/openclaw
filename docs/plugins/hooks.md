@@ -167,7 +167,8 @@ not prompt content:
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or
+  `authProfileOverride`.
 - `before_prompt_build`: receives the current prompt and session messages.
   Return `prependContext`, `systemPrompt`, `prependSystemContext`, or
   `appendSystemContext`.

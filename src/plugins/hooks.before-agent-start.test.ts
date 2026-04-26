@@ -1,9 +1,9 @@
 /**
  * Layer 1: Hook Merger Tests for before_agent_start
  *
- * Validates that modelOverride and providerOverride fields are correctly
- * propagated through the hook merger, including priority ordering and
- * backward compatibility.
+ * Validates that modelOverride, providerOverride, and authProfileOverride fields
+ * are correctly propagated through the hook merger, including priority ordering
+ * and backward compatibility.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
@@ -91,14 +91,16 @@ describe("before_agent_start hook merger", () => {
       },
     ],
     [
-      "returns both modelOverride and providerOverride together",
+      "returns model/provider/auth profile overrides together",
       {
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:local",
       },
       {
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:local",
       },
     ],
     [
@@ -107,11 +109,13 @@ describe("before_agent_start hook merger", () => {
         systemPrompt: "You are a helpful assistant",
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:local",
       },
       {
         systemPrompt: "You are a helpful assistant",
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
+        authProfileOverride: "ollama:local",
       },
     ],
   ] as const)("%s", async (_name, hookResult, expected) => {
@@ -121,12 +125,21 @@ describe("before_agent_start hook merger", () => {
   it("higher-priority plugin wins for modelOverride", async () => {
     const result = await expectMergedBeforeAgentStart(
       [
-        { pluginId: "low-priority", result: { modelOverride: "gpt-5.4" }, priority: 1 },
-        { pluginId: "high-priority", result: { modelOverride: "llama3.3:8b" }, priority: 10 },
+        {
+          pluginId: "low-priority",
+          result: { modelOverride: "gpt-5.4", authProfileOverride: "openai-codex:default" },
+          priority: 1,
+        },
+        {
+          pluginId: "high-priority",
+          result: { modelOverride: "llama3.3:8b", authProfileOverride: "ollama:local" },
+          priority: 10,
+        },
       ],
-      { modelOverride: "llama3.3:8b" },
+      { modelOverride: "llama3.3:8b", authProfileOverride: "ollama:local" },
     );
     expect(result?.modelOverride).toBe("llama3.3:8b");
+    expect(result?.authProfileOverride).toBe("ollama:local");
   });
 
   it("lower-priority plugin does not overwrite if it returns undefined", async () => {

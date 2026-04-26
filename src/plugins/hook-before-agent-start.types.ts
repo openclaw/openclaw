@@ -16,6 +16,8 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "local-provider" */
   providerOverride?: string;
+  /** Prefer a configured auth profile for this agent run. E.g. "openai-codex:work" */
+  authProfileOverride?: string;
 };
 
 // before_prompt_build hook

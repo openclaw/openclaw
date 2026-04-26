@@ -92,6 +92,7 @@ describe("model override pipeline wiring", () => {
         ({
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",
+          authProfileOverride: "demo-local-provider:work",
         }) as PluginHookBeforeModelResolveResult,
     );
 
@@ -167,6 +168,7 @@ describe("model override pipeline wiring", () => {
         expected: {
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",
+          authProfileOverride: "demo-local-provider:work",
         },
       },
       {
@@ -177,6 +179,7 @@ describe("model override pipeline wiring", () => {
         expected: {
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",
+          authProfileOverride: "demo-local-provider:work",
         },
       },
     ] as const)("$name", async ({ event, expected, withBrokenHook, catchErrors }) => {
@@ -187,10 +190,12 @@ describe("model override pipeline wiring", () => {
       addBeforeModelResolveHook(registry, "new-hook", () => ({
         modelOverride: "demo-local-model",
         providerOverride: "demo-local-provider",
+        authProfileOverride: "demo-local-provider:work",
       }));
       addLegacyBeforeAgentStartHook({
         modelOverride: "demo-legacy-model",
         providerOverride: "demo-legacy-provider",
+        authProfileOverride: "demo-legacy-provider:default",
       });
 
       const runner = createHookRunner(registry);
@@ -199,10 +204,12 @@ describe("model override pipeline wiring", () => {
       const merged = {
         providerOverride: explicit?.providerOverride ?? legacy?.providerOverride,
         modelOverride: explicit?.modelOverride ?? legacy?.modelOverride,
+        authProfileOverride: explicit?.authProfileOverride ?? legacy?.authProfileOverride,
       };
 
       expect(merged.providerOverride).toBe("demo-local-provider");
       expect(merged.modelOverride).toBe("demo-local-model");
+      expect(merged.authProfileOverride).toBe("demo-local-provider:work");
     });
   });
 

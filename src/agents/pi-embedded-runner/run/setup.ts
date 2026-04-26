@@ -4,6 +4,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -34,7 +35,7 @@ type HookRunnerLike = {
   runBeforeModelResolve(
     input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
+  ): Promise<PluginHookBeforeModelResolveResult | undefined>;
   runBeforeAgentStart(
     input: { prompt: string },
     context: HookContext,
@@ -51,7 +52,7 @@ export async function resolveHookModelSelection(params: {
 }) {
   let provider = params.provider;
   let modelId = params.modelId;
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride: PluginHookBeforeModelResolveResult | undefined;
   let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
 
@@ -82,6 +83,9 @@ export async function resolveHookModelSelection(params: {
           modelResolveOverride?.providerOverride ?? legacyBeforeAgentStartResult?.providerOverride,
         modelOverride:
           modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
+        authProfileOverride:
+          modelResolveOverride?.authProfileOverride ??
+          legacyBeforeAgentStartResult?.authProfileOverride,
       };
     } catch (hookErr) {
       log.warn(`before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`);
@@ -96,11 +100,45 @@ export async function resolveHookModelSelection(params: {
     modelId = modelResolveOverride.modelOverride;
     log.info(`[hooks] model overridden to ${modelId}`);
   }
+  if (modelResolveOverride?.authProfileOverride) {
+    log.info(`[hooks] auth profile preferred as ${modelResolveOverride.authProfileOverride}`);
+  }
 
   return {
     provider,
     modelId,
+    authProfileOverride: modelResolveOverride?.authProfileOverride,
     legacyBeforeAgentStartResult,
+  };
+}
+
+export function resolvePreferredRunAuthProfile(params: {
+  requestedAuthProfileId?: string;
+  requestedAuthProfileIdSource?: "auto" | "user";
+  hookAuthProfileOverride?: string;
+}): {
+  preferredProfileId?: string;
+  preferredProfileIdSource?: "auto" | "user";
+} {
+  const requestedProfileId = params.requestedAuthProfileId?.trim() || undefined;
+  if (params.requestedAuthProfileIdSource === "user") {
+    return {
+      preferredProfileId: requestedProfileId,
+      preferredProfileIdSource: requestedProfileId ? "user" : undefined,
+    };
+  }
+
+  const hookPreferredProfileId = params.hookAuthProfileOverride?.trim() || undefined;
+  if (hookPreferredProfileId) {
+    return {
+      preferredProfileId: hookPreferredProfileId,
+      preferredProfileIdSource: "auto",
+    };
+  }
+
+  return {
+    preferredProfileId: requestedProfileId,
+    preferredProfileIdSource: requestedProfileId ? params.requestedAuthProfileIdSource : undefined,
   };
 }
 
