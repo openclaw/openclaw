@@ -184,6 +184,21 @@ The hook PR should implement those seams with a tiny fixture plugin. The Plan
 Mode plugin should come after the hook PR and use PR #71676 as its parity
 oracle.
 
+## Already Implemented Comparison
+
+This RFC packet should not ask maintainers to guess whether an existing hook is
+"close enough." The table below is the #71427-style comparison for the six
+requested SDK seams.
+
+| RFC | Existing SDK surface that may look similar                                                           | Why it is not enough                                                                                                                                         | Non-Plan plugin consumers                                                                 |
+| --- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| A   | Fixed `sessions.patch`, hardcoded session rows, internal `session:patch`, plugin gateway RPC scopes. | There is no namespaced plugin session extension with host-owned patch validation, projection, broadcast, lifecycle cleanup, and disabled-plugin behavior.    | review gates, release workflows, memory managers, budget governors, channel bindings      |
+| B   | `before_prompt_build`, legacy `before_agent_start`, and in-memory system events.                     | These are current-turn prompt hooks, not a durable exactly-once next-turn queue with retry-safe dequeue, expiry, dedupe, and disabled-plugin suppression.    | CI triage, incident handoff, memory hydration, channel retries, approval continuations    |
+| C   | Normal `before_tool_call`, core config filtering, basic plugin tool catalog fields.                  | Normal hooks share plugin ordering; there is no bundled/trusted pre-plugin policy tier, metadata/display registry, or core-tool decoration rule.             | budget guards, workspace policy, deploy freezes, dangerous-action approvals               |
+| D   | `api.registerCommand(...)`, `gatewayClientScopes` in context, scoped plugin gateway methods.         | Plugins can inspect scopes manually, but commands cannot declare host-enforced scopes, trusted reserved-root ownership, or `continueAgent`.                  | deploy approvals, review commands, budget overrides, incident commands, channel commands  |
+| E   | Remote slash commands and generic plugin approval cards.                                             | Existing UI support covers discovery and one generic card class, not chat modes, input guards, status surfaces, event classifiers, or descriptor projection. | approval workflows, release dashboards, budget warnings, incident banners, memory panels  |
+| F   | Raw `runtime.events.onAgentEvent`, internal run context, `gateway_start.getCron`, prompt hooks.      | Plugins lack typed filtered event subscriptions, namespaced run context, session-owned scheduler cleanup, and heartbeat contribution ordering.               | telemetry exporters, memory indexers, CI watchers, incident escalators, long-running jobs |
+
 ## Why Current SDK Surfaces Are Not Enough
 
 OpenClaw already has a useful plugin system:
@@ -1098,8 +1113,10 @@ Required fixture coverage:
 
 ## One Host-Hook PR Implementation Plan
 
-The implementation PR should be small relative to PR #71676 and should avoid
-Plan Mode feature logic. Recommended commit stack:
+This RFC defines the complete host-hook contract. The follow-up implementation
+PR must implement all generic hooks needed before Plan Mode can be packaged as
+a plugin with PR #71676 parity. That PR should be small relative to PR #71676
+and should avoid Plan Mode feature logic. Recommended commit stack:
 
 1. Add plugin session extension registry and patch action plumbing.
 2. Add durable next-turn injection queue and agent turn preparation hook.
@@ -1132,10 +1149,11 @@ The hook PR should include:
 - disablement behavior
 - docs for plugin authors and maintainers
 
-## Fixture Plugin Contract
+## SDK Contract Fixture
 
 Create a fixture plugin with no product behavior. Suggested id:
-`host-hook-fixture`.
+`host-hook-fixture`. This is not a Plan Mode fixture; it is a generic SDK
+contract fixture that proves a reusable plugin can exercise every new seam.
 
 The fixture should:
 
@@ -1155,7 +1173,15 @@ The fixture should:
 - create and clean up one session-scoped scheduled job
 - contribute one heartbeat prompt string
 
-The fixture plugin is the guardrail that future Plan Mode work depends on.
+The fixture plugin is the guardrail that future Plan Mode work depends on, but
+it should model generic plugin classes such as:
+
+- approval workflow: persistent approval state, scoped command, UI card, and
+  continuation
+- budget or workspace policy gate: trusted tool policy, metadata, override
+  command, and warning UI
+- background lifecycle plugin: event subscription, run context, scheduled job,
+  heartbeat contribution, and cleanup
 
 ## Plan Mode Plugin Migration Sequence
 

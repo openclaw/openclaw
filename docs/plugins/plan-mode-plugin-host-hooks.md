@@ -16,8 +16,10 @@ The RFC is based on PR #71676, "Plan Mode rebased onto upstream/main +
 executing-state subsystem".
 
 The design goal is to use PR #71676 as the behavior contract and parity oracle,
-not as the merge target. The hook PR should be small, additive,
-backwards-compatible, and covered by fixture-plugin tests.
+not as the merge target. This RFC defines the complete host-hook contract; the
+follow-up implementation PR must implement all generic hooks needed before Plan
+Mode can be packaged as a bundled plugin. The hook PR should be small,
+additive, backwards-compatible, and covered by fixture-plugin tests.
 
 <Warning>
   This page is an RFC proposal, not implemented SDK reference. The APIs and
@@ -30,6 +32,8 @@ backwards-compatible, and covered by fixture-plugin tests.
 Read [the full RFC packet](/plan/plan-mode-plugin-host-hooks-rfc) for:
 
 - current plugin surface gap analysis
+- an "already implemented?" comparison that distinguishes adjacent existing
+  hooks from the exact SDK contracts still missing
 - current SDK research against existing hooks, using
   [#71427](https://github.com/openclaw/openclaw/issues/71427) as the comparison
   bar
@@ -420,7 +424,7 @@ heartbeat prompt nudges from plugin-owned state.
 
 ## One Hook PR Shape
 
-The hook PR should be one focused host PR with these commits:
+The follow-up hook PR should be one focused host PR with these commits:
 
 1. Session extension registry, gateway patch action plumbing, and tests.
 2. Agent turn injection queue and `agent_turn_prepare` hook, with tests.
@@ -434,9 +438,11 @@ Plan Mode plugin code should not be included. The fixture plugin should be tiny
 and intentionally non-product so reviewers can evaluate the seams without
 reviewing Plan Mode behavior.
 
-## Fixture Plugin Requirements
+## SDK Contract Fixture Requirements
 
-The fixture plugin should prove the full path:
+The fixture plugin should prove the full path without Plan Mode product logic.
+It should model reusable SDK consumers such as an approval workflow, a
+budget/workspace policy gate, and a background lifecycle plugin:
 
 - registers a session extension
 - patches extension state through gateway RPC
