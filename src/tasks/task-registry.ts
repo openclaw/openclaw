@@ -181,6 +181,8 @@ function cloneTaskRecord(record: TaskRecord): TaskRecord {
 }
 
 function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
+  // Detached runtimes can report lifecycle times captured before the registry
+  // inserted or restored the row; keep createdAt as the visible lifecycle floor.
   let createdAt = task.createdAt;
   for (const candidate of [task.startedAt, task.lastEventAt, task.endedAt]) {
     if (typeof candidate === "number" && candidate < createdAt) {
