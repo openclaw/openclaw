@@ -522,6 +522,42 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(getReplyPayloadMetadata(payload)?.ttsSourceText).toBe("[warmly] hello there");
   });
 
+  it("preserves an explicit empty plain TTS variant for tag-only full-mode replies", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      emotionMode: "full",
+      payloads: [{ text: "[warmly]" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    const [payload] = replyPayloads;
+    expect(payload?.text).toBe("[warmly]");
+    if (!payload) {
+      throw new Error("expected payload");
+    }
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      ttsSourceText: "[warmly]",
+      ttsPlainText: "",
+    });
+  });
+
+  it("preserves TTS metadata when media dedupe clones a payload", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      emotionMode: "on",
+      payloads: [{ text: "[warmly] hello there", mediaUrl: "file:///tmp/voice.ogg" }],
+      messagingToolSentMediaUrls: ["file:///tmp/voice.ogg"],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    const [payload] = replyPayloads;
+    expect(payload?.mediaUrl).toBeUndefined();
+    if (!payload) {
+      throw new Error("expected payload");
+    }
+    expect(getReplyPayloadMetadata(payload)?.ttsSourceText).toBe("[warmly] hello there");
+  });
+
   it("does not preserve raw emotion-tagged TTS metadata when emotion mode is off", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

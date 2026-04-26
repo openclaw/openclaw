@@ -276,7 +276,7 @@ export function stripEmotionTags(
     const before = index > 0 ? text[index - 1] : undefined;
     const after = text[nextCursor];
     const alreadySeparated =
-      index === 0 || replacement === " " || (before ? /\s/u.test(before) : false);
+      index === 0 || replacement === " " || (before ? /\s/u.test(before) || before === "]" : false);
     if (alreadySeparated && isInlineSpacing(after)) {
       nextCursor += 1;
     }
@@ -313,7 +313,10 @@ export function sanitizeEmotionTagsForMode(
   // hides bracketed assistant text from non-emotion-aware callsites. The visible
   // chat layer (`sanitizeDirectiveAndEmotionTagsForDisplay`) and the writer
   // (`agent-runner-payloads`) both rely on this no-opinion no-op semantics.
-  if (mode === undefined || mode === "full") {
+  if (mode === undefined) {
+    return { text, changed: false };
+  }
+  if (mode === "full") {
     if (!options.allowTrailingPartialTag) {
       return { text, changed: false };
     }

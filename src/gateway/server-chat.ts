@@ -89,6 +89,13 @@ function normalizeHeartbeatChatFinalText(params: {
 // PR-D: per-session emotion mode for visible-stream sanitization. The
 // resolveMergedAssistantText / appendUniqueSuffix helpers are imported from
 // the canonical chat-merge module on main; we add only the emotion-mode lookup.
+const LIVE_EMOTION_MODE_CACHE_TTL_MS = 250;
+
+type CachedLiveEmotionMode = {
+  mode: EmotionMode;
+  expiresAt: number;
+};
+
 function resolveSessionEmotionMode(sessionKey: string) {
   return normalizeEmotionMode(loadSessionEntry(sessionKey).entry?.emotionMode) ?? "off";
 }
@@ -162,7 +169,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
-  emotionModes: Map<string, EmotionMode>;
+  emotionModes: Map<string, CachedLiveEmotionMode>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
@@ -174,7 +181,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
-  const emotionModes = new Map<string, EmotionMode>();
+  const emotionModes = new Map<string, CachedLiveEmotionMode>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
@@ -660,9 +667,19 @@ export function createAgentEventHandler({
     delta?: unknown,
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
-    const emotionMode =
-      chatRunState.emotionModes.get(clientRunId) ?? resolveSessionEmotionMode(sessionKey);
-    chatRunState.emotionModes.set(clientRunId, emotionMode);
+    const resolveLiveEmotionMode = (): EmotionMode => {
+      const now = Date.now();
+      const cached = chatRunState.emotionModes.get(clientRunId);
+      if (cached && cached.expiresAt > now) {
+        return cached.mode;
+      }
+      const mode = resolveSessionEmotionMode(sessionKey);
+      chatRunState.emotionModes.set(clientRunId, {
+        mode,
+        expiresAt: now + LIVE_EMOTION_MODE_CACHE_TTL_MS,
+      });
+      return mode;
+    };
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
@@ -674,15 +691,14 @@ export function createAgentEventHandler({
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
     const projected = projectLiveAssistantBufferedText(mergedRawText);
-    // PR-D: emotion-tag sanitization on the live visible buffer happens AFTER
-    // main's projection logic so we don't fight projectLiveAssistantBufferedText
-    // for control over what reaches the client. emotionMode === "off" or "full"
-    // is a no-op; emotionMode === "on" hides tags from the visible stream.
+    // PR-D: keep the durable buffer unsanitized. Streaming display may hide a
+    // trailing partial emotion tag, but the final event must be rebuilt from the
+    // raw buffer so literal text like `Use [` can recover when more tokens arrive.
+    chatRunState.buffers.set(clientRunId, projected.text);
     const mergedText = sanitizeDirectiveAndEmotionTagsForDisplay(projected.text, {
-      emotionMode,
+      emotionMode: resolveLiveEmotionMode(),
       hideTrailingPartialEmotionTag: true,
     }).text;
-    chatRunState.buffers.set(clientRunId, mergedText);
     if (projected.suppress) {
       return;
     }
@@ -712,6 +728,7 @@ export function createAgentEventHandler({
   };
 
   const resolveBufferedChatTextState = (
+    sessionKey: string,
     clientRunId: string,
     sourceRunId: string,
     options?: { suppressLeadFragments?: boolean },
@@ -727,8 +744,12 @@ export function createAgentEventHandler({
     const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
       suppressLeadFragments: options?.suppressLeadFragments,
     });
+    const visibleText = sanitizeDirectiveAndEmotionTagsForDisplay(projected.text.trim(), {
+      emotionMode: resolveSessionEmotionMode(sessionKey),
+      hideTrailingPartialEmotionTag: false,
+    }).text;
     return {
-      text: projected.text.trim(),
+      text: visibleText,
       shouldSuppressSilent: normalizedHeartbeatText.suppress || projected.suppress,
     };
   };
@@ -739,9 +760,14 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
-      suppressLeadFragments: true,
-    });
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(
+      sessionKey,
+      clientRunId,
+      sourceRunId,
+      {
+        suppressLeadFragments: true,
+      },
+    );
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
@@ -783,9 +809,14 @@ export function createAgentEventHandler({
     stopReason?: string,
     errorKind?: ErrorKind,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
-      suppressLeadFragments: false,
-    });
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(
+      sessionKey,
+      clientRunId,
+      sourceRunId,
+      {
+        suppressLeadFragments: false,
+      },
+    );
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.

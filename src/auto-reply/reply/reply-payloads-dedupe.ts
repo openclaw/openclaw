@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { cloneReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export function filterMessagingToolDuplicates(params: {
@@ -62,10 +63,13 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload;
     }
-    return Object.assign({}, payload, {
-      mediaUrl: stripSingle ? undefined : mediaUrl,
-      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
-    });
+    return cloneReplyPayloadMetadata(
+      payload,
+      Object.assign({}, payload, {
+        mediaUrl: stripSingle ? undefined : mediaUrl,
+        mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+      }),
+    );
   });
 }
 

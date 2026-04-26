@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const loadSessionEntryMock = vi.fn(() => ({ entry: undefined }));
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
@@ -24,6 +25,10 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+}));
+
 import { loadConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
@@ -43,6 +48,7 @@ describe("agent event handler", () => {
       useIndicator: true,
     });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+    loadSessionEntryMock.mockReset().mockReturnValue({ entry: undefined });
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
   });
@@ -640,6 +646,72 @@ describe("agent event handler", () => {
     );
     expect(errorCalls).toHaveLength(errorCallsBeforeStaleEvent);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(sessionChatCallsBeforeStaleEvent);
+    nowSpy?.mockRestore();
+  });
+
+  it("re-resolves emotion mode during a live chat stream after the TTL window", () => {
+    let now = 10_000;
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now });
+    nowSpy?.mockImplementation(() => now);
+    loadSessionEntryMock.mockReturnValueOnce({ entry: { emotionMode: "on" } });
+    chatRunState.registry.add("run-emotion-refresh", {
+      sessionKey: "session-emotion-refresh",
+      clientRunId: "client-emotion-refresh",
+    });
+
+    handler({
+      runId: "run-emotion-refresh",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "[warmly] hello" },
+    });
+
+    now += 300;
+    loadSessionEntryMock.mockReturnValueOnce({ entry: { emotionMode: "full" } });
+    handler({
+      runId: "run-emotion-refresh",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "[warmly] hello again" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    expect(
+      (chatCalls[0]?.[1] as { message?: { content?: Array<{ text?: string }> } }).message
+        ?.content?.[0]?.text,
+    ).toBe("hello");
+    expect(
+      (chatCalls[1]?.[1] as { message?: { content?: Array<{ text?: string }> } }).message
+        ?.content?.[0]?.text,
+    ).toBe("[warmly] hello again");
+    nowSpy?.mockRestore();
+  });
+
+  it("rebuilds final chat text from the unsanitized buffer so trailing brackets recover", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 20_000 });
+    loadSessionEntryMock.mockReturnValue({ entry: { emotionMode: "on" } });
+    chatRunState.registry.add("run-trailing-bracket", {
+      sessionKey: "session-trailing-bracket",
+      clientRunId: "client-trailing-bracket",
+    });
+
+    handler({
+      runId: "run-trailing-bracket",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Use [" },
+    });
+    emitLifecycleEnd(handler, "run-trailing-bracket", 2);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    const finalPayload = chatCalls.find(
+      ([, payload]) => (payload as { state?: string }).state === "final",
+    )?.[1] as { message?: { content?: Array<{ text?: string }> } } | undefined;
+    expect(finalPayload?.message?.content?.[0]?.text).toBe("Use [");
     nowSpy?.mockRestore();
   });
 
