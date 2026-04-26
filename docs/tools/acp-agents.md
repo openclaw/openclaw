@@ -10,7 +10,7 @@ read_when:
 title: "ACP agents"
 ---
 
-[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
+[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Cursor, Copilot, Droid, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to bind or control Codex in the current conversation and the bundled `codex` plugin is enabled, OpenClaw should use the native Codex app-server plugin (`/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, `/codex stop`) instead of ACP. If you ask for `/acp`, ACP, acpx, or an ACP adapter test explicitly, OpenClaw can still route Codex through ACP. Each ACP session spawn is tracked as a [background task](/automation/tasks).
 
@@ -83,7 +83,7 @@ OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, binds to the cu
 
 For `sessions_spawn`, `runtime: "acp"` is advertised only when ACP is enabled,
 the requester is not sandboxed, and an ACP runtime backend is loaded. It targets
-ACP harness ids such as `codex`, `claude`, `gemini`, or `opencode`. Do not pass
+ACP harness ids such as `codex`, `claude`, `droid`, `gemini`, or `opencode`. Do not pass
 a normal OpenClaw config agent id from `agents_list` unless that entry is
 explicitly configured with `agents.list[].runtime.type="acp"`; otherwise use
 the default sub-agent runtime. When an OpenClaw agent is configured with
