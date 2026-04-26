@@ -79,6 +79,10 @@ Docs: https://docs.openclaw.ai
   and honor configured `params.chat_template_kwargs` for OpenAI-compatible
   completions, so vLLM/Nemotron replies stay visible instead of becoming
   thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
+- Channels/replies: strip copied inbound metadata blocks from user-facing
+  assistant replies and model replay history, so Discord/vLLM sessions do not
+  leak `Conversation info` / `UNTRUSTED ... message body` envelopes after a
+  model echoes them. Fixes #71847. Thanks @jmystaki-create.
 - Subagents/memory: keep inter-session completion wakes out of memory and
   dreaming session exports, and strip internal runtime-context blocks from
   realtime Control UI chat events.
