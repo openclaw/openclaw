@@ -328,8 +328,8 @@ export async function startGatewayServer(
           config: cfgAtStart,
           writeConfig: writeConfigFile,
           log,
-          cliBind: opts.bind,
-          cliPort: port,
+          effectiveBind: opts.bind,
+          effectivePort: port,
         }),
       );
   cfgAtStart = controlUiSeed.config;

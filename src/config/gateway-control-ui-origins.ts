@@ -54,23 +54,24 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
      *  proactively.  Keeping this as an injected callback avoids a hard
      *  dependency from the config layer on the gateway runtime layer. */
     isContainerEnvironment?: () => boolean;
-    /** CLI --bind override.  When gateway.bind is not set in config but the
-     *  gateway was started with --bind lan (or another non-loopback mode) on
-     *  the command line, this value is used to detect non-loopback binding so
-     *  that origins can be seeded even in environments where container
-     *  detection fails (e.g. Fly.io Firecracker VMs). */
-    cliBind?: string;
-    /** CLI --port override.  When gateway.port is not set in config but the
-     *  gateway was started with --port on the command line, this value is used
-     *  so that seeded origins contain the correct port number. */
-    cliPort?: number;
+    /** Effective (resolved) bind mode from the gateway CLI.  This is the
+     *  fully-resolved value from `defaultGatewayBindMode()` or the explicit
+     *  --bind flag — not the raw CLI string.  When gateway.bind is not set in
+     *  config, this value is used to detect non-loopback binding so that
+     *  origins can be seeded even in environments where container detection
+     *  fails (e.g. Fly.io Firecracker VMs). */
+    effectiveBind?: string;
+    /** Effective (resolved) port from the gateway CLI.  This is the port the
+     *  gateway will actually bind to, used so that seeded origins contain the
+     *  correct port number when gateway.port is not set in config. */
+    effectivePort?: number;
   },
 ): {
   config: OpenClawConfig;
   seededOrigins: string[] | null;
   bind: GatewayNonLoopbackBindMode | null;
 } {
-  const bind = config.gateway?.bind ?? opts?.cliBind;
+  const bind = config.gateway?.bind ?? opts?.effectiveBind;
   // When bind is unset (undefined) and we are inside a container, the runtime
   // will default to "auto" → 0.0.0.0 via defaultGatewayBindMode().  We must
   // seed origins *before* resolveGatewayRuntimeConfig runs, otherwise the
@@ -94,7 +95,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   }
 
   const port = resolveGatewayPortWithDefault(
-    config.gateway?.port ?? opts?.cliPort,
+    config.gateway?.port ?? opts?.effectivePort,
     opts?.defaultPort,
   );
   const seededOrigins = buildDefaultControlUiAllowedOrigins({

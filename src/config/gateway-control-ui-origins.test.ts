@@ -66,12 +66,12 @@ describe("buildDefaultControlUiAllowedOrigins", () => {
 });
 
 describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
-  describe("cliBind parameter", () => {
-    it("seeds origins when cliBind is lan and config has no bind (Fly.io scenario)", () => {
+  describe("effectiveBind parameter", () => {
+    it("seeds origins when effectiveBind is lan and config has no bind (Fly.io scenario)", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: {} },
         {
-          cliBind: "lan",
+          effectiveBind: "lan",
           isContainerEnvironment: () => false,
         },
       );
@@ -80,12 +80,12 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
       expect(result.bind).toBe("lan");
     });
 
-    it("seeds origins with cliPort when config has no port", () => {
+    it("seeds origins with effectivePort when config has no port", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: {} },
         {
-          cliBind: "lan",
-          cliPort: 3000,
+          effectiveBind: "lan",
+          effectivePort: 3000,
           isContainerEnvironment: () => false,
         },
       );
@@ -94,11 +94,11 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
       expect(result.seededOrigins).toContain("http://127.0.0.1:3000");
     });
 
-    it("does not seed when cliBind is loopback", () => {
+    it("does not seed when effectiveBind is loopback", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: {} },
         {
-          cliBind: "loopback",
+          effectiveBind: "loopback",
           isContainerEnvironment: () => false,
         },
       );
@@ -106,7 +106,7 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
       expect(result.bind).toBeNull();
     });
 
-    it("does not seed when neither cliBind nor config bind is set and not in container", () => {
+    it("does not seed when neither effectiveBind nor config bind is set and not in container", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: {} },
         { isContainerEnvironment: () => false },
@@ -115,20 +115,20 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
       expect(result.bind).toBeNull();
     });
 
-    it("prefers config bind over cliBind", () => {
+    it("prefers config bind over effectiveBind", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: { bind: "lan" } },
-        { cliBind: "auto", isContainerEnvironment: () => false },
+        { effectiveBind: "auto", isContainerEnvironment: () => false },
       );
       expect(result.seededOrigins).not.toBeNull();
       expect(result.bind).toBe("lan");
     });
 
-    it("seeds origins when cliBind is auto and container detection returns false", () => {
+    it("seeds origins when effectiveBind is auto and container detection returns false", () => {
       const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
         { gateway: {} },
         {
-          cliBind: "auto",
+          effectiveBind: "auto",
           isContainerEnvironment: () => false,
         },
       );
