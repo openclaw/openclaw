@@ -102,7 +102,7 @@ export function registerPolicyGateFixture(api: OpenClawPluginApi, calls: string[
     id: "workspace-policy",
     description: "Blocks mutating tools while the workspace policy is locked.",
     evaluate(event, ctx) {
-      const state = ctx.getSessionExtension<{ locked?: boolean; reason?: string }>("policy");
+      const state = ctx.getSessionExtension?.<{ locked?: boolean; reason?: string }>("policy");
       if (state?.locked && event.toolName === "mutating_tool") {
         return {
           block: true,
