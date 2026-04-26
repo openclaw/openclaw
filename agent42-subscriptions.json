@@ -1,0 +1,8 @@
+﻿{
+  "currency": "USD",
+  "plans": [
+    { "id": "starter", "priceUsdMonthly": 19, "seats": 3 },
+    { "id": "team", "priceUsdMonthly": 79, "seats": 15 },
+    { "id": "enterprise", "priceUsdMonthly": 249, "seats": 100 }
+  ]
+}
