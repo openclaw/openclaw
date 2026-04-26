@@ -99,6 +99,10 @@ observation-only.
 
 - `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` — coordinate subagent routing and completion delivery
 
+**Cron**
+
+- `cron_lifecycle` — observe scheduled job start and finish events for both `agentTurn` and `systemEvent` jobs
+
 **Lifecycle**
 
 - `gateway_start` / `gateway_stop` — start or stop plugin-owned services with the Gateway
@@ -263,6 +267,35 @@ resources.
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
+
+## Cron lifecycle
+
+Use `cron_lifecycle` when a plugin needs an enforced audit or telemetry trail
+for scheduled work without asking the agent to self-report. The hook fires
+after the cron service emits `started` and `finished` events, before legacy
+completion webhooks and failure notifications run.
+
+The event includes stable job identity and execution fields:
+
+```typescript
+api.on("cron_lifecycle", async (event, ctx) => {
+  await audit.write({
+    jobId: event.jobId,
+    jobName: event.jobName,
+    action: event.action, // "started" | "finished"
+    payloadKind: event.payloadKind, // "agentTurn" | "systemEvent"
+    agentId: event.agentId,
+    status: event.status,
+    durationMs: event.durationMs,
+    error: event.error,
+    storePath: ctx.storePath,
+  });
+});
+```
+
+`started` events include `runAtMs`. `finished` events can also include
+`status`, `durationMs`, `error`, `summary`, delivery status, session
+correlation, model/provider telemetry, and `nextRunAtMs` when available.
 
 ## Upcoming deprecations
 

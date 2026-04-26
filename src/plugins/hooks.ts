@@ -61,6 +61,8 @@ import type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
+  PluginHookCronLifecycleContext,
+  PluginHookCronLifecycleEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -126,6 +128,8 @@ export type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
   PluginHookSubagentEndedEvent,
+  PluginHookCronLifecycleContext,
+  PluginHookCronLifecycleEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -1116,6 +1120,17 @@ export function createHookRunner(
     return runVoidHook("subagent_ended", event, ctx);
   }
 
+  /**
+   * Run cron_lifecycle hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runCronLifecycle(
+    event: PluginHookCronLifecycleEvent,
+    ctx: PluginHookCronLifecycleContext,
+  ): Promise<void> {
+    return runVoidHook("cron_lifecycle", event, ctx);
+  }
+
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
@@ -1232,6 +1247,7 @@ export function createHookRunner(
     runSubagentDeliveryTarget,
     runSubagentSpawned,
     runSubagentEnded,
+    runCronLifecycle,
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,

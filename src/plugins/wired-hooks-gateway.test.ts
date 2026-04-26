@@ -8,6 +8,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
+  PluginHookCronLifecycleContext,
+  PluginHookCronLifecycleEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -60,5 +62,24 @@ describe("gateway hook runner methods", () => {
 
     expect(runner.hasHooks("gateway_start")).toBe(true);
     expect(runner.hasHooks("gateway_stop")).toBe(false);
+  });
+
+  it("runCronLifecycle invokes registered cron_lifecycle hooks", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_lifecycle", handler }]);
+    const event = {
+      jobId: "job-1",
+      jobName: "Nightly report",
+      agentId: "main",
+      action: "started",
+      payloadKind: "agentTurn",
+      runAtMs: 1770000000000,
+    } satisfies PluginHookCronLifecycleEvent;
+    const ctx = { storePath: "/tmp/openclaw/cron.json" } satisfies PluginHookCronLifecycleContext;
+
+    await runner.runCronLifecycle(event, ctx);
+
+    expect(handler).toHaveBeenCalledWith(event, ctx);
+    expect(runner.hasHooks("cron_lifecycle")).toBe(true);
   });
 });

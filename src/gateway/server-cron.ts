@@ -22,9 +22,10 @@ import {
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
-import { CronService } from "../cron/service.js";
+import { CronService, type CronEvent } from "../cron/service.js";
 import { assertSafeCronSessionTargetId } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -34,6 +35,7 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -142,6 +144,55 @@ async function postCronWebhook(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function emitCronLifecycleHook(params: {
+  evt: CronEvent;
+  job?: CronJob;
+  storePath: string;
+  defaultAgentId: string;
+  logger: ReturnType<typeof getChildLogger>;
+}) {
+  if (params.evt.action !== "started" && params.evt.action !== "finished") {
+    return;
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("cron_lifecycle")) {
+    return;
+  }
+
+  void hookRunner
+    .runCronLifecycle(
+      {
+        jobId: params.evt.jobId,
+        jobName: params.job?.name,
+        agentId: params.job?.agentId ?? params.defaultAgentId,
+        action: params.evt.action,
+        payloadKind: params.job?.payload.kind,
+        sessionTarget: params.job?.sessionTarget,
+        wakeMode: params.job?.wakeMode,
+        runAtMs: params.evt.runAtMs,
+        durationMs: params.evt.durationMs,
+        status: params.evt.status,
+        error: params.evt.error,
+        summary: params.evt.summary,
+        delivered: params.evt.delivered,
+        deliveryStatus: params.evt.deliveryStatus,
+        deliveryError: params.evt.deliveryError,
+        sessionId: params.evt.sessionId,
+        sessionKey: params.evt.sessionKey,
+        nextRunAtMs: params.evt.nextRunAtMs,
+        model: params.evt.model,
+        provider: params.evt.provider,
+      },
+      { storePath: params.storePath },
+    )
+    .catch((err) => {
+      params.logger.warn(
+        { jobId: params.evt.jobId, err: formatErrorMessage(err) },
+        "cron: lifecycle hook failed",
+      );
+    });
 }
 
 export function buildGatewayCronService(params: {
@@ -416,10 +467,11 @@ export function buildGatewayCronService(params: {
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
+      const job = cron.getJob(evt.jobId);
+      emitCronLifecycleHook({ evt, job, storePath, defaultAgentId, logger: cronLogger });
       if (evt.action === "finished") {
         const webhookToken = normalizeOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
-        const job = cron.getJob(evt.jobId);
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
           delivery:
