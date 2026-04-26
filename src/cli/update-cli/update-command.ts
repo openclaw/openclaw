@@ -1339,54 +1339,30 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (switchToGit && result.status === "ok" && result.mode === "git") {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Switched from a package install to a git checkout. Skipping remaining post-update work in the old CLI process; rerun follow-up commands from the new git install if needed.",
-        ),
-      );
-    } else {
-      defaultRuntime.writeJson(result);
-    }
-    defaultRuntime.exit(0);
-    return;
-  }
-
   let postUpdateConfigSnapshot = configSnapshot;
   if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
-    if (switchToGit) {
-      if (!opts.json) {
-        defaultRuntime.log(
-          theme.muted(
-            `Skipped persisting update.channel=${requestedChannel} in the pre-update CLI process after switching to a git install.`,
-          ),
-        );
-      }
-    } else {
-      const next = {
-        ...configSnapshot.sourceConfig,
-        update: {
-          ...configSnapshot.sourceConfig.update,
-          channel: requestedChannel,
-        },
-      };
-      await replaceConfigFile({
-        nextConfig: next,
-        baseHash: configSnapshot.hash,
-      });
-      postUpdateConfigSnapshot = {
-        ...configSnapshot,
-        hash: undefined,
-        parsed: next,
-        sourceConfig: asResolvedSourceConfig(next),
-        resolved: asResolvedSourceConfig(next),
-        runtimeConfig: asRuntimeConfig(next),
-        config: asRuntimeConfig(next),
-      };
-      if (!opts.json) {
-        defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-      }
+    const next = {
+      ...configSnapshot.sourceConfig,
+      update: {
+        ...configSnapshot.sourceConfig.update,
+        channel: requestedChannel,
+      },
+    };
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: configSnapshot.hash,
+    });
+    postUpdateConfigSnapshot = {
+      ...configSnapshot,
+      hash: undefined,
+      parsed: next,
+      sourceConfig: asResolvedSourceConfig(next),
+      resolved: asResolvedSourceConfig(next),
+      runtimeConfig: asRuntimeConfig(next),
+      config: asRuntimeConfig(next),
+    };
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
     }
   }
 
@@ -1409,16 +1385,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
   }
 
-  const deferOldProcessPostUpdateWork = switchToGit && result.mode === "git";
-  if (deferOldProcessPostUpdateWork) {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
-        ),
-      );
-    }
-  } else if (!pluginsUpdatedInFreshProcess) {
+  if (!pluginsUpdatedInFreshProcess) {
     postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
@@ -1468,34 +1435,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  if (deferOldProcessPostUpdateWork) {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Skipped completion/restart follow-ups in the pre-update CLI process after switching to a git install.",
-        ),
-      );
-    }
-  } else {
-    await tryWriteCompletionCache(postUpdateRoot, Boolean(opts.json));
-    await tryInstallShellCompletion({
-      jsonMode: Boolean(opts.json),
-      skipPrompt: Boolean(opts.yes),
-    });
+  await tryWriteCompletionCache(postUpdateRoot, Boolean(opts.json));
+  await tryInstallShellCompletion({
+    jsonMode: Boolean(opts.json),
+    skipPrompt: Boolean(opts.yes),
+  });
 
-    const restartOk = await maybeRestartService({
-      shouldRestart,
-      result: resultWithPostUpdate,
-      opts,
-      refreshServiceEnv: refreshGatewayServiceEnv,
-      gatewayPort,
-      restartScriptPath,
-      invocationCwd,
-    });
-    if (!restartOk) {
-      defaultRuntime.exit(1);
-      return;
-    }
+  const restartOk = await maybeRestartService({
+    shouldRestart,
+    result: resultWithPostUpdate,
+    opts,
+    refreshServiceEnv: refreshGatewayServiceEnv,
+    gatewayPort,
+    restartScriptPath,
+    invocationCwd,
+  });
+  if (!restartOk) {
+    defaultRuntime.exit(1);
+    return;
   }
 
   if (!opts.json) {

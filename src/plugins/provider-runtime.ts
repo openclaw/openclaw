@@ -14,9 +14,8 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   __testing as providerHookRuntimeTesting,
-  clearProviderRuntimeHookCache,
+  clearProviderRuntimeHookCache as clearProviderHookRuntimeCache,
   prepareProviderExtraParams,
-  resetProviderRuntimeHookCacheForTest,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
@@ -34,6 +33,7 @@ import {
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "./providers.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
@@ -86,6 +86,14 @@ import type {
 const log = createSubsystemLogger("plugins/provider-runtime");
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
 let catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+let catalogHookProviderIdCacheWithoutConfig = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, string[]>
+>();
+let catalogHookProviderIdCacheByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>
+>();
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -132,13 +140,95 @@ function resetCatalogHookProvidersCacheForTest(): void {
   catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
 }
 
+function clearCatalogHookProviderIdCache(): void {
+  catalogHookProviderIdCacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
+  catalogHookProviderIdCacheByConfig = new WeakMap<
+    OpenClawConfig,
+    WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>
+  >();
+}
+
+function resolveCatalogHookProviderIdCacheBucket(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Map<string, string[]> {
+  if (!params.config) {
+    let bucket = catalogHookProviderIdCacheWithoutConfig.get(params.env);
+    if (!bucket) {
+      bucket = new Map<string, string[]>();
+      catalogHookProviderIdCacheWithoutConfig.set(params.env, bucket);
+    }
+    return bucket;
+  }
+
+  let envBuckets = catalogHookProviderIdCacheByConfig.get(params.config);
+  if (!envBuckets) {
+    envBuckets = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
+    catalogHookProviderIdCacheByConfig.set(params.config, envBuckets);
+  }
+  let bucket = envBuckets.get(params.env);
+  if (!bucket) {
+    bucket = new Map<string, string[]>();
+    envBuckets.set(params.env, bucket);
+  }
+  return bucket;
+}
+
+function buildCatalogHookProviderIdCacheKey(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const { roots } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}`;
+}
+
+function resolveCachedCatalogHookProviderPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const env = params.env ?? process.env;
+  const bucket = resolveCatalogHookProviderIdCacheBucket({
+    config: params.config,
+    env,
+  });
+  const key = buildCatalogHookProviderIdCacheKey({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const cached = bucket.get(key);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolveCatalogHookProviderPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  bucket.set(key, resolved);
+  return resolved;
+}
+
+export function clearProviderRuntimeHookCache(): void {
+  resetCatalogHookProvidersCacheForTest();
+  clearCatalogHookProviderIdCache();
+  clearProviderHookRuntimeCache();
+}
+
+export function resetProviderRuntimeHookCacheForTest(): void {
+  clearProviderRuntimeHookCache();
+}
+
 export {
-  clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
-  resetProviderRuntimeHookCacheForTest,
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 };
@@ -147,6 +237,7 @@ export const __testing = {
   ...providerHookRuntimeTesting,
   resetExternalAuthFallbackWarningCacheForTest,
   resetCatalogHookProvidersCacheForTest,
+  resetProviderRuntimeHookCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -169,7 +260,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   if (cached) {
     return cached;
   }
-  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
+  const onlyPluginIds = resolveCachedCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,

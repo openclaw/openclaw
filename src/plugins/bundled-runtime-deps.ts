@@ -341,9 +341,13 @@ function removeRuntimeDepsLockIfStale(lockDir: string, nowMs: number): boolean {
   }
 }
 
-function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+export function withBundledRuntimeDepsFilesystemLock<T>(
+  installRoot: string,
+  lockName: string,
+  run: () => T,
+): T {
   fs.mkdirSync(installRoot, { recursive: true });
-  const lockDir = path.join(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+  const lockDir = path.join(installRoot, lockName);
   const startedAt = Date.now();
   let locked = false;
   while (!locked) {
@@ -388,6 +392,10 @@ function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () =
   } finally {
     fs.rmSync(lockDir, { recursive: true, force: true });
   }
+}
+
+function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+  return withBundledRuntimeDepsFilesystemLock(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR, run);
 }
 
 function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {

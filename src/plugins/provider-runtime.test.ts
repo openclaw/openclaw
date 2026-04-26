@@ -1766,6 +1766,8 @@ describe("provider-runtime", () => {
         cache: false,
       }),
     );
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {

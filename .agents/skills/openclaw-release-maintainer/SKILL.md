@@ -25,12 +25,22 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - Before release branching, commit any dirty files in coherent groups, push,
   pull/rebase, then run `/changelog` on `main` and commit/push/pull that
   changelog rewrite immediately before creating the release branch.
-- During release planning, inspect `src/plugins/compat/registry.ts` before
-  branching and again before final publish. For every deprecated or
-  removal-pending compatibility record whose `removeAfter` date is on or before
-  the release date, either remove the compatibility path where safe and
-  validate the affected tests, or write down why removal is blocked and get
-  explicit maintainer approval before shipping the expired compatibility path.
+- During release planning, inspect both `src/plugins/compat/registry.ts` and
+  `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
+  before final publish. For every deprecated or removal-pending compatibility
+  record whose `removeAfter` date is on or before the release date, either
+  remove the compatibility path where safe and validate the affected tests, or
+  write down why removal is blocked and get explicit maintainer approval before
+  shipping the expired compatibility path.
+- When removing deprecated runtime/config compatibility, preserve any doctor
+  migration, repair, or hint that is still needed by supported upgrade paths.
+  Doctor-side compatibility should stay tracked in
+  `src/commands/doctor/shared/deprecation-compat.ts` until maintainers confirm
+  the repair is no longer needed.
+- Revalidate compatibility replacement text during release planning. The
+  recommended replacement can shift as plugin ownership, externalization, and
+  config footprint move, so do not blindly copy stale replacement annotations
+  into release notes.
 - Do not delete or rewrite beta tags after they leave the machine. If a
   published or pushed beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
@@ -86,10 +96,11 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   parallel, publish npm from the successful npm preflight, then start published
   npm install/update, Docker, and Parallels verification while mac artifacts
   continue.
-- After a beta is published, run the expensive Docker, Parallels, and QA-Lab
-  release rosters in parallel instead of serializing them. Use selective reruns
-  after failures or fixes, but keep proof that Docker, Parallels, and QA-Lab
-  each passed at least once before stable/latest promotion.
+- After a beta is published, overlap remote/manual release rosters where useful,
+  but avoid piling local Docker, Parallels, and QA-Lab work onto the same host
+  when it would create system-load noise. Use selective reruns after failures or
+  fixes, but keep proof that Docker, Parallels, and QA-Lab each passed at least
+  once before stable/latest promotion.
 - Mac packaging may be built from a slight release-branch variation of the
   tagged commit when the delta is mac packaging, signing, workflow, or
   validation-only release machinery. If mac packaging needs release-branch-only
@@ -122,12 +133,13 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.D` through the line before the
   next level-2 heading and use that complete block as the release notes.
-- When preparing release notes, scan `src/plugins/compat/registry.ts` for
-  plugin compatibility records with `warningStarts` or `removeAfter` within 7
-  days after the release date. Add an `Upcoming deprecations` note to the
-  release notes when any exist, including the compatibility code, target date,
-  replacement, and a link to the record's `docsPath` or `/plugins/compatibility`
-  when no more specific deprecation page exists.
+- When preparing release notes, scan `src/plugins/compat/registry.ts` and
+  `src/commands/doctor/shared/deprecation-compat.ts` for compatibility records
+  with `warningStarts` or `removeAfter` within 7 days after the release date.
+  Add an `Upcoming deprecations` note to the release notes when any exist,
+  including the compatibility code, target date, replacement, and a link to the
+  record's `docsPath` or `/plugins/compatibility` when no more specific
+  deprecation page exists.
 - When cutting a mac release with a beta GitHub prerelease:
   - tag `vYYYY.M.D-beta.N` from the release commit
   - create a prerelease titled `openclaw YYYY.M.D-beta.N`
@@ -558,9 +570,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     the next beta if the fix must change the already-published package. If any
     lane fails after the beta tag/package is pushed or published, fix,
     commit/push/pull, increment to the next beta tag, and rerun the affected
-    beta evidence. Start Docker, Parallels, and QA-Lab in parallel once the
-    beta is live. Ensure the full expensive roster has passed at least once
-    before stable/latest promotion. The roster includes the manual Actions >
+    beta evidence. Once the beta is live, start remote/manual rosters where they
+    can overlap safely, but keep local Docker and Parallels load controlled.
+    Ensure the full expensive roster has passed at least once before
+    stable/latest promotion. The roster includes the manual Actions >
     `NPM Telegram Beta E2E` workflow against the exact published beta package.
     If a pre-npm lane fails before any tag/package leaves the machine, fix and
     rerun the same intended beta attempt. Repeat up to the operator's
