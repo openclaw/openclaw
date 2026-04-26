@@ -8,6 +8,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -935,6 +936,27 @@ export function discoverOpenClawPlugins(params: {
     load: () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
+      for (const sourceOverlayDir of listBundledSourceOverlayDirs({
+        bundledRoot: roots.stock,
+        env,
+      })) {
+        discoverFromPath({
+          rawPath: sourceOverlayDir,
+          origin: "bundled",
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
+          env,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+        });
+        result.diagnostics.push({
+          level: "warn",
+          source: sourceOverlayDir,
+          message:
+            "using bind-mounted bundled plugin source overlay; this source overrides the packaged dist bundle for the same plugin id",
+        });
+      }
       if (roots.stock) {
         discoverInDirectory({
           dir: roots.stock,

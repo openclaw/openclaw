@@ -122,22 +122,29 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                        | Purpose                                                         |
-| ------------------------------- | --------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`                | Use a remote image instead of building locally                  |
-| `OPENCLAW_DOCKER_APT_PACKAGES`  | Install extra apt packages during build (space-separated)       |
-| `OPENCLAW_EXTENSIONS`           | Pre-install plugin deps at build time (space-separated names)   |
-| `OPENCLAW_EXTRA_MOUNTS`         | Extra host bind mounts (comma-separated `source:target[:opts]`) |
-| `OPENCLAW_HOME_VOLUME`          | Persist `/home/node` in a named Docker volume                   |
-| `OPENCLAW_SANDBOX`              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
-| `OPENCLAW_DOCKER_SOCKET`        | Override Docker socket path                                     |
-| `OPENCLAW_DISABLE_BONJOUR`      | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT` | Signal-specific OTLP endpoints for traces, metrics, or logs     |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`   | OTLP protocol override. Only `http/protobuf` is supported today |
-| `OTEL_SERVICE_NAME`             | Service name used for OpenTelemetry resources                   |
-| `OTEL_SEMCONV_STABILITY_OPT_IN` | Opt in to latest experimental GenAI semantic attributes         |
-| `OPENCLAW_OTEL_PRELOADED`       | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+| Variable                                   | Purpose                                                         |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
+| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_EXTENSIONS`                      | Pre-install plugin deps at build time (space-separated names)   |
+| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
+| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
+| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs     |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today |
+| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                   |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes         |
+| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+
+Maintainers can test bundled plugin source against a packaged image by mounting
+one plugin source directory over its packaged source path, for example
+`OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`.
+That mounted source directory overrides the matching compiled
+`/app/dist/extensions/synology-chat` bundle for the same plugin id.
 
 ### Observability
 
