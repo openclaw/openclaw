@@ -70,6 +70,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/Fly.io: seed Control UI allowed origins from the actual runtime
   bind and port so CLI-driven non-loopback starts do not crash before config
   exists. Fixes #71823.
+- Models/LM Studio: preserve `@iq*` quant suffixes in model refs and provider
+  matching so `/model lmstudio/...@iq3_xxs` keeps the exact LM Studio variant.
+  Fixes #71474. (#71486) Thanks @Bartok9, @XinwuC, and @Sanjays2402.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
