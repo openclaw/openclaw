@@ -1,7 +1,7 @@
 import { normalizeModelCatalogProviderRows } from "./normalize.js";
 import type { OpenClawProviderIndex } from "./provider-index/index.js";
 import { normalizeModelCatalogProviderId } from "./refs.js";
-import type { NormalizedModelCatalogRow } from "./types.js";
+import type { ModelCatalogProvider, NormalizedModelCatalogRow } from "./types.js";
 
 export type ProviderIndexModelCatalogPlanEntry = {
   provider: string;
@@ -13,6 +13,16 @@ export type ProviderIndexModelCatalogPlan = {
   rows: readonly NormalizedModelCatalogRow[];
   entries: readonly ProviderIndexModelCatalogPlanEntry[];
 };
+
+function withPreviewStatusDefaults(providerCatalog: ModelCatalogProvider): ModelCatalogProvider {
+  return {
+    ...providerCatalog,
+    models: providerCatalog.models.map((model) => ({
+      ...model,
+      status: model.status ?? "preview",
+    })),
+  };
+}
 
 export function planProviderIndexModelCatalogRows(params: {
   index: OpenClawProviderIndex;
@@ -34,7 +44,7 @@ export function planProviderIndexModelCatalogRows(params: {
     }
     const rows = normalizeModelCatalogProviderRows({
       provider: normalizedProvider,
-      providerCatalog: provider.previewCatalog,
+      providerCatalog: withPreviewStatusDefaults(provider.previewCatalog),
       source: "provider-index",
     });
     if (rows.length === 0) {

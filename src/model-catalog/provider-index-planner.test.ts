@@ -45,7 +45,7 @@ describe("provider index model catalog planner", () => {
             source: "provider-index",
             input: ["text"],
             reasoning: false,
-            status: "available",
+            status: "preview",
             contextWindow: 262144,
           },
         ],
