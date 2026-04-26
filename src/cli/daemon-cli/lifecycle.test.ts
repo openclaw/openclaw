@@ -392,6 +392,17 @@ describe("runDaemonRestart health checks", () => {
     );
   });
 
+  it("reuses one config/probe-auth lookup across unmanaged restart checks", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    resolveDaemonProbeAuth.mockResolvedValue({ auth: { token: "resolved-token" } });
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(resolveDaemonProbeAuth).toHaveBeenCalledTimes(1);
+  });
+
   it("prefers unmanaged restart over launchd repair when a gateway listener is present", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
