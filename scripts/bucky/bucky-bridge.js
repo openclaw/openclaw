@@ -33,17 +33,20 @@ const WHATSAPP_TO = "+918200557253";
 // Path to the deploy/ directory in the OpenClaw repo on your Mac
 const DEPLOY_DIR = path.join(os.homedir(), "Documents", "Personal-openclaw", "deploy");
 const CURRENT_WORK_FILE = path.join(DEPLOY_DIR, "CURRENT_WORK.md");
+const SKILLS_DIR = path.join(DEPLOY_DIR, "skills");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const POLL_MS = 60_000;
 
-// GCP sync — CURRENT_WORK.md is written locally, then rsync'd to the VM so Bucky can read it
+// GCP sync — CURRENT_WORK.md and skills/ are written locally, then synced to the VM so Bucky can read them
 const GCP_HOST = "dirghpatel@136.116.235.101";
 const GCP_REMOTE = "/home/dirghpatel/.openclaw/CURRENT_WORK.md";
+const GCP_SKILLS_REMOTE = "/home/dirghpatel/.openclaw/skills/";
 const SSH_KEY = path.join(os.homedir(), ".ssh", "google_compute_engine");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let prevCommitHash = null; // detect new commits
 let prevCurrentWorkHash = null; // only sync to GCP when content changes
+let prevSkillsHash = null; // only rsync skills when content changes
 
 let sessionWatcher = null; // fs.FSWatcher for active transcript
 let watchedFile = null; // path of the file currently being watched
@@ -71,6 +74,36 @@ function istTimestamp() {
   // IST = UTC+5:30
   const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
   return ist.toISOString().replace("T", " ").slice(0, 16) + " IST";
+}
+
+function istTimeContext() {
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  const iso = ist.toISOString();
+  const hour = parseInt(iso.slice(11, 13), 10);
+  const minute = iso.slice(14, 16);
+  const h12 = hour % 12 || 12;
+  const ampm = hour < 12 ? "AM" : "PM";
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayName = days[ist.getUTCDay()];
+  const dateStr = iso.slice(0, 10);
+
+  let greeting;
+  if (hour >= 5 && hour < 12) {
+    greeting = "Good morning";
+  } else if (hour >= 12 && hour < 17) {
+    greeting = "Good afternoon";
+  } else if (hour >= 17 && hour < 21) {
+    greeting = "Good evening";
+  } else {
+    greeting = "Hey";
+  }
+
+  return {
+    line: `${h12}:${minute} ${ampm} IST, ${dayName} ${dateStr}`,
+    hour,
+    greeting,
+  };
 }
 
 // ── Context gathering ──────────────────────────────────────────────────────────
@@ -222,6 +255,48 @@ function syncToGCP(content) {
 }
 
 /**
+ * Rsync deploy/skills/ to GCP ~/.openclaw/skills/ so skill edits
+ * (including self-upgrades via WhatsApp) take effect without a manual deploy.
+ * Only fires when skill files have changed since last sync.
+ */
+function syncSkillsToGCP() {
+  try {
+    // Build a cheap fingerprint from skill file mtimes
+    const skillFiles = [];
+    const collectSkills = (dir) => {
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            collectSkills(full);
+          } else if (entry.name.endsWith(".md")) {
+            skillFiles.push(`${full}:${fs.statSync(full).mtimeMs}`);
+          }
+        }
+      } catch {
+        /* skip */
+      }
+    };
+    collectSkills(SKILLS_DIR);
+    const hash = skillFiles
+      .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      .join("|")
+      .slice(0, 128);
+    if (hash === prevSkillsHash) {
+      return;
+    }
+    prevSkillsHash = hash;
+    run(
+      `rsync -a --delete -e "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY}" ${SKILLS_DIR}/ ${GCP_HOST}:${GCP_SKILLS_REMOTE}`,
+      null,
+    );
+    console.log("[bridge] synced skills/ to GCP");
+  } catch (err) {
+    console.error("[bridge] skill sync error:", err.message);
+  }
+}
+
+/**
  * Set up fs.watch on the active session JSONL file.
  * Tears down any existing watcher first.
  */
@@ -281,10 +356,15 @@ function setupWatcher(sessionFile) {
 function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject, sessState) {
   const projectPath = claudeCtx?.cwd || vsCodeProject || null;
   const projectName = projectPath ? path.basename(projectPath) : "unknown";
+  const timeCtx = istTimeContext();
 
   const lines = [
     "# CURRENT_WORK.md",
     `> Auto-updated by bucky-bridge. Last sync: ${istTimestamp()}`,
+    "",
+    "## Current Time (IST)",
+    `- Now: **${timeCtx.line}**`,
+    `- Greeting to use: **${timeCtx.greeting}**`,
     "",
     "## Active Project",
     `- Name: ${projectName}`,
@@ -403,6 +483,9 @@ async function tick() {
 
   // Always update CURRENT_WORK.md silently
   updateCurrentWork(claudeCtx, gitCtx, vsCodeProj, sessionState);
+
+  // Sync skills/ to GCP so WhatsApp self-upgrades take effect without manual deploy
+  syncSkillsToGCP();
 
   // Notify on new commits (skip the very first poll — we don't know prevCommitHash yet)
   if (gitCtx?.commitHash && prevCommitHash !== null && gitCtx.commitHash !== prevCommitHash) {

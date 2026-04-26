@@ -6,6 +6,12 @@ user-invocable: false
 
 # Routing Policy
 
+## Required skills to read first
+
+- **time-context**: Before any greeting or time-aware response — always use IST, never UTC.
+- **capabilities**: Before claiming to perform any action — do not hallucinate unavailable tools.
+- **self-upgrade**: When Dirgh asks to update Bucky's behavior via WhatsApp.
+
 ## The one rule
 
 Does the task require reading or writing code files, running builds, or making commits?
@@ -34,6 +40,7 @@ Does the task require reading or writing code files, running builds, or making c
 - Running builds, test suites, linters, npm install
 - Complex multi-file changes
 - Anything that requires the Edit, Write, or Bash tools on a codebase
+- **Self-upgrade**: Dirgh asks to update Bucky's behavior/skills via WhatsApp (see self-upgrade skill)
 
 ## Market/competitive research exception
 
