@@ -272,6 +272,48 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result.localRoots).not.toContain(path.resolve("/packs/shared"));
   });
 
+  it("does not widen sandbox media roots when sender group policy denies read", () => {
+    const stateDir = path.join("/tmp", "openclaw-sandbox-denied-media-access-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all" },
+          },
+        },
+        tools: {
+          allow: ["read"],
+          fs: {
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+        channels: {
+          requestchat: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:attacker": {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:requestchat:group:ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+      requesterSenderId: "attacker",
+    });
+
+    expect(result.readFile).toBeUndefined();
+    expect(result.localRoots).toContain(path.join(stateDir, "sandboxes"));
+    expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+    expect(result.localRoots).not.toContain(path.resolve("/packs/shared"));
+  });
+
   it("keeps host reads enabled for DM sender when no group context exists", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {

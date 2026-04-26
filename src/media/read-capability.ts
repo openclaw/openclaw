@@ -195,18 +195,18 @@ export function resolveAgentScopedOutboundMediaAccess(
   const ignoreConfiguredRoots = shouldIgnoreConfiguredRootsForHostMedia(params);
   const localRoots =
     params.mediaAccess?.localRoots ??
-    (ignoreConfiguredRoots
+    (hostMediaReadAllowed
       ? getAgentScopedMediaLocalRootsForSources({
           cfg: params.cfg,
           agentId: params.agentId,
           mediaSources: params.mediaSources,
-          ignoreConfiguredRoots: true,
+          ignoreConfiguredRoots,
         })
-      : hostMediaReadAllowed
+      : ignoreConfiguredRoots
         ? getAgentScopedMediaLocalRootsForSources({
             cfg: params.cfg,
             agentId: params.agentId,
-            mediaSources: params.mediaSources,
+            ignoreConfiguredRoots: true,
           })
         : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
   const resolvedWorkspaceDir =
