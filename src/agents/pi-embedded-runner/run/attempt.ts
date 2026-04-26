@@ -1408,10 +1408,8 @@ export async function runEmbeddedAttempt(
       );
 
       if (hookRunner?.hasHooks("after_tools_resolved")) {
-        const resolvedTools = buildAfterToolsResolvedToolMetadata([
-          ...effectiveTools,
-          ...allCustomTools,
-        ]);
+        // `allCustomTools` is already the final provider-facing registration set.
+        const resolvedTools = buildAfterToolsResolvedToolMetadata(allCustomTools);
         void hookRunner
           .runAfterToolsResolved(
             {
@@ -1420,11 +1418,17 @@ export async function runEmbeddedAttempt(
               model: params.modelId,
             },
             {
+              runId: params.runId,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
               agentId: hookAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
+              modelProviderId: params.model.provider,
+              modelId: params.model.id,
               messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
             },
           )
           .catch((err) => {

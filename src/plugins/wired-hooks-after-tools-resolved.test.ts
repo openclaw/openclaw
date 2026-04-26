@@ -26,8 +26,10 @@ describe("after_tools_resolved hook runner", () => {
         model: "gpt-5",
       },
       {
+        runId: "run-1",
         agentId: "main",
         sessionId: "session-1",
+        channelId: "discord",
       },
     );
 
@@ -37,8 +39,10 @@ describe("after_tools_resolved hook runner", () => {
         model: "gpt-5",
       }),
       expect.objectContaining({
+        runId: "run-1",
         agentId: "main",
         sessionId: "session-1",
+        channelId: "discord",
       }),
     );
   });
