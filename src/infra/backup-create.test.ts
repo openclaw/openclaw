@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatBackupCreateSummary, type BackupCreateResult } from "./backup-create.js";
+import {
+  findAssetsBypassingExcludes,
+  formatBackupCreateSummary,
+  type BackupCreateResult,
+} from "./backup-create.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -81,5 +85,32 @@ describe("formatBackupCreateSummary", () => {
     },
   ])("$name", ({ result, expected }) => {
     expect(formatBackupCreateSummary(result)).toEqual(expected);
+  });
+});
+
+describe("findAssetsBypassingExcludes", () => {
+  const stateDir = "/home/user/.openclaw";
+  const assets = [
+    { kind: "state", sourcePath: "/home/user/.openclaw" },
+    { kind: "config", sourcePath: "/home/user/.openclaw/config.json" },
+    { kind: "workspace", sourcePath: "/tmp/external-workspace-abc" },
+    { kind: "config", sourcePath: "/etc/openclaw/custom-config.json" },
+  ];
+
+  it("returns [] when no excludes are active", () => {
+    expect(findAssetsBypassingExcludes([], assets, stateDir)).toEqual([]);
+  });
+
+  it("returns assets whose sourcePath sits outside the filter's baseDir", () => {
+    const bypassed = findAssetsBypassingExcludes(["*.log"], assets, stateDir);
+    expect(bypassed.map((a) => a.sourcePath)).toEqual([
+      "/tmp/external-workspace-abc",
+      "/etc/openclaw/custom-config.json",
+    ]);
+  });
+
+  it("returns [] when every asset lives inside baseDir", () => {
+    const inside = assets.slice(0, 2);
+    expect(findAssetsBypassingExcludes(["*.log"], inside, stateDir)).toEqual([]);
   });
 });

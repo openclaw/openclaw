@@ -281,6 +281,22 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
   return lines;
 }
 
+/**
+ * Returns the assets whose excludes will silently no-op because they live
+ * outside the filter's base directory. Used to warn the user before a backup
+ * widens beyond what they expect. Empty when no excludes are active.
+ */
+export function findAssetsBypassingExcludes<Asset extends { kind: string; sourcePath: string }>(
+  excludePatterns: readonly string[],
+  assets: readonly Asset[],
+  baseDir: string,
+): Asset[] {
+  if (excludePatterns.length === 0) {
+    return [];
+  }
+  return assets.filter((asset) => !isPathWithin(asset.sourcePath, baseDir));
+}
+
 function remapArchiveEntryPath(params: {
   entryPath: string;
   manifestPath: string;
@@ -350,6 +366,26 @@ export async function createBackupArchive(
     patternSources,
     canonicalStateDir,
   );
+
+  // KNOWN LIMITATION: buildExcludeFilter is constructed with a single
+  // baseDir (stateDir). Assets outside that base — external workspaces, custom
+  // config locations — bypass the exclude patterns entirely (the filter
+  // returns true to avoid the `ignore` library's RangeError on `../` paths).
+  // Warn the user when this gap will silently widen the archive so they aren't
+  // surprised by a backup that ignored their excludes for those assets.
+  // See PR #44288 review thread (Codex round 2, finding 2) for the follow-up
+  // tracked to remove this limitation by per-asset filter bases.
+  const externalAssets = findAssetsBypassingExcludes(
+    excludePatterns,
+    plan.included,
+    canonicalStateDir,
+  );
+  if (externalAssets.length > 0) {
+    const summary = externalAssets.map((asset) => `${asset.kind}:${asset.sourcePath}`).join(", ");
+    console.warn(
+      `⚠️  Exclude patterns are not applied to assets outside the state directory. ${externalAssets.length} asset(s) archived in full: ${summary}`,
+    );
+  }
 
   if (!opts.dryRun) {
     await assertOutputPathReady(outputPath);
