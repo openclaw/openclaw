@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
+const appendTranscriptMessageMock = vi.fn(() => true);
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
@@ -27,6 +28,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
   loadAssistantIdentity: vi.fn(),
 }));
 vi.mock("./controllers/chat.ts", () => ({
+  appendTranscriptMessage: appendTranscriptMessageMock,
   loadChatHistory: loadChatHistoryMock,
   handleChatEvent: vi.fn(() => "idle"),
 }));
@@ -108,6 +110,7 @@ function createHost() {
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
+    chatMessages: [],
   } as unknown as Parameters<typeof handleGatewayEvent>[0];
 }
 
@@ -131,6 +134,7 @@ describe("handleGatewayEvent sessions.changed", () => {
 describe("handleGatewayEvent session.message", () => {
   it("reloads chat history for the active session", () => {
     loadChatHistoryMock.mockReset();
+    appendTranscriptMessageMock.mockReset().mockReturnValue(true);
     const host = createHost();
     host.sessionKey = "agent:qa:main";
 
@@ -143,10 +147,45 @@ describe("handleGatewayEvent session.message", () => {
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(appendTranscriptMessageMock).not.toHaveBeenCalled();
   });
 
-  it("skips history reload while a chat run is active", () => {
+  it("appends transcript payloads while a chat run is active", () => {
     loadChatHistoryMock.mockReset();
+    appendTranscriptMessageMock.mockReset().mockReturnValue(true);
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-123";
+
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Second completion arrived" }],
+      __openclaw: { id: "msg-2", seq: 2 },
+    };
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:qa:main",
+        message,
+        messageId: "msg-2",
+        messageSeq: 2,
+      },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(appendTranscriptMessageMock).toHaveBeenCalledTimes(1);
+    expect(appendTranscriptMessageMock).toHaveBeenCalledWith(host, message, {
+      messageId: "msg-2",
+      messageSeq: 2,
+    });
+  });
+
+  it("still defers reload while a chat run is active when no payload message is provided", () => {
+    loadChatHistoryMock.mockReset();
+    appendTranscriptMessageMock.mockReset().mockReturnValue(true);
     const host = createHost();
     host.sessionKey = "agent:qa:main";
     host.chatRunId = "run-123";
@@ -159,10 +198,12 @@ describe("handleGatewayEvent session.message", () => {
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(appendTranscriptMessageMock).not.toHaveBeenCalled();
   });
 
   it("ignores transcript updates for other sessions", () => {
     loadChatHistoryMock.mockReset();
+    appendTranscriptMessageMock.mockReset().mockReturnValue(true);
     const host = createHost();
     host.sessionKey = "agent:qa:main";
 
@@ -174,6 +215,7 @@ describe("handleGatewayEvent session.message", () => {
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(appendTranscriptMessageMock).not.toHaveBeenCalled();
   });
 });
 

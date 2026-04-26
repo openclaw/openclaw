@@ -309,6 +309,87 @@ function preserveOptimisticTailMessages(
   return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
+function resolveTranscriptMessageIdentity(
+  message: unknown,
+  fallback?: { messageId?: string; messageSeq?: number },
+): string | null {
+  if (typeof fallback?.messageId === "string" && fallback.messageId.trim()) {
+    return `id:${fallback.messageId.trim()}`;
+  }
+  if (!message || typeof message !== "object") {
+    if (typeof fallback?.messageSeq === "number" && Number.isFinite(fallback.messageSeq)) {
+      return `seq:${fallback.messageSeq}`;
+    }
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.id === "string" && entry.id.trim()) {
+    return `id:${entry.id.trim()}`;
+  }
+  const meta = entry.__openclaw;
+  if (meta && typeof meta === "object") {
+    const transcriptMeta = meta as { id?: unknown; seq?: unknown };
+    if (typeof transcriptMeta.id === "string" && transcriptMeta.id.trim()) {
+      return `id:${transcriptMeta.id.trim()}`;
+    }
+    if (typeof transcriptMeta.seq === "number" && Number.isFinite(transcriptMeta.seq)) {
+      return `seq:${transcriptMeta.seq}`;
+    }
+  }
+  if (typeof fallback?.messageSeq === "number" && Number.isFinite(fallback.messageSeq)) {
+    return `seq:${fallback.messageSeq}`;
+  }
+  return null;
+}
+
+function canReplaceOptimisticTranscriptEcho(existing: unknown, incoming: unknown): boolean {
+  if (!existing || typeof existing !== "object" || !incoming || typeof incoming !== "object") {
+    return false;
+  }
+  if (resolveTranscriptMessageIdentity(existing)) {
+    return false;
+  }
+  const existingRole = normalizeLowercaseStringOrEmpty((existing as Record<string, unknown>).role);
+  const incomingRole = normalizeLowercaseStringOrEmpty((incoming as Record<string, unknown>).role);
+  if (existingRole !== "user" || incomingRole !== "user") {
+    return false;
+  }
+  const existingText = extractText(existing)?.trim() ?? "";
+  const incomingText = extractText(incoming)?.trim() ?? "";
+  return Boolean(existingText) && existingText === incomingText;
+}
+
+export function appendTranscriptMessage(
+  state: Pick<ChatState, "chatMessages">,
+  message: unknown,
+  options?: { messageId?: string; messageSeq?: number },
+): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if (shouldHideHistoryMessage(message)) {
+    return false;
+  }
+  const messageIdentity = resolveTranscriptMessageIdentity(message, options);
+  if (
+    messageIdentity &&
+    state.chatMessages.some((entry) => resolveTranscriptMessageIdentity(entry) === messageIdentity)
+  ) {
+    return false;
+  }
+  const nextMessages = [...state.chatMessages];
+  if (
+    nextMessages.length > 0 &&
+    canReplaceOptimisticTranscriptEcho(nextMessages[nextMessages.length - 1], message)
+  ) {
+    nextMessages[nextMessages.length - 1] = message;
+  } else {
+    nextMessages.push(message);
+  }
+  state.chatMessages = nextMessages;
+  return true;
+}
+
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
   if (!(err instanceof GatewayRequestError)) {
     return false;

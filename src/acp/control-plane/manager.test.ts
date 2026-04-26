@@ -13,12 +13,14 @@ const hoisted = vi.hoisted(() => {
   const upsertAcpSessionMetaMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
+  const verifyAcpWorktreeDiffMock = vi.fn();
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     getAcpRuntimeBackendMock,
     requireAcpRuntimeBackendMock,
+    verifyAcpWorktreeDiffMock,
   };
 });
 
@@ -31,6 +33,10 @@ vi.mock("../runtime/session-meta.js", () => ({
 vi.mock("../runtime/registry.js", () => ({
   getAcpRuntimeBackend: (backendId?: string) => hoisted.getAcpRuntimeBackendMock(backendId),
   requireAcpRuntimeBackend: (backendId?: string) => hoisted.requireAcpRuntimeBackendMock(backendId),
+}));
+
+vi.mock("../../agents/acp-verification-gate.js", () => ({
+  verifyAcpWorktreeDiff: (cwd: string) => hoisted.verifyAcpWorktreeDiffMock(cwd),
 }));
 
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
@@ -236,6 +242,10 @@ describe("AcpSessionManager", () => {
         return null;
       }
     });
+    hoisted.verifyAcpWorktreeDiffMock.mockReset().mockResolvedValue({
+      hasChanges: true,
+      stat: "",
+    });
   });
 
   afterEach(() => {
@@ -360,6 +370,11 @@ describe("AcpSessionManager", () => {
         return null;
       });
 
+      hoisted.verifyAcpWorktreeDiffMock.mockResolvedValue({
+        hasChanges: false,
+        stat: "",
+      });
+
       const manager = new AcpSessionManager();
       await manager.runTurn({
         cfg: baseCfg,
@@ -370,6 +385,7 @@ describe("AcpSessionManager", () => {
       });
       await flushMicrotasks();
 
+      expect(hoisted.verifyAcpWorktreeDiffMock).not.toHaveBeenCalled();
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
         runtime: "acp",
         ownerKey: "agent:quant:telegram:quant:direct:822430204",
@@ -384,6 +400,289 @@ describe("AcpSessionManager", () => {
       });
     });
   }, 300_000);
+
+  it("skips verification gate for persistent sessions with zero diffs", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "I analyzed the codebase and found the root cause.",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-persistent") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-persistent",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:discord:channel:persistent-parent",
+              label: "Debug investigation",
+            },
+            acp: readySessionMeta({ mode: "persistent" }),
+          };
+        }
+        if (sessionKey === "agent:quant:discord:channel:persistent-parent") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-persistent",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      // Simulate zero diffs — persistent session should still succeed.
+      hoisted.verifyAcpWorktreeDiffMock.mockResolvedValue({
+        hasChanges: false,
+        stat: "",
+      });
+
+      const { createManagedTaskFlow } = await import("../../tasks/task-flow-registry.js");
+      const { createRunningTaskRun } = await import("../../tasks/task-executor.js");
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:quant:discord:channel:persistent-parent",
+        controllerId: "agents/acp-spawn",
+        goal: "Debug investigation",
+        currentStep: "await-child",
+        stateJson: {
+          workflowIntent: {
+            kind: "acp_parent_prompt",
+            cwd: "/tmp/test-worktree-persistent",
+          },
+        },
+      });
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:quant:discord:channel:persistent-parent",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child-persistent",
+        runId: "persistent-zero-diff-run",
+        label: "Debug investigation",
+        task: "Analyze the codebase and find the root cause",
+        startedAt: 100,
+        deliveryStatus: "pending",
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-persistent",
+        text: "Analyze the codebase and find the root cause",
+        mode: "prompt",
+        requestId: "persistent-zero-diff-run",
+      });
+      await flushMicrotasks();
+
+      // Persistent session: zero diffs should NOT trigger the verification gate.
+      expect(hoisted.verifyAcpWorktreeDiffMock).not.toHaveBeenCalled();
+      expect(findTaskByRunId("persistent-zero-diff-run")).toMatchObject({
+        status: "succeeded",
+      });
+    });
+  });
+
+  it("downgrades oneshot zero-diff runs with progress output to blocked follow-up", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "I tried to apply the fix but nothing changed.",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-oneshot") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-oneshot",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:discord:channel:oneshot-parent",
+              label: "Apply fix",
+            },
+            acp: readySessionMeta({ mode: "oneshot" }),
+          };
+        }
+        if (sessionKey === "agent:quant:discord:channel:oneshot-parent") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-oneshot",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      hoisted.verifyAcpWorktreeDiffMock.mockResolvedValue({
+        hasChanges: false,
+        stat: "",
+      });
+
+      const { createManagedTaskFlow } = await import("../../tasks/task-flow-registry.js");
+      const { createRunningTaskRun } = await import("../../tasks/task-executor.js");
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:quant:discord:channel:oneshot-parent",
+        controllerId: "agents/acp-spawn",
+        goal: "Apply fix",
+        currentStep: "await-child",
+        stateJson: {
+          workflowIntent: {
+            kind: "acp_parent_prompt",
+            cwd: "/tmp/test-worktree-oneshot",
+          },
+        },
+      });
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:quant:discord:channel:oneshot-parent",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child-oneshot",
+        runId: "oneshot-zero-diff-run",
+        label: "Apply fix",
+        task: "Apply the fix to the codebase",
+        startedAt: 100,
+        deliveryStatus: "pending",
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-oneshot",
+        text: "Apply the fix to the codebase",
+        mode: "prompt",
+        requestId: "oneshot-zero-diff-run",
+      });
+      await flushMicrotasks();
+
+      expect(hoisted.verifyAcpWorktreeDiffMock).toHaveBeenCalledWith("/tmp/test-worktree-oneshot");
+      expect(findTaskByRunId("oneshot-zero-diff-run")).toMatchObject({
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "No tracked file changes landed. Use a persistent ACP session for exploratory work or steer a concrete follow-up turn.",
+      });
+    });
+  });
+
+  it("still fails oneshot zero-diff runs that produced no progress output", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-empty-oneshot") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-empty-oneshot",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:discord:channel:oneshot-parent-empty",
+              label: "Apply fix",
+            },
+            acp: readySessionMeta({ mode: "oneshot" }),
+          };
+        }
+        if (sessionKey === "agent:quant:discord:channel:oneshot-parent-empty") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-oneshot-empty",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      hoisted.verifyAcpWorktreeDiffMock.mockResolvedValue({
+        hasChanges: false,
+        stat: "",
+      });
+
+      const { createManagedTaskFlow } = await import("../../tasks/task-flow-registry.js");
+      const { createRunningTaskRun } = await import("../../tasks/task-executor.js");
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:quant:discord:channel:oneshot-parent-empty",
+        controllerId: "agents/acp-spawn",
+        goal: "Apply fix",
+        currentStep: "await-child",
+        stateJson: {
+          workflowIntent: {
+            kind: "acp_parent_prompt",
+            cwd: "/tmp/test-worktree-oneshot-empty",
+          },
+        },
+      });
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:quant:discord:channel:oneshot-parent-empty",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child-empty-oneshot",
+        runId: "oneshot-zero-diff-empty-run",
+        label: "Apply fix",
+        task: "Apply the fix to the codebase",
+        startedAt: 100,
+        deliveryStatus: "pending",
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-empty-oneshot",
+        text: "Apply the fix to the codebase",
+        mode: "prompt",
+        requestId: "oneshot-zero-diff-empty-run",
+      });
+      await flushMicrotasks();
+
+      expect(hoisted.verifyAcpWorktreeDiffMock).toHaveBeenCalledWith(
+        "/tmp/test-worktree-oneshot-empty",
+      );
+      expect(findTaskByRunId("oneshot-zero-diff-empty-run")).toMatchObject({
+        status: "failed",
+        error: "Verification gate: agent reported success but produced no file changes",
+        terminalSummary: "no_file_changes",
+      });
+    });
+  });
 
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();

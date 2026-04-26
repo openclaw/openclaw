@@ -1,3 +1,4 @@
+import { verifyAcpWorktreeDiff } from "../../agents/acp-verification-gate.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -11,6 +12,8 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId } from "../../tasks/runtime-internal.js";
+import { getTaskFlowById } from "../../tasks/task-flow-runtime-internal.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -862,8 +865,9 @@ export class AcpSessionManager {
             });
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-              this.markBackgroundTaskTerminal(taskContext.runId, {
+              await this.markBackgroundTaskTerminal(taskContext.runId, {
                 sessionKey,
+                sessionMode: resolvedMeta.mode,
                 status: "succeeded",
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -905,8 +909,9 @@ export class AcpSessionManager {
               errorCode: acpError.code,
             });
             if (taskContext) {
-              this.markBackgroundTaskTerminal(taskContext.runId, {
+              await this.markBackgroundTaskTerminal(taskContext.runId, {
                 sessionKey,
+                sessionMode: resolvedMeta.mode,
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -2180,10 +2185,11 @@ export class AcpSessionManager {
     }
   }
 
-  private markBackgroundTaskTerminal(
+  private async markBackgroundTaskTerminal(
     runId: string,
     params: {
       sessionKey?: string;
+      sessionMode?: AcpRuntimeSessionMode;
       status: "succeeded" | "failed" | "timed_out";
       endedAt: number;
       lastEventAt?: number;
@@ -2192,9 +2198,62 @@ export class AcpSessionManager {
       terminalSummary?: string | null;
       terminalOutcome?: "succeeded" | "blocked" | null;
     },
-  ): void {
+  ): Promise<void> {
     try {
-      if (params.status === "succeeded") {
+      // Verification gate: for succeeded oneshot tasks, check that the worktree
+      // has actual tracked file changes before we accept the result as a real
+      // coding completion.
+      //
+      // Exemptions:
+      // - Persistent sessions: a turn may legitimately complete without file
+      //   changes (analysis, planning, iterative investigation) and the session
+      //   stays alive for follow-up turns.
+      // - Explicit blocked outcomes: permission / write-access blockers can be
+      //   real even when no tracked diff exists, so preserve the blocked state.
+      //
+      // For non-blocked oneshot runs that produced output but no tracked diff,
+      // degrade to BLOCKED instead of FAILED. That keeps the false-completion
+      // safeguard in place without surfacing an overly harsh hard-failure banner
+      // for exploratory first-turn replies.
+      let effectiveStatus = params.status;
+      let effectiveTerminalSummary = params.terminalSummary;
+      let effectiveTerminalOutcome = params.terminalOutcome;
+      let effectiveError = params.error;
+      if (
+        params.status === "succeeded" &&
+        params.sessionMode !== "persistent" &&
+        effectiveTerminalOutcome !== "blocked"
+      ) {
+        const cwd = this.resolveWorktreeCwdFromTask(runId);
+        if (cwd) {
+          const verification = await verifyAcpWorktreeDiff(cwd);
+          if (!verification.hasChanges) {
+            logVerbose(
+              `acp-manager: verification gate failed for ${runId}: no file changes detected in ${cwd}`,
+            );
+            const hasProgressSummary = Boolean(normalizeText(params.progressSummary)?.trim());
+            if (hasProgressSummary) {
+              effectiveStatus = "succeeded";
+              effectiveTerminalOutcome = "blocked";
+              effectiveTerminalSummary =
+                effectiveTerminalSummary ??
+                "No tracked file changes landed. Use a persistent ACP session for exploratory work or steer a concrete follow-up turn.";
+              effectiveError = undefined;
+            } else {
+              effectiveStatus = "failed";
+              effectiveTerminalSummary = "no_file_changes";
+              effectiveTerminalOutcome = undefined;
+              effectiveError =
+                "Verification gate: agent reported success but produced no file changes";
+            }
+          }
+        } else {
+          logVerbose(
+            `acp-manager: skipping verification gate for ${runId}: no cwd available (legacy flow)`,
+          );
+        }
+      }
+      if (effectiveStatus === "succeeded") {
         completeTaskRunByRunId({
           runId,
           runtime: "acp",
@@ -2202,8 +2261,8 @@ export class AcpSessionManager {
           endedAt: params.endedAt,
           lastEventAt: params.lastEventAt,
           progressSummary: params.progressSummary,
-          terminalSummary: params.terminalSummary,
-          terminalOutcome: params.terminalOutcome,
+          terminalSummary: effectiveTerminalSummary,
+          terminalOutcome: effectiveTerminalOutcome,
         });
         return;
       }
@@ -2211,15 +2270,37 @@ export class AcpSessionManager {
         runId,
         runtime: "acp",
         sessionKey: params.sessionKey,
-        status: params.status,
+        status: effectiveStatus,
         endedAt: params.endedAt,
         lastEventAt: params.lastEventAt,
-        error: params.error,
+        error: effectiveError,
         progressSummary: params.progressSummary,
-        terminalSummary: params.terminalSummary,
+        terminalSummary: effectiveTerminalSummary,
       });
     } catch (error) {
       logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
     }
+  }
+
+  /**
+   * Resolve the worktree cwd for a task by looking up its parent flow's
+   * stateJson.workflowIntent.cwd. Returns undefined if the flow or cwd
+   * is not available (e.g. legacy flows without workflowIntent.cwd).
+   */
+  private resolveWorktreeCwdFromTask(runId: string): string | undefined {
+    const task = findTaskByRunId(runId);
+    if (!task?.parentFlowId) {
+      return undefined;
+    }
+    const flow = getTaskFlowById(task.parentFlowId);
+    if (!flow?.stateJson || typeof flow.stateJson !== "object" || Array.isArray(flow.stateJson)) {
+      return undefined;
+    }
+    const workflowIntent = (flow.stateJson as Record<string, unknown>).workflowIntent;
+    if (!workflowIntent || typeof workflowIntent !== "object" || Array.isArray(workflowIntent)) {
+      return undefined;
+    }
+    const cwd = (workflowIntent as Record<string, unknown>).cwd;
+    return typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
   }
 }

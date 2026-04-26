@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
+  appendTranscriptMessage,
   handleChatEvent,
   loadChatHistory,
   sendChatMessage,
@@ -518,6 +519,62 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("appendTranscriptMessage", () => {
+  it("appends a new transcript payload when it is not already present", () => {
+    const state = createState();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Child completion" }],
+      __openclaw: { id: "msg-1", seq: 1 },
+    };
+
+    expect(appendTranscriptMessage(state, message)).toBe(true);
+    expect(state.chatMessages).toEqual([message]);
+  });
+
+  it("deduplicates transcript payloads by OpenClaw message id", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Child completion" }],
+      __openclaw: { id: "msg-1", seq: 1 },
+    };
+    const state = createState({ chatMessages: [message] });
+
+    expect(appendTranscriptMessage(state, message)).toBe(false);
+    expect(state.chatMessages).toEqual([message]);
+  });
+
+  it("replaces the optimistic user echo with the server-backed transcript message", () => {
+    const optimistic = {
+      role: "user",
+      content: [{ type: "text", text: "Please keep working" }],
+      timestamp: 1,
+    };
+    const serverMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Please keep working" }],
+      __openclaw: { id: "msg-user-1", seq: 4 },
+      timestamp: 2,
+    };
+    const state = createState({ chatMessages: [optimistic] });
+
+    expect(appendTranscriptMessage(state, serverMessage)).toBe(true);
+    expect(state.chatMessages).toEqual([serverMessage]);
+  });
+
+  it("hides silent assistant transcript payloads", () => {
+    const state = createState();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+      __openclaw: { id: "msg-silent", seq: 2 },
+    };
+
+    expect(appendTranscriptMessage(state, message)).toBe(false);
+    expect(state.chatMessages).toEqual([]);
   });
 });
 
