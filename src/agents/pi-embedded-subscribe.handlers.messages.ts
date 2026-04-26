@@ -177,6 +177,10 @@ function clearPendingToolMedia(
   state.pendingToolTrustedLocalMedia = false;
 }
 
+function hasReplyMedia(payload: BlockReplyPayload): boolean {
+  return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
+}
+
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedPiSubscribeState,
@@ -192,6 +196,12 @@ export function consumePendingToolMediaIntoReply(
     !state.pendingToolAudioAsVoice &&
     !state.pendingToolTrustedLocalMedia
   ) {
+    return payload;
+  }
+  if (hasReplyMedia(payload)) {
+    // Pending tool media is a fallback delivery queue; explicit final media is
+    // the assistant's user-visible selection, while tool output remains in the transcript.
+    clearPendingToolMedia(state);
     return payload;
   }
   const mergedMediaUrls = Array.from(
