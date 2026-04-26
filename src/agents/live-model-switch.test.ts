@@ -178,6 +178,61 @@ describe("live model switch", () => {
     });
   });
 
+  it("treats legacy persisted auth profiles without a source as user-selected", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "profile-gpt",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "profile-gpt",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("preserves legacy automatic auth-profile markers from compaction state", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "profile-gpt",
+        authProfileOverrideCompactionCount: 2,
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "profile-gpt",
+      authProfileIdSource: "auto",
+    });
+  });
+
   it("prefers persisted session overrides ahead of stale runtime model fields", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
@@ -396,6 +451,24 @@ describe("live model switch", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("treats legacy current auth profiles without a source as user-selected", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      ),
+    ).toBe(true);
   });
 
   it("compares automatic current auth profiles when the persisted selection has one", async () => {

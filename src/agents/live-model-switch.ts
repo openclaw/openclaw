@@ -57,11 +57,16 @@ export function resolveLiveSessionModelSelection(params: {
     defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
+  const legacyAuthProfileIdSource =
+    typeof entry?.authProfileOverrideCompactionCount === "number" ? "auto" : "user";
+  const authProfileIdSource = authProfileId
+    ? (entry?.authProfileOverrideSource ?? legacyAuthProfileIdSource)
+    : undefined;
   return {
     provider,
     model,
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource,
   };
 }
 
@@ -101,7 +106,7 @@ export function hasDifferentLiveSessionModelSelection(
   }
   const nextAuthProfileId = normalizeOptionalString(next.authProfileId);
   const currentAuthProfileId =
-    nextAuthProfileId || current.authProfileIdSource === "user"
+    nextAuthProfileId || current.authProfileIdSource !== "auto"
       ? normalizeOptionalString(current.authProfileId)
       : undefined;
   return (
