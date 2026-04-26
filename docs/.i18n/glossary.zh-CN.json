@@ -424,6 +424,14 @@
     "target": "插件钩子"
   },
   {
+    "source": "Host-hook examples and recipes",
+    "target": "宿主钩子示例与配方"
+  },
+  {
+    "source": "Host-hook examples",
+    "target": "宿主钩子示例"
+  },
+  {
     "source": "Internal hooks",
     "target": "内部钩子"
   },

@@ -1194,6 +1194,7 @@
                     "pages": [
                       "plugins/building-plugins",
                       "plugins/hooks",
+                      "plugins/host-hooks-examples",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
                       "plugins/compatibility",
