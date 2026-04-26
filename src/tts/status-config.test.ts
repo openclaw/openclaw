@@ -138,6 +138,162 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("reports configured OpenAI TTS model, voice, and sanitized custom endpoint", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "openai",
+                providers: {
+                  openai: {
+                    displayName: "NeuTTS local",
+                    baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
+                    model: "neutts-nano",
+                    voice: "clara",
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "openai",
+        displayName: "NeuTTS local",
+        model: "neutts-nano",
+        voice: "clara",
+        baseUrl: "http://127.0.0.1:18801/v1",
+        customBaseUrl: true,
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
+  it("omits default OpenAI endpoint details from status", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "openai",
+                providers: {
+                  openai: {
+                    baseUrl: "https://api.openai.com/v1/",
+                    model: "gpt-4o-mini-tts",
+                    voice: "coral",
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "openai",
+        model: "gpt-4o-mini-tts",
+        voice: "coral",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
+  it("reports merged per-agent provider metadata", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "off",
+                provider: "openai",
+                providers: {
+                  openai: {
+                    model: "gpt-4o-mini-tts",
+                    voice: "coral",
+                  },
+                },
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "reader",
+                  tts: {
+                    auto: "always",
+                    providers: {
+                      openai: {
+                        voice: "nova",
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig,
+          agentId: "reader",
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "openai",
+        model: "gpt-4o-mini-tts",
+        voice: "nova",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
+  it("uses provider metadata for local provider prefs overrides", async () => {
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(
+        prefsPath,
+        JSON.stringify({
+          tts: {
+            auto: "always",
+            provider: "edge",
+          },
+        }),
+      );
+
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                provider: "openai",
+                prefsPath,
+                providers: {
+                  microsoft: {
+                    voice: "en-US-AvaMultilingualNeural",
+                  },
+                  openai: {
+                    model: "gpt-4o-mini-tts",
+                    voice: "coral",
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        voice: "en-US-AvaMultilingualNeural",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
     await withStatusTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw-dev");

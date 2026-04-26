@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
+- TTS/status: show configured TTS model, voice, and sanitized custom endpoint in `/status`, preserve OpenAI-compatible TTS instructions on custom endpoints, and retry empty Microsoft/Edge TTS output once. Addresses #46602, #47232, and #43936. Thanks @leekuangtao, @Huntterxx, and @rex993.
 - Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
   retry once, repair replay, and allow configured model fallback instead of
   preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
