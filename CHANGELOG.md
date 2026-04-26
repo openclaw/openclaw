@@ -114,10 +114,7 @@ Docs: https://docs.openclaw.ai
 - Agents/runtime: submit heartbeat, cron, and exec wakeups as transient runtime context instead of visible user prompts, keeping synthetic system work out of chat transcripts. Fixes #66496 and #66814. Thanks @jeades and @mandomaker.
 - Telegram: include native quote excerpts automatically for threaded replies and reply tags when the original Telegram text is available, without adding another config knob. Fixes #6975. Thanks @rex05ai.
 - Node/Linux: make `openclaw node install` enable and restart the `openclaw-node` systemd unit instead of the gateway unit on node-only VMs. Fixes #68287. Thanks @dlebee-agent.
-- Browser/CDP: retry transient raw-CDP WebSocket handshake failures before any
-  browser command is sent, and reconnect stale persistent Playwright CDP
-  sessions for safe tab-list reads without replaying mutating browser actions.
-  Fixes #67728.
+- Browser/CDP: retry transient raw-CDP WebSocket handshake failures before any browser command is sent, and reconnect stale persistent Playwright CDP sessions for safe tab-list reads without replaying mutating browser actions. Fixes #67728.
 - Gateway/Linux: retry `systemctl --user enable` after a second daemon reload when the freshly written gateway unit is not visible yet on migrated systemd installs. Fixes #65184. Thanks @liushuaiiu.
 - Telegram: preserve exact selected quote text when sending native quote replies, and retry with legacy replies if Telegram rejects quote parameters. (#71952) Thanks @rubencu.
 - Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
@@ -125,27 +122,13 @@ Docs: https://docs.openclaw.ai
 - Plugins/chat: keep `/plugins list`, `/plugins enable`, and `/plugins disable` on the persisted plugin index path so chat plugin management does not load diagnostic/runtime plugin registries before execution. Thanks @shakkernerd.
 - Plugins/doctor: read workspace plugin status and legacy web-search ownership through installed-index manifest metadata instead of broad manifest registry scans. Thanks @shakkernerd.
 - CLI/agents: read channel provider status from read-only plugin index metadata for text `agents list` output instead of the loaded channel registry. Thanks @shakkernerd.
-- Logging: redact configured secret patterns at console and file-log sink exits
-  so credentials that reach the logger are masked before terminal display or
-  JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.
-- Gateway/services: refuse process and service mutations from an older OpenClaw
-  binary when the config was last written by a newer version, preventing
-  split-brain installs from stopping or rewriting newer gateway services. Fixes
-  #57079.
+- Logging: redact configured secret patterns at console and file-log sink exits so credentials that reach the logger are masked before terminal display or JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.
+- Gateway/services: refuse process and service mutations from an older OpenClaw binary when the config was last written by a newer version, preventing split-brain installs from stopping or rewriting newer gateway services. Fixes #57079.
 - Gateway: reserve `/healthz` and `/readyz` ahead of plugin, canvas, and Control UI HTTP stages so liveness/readiness probes still answer when a later route handler stalls. Fixes #69674. Thanks @Xike-Creek.
-- Logging: load `logging.file` and redaction settings directly from the active
-  OpenClaw config path in bundled runtimes, so packaged gateways stop falling
-  back to `/tmp/openclaw`. Fixes #59370, #67168, and #61295. Thanks @KeaneYan,
-  @Pan9hu, and @zsjlovelike.
-- Logging: rotate file logs at `logging.maxFileBytes`, keep bounded numbered
-  archives, and make long-lived rolling loggers follow the current-day file
-  instead of suppressing diagnostics or writing stale dated files. Fixes #58583
-  and #62381. Thanks @jpeghead and @zhaoleink.
+- Logging: load `logging.file` and redaction settings directly from the active OpenClaw config path in bundled runtimes, so packaged gateways stop falling back to `/tmp/openclaw`. Fixes #59370, #67168, and #61295. Thanks @KeaneYan, @Pan9hu, and @zsjlovelike.
+- Logging: rotate file logs at `logging.maxFileBytes`, keep bounded numbered archives, and make long-lived rolling loggers follow the current-day file instead of suppressing diagnostics or writing stale dated files. Fixes #58583 and #62381. Thanks @jpeghead and @zhaoleink.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
-- macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
-  start browser-capable CLI node services through the restored
-  `openclaw node start` command, and show an actionable browser-control error
-  when the local control service is missing. Fixes #66637.
+- macOS/Node: keep native remote app nodes from advertising `browser.proxy`, start browser-capable CLI node services through the restored `openclaw node start` command, and show an actionable browser-control error when the local control service is missing. Fixes #66637.
 - Gateway/update: fail package updates when the restarted managed gateway reports the wrong version, including fallback restarts and JSON mode, avoiding false-success mixed-version restarts after macOS LaunchAgent updates. Fixes #71835. Thanks @abhinas90 and @jsompis.
 - Gateway/update: warn before package updates and bundled plugin runtime-dependency repairs when the target volume appears low on disk space, without blocking installs on best-effort filesystem checks. Fixes #71835. Thanks @abhinas90 and @jsompis.
 - Plugins/runtime deps: surface activated plugin load failures in health and fail package-update restart verification or doctor repair when bundled runtime deps still cannot load, avoiding false-success repairs. (#71883) Thanks @Solvely-Colin.
@@ -159,52 +142,25 @@ Docs: https://docs.openclaw.ai
 - Plugins: scope setup and web-provider metadata manifest reads to explicit plugin ids when callers already know the owning plugin set. Thanks @vincentkoc.
 - Plugins/onboarding: defer onboarding install-record index writes until the guarded config commit so setup failures cannot leave the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Plugins/registry: resolve web provider ownership from the installed plugin index instead of broad manifest scans on secret, tool, and pricing paths. Thanks @shakkernerd.
-- Config/providers: accept `video` and `audio` in configured model `input` values and
-  preserve them in provider catalog entries. Fixes #20721. Thanks @alvinttang.
+- Config/providers: accept `video` and `audio` in configured model `input` values and preserve them in provider catalog entries. Fixes #20721. Thanks @alvinttang.
 - Models/auth: honor the parent `--agent` flag for auth write commands (`add`, `login`, `setup-token`, `paste-token`, and the GitHub Copilot shortcut) so OAuth/API-key/token results are written to the requested agent store instead of the default agent. Fixes #71864. (#71933) Thanks @balric-seo.
-- TTS: strip model-emitted TTS directives from streamed block text before channel
-  delivery, including directives split across adjacent blocks, while preserving
-  the accumulated raw reply for final-mode synthesis. Fixes #38937.
-- TTS: keep explicit `provider=...` directive keys scoped to that provider and
-  warn on unsupported keys instead of letting another speech provider consume
-  overlapping keys. Fixes #60131.
-- TTS/Feishu: normalize final-mode streamed TTS-only audio before delivery so
-  generated voice-note files use the same safe media path and native voice
-  routing as normal final replies. Fixes #71920.
-- Feishu: transcribe inbound voice-note audio with the shared media audio path
-  before agent dispatch and keep raw Feishu `file_key` payloads out of message
-  text. Fixes #67120 and #61876.
+- TTS: strip model-emitted TTS directives from streamed block text before channel delivery, including directives split across adjacent blocks, while preserving the accumulated raw reply for final-mode synthesis. Fixes #38937.
+- TTS: keep explicit `provider=...` directive keys scoped to that provider and warn on unsupported keys instead of letting another speech provider consume overlapping keys. Fixes #60131.
+- TTS/Feishu: normalize final-mode streamed TTS-only audio before delivery so generated voice-note files use the same safe media path and native voice routing as normal final replies. Fixes #71920.
+- Feishu: transcribe inbound voice-note audio with the shared media audio path before agent dispatch and keep raw Feishu `file_key` payloads out of message text. Fixes #67120 and #61876.
 - Tasks: terminalize async Gateway agent task records from the Gateway run result while preserving aborted, failed, and cancelled outcomes instead of leaving completed runs stuck as active or lost. (#71905) Thanks @likewen-tech.
-- WhatsApp: let authorized group voice-note transcripts satisfy mention gating
-  before reply dispatch, while keeping unmentioned transcripts in pending group
-  history. Fixes #44908.
-- Media understanding: carry channel voice-note preflight state into attachment
-  selection so WhatsApp, Feishu, Telegram, and Discord do not transcribe the
-  same inbound audio twice. Fixes #70580.
-- TTS/BlueBubbles: deliver compatible auto-TTS audio as iMessage voice memo
-  bubbles instead of plain MP3/CAF file attachments. Fixes #16848.
-- TTS: resolve voice-note and voice-memo routing from channel plugin
-  capabilities instead of speech-core-owned channel id lists.
-- ACP: send subagent and async-task completion wakes to external ACP harnesses as
-  plain prompts instead of OpenClaw internal runtime-context envelopes, while
-  keeping those envelopes out of ACP transcripts.
+- WhatsApp: let authorized group voice-note transcripts satisfy mention gating before reply dispatch, while keeping unmentioned transcripts in pending group history. Fixes #44908.
+- Media understanding: carry channel voice-note preflight state into attachment selection so WhatsApp, Feishu, Telegram, and Discord do not transcribe the same inbound audio twice. Fixes #70580.
+- TTS/BlueBubbles: deliver compatible auto-TTS audio as iMessage voice memo bubbles instead of plain MP3/CAF file attachments. Fixes #16848.
+- TTS: resolve voice-note and voice-memo routing from channel plugin capabilities instead of speech-core-owned channel id lists.
+- ACP: send subagent and async-task completion wakes to external ACP harnesses as plain prompts instead of OpenClaw internal runtime-context envelopes, while keeping those envelopes out of ACP transcripts.
 - TTS/status: show configured TTS model, voice, and sanitized custom endpoint in `/status`, preserve OpenAI-compatible TTS instructions on custom endpoints, and retry empty Microsoft/Edge TTS output once. Addresses #46602, #47232, and #43936. Thanks @leekuangtao, @Huntterxx, and @rex993.
 - Agents/Gateway: steer agent-driven config edits and restarts through the owner-only `gateway` tool, document `config.schema.lookup` as the field-doc source, and warn against using `gateway stop && gateway start` as a restart substitute on macOS. Fixes #71929. Thanks @ygc3817922006-sketch.
 - Media understanding/audio: inject a deterministic transcript placeholder for too-small voice notes so agents do not hallucinate transcription or provider failures. Fixes #48944. Thanks @eulicesl.
-- Providers/vLLM: send Nemotron 3 chat-template kwargs when thinking is off
-  and honor configured `params.chat_template_kwargs` for OpenAI-compatible
-  completions, so vLLM/Nemotron replies stay visible instead of becoming
-  thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
-- Channels/replies: strip copied inbound metadata blocks from user-facing
-  assistant replies and model replay history, so Discord/vLLM sessions do not
-  leak `Conversation info` / `UNTRUSTED ... message body` envelopes after a
-  model echoes them. Fixes #71847. Thanks @jmystaki-create.
-- Subagents/memory: keep inter-session completion wakes out of memory and
-  dreaming session exports, and strip internal runtime-context blocks from
-  realtime Control UI chat events.
-- Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
-  retry once, repair replay, and allow configured model fallback instead of
-  preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
+- Providers/vLLM: send Nemotron 3 chat-template kwargs when thinking is off and honor configured `params.chat_template_kwargs` for OpenAI-compatible completions, so vLLM/Nemotron replies stay visible instead of becoming thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
+- Channels/replies: strip copied inbound metadata blocks from user-facing assistant replies and model replay history, so Discord/vLLM sessions do not leak `Conversation info` / `UNTRUSTED ... message body` envelopes after a model echoes them. Fixes #71847. Thanks @jmystaki-create.
+- Subagents/memory: keep inter-session completion wakes out of memory and dreaming session exports, and strip internal runtime-context blocks from realtime Control UI chat events.
+- Agents/Claude: treat zero-token empty `stop` turns as failed provider output, retry once, repair replay, and allow configured model fallback instead of preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
 - Tasks: normalize task lifecycle timestamps at create, update, and restore time, and report retained lost tasks as audit warnings until their cleanup window expires. (#71871) Thanks @likewen-tech.
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed model call instead of exporting a misleading `StreamAbandoned` error span. Thanks @vincentkoc.
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from being treated as empty state, preserving `paired.json` for repair instead of overwriting approved pairings. Fixes #71873. Thanks @iret77.
@@ -216,13 +172,8 @@ Docs: https://docs.openclaw.ai
 - Control UI: hide the chat loading skeleton during background history reloads when existing messages or active stream content are already visible, avoiding reload flashes on high-latency local gateways. Fixes #71844. Thanks @WolvenRA.
 - Control UI: keep locally optimistic chat messages visible when a history reload temporarily returns empty, avoiding lost first-turn messages on high-latency gateways. Fixes #71878. Thanks @WolvenRA.
 - Control UI: keep chat history limits based on visible messages after filtering heartbeat and control-only transcript rows, so recent hidden entries no longer make older visible replies disappear. Thanks @WolvenRA.
-- Agents/images: scrub old `[media attached: ...]`, `[Image: source: ...]`,
-  and `media://inbound/...` markers from pruned model replay context so stale
-  media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks
-  @jmeadlock.
-- Docker/Bonjour: disable Bonjour/mDNS advertising by default for bundled
-  Compose gateways on bridge networking, while keeping host/macvlan opt-in with
-  `OPENCLAW_DISABLE_BONJOUR=0`. Fixes #71879. Thanks @gbballpack.
+- Agents/images: scrub old `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` markers from pruned model replay context so stale media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks @jmeadlock.
+- Docker/Bonjour: disable Bonjour/mDNS advertising by default for bundled Compose gateways on bridge networking, while keeping host/macvlan opt-in with `OPENCLAW_DISABLE_BONJOUR=0`. Fixes #71879. Thanks @gbballpack.
 - CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure` and show daemon state separately when available, so `gateway.tailscale.mode: "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790. Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables itself for the current Gateway process after repeated failed restarts while the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux, @FiredMosquito831, and @spikefcz.
 - Gateway/Fly.io: seed Control UI allowed origins from the actual runtime bind and port so CLI-driven non-loopback starts do not crash before config exists. Fixes #71823.
@@ -241,9 +192,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: keep ACP prompt/skill routing hidden unless an ACP runtime backend is available, and warn in doctor when enabled Codex plugin configs still route `openai-codex/*` models through PI. Thanks @vincentkoc.
 - Media delivery: avoid sending generated image attachments twice when the assistant reply already includes explicit `MEDIA:` lines for the same turn, and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
 - Codex harness: ignore retryable app-server error notifications after Codex recovers, and preserve the real nested error message for terminal app-server failures instead of replacing it with a generic failure. Thanks @pashpashpash.
-- Agents/Codex: prepare native Codex sub-agent session metadata without a
-  nested Gateway session patch and add a focused Docker smoke for the app-server
-  sub-agent path. Thanks @vincentkoc.
+- Agents/Codex: prepare native Codex sub-agent session metadata without a nested Gateway session patch and add a focused Docker smoke for the app-server sub-agent path. Thanks @vincentkoc.
 - Agents/subagents: keep queued subagent announces session-only when the requester has no external channel target, avoiding ambiguous multi-channel delivery failures. Fixes #59201. Thanks @larrylhollan.
 - Image understanding: preserve configured provider-prefixed vision model metadata when callers request the model without the provider prefix, so custom image models keep their `input: ["text", "image"]` capability. Fixes #33185. Thanks @Kobe9312 and @vincentkoc.
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
@@ -819,16 +768,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Dependencies: refresh workspace package pins and lockfile entries for AWS SDK,
-  Anthropic SDK, ACP SDK, Matrix crypto, TypeBox, Vite, tsdown, Slack Bolt,
-  CopilotKit AIMock, and related bundled plugin packages. Thanks @steipete.
-- Gateway/env: import each missing expected login-shell env var independently,
-  so an existing gateway token no longer prevents `env.shellEnv` from loading
-  plugin credentials such as `TWILIO_*` from `.profile`. Thanks @steipete.
-- macOS/Gateway pairing: silently accept same-host native app
-  `metadata-upgrade` reconnects, so macOS patch-version changes update paired
-  metadata instead of spamming security audit warnings and `pairing required`
-  disconnects. Thanks @steipete.
+- Dependencies: refresh workspace package pins and lockfile entries for AWS SDK, Anthropic SDK, ACP SDK, Matrix crypto, TypeBox, Vite, tsdown, Slack Bolt, CopilotKit AIMock, and related bundled plugin packages. Thanks @steipete.
+- Gateway/env: import each missing expected login-shell env var independently, so an existing gateway token no longer prevents `env.shellEnv` from loading plugin credentials such as `TWILIO_*` from `.profile`. Thanks @steipete.
+- macOS/Gateway pairing: silently accept same-host native app `metadata-upgrade` reconnects, so macOS patch-version changes update paired metadata instead of spamming security audit warnings and `pairing required` disconnects. Thanks @steipete.
 - CLI/Gateway: wait for one-shot gateway RPC clients to finish WebSocket teardown before the CLI process exits, reducing hangs where commands like `openclaw status` or `openclaw version` could finish their work but stay alive until an external timeout killed them (#70691). Thanks @Takhoffman.
 - Thinking defaults/status: raise the implicit default thinking level for reasoning-capable models from legacy `off`/`low` fallback behavior to a safe provider-supported `medium` equivalent when no explicit config default is set, preserve configured-model reasoning metadata when runtime catalog loading is empty, and make `/status` report the same resolved default as runtime (#70601). Thanks @Takhoffman.
 - Gateway/model pricing: extend OpenRouter and LiteLLM catalog fetch timeouts to 60 seconds, reducing noisy timeout warnings during slow upstream responses. Thanks @steipete.
@@ -867,9 +809,7 @@ Docs: https://docs.openclaw.ai
 - Config/includes: write through single-file top-level includes for isolated OpenClaw-owned mutations, so `plugins install` and `plugins update` update an included `plugins.json5` file instead of flattening modular `$include` configs. Fixes #41050 and #66048.
 - Config/reload: plan gateway reloads from source-authored config instead of runtime-materialized snapshots, so plugin update writes no longer trigger false restarts from derived provider/plugin config paths. Fixes #68732.
 - Plugins/update: skip npm plugin reinstall/config rewrites when the installed version and recorded artifact identity already match the registry target, let bare npm package names resolve back to tracked install records, and point already-installed `plugins install` attempts at `plugins update` / `--force` instead of a hook-pack fallback. Fixes #46955, #67957, and #68073.
-- Agents/MCP: keep `mcp.servers` and bundle MCP tools available in Pi embedded runs.
-  `coding` and `messaging` sessions while preserving `minimal` profile and
-  `tools.deny: ["bundle-mcp"]` opt-out behavior. Fixes #68875 and #68818.
+- Agents/MCP: keep `mcp.servers` and bundle MCP tools available in Pi embedded runs. `coding` and `messaging` sessions while preserving `minimal` profile and `tools.deny: ["bundle-mcp"]` opt-out behavior. Fixes #68875 and #68818.
 - Plugins/startup: tolerate transient bundled-channel catalog/metadata drift while auto-enabling configured plugins, so CLI and gateway startup no longer crash when a channel id is known but its display metadata is unavailable.
 - CLI/Claude: report CLI-backed reply runs as streaming while Claude/Codex CLI turns are still in flight, so WebChat keeps visible response state until the backend finishes. Fixes #70125.
 - Slack/streaming: fall back to normal Slack replies for Slack Connect streams rejected before the SDK flushes its local buffer, so short replies no longer disappear or report success before Slack acknowledges delivery. Fixes #70295. (#70370) Thanks @mvanhorn.
