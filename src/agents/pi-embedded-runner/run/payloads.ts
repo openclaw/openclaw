@@ -17,6 +17,7 @@ import {
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
+  sanitizeUserFacingText,
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
@@ -289,11 +290,12 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const sanitizedText = cleanedText ? sanitizeUserFacingText(cleanedText) : cleanedText;
+    if (!sanitizedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
     replyItems.push({
-      text: cleanedText,
+      text: sanitizedText,
       media: mediaUrls,
       audioAsVoice,
       replyToId,

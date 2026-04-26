@@ -9,6 +9,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
+import { writeTelegramInboundHeartbeat } from "./inbound-heartbeat-store.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
@@ -22,6 +23,11 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+
+// Write-frequency cap for inbound-receipt heartbeats. Watchdog thresholds are
+// 15m/30m; 5s resolution is ample and keeps a high-traffic chat from thrashing
+// the disk on every getUpdates round-trip.
+const INBOUND_HEARTBEAT_MIN_INTERVAL_MS = 5_000;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -66,6 +72,7 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #transportState: TelegramPollingTransportState;
+  #lastInboundHeartbeatAt = 0;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -265,6 +272,38 @@ export class TelegramPollingSession {
         lastGetUpdatesFinishedAt = finishedAt;
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
+        if (Array.isArray(result)) {
+          // Emit an inbound-receipt heartbeat so an external watchdog can
+          // distinguish a live poll loop (empty_ack ticks or real message
+          // batches) from a stuck one where the bot still sends but never
+          // receives. Fire-and-forget — the write must never block or fail
+          // the poll loop. Throttled so high-traffic chats don't thrash disk.
+          if (finishedAt - this.#lastInboundHeartbeatAt >= INBOUND_HEARTBEAT_MIN_INTERVAL_MS) {
+            this.#lastInboundHeartbeatAt = finishedAt;
+            const updates = result as ReadonlyArray<{ update_id?: unknown }>;
+            const updateCount = updates.length;
+            let maxUpdateId: number | null = null;
+            for (const u of updates) {
+              const id = u?.update_id;
+              if (typeof id === "number" && Number.isSafeInteger(id)) {
+                if (maxUpdateId == null || id > maxUpdateId) {
+                  maxUpdateId = id;
+                }
+              }
+            }
+            void writeTelegramInboundHeartbeat({
+              accountId: this.opts.accountId,
+              botToken: this.opts.token,
+              outcome: updateCount > 0 ? "message" : "empty_ack",
+              updateCount,
+              lastUpdateId: maxUpdateId,
+            }).catch((heartbeatErr) => {
+              this.opts.log(
+                `[telegram] inbound heartbeat write failed: ${formatErrorMessage(heartbeatErr)}`,
+              );
+            });
+          }
+        }
         return result;
       } catch (err) {
         const finishedAt = Date.now();
