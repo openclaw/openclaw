@@ -59,6 +59,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when
+  the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables
+  itself for the current Gateway process after repeated failed restarts while
+  the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux,
+  @FiredMosquito831, and @spikefcz.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.

@@ -533,6 +533,38 @@ describe("gateway bonjour advertiser", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it("disables bonjour for the process after repeated stuck advertiser restarts", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announcing" };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn(() => new Promise<void>(() => {}));
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    await vi.advanceTimersByTimeAsync(65_000);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("disabling advertiser after 3 failed restarts"),
+    );
+    expect(createService).toHaveBeenCalledTimes(4);
+    expect(advertise).toHaveBeenCalledTimes(4);
+    expect(destroy).toHaveBeenCalledTimes(4);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(createService).toHaveBeenCalledTimes(4);
+    expect(advertise).toHaveBeenCalledTimes(4);
+
+    await started.stop();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes hostnames with domains for service names", async () => {
     // Allow advertiser to run in unit tests.
     delete process.env.VITEST;

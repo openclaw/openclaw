@@ -69,6 +69,7 @@ type BonjourAdvertiserDeps = {
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const STUCK_ANNOUNCING_MS = 8_000;
+const MAX_CONSECUTIVE_RESTARTS = 3;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
@@ -332,7 +333,9 @@ export async function startGatewayBonjourAdvertiser(
 
     let stopped = false;
     let recreatePromise: Promise<void> | null = null;
-    let cycle = createCycle();
+    let disabled = false;
+    let consecutiveRestarts = 0;
+    let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
     attachConflictListeners(cycle.services);
     startAdvertising(cycle.services);
@@ -353,13 +356,26 @@ export async function startGatewayBonjourAdvertiser(
     };
 
     const recreateAdvertiser = async (reason: string) => {
-      if (stopped) {
+      if (stopped || disabled) {
         return;
       }
       if (recreatePromise) {
         return recreatePromise;
       }
       recreatePromise = (async () => {
+        consecutiveRestarts += 1;
+        if (consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS) {
+          disabled = true;
+          logger.warn(
+            `bonjour: disabling advertiser after ${MAX_CONSECUTIVE_RESTARTS} failed restarts (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
+          );
+          const previous = cycle;
+          cycle = null;
+          stateTracker.clear();
+          await stopCycle(previous, { shutdownResponder: true });
+          restoreConsoleLog();
+          return;
+        }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
         const previous = cycle;
         await stopCycle(previous);
@@ -378,11 +394,17 @@ export async function startGatewayBonjourAdvertiser(
       if (stopped || recreatePromise) {
         return;
       }
+      if (disabled || !cycle) {
+        return;
+      }
       updateStateTrackers(cycle.services);
       for (const { label, svc } of cycle.services) {
         const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
         if (typeof stateUnknown !== "string") {
           continue;
+        }
+        if (stateUnknown === "announced") {
+          consecutiveRestarts = 0;
         }
         const tracked = stateTracker.get(label);
         if (
