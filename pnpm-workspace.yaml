@@ -22,22 +22,29 @@ minimumReleaseAgeExclude:
   - "@mariozechner/*"
   - "@openai/codex"
   - "@openai/codex-*"
+  - "@napi-rs/canvas"
+  - "@napi-rs/canvas-*"
+  - "@oxc-project/types"
   - "@typescript/native-preview*"
+  - "@vitest/*"
   - "@types/node"
   - "@rolldown/*"
   - "@oxlint/*"
   - "@oxfmt/*"
   - "axios@1.15.0"
   - "discord-api-types"
+  - "koffi"
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
 
 onlyBuiltDependencies:
+  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
   - "@tloncorp/api"
+  - "@tloncorp/tlon-skill"
   - "@whiskeysockets/baileys"
   - authenticate-pam
   - esbuild
@@ -47,3 +54,5 @@ onlyBuiltDependencies:
 
 ignoredBuiltDependencies:
   - koffi
+
+strictDepBuilds: true

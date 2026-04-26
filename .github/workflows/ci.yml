@@ -67,7 +67,7 @@ jobs:
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -352,7 +352,7 @@ jobs:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -388,12 +388,17 @@ jobs:
 
       - name: Setup Python
         id: setup-python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # setup-uv v8.1.0; uv 0.11.7
+        with:
+          version: "0.11.7"
+
       - name: Restore pre-commit cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .cache/pre-commit-security-fast
           key: pre-commit-security-fast-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -401,7 +406,10 @@ jobs:
             pre-commit-security-fast-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: |
+          uv venv "$RUNNER_TEMP/pre-commit-venv" --python python
+          uv pip install --project "$GITHUB_WORKSPACE" --python "$RUNNER_TEMP/pre-commit-venv/bin/python" pre-commit==4.2.0
+          echo "$RUNNER_TEMP/pre-commit-venv/bin" >> "$GITHUB_PATH"
 
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
@@ -441,7 +449,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -449,7 +457,7 @@ jobs:
           submodules: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24.x"
           check-latest: false
@@ -572,7 +580,7 @@ jobs:
         run: pnpm ui:i18n:check
 
       - name: Cache dist build
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/
@@ -583,14 +591,14 @@ jobs:
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
       - name: Upload built runtime artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-runtime-build
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload A2UI bundle artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
@@ -684,7 +692,7 @@ jobs:
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
@@ -1621,7 +1629,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/plugin-sdk
@@ -1828,20 +1836,26 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
           submodules: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # setup-uv v8.1.0; uv 0.11.7
+        with:
+          version: "0.11.7"
+
       - name: Install Python tooling
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest ruff pyyaml
+          uv venv "$RUNNER_TEMP/skills-python-venv" --python python
+          uv pip install --project "$GITHUB_WORKSPACE" --python "$RUNNER_TEMP/skills-python-venv/bin/python" pytest ruff pyyaml
+          echo "$RUNNER_TEMP/skills-python-venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint Python skill scripts
         run: python -m ruff check skills
@@ -1870,7 +1884,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
           submodules: false
@@ -1895,7 +1909,7 @@ jobs:
           }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24.x
           check-latest: false
@@ -1937,7 +1951,7 @@ jobs:
 
       - name: Save pnpm store cache
         if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         continue-on-error: true
         with:
           path: ${{ steps.pnpm-cache.outputs.store-path }}
@@ -1974,7 +1988,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
           submodules: false
@@ -2014,7 +2028,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
           submodules: false
@@ -2032,7 +2046,7 @@ jobs:
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -2041,7 +2055,7 @@ jobs:
 
       - name: Cache Swift build directory
         id: swift-build-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'Swabble/Package.swift', 'Swabble/Sources/**') }}
@@ -2161,7 +2175,7 @@ jobs:
           exit 1
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.

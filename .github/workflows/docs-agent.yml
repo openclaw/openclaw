@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: main
           fetch-depth: 0
@@ -149,7 +149,7 @@ jobs:
 
       - name: Run Codex docs agent
         if: steps.gate.outputs.run_agent == 'true'
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02 # v1
         env:
           DOCS_AGENT_BASE_SHA: ${{ steps.gate.outputs.review_base_sha }}
           DOCS_AGENT_HEAD_SHA: ${{ steps.gate.outputs.review_head_sha }}

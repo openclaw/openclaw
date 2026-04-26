@@ -69,7 +69,7 @@ jobs:
           fi
 
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -231,7 +231,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.resolve_target.outputs.ref }}
           fetch-depth: 1
@@ -278,7 +278,7 @@ jobs:
 
       - name: Upload parity artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-qa-parity-${{ needs.resolve_target.outputs.sha }}
           path: .artifacts/qa-e2e/
@@ -299,7 +299,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.resolve_target.outputs.ref }}
           fetch-depth: 1
@@ -348,7 +348,7 @@ jobs:
 
       - name: Upload Matrix QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.sha }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -369,7 +369,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.resolve_target.outputs.ref }}
           fetch-depth: 1
@@ -432,7 +432,7 @@ jobs:
 
       - name: Upload Telegram QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.sha }}
           path: ${{ steps.run_lane.outputs.output_dir }}

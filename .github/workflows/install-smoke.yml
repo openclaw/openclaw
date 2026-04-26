@@ -43,7 +43,7 @@ jobs:
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
@@ -88,7 +88,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -195,7 +195,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -345,7 +345,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 

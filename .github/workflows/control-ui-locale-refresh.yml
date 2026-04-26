@@ -35,7 +35,7 @@ jobs:
       locales_json: ${{ steps.plan.outputs.locales_json }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: true
           submodules: false

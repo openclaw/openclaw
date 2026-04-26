@@ -172,7 +172,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  PNPM_VERSION: "10.33.0"
 
 jobs:
   validate_selected_ref:
@@ -182,7 +182,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -242,7 +242,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -278,7 +278,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -323,7 +323,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -441,7 +441,7 @@ jobs:
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -538,7 +538,7 @@ jobs:
 
       - name: Upload Docker E2E chunk artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-${{ matrix.chunk_id }}
           path: .artifacts/docker-tests/
@@ -717,7 +717,7 @@ jobs:
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -763,7 +763,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -869,7 +869,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1005,7 +1005,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1

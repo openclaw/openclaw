@@ -72,7 +72,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout main
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload npm Telegram E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}

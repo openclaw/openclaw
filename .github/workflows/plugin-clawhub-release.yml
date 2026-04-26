@@ -23,7 +23,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  PNPM_VERSION: "10.33.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
@@ -42,7 +42,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -148,7 +148,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           fetch-depth: 1
@@ -162,7 +162,7 @@ jobs:
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}
@@ -207,7 +207,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
           fetch-depth: 1
@@ -221,7 +221,7 @@ jobs:
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}
