@@ -289,8 +289,10 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         continue;
       }
       const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
+      if (preserveJob) {
+        continue;
+      }
       if (
-        !preserveJob &&
         !hasPluginSessionSchedulerJob({
           pluginId: record.pluginId,
           jobId,
@@ -313,13 +315,11 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         });
         continue;
       }
-      if (!preserveJob) {
-        deletePluginSessionSchedulerJob({
-          pluginId: record.pluginId,
-          jobId,
-          sessionKey: params.sessionKey,
-        });
-      }
+      deletePluginSessionSchedulerJob({
+        pluginId: record.pluginId,
+        jobId,
+        sessionKey: params.sessionKey,
+      });
     }
     return failures;
   }

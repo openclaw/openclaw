@@ -1305,7 +1305,7 @@ describe("host-hook fixture plugin contract", () => {
         nextRegistry: next,
       }),
     ).resolves.toMatchObject({ failures: [] });
-    expect(cleanupEvents).toEqual(["restart:shared-job"]);
+    expect(cleanupEvents).toEqual([]);
     expect(listPluginSessionSchedulerJobs("restart-fixture")).toEqual([
       {
         id: "shared-job",
