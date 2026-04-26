@@ -189,6 +189,7 @@ describe("startPluginServices", () => {
     });
 
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {

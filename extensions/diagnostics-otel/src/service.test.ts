@@ -183,7 +183,10 @@ function createOtelContext(
     },
     logger: createLogger(),
     stateDir: OTEL_TEST_STATE_DIR,
-    internalDiagnostics: { onEvent: onInternalDiagnosticEvent },
+    internalDiagnostics: {
+      emit: emitTrustedDiagnosticEvent,
+      onEvent: onInternalDiagnosticEvent,
+    },
   };
 }
 
@@ -424,6 +427,124 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
     expect(sdkShutdown).not.toHaveBeenCalled();
     expect(logShutdown).toHaveBeenCalledTimes(1);
+  });
+
+  test("emits and records bounded telemetry exporter health events", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+
+    await service.start(ctx);
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "traces",
+          status: "started",
+          reason: "configured",
+        }),
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "metrics",
+          status: "started",
+          reason: "configured",
+        }),
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "logs",
+          status: "started",
+          reason: "configured",
+        }),
+      ]),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.exporter": "diagnostics-otel",
+      "openclaw.signal": "logs",
+      "openclaw.status": "started",
+      "openclaw.reason": "configured",
+    });
+
+    unsubscribe();
+    await service.stop?.(ctx);
+  });
+
+  test("reports log exporter emit failures without exporting raw error text", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    logEmit.mockImplementationOnce(() => {
+      throw new TypeError("token sk-test-secret should not leave as telemetry");
+    });
+
+    await service.start(ctx);
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "export me",
+    });
+    await flushDiagnosticEvents();
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "telemetry.exporter",
+          exporter: "diagnostics-otel",
+          signal: "logs",
+          status: "failure",
+          reason: "emit_failed",
+          errorCategory: "TypeError",
+        }),
+      ]),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.exporter": "diagnostics-otel",
+      "openclaw.signal": "logs",
+      "openclaw.status": "failure",
+      "openclaw.reason": "emit_failed",
+      "openclaw.errorCategory": "TypeError",
+    });
+
+    unsubscribe();
+    await service.stop?.(ctx);
+  });
+
+  test("ignores untrusted telemetry exporter events for OTEL metrics", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+
+    await service.start(ctx);
+    telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add.mockClear();
+    emitDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "spoofed-plugin-exporter",
+      signal: "metrics",
+      status: "failure",
+      reason: "emit_failed",
+    });
+
+    expect(
+      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
+    ).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
   });
 
   test("honors disabled traces when an OpenTelemetry SDK is preloaded", async () => {

@@ -81,6 +81,10 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type TelemetryExporterDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "telemetry.exporter" }
+>;
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   inputMessages: false,
@@ -139,6 +143,17 @@ function formatError(err: unknown): string {
     return JSON.stringify(err);
   } catch {
     return String(err);
+  }
+}
+
+function errorCategory(err: unknown): string {
+  try {
+    if (err instanceof Error && typeof err.name === "string" && err.name.trim()) {
+      return lowCardinalityAttr(err.name, "Error");
+    }
+    return lowCardinalityAttr(typeof err, "unknown");
+  } catch {
+    return "unknown";
   }
 }
 
@@ -529,8 +544,45 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
+      const emitExporterEvent = (
+        event: Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts">,
+      ) => {
+        try {
+          ctx.internalDiagnostics?.emit({
+            type: "telemetry.exporter",
+            ...event,
+          });
+        } catch {
+          // Exporter health must never affect the exporter lifecycle.
+        }
+      };
+      const emitForSignals = (
+        signals: TelemetryExporterDiagnosticEvent["signal"][],
+        event: Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts" | "signal">,
+      ) => {
+        for (const signal of signals) {
+          emitExporterEvent({ signal, ...event });
+        }
+      };
+      const tracesEnabled = otel.traces !== false;
+      const metricsEnabled = otel.metrics !== false;
+      const logsEnabled = otel.logs === true;
+      const enabledSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+        ...(tracesEnabled ? (["traces"] as const) : []),
+        ...(metricsEnabled ? (["metrics"] as const) : []),
+        ...(logsEnabled ? (["logs"] as const) : []),
+      ];
+      if (enabledSignals.length === 0) {
+        return;
+      }
+
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
       if (protocol !== "http/protobuf") {
+        emitForSignals(enabledSignals, {
+          exporter: "diagnostics-otel",
+          status: "failure",
+          reason: "unsupported_protocol",
+        });
         ctx.logger.warn(`diagnostics-otel: unsupported protocol ${protocol}`);
         return;
       }
@@ -543,13 +595,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
       const sampleRate = resolveSampleRate(otel.sampleRate);
       const contentCapturePolicy = resolveContentCapturePolicy(otel.captureContent);
-
-      const tracesEnabled = otel.traces !== false;
-      const metricsEnabled = otel.metrics !== false;
-      const logsEnabled = otel.logs === true;
-      if (!tracesEnabled && !metricsEnabled && !logsEnabled) {
-        return;
-      }
       const sdkPreloaded = hasPreloadedOtelSdk();
 
       const resource = resourceFromAttributes({
@@ -614,6 +659,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         try {
           sdk.start();
         } catch (err) {
+          emitForSignals(
+            [
+              ...(tracesEnabled ? (["traces"] as const) : []),
+              ...(metricsEnabled ? (["metrics"] as const) : []),
+            ],
+            {
+              exporter: "diagnostics-otel",
+              status: "failure",
+              reason: "start_failed",
+              errorCategory: errorCategory(err),
+            },
+          );
           await stopStarted();
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
           throw err;
@@ -783,6 +840,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Diagnostic memory pressure events",
       });
+      const telemetryExporterCounter = meter.createCounter("openclaw.telemetry.exporter.events", {
+        unit: "1",
+        description: "Diagnostic telemetry exporter lifecycle and failure events",
+      });
 
       let recordLogRecord:
         | ((
@@ -847,6 +908,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             }
             otelLogger.emit(logRecord);
           } catch (err) {
+            emitExporterEvent({
+              exporter: "diagnostics-otel",
+              signal: "logs",
+              status: "failure",
+              reason: "emit_failed",
+              errorCategory: errorCategory(err),
+            });
             const now = Date.now();
             if (
               now - logRecordExportFailureLastReportedAt >=
@@ -1602,6 +1670,24 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const recordTelemetryExporter = (
+        evt: TelemetryExporterDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!metadata.trusted) {
+          return;
+        }
+        telemetryExporterCounter.add(1, {
+          "openclaw.exporter": lowCardinalityAttr(evt.exporter, "unknown"),
+          "openclaw.signal": evt.signal,
+          "openclaw.status": evt.status,
+          ...(evt.reason ? { "openclaw.reason": evt.reason } : {}),
+          ...(evt.errorCategory
+            ? { "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other") }
+            : {}),
+        });
+      };
+
       const subscribe = ctx.internalDiagnostics?.onEvent;
       if (!subscribe) {
         ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
@@ -1689,6 +1775,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "diagnostic.memory.pressure":
               recordMemoryPressure(evt);
               return;
+            case "telemetry.exporter":
+              recordTelemetryExporter(evt, metadata);
+              return;
             case "tool.execution.started":
             case "run.started":
             case "model.call.started":
@@ -1700,6 +1789,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
           );
         }
+      });
+
+      emitForSignals(enabledSignals, {
+        exporter: "diagnostics-otel",
+        status: "started",
+        reason: "configured",
       });
 
       if (logsEnabled) {
