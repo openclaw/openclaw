@@ -58,6 +58,8 @@ reach other host locations unless sandboxing is enabled. See
 - Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
 - Sessions: `~/.openclaw/agents/<agentId>/sessions`
 
+Keep additional agent workspaces peer-level (`workspace-<agentId>`), not nested under `workspace/`. Recursive operations that intentionally target the main workspace, such as cleanup, search, or memory scans, can also traverse any agent workspace placed inside it.
+
 ### Single-agent mode (default)
 
 If you do nothing, OpenClaw runs a single agent:

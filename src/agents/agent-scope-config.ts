@@ -53,6 +53,15 @@ function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
 }
 
+function isManagedMainWorkspaceDir(workspaceDir: string, env: NodeJS.ProcessEnv): boolean {
+  const resolved = path.resolve(workspaceDir);
+  const stateDir = path.resolve(stripNullBytes(resolveStateDir(env)));
+  const name = path.basename(resolved);
+  return (
+    path.dirname(resolved) === stateDir && (name === "workspace" || name.startsWith("workspace-"))
+  );
+}
+
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
@@ -171,7 +180,7 @@ export function resolveAgentWorkspaceDir(
   }
   if (fallback) {
     const resolvedFallback = stripNullBytes(resolveUserPath(fallback, env));
-    if (path.resolve(resolvedFallback) !== path.resolve(resolveDefaultAgentWorkspaceDir(env))) {
+    if (!isManagedMainWorkspaceDir(resolvedFallback, env)) {
       return stripNullBytes(path.join(resolvedFallback, id));
     }
   }

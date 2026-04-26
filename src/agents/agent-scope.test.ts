@@ -509,6 +509,41 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.join(stateDir, "workspace-work"));
   });
 
+  it("non-default agent does not nest after changing OPENCLAW_PROFILE", () => {
+    const home = path.join(path.sep, "tmp", "test-home");
+    const stateDir = path.join(home, ".openclaw");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "");
+    vi.stubEnv("OPENCLAW_PROFILE", "dev");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: path.join(stateDir, "workspace") },
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    };
+
+    const workspace = resolveAgentWorkspaceDir(cfg, "work");
+    expect(workspace).toBe(path.join(stateDir, "workspace-work"));
+  });
+
+  it("keeps explicit nested agent workspace configs unchanged", () => {
+    const stateDir = path.join(path.sep, "tmp", "test-state");
+    const nestedWorkspace = path.join(stateDir, "workspace", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: path.join(stateDir, "workspace") },
+        list: [
+          { id: "main", default: true },
+          { id: "work", workspace: nestedWorkspace },
+        ],
+      },
+    };
+
+    const workspace = resolveAgentWorkspaceDir(cfg, "work");
+    expect(workspace).toBe(nestedWorkspace);
+  });
+
   it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
     const cfg: OpenClawConfig = {
       agents: {
