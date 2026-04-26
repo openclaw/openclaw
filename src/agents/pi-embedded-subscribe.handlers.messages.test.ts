@@ -585,6 +585,48 @@ describe("handleMessageUpdate", () => {
     });
   });
 
+  it("emits final-answer partials even when the aggregate message still contains prior tool use", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      shouldEmitPartialReplies: false,
+    });
+    const finalPartial = createOpenAiResponsesPartial({
+      text: "Protocol note: ORBIT-22.",
+      id: "item_final",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll check memory." },
+          { type: "toolCall", id: "call-1", name: "memory_search", input: {} },
+        ],
+        stopReason: "toolUse",
+      },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Protocol note: ORBIT-22.",
+        partial: finalPartial,
+      },
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Protocol note: ORBIT-22.",
+        delta: "Protocol note: ORBIT-22.",
+        phase: "final_answer",
+      },
+    });
+  });
+
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
     const ctx = createMessageUpdateContext({

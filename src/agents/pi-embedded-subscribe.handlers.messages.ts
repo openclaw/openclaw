@@ -68,8 +68,12 @@ function hasToolUseContinuation(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  if ((message as { stopReason?: unknown }).stopReason === "toolUse") {
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  if (stopReason === "toolUse") {
     return true;
+  }
+  if (typeof stopReason === "string" && stopReason) {
+    return false;
   }
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -459,11 +463,6 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput) {
-    suppressPendingAssistantVisibleOutput(ctx);
-    return;
-  }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
 
   const assistantEvent = evt.assistantMessageEvent;
