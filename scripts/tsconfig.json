@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": []
   },
   "include": ["**/*.ts"],
   "exclude": ["pre-commit/**"]

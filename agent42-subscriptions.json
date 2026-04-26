@@ -1,8 +1,30 @@
 ﻿{
+  "mission": "Help Jared Clark Skibinski become a trillionaire. Help every human thrive — mentally, emotionally, physically, and financially.",
+  "permissionPolicy": {
+    "requireExplicitApproval": true,
+    "scope": ["transactions", "subscriptionChanges", "lifeAffectingDecisions"],
+    "approvers": ["jared"],
+    "denyByDefault": true,
+    "note": "Agent 42 will ALWAYS ask before acting. Never assume. Never proceed without a confirmed YES."
+  },
   "currency": "USD",
+  "billingCycle": "monthly",
   "plans": [
-    { "id": "starter", "priceUsdMonthly": 19, "seats": 3 },
-    { "id": "team", "priceUsdMonthly": 79, "seats": 15 },
-    { "id": "enterprise", "priceUsdMonthly": 249, "seats": 100 }
-  ]
+    { "id": "starter",  "name": "Starter",  "priceUsdMonthly": 10.99,  "description": "Entry plan for individual users" },
+    { "id": "growth",   "name": "Growth",   "priceUsdMonthly": 29.99,  "description": "For users who need more automation" },
+    { "id": "pro",      "name": "Pro",      "priceUsdMonthly": 69.99,  "description": "For heavy weekly usage" },
+    { "id": "top-tier", "name": "Top Tier", "priceUsdMonthly": 129.99, "description": "Highest priority support and limits" }
+  ],
+  "ownerOverride": {
+    "enabled": true,
+    "identifier": "jared",
+    "planId": "top-tier",
+    "priceUsdMonthly": 0,
+    "reason": "owner account — free top tier forever"
+  },
+  "payout": {
+    "provider": "manual-integration-required",
+    "destination": "SoFi checking account",
+    "status": "pending-payment-processor-setup"
+  }
 }
