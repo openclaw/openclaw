@@ -908,11 +908,11 @@ describe("test-projects args", () => {
 
     expect(
       resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual(["src/plugin-sdk/core.ts", "extensions"]);
+    ).toEqual(["src/plugin-sdk/core.test.ts", "extensions"]);
     expect(plans[0]).toEqual({
       config: "test/vitest/vitest.plugin-sdk.config.ts",
       forwardedArgs: [],
-      includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+      includePatterns: ["src/plugin-sdk/core.test.ts"],
       watchMode: false,
     });
     expect(plans.map((plan) => plan.config)).toContain(
@@ -932,7 +932,14 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/discord/src/monitor/**/*.test.ts"],
+        includePatterns: [
+          "extensions/discord/src/channel-actions.contract.test.ts",
+          "extensions/discord/src/channel.test.ts",
+          "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
+          "extensions/discord/src/monitor/message-handler.queue.test.ts",
+          "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+          "extensions/discord/src/monitor/provider.test.ts",
+        ],
         watchMode: false,
       },
     ]);

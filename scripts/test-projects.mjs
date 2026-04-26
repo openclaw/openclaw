@@ -275,7 +275,9 @@ async function main() {
   const baseEnv = resolveLocalVitestEnv(process.env);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
+    targetArgs.length === 0
+      ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
+      : null;
   const rawRunSpecs =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({

@@ -301,6 +301,11 @@ const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
 ]);
+const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
+const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
+const IMPORT_SPECIFIER_PATTERN =
+  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const FOCUSED_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_FOCUSED";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
@@ -375,6 +380,10 @@ function isFileLikeTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
+function isTestFileTarget(arg) {
+  return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
+}
+
 function isLikelyFileTarget(arg) {
   return /(?:^|\/)[^/]+\.[A-Za-z0-9]+$/u.test(arg);
 }
@@ -404,6 +413,128 @@ function toScopedIncludePattern(arg, cwd) {
     return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
   }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
+}
+
+function isSkippedImportGraphDirectory(name) {
+  return (
+    name === ".git" ||
+    name === "dist" ||
+    name === "node_modules" ||
+    name === "vendor" ||
+    name.startsWith(".openclaw-runtime-deps")
+  );
+}
+
+function listImportGraphFiles(cwd, directory, files = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(path.join(cwd, directory), { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    const relative = normalizePathPattern(path.posix.join(directory, entry.name));
+    if (entry.isDirectory()) {
+      if (!isSkippedImportGraphDirectory(entry.name)) {
+        listImportGraphFiles(cwd, relative, files);
+      }
+      continue;
+    }
+    if (entry.isFile() && IMPORTABLE_FILE_EXTENSIONS.some((ext) => relative.endsWith(ext))) {
+      files.push(relative);
+    }
+  }
+  return files;
+}
+
+function resolveImportSpecifier(importer, specifier, fileSet) {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+
+  const importerDir = path.posix.dirname(importer);
+  const base = normalizePathPattern(path.posix.normalize(path.posix.join(importerDir, specifier)));
+  const candidates = [];
+  const ext = path.posix.extname(base);
+  if (ext) {
+    candidates.push(base);
+    if ([".js", ".jsx", ".mjs", ".cjs"].includes(ext)) {
+      const withoutExt = base.slice(0, -ext.length);
+      candidates.push(
+        ...IMPORTABLE_FILE_EXTENSIONS.map((candidateExt) => `${withoutExt}${candidateExt}`),
+      );
+    }
+  } else {
+    candidates.push(
+      ...IMPORTABLE_FILE_EXTENSIONS.map((candidateExt) => `${base}${candidateExt}`),
+      ...IMPORTABLE_FILE_EXTENSIONS.map((candidateExt) => `${base}/index${candidateExt}`),
+    );
+  }
+
+  return candidates.find((candidate) => fileSet.has(candidate)) ?? null;
+}
+
+let cachedImportGraph = null;
+let cachedImportGraphCwd = null;
+
+function getImportGraph(cwd) {
+  if (cachedImportGraph && cachedImportGraphCwd === cwd) {
+    return cachedImportGraph;
+  }
+
+  const files = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) => listImportGraphFiles(cwd, root));
+  const fileSet = new Set(files);
+  const reverseImports = new Map();
+  const testFiles = new Set(
+    files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
+  );
+
+  for (const file of files) {
+    let source = "";
+    try {
+      source = fs.readFileSync(path.join(cwd, file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
+      if (!imported) {
+        continue;
+      }
+      const importers = reverseImports.get(imported) ?? [];
+      importers.push(file);
+      reverseImports.set(imported, importers);
+    }
+  }
+
+  cachedImportGraph = { reverseImports, testFiles };
+  cachedImportGraphCwd = cwd;
+  return cachedImportGraph;
+}
+
+function resolveAffectedTestsFromImportGraph(changedPath, cwd) {
+  const normalized = normalizePathPattern(changedPath);
+  const { reverseImports, testFiles } = getImportGraph(cwd);
+  const queue = [normalized];
+  const seen = new Set(queue);
+  const targets = [];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    for (const importer of reverseImports.get(current) ?? []) {
+      if (seen.has(importer)) {
+        continue;
+      }
+      seen.add(importer);
+      if (testFiles.has(importer)) {
+        targets.push(importer);
+      }
+      queue.push(importer);
+    }
+  }
+
+  return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveVitestConfigTargetKind(relative) {
@@ -554,6 +685,11 @@ function resolveToolingTestTargets(changedPath) {
   return TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
 }
 
+function shouldUseFocusedChangedTargets(env = process.env) {
+  const value = env[FOCUSED_CHANGED_ENV_KEY]?.trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value ?? "");
+}
+
 function isRoutableChangedTarget(changedPath) {
   if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
     return false;
@@ -564,7 +700,39 @@ function isRoutableChangedTarget(changedPath) {
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
-export function resolveChangedTestTargetPlan(changedPaths) {
+function resolveSiblingTestTarget(changedPath, cwd) {
+  if (!/\.[cm]?tsx?$/u.test(changedPath) || isTestFileTarget(changedPath)) {
+    return null;
+  }
+  const withoutExtension = changedPath.replace(/\.[cm]?tsx?$/u, "");
+  const sibling = `${withoutExtension}.test.ts`;
+  return fs.existsSync(path.join(cwd, sibling)) ? sibling : null;
+}
+
+function resolvePreciseChangedTestTargets(changedPath, options) {
+  const cwd = options.cwd ?? process.cwd();
+  const mappedTargets =
+    resolveToolingTestTargets(changedPath) ?? SOURCE_TEST_TARGETS.get(changedPath);
+  if (mappedTargets) {
+    return mappedTargets;
+  }
+  if (isRoutableChangedTarget(changedPath) && isTestFileTarget(changedPath)) {
+    return [changedPath];
+  }
+  const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
+  if (siblingTest) {
+    return [siblingTest];
+  }
+  if (/^(?:src|test\/helpers|extensions|packages|ui\/src)\//u.test(changedPath)) {
+    const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
+    if (affectedTests.length > 0) {
+      return affectedTests;
+    }
+  }
+  return null;
+}
+
+export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   if (changedPaths.length === 0) {
     return { mode: "none", targets: [] };
   }
@@ -572,22 +740,29 @@ export function resolveChangedTestTargetPlan(changedPaths) {
   if (toolingTargets) {
     return { mode: "targets", targets: toolingTargets };
   }
-  if (shouldKeepBroadChangedRun(changedPaths)) {
-    return { mode: "broad", targets: [] };
-  }
   const changedLanes = detectChangedLanes(changedPaths);
-  if (changedLanes.lanes.all) {
+  const focused = options.focused ?? shouldUseFocusedChangedTargets(options.env ?? {});
+  const targets = [];
+  for (const changedPath of changedPaths) {
+    const preciseTargets = resolvePreciseChangedTestTargets(changedPath, options);
+    if (preciseTargets) {
+      targets.push(...preciseTargets);
+      continue;
+    }
+    if (focused) {
+      continue;
+    }
+    if (shouldKeepBroadChangedRun([changedPath]) || changedLanes.lanes.all) {
+      return { mode: "broad", targets: [] };
+    }
+    if (isRoutableChangedTarget(changedPath)) {
+      targets.push(changedPath);
+    }
+  }
+  if (!focused && changedLanes.lanes.all) {
     return { mode: "broad", targets: [] };
   }
-  const targets = changedPaths.flatMap((changedPath) => {
-    const mappedTargets =
-      resolveToolingTestTargets(changedPath) ?? SOURCE_TEST_TARGETS.get(changedPath);
-    if (mappedTargets) {
-      return mappedTargets;
-    }
-    return isRoutableChangedTarget(changedPath) ? [changedPath] : [];
-  });
-  if (changedLanes.extensionImpactFromCore) {
+  if (!focused && changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
   return { mode: "targets", targets: [...new Set(targets)] };
@@ -604,13 +779,17 @@ export function resolveChangedTargetArgs(
   args,
   cwd = process.cwd(),
   listChangedPaths = listChangedPathsFromGit,
+  options = {},
 ) {
   const baseRef = extractChangedBaseRef(args);
   if (!baseRef) {
     return null;
   }
   const changedPaths = listChangedPaths(baseRef, cwd);
-  const plan = resolveChangedTestTargetPlan(changedPaths);
+  const plan = resolveChangedTestTargetPlan(changedPaths, {
+    cwd,
+    ...options,
+  });
   if (plan.mode === "broad") {
     return null;
   }
@@ -877,10 +1056,11 @@ export function buildVitestRunPlans(
   args,
   cwd = process.cwd(),
   listChangedPaths = listChangedPathsFromGit,
+  options = {},
 ) {
   const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths) : null;
+    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const activeTargetArgs = changedTargetArgs ?? targetArgs;
   const activeForwardedArgs =
     changedTargetArgs !== null ? stripChangedArgs(forwardedArgs) : forwardedArgs;
@@ -1187,7 +1367,10 @@ export function shouldRetryVitestNoOutputTimeout(env = process.env) {
 export function createVitestRunSpecs(args, params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
-  const plans = filterPlansForContractIncludeFile(buildVitestRunPlans(args, cwd), baseEnv);
+  const plans = filterPlansForContractIncludeFile(
+    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
+    baseEnv,
+  );
   return plans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(

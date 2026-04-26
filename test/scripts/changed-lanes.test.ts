@@ -217,7 +217,7 @@ describe("scripts/changed-lanes", () => {
       all: false,
     });
     expect(plan.runExtensionTests).toBe(true);
-    expect(plan.testTargets).toEqual(["src/plugin-sdk/core.ts"]);
+    expect(plan.testTargets).toEqual(["src/plugin-sdk/core.test.ts"]);
   });
 
   it("fails safe for root config changes", () => {
