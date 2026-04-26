@@ -65,6 +65,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP: wait for the configured runtime backend to become healthy before startup
+  identity reconciliation, avoiding transient acpx warnings during Gateway boot.
+  Fixes #40566.
 - CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure`
   and show daemon state separately when available, so `gateway.tailscale.mode:
 "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790.
