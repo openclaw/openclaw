@@ -2389,6 +2389,17 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: params.transcriptPrompt,
           });
+          const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
+          if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+            const runtimeSystemPrompt = composeSystemPromptWithHookContext({
+              baseSystemPrompt: systemPromptText,
+              appendSystemContext: runtimeSystemContext,
+            });
+            if (runtimeSystemPrompt) {
+              applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              systemPromptText = runtimeSystemPrompt;
+            }
+          }
 
           // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
@@ -2426,6 +2437,7 @@ export async function runEmbeddedAttempt(
 
           if (
             !skipPromptSubmission &&
+            !promptSubmission.runtimeOnly &&
             !hasPromptSubmissionContent({
               prompt: promptSubmission.prompt,
               messages: activeSession.messages,
@@ -2619,19 +2631,23 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            await queueRuntimeContextForNextTurn({
-              session: activeSession,
-              runtimeContext: promptSubmission.runtimeContext,
-            });
-
-            // Only pass images option if there are actually images to pass
-            // This avoids potential issues with models that don't expect the images parameter
-            if (imageResult.images.length > 0) {
-              await abortable(
-                activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-              );
-            } else {
+            if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
+            } else {
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext: promptSubmission.runtimeContext,
+              });
+
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptSubmission.prompt));
+              }
             }
           }
         } catch (err) {

@@ -987,6 +987,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
   });
+
+  it("keeps heartbeat prompts out of visible transcript prompt", async () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: heartbeatPrompt,
+          RawBody: heartbeatPrompt,
+          CommandBody: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: heartbeatPrompt,
+          BodyStripped: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain(heartbeatPrompt);
+    expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
+  });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(
       baseParams({
