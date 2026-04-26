@@ -472,6 +472,34 @@ function enableTelegramCurrentConversationBindings(): void {
     },
   });
   const telegramPlugin = {
+    conversationBindings: {
+      resolveConversationRef: ({
+        conversationId,
+        parentConversationId,
+        threadId,
+      }: {
+        conversationId: string;
+        parentConversationId?: string;
+        threadId?: string | number;
+      }) => {
+        const parent = (parentConversationId ?? "").trim();
+        const normalizedConversationId = conversationId.trim();
+        const explicitThreadId = threadId == null ? "" : String(threadId).trim();
+        if (parent && /^\d+$/.test(normalizedConversationId)) {
+          return {
+            conversationId: `${parent}:topic:${normalizedConversationId}`,
+            parentConversationId: parent,
+          };
+        }
+        if (parent && /^\d+$/.test(explicitThreadId)) {
+          return {
+            conversationId: `${parent}:topic:${explicitThreadId}`,
+            parentConversationId: parent,
+          };
+        }
+        return { conversationId: normalizedConversationId };
+      },
+    },
     messaging: {
       resolveInboundConversation: ({
         conversationId,
@@ -486,11 +514,17 @@ function enableTelegramCurrentConversationBindings(): void {
         const normalized = source.replace(/^telegram:(?:group:|channel:|direct:)?/i, "");
         const explicitThreadId = threadId == null ? "" : String(threadId).trim();
         if (/^-?\d+$/.test(normalized) && /^\d+$/.test(explicitThreadId)) {
-          return { conversationId: `${normalized}:topic:${explicitThreadId}` };
+          return {
+            conversationId: `${normalized}:topic:${explicitThreadId}`,
+            parentConversationId: normalized,
+          };
         }
         const topicMatch = /^(-?\d+):topic:(\d+)$/i.exec(normalized);
         if (topicMatch?.[1] && topicMatch[2]) {
-          return { conversationId: `${topicMatch[1]}:topic:${topicMatch[2]}` };
+          return {
+            conversationId: `${topicMatch[1]}:topic:${topicMatch[2]}`,
+            parentConversationId: topicMatch[1],
+          };
         }
         return /^-?\d+$/.test(normalized) ? { conversationId: normalized } : undefined;
       },

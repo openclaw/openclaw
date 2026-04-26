@@ -16,6 +16,7 @@ import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -557,7 +558,29 @@ function resolveConversationRefForThreadBinding(params: {
     groupId: params.groupId,
     isGroup: true,
   });
-  return resolution?.canonical ?? null;
+  const canonical = resolution?.canonical;
+  if (!canonical) {
+    return null;
+  }
+  const pluginConversationRef = getChannelPlugin(
+    canonical.channel,
+  )?.conversationBindings?.resolveConversationRef?.({
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    parentConversationId: canonical.parentConversationId,
+    threadId: params.threadId,
+  });
+  const pluginConversationId = normalizeOptionalString(pluginConversationRef?.conversationId);
+  if (pluginConversationId) {
+    const pluginParentConversationId = normalizeOptionalString(
+      pluginConversationRef?.parentConversationId,
+    );
+    return {
+      conversationId: pluginConversationId,
+      ...(pluginParentConversationId ? { parentConversationId: pluginParentConversationId } : {}),
+    };
+  }
+  return canonical;
 }
 
 function resolveAcpSpawnChannelAccountId(params: {

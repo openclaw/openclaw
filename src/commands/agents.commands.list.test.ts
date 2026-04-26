@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 
-const { buildProviderStatusIndexMock, requireValidConfigMock } = vi.hoisted(() => ({
+const {
+  buildProviderStatusIndexMock,
+  buildProviderSummaryMetadataIndexMock,
+  requireValidConfigMock,
+} = vi.hoisted(() => ({
   buildProviderStatusIndexMock: vi.fn(),
+  buildProviderSummaryMetadataIndexMock: vi.fn(),
   requireValidConfigMock: vi.fn(),
 }));
 
@@ -13,6 +18,7 @@ vi.mock("./agents.command-shared.js", () => ({
 
 vi.mock("./agents.providers.js", () => ({
   buildProviderStatusIndex: buildProviderStatusIndexMock,
+  buildProviderSummaryMetadataIndex: buildProviderSummaryMetadataIndexMock,
   listProvidersForAgent: () => ["Telegram default: configured"],
   summarizeBindings: () => ["Telegram default"],
 }));
@@ -47,6 +53,7 @@ describe("agentsListCommand", () => {
     vi.clearAllMocks();
     requireValidConfigMock.mockResolvedValue(createConfig());
     buildProviderStatusIndexMock.mockResolvedValue(new Map());
+    buildProviderSummaryMetadataIndexMock.mockReturnValue(new Map());
   });
 
   it("keeps plain JSON output on the config-only path", async () => {
