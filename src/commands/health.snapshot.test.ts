@@ -13,6 +13,10 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
+let buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
+let probeTelegramAccountForTestOverride:
+  | ((account: TelegramHealthAccount, timeoutMs: number) => Promise<Record<string, unknown>>)
+  | undefined;
 
 type TelegramHealthAccount = {
   accountId: string;
@@ -289,9 +293,12 @@ function createTelegramHealthPlugin(): Pick<
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
     status: {
-      buildChannelSummary: ({ snapshot }) => buildTelegramHealthSummary(snapshot),
+      buildChannelSummary: ({ snapshot }) => buildTelegramHealthSummaryForTest(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
-        await probeTelegramAccountForTest(account as TelegramHealthAccount, timeoutMs),
+        await (probeTelegramAccountForTestOverride ?? probeTelegramAccountForTest)(
+          account as TelegramHealthAccount,
+          timeoutMs,
+        ),
     },
   };
 }
@@ -307,6 +314,8 @@ describe("getHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
+    probeTelegramAccountForTestOverride = undefined;
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: createTelegramHealthPlugin(), source: "test" },
@@ -419,6 +428,53 @@ describe("getHealthSnapshot", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("preserves runtime state and probe payloads when plugin summaries omit them", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-1" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    buildTelegramHealthSummaryForTest = (snapshot) => ({
+      accountId: snapshot.accountId,
+      configured: Boolean(snapshot.configured),
+    });
+    probeTelegramAccountForTestOverride = async () => ({
+      ok: true,
+      bot: { username: "runtime_bot" },
+    });
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            connected: true,
+            lastConnectedAt: 123,
+          },
+        },
+        channelAccounts: {},
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      connected?: boolean;
+      lastConnectedAt?: number;
+      probe?: { ok?: boolean; bot?: { username?: string } };
+      accounts?: Record<
+        string,
+        {
+          connected?: boolean;
+          lastConnectedAt?: number;
+          probe?: { ok?: boolean; bot?: { username?: string } };
+        }
+      >;
+    };
+
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.probe?.bot?.username).toBe("runtime_bot");
+    expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.probe?.ok).toBe(true);
   });
 
   it("returns structured telegram probe errors", async () => {
