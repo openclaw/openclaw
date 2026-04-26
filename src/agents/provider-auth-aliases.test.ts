@@ -1,16 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+}));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../plugins/manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex:
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 describe("provider auth aliases", () => {
   it("treats deprecated auth choice ids as provider auth aliases", () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "openai",

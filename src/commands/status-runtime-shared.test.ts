@@ -71,7 +71,10 @@ describe("status-runtime-shared", () => {
     });
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       { gateway: {} },
-      { activationSourceConfig: { gateway: {} } },
+      {
+        activationSourceConfig: { gateway: {} },
+        includeSetupRuntimeFallback: false,
+      },
     );
   });
 

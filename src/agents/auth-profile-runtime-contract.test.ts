@@ -33,6 +33,22 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  };
+});
+
 vi.mock("./cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
