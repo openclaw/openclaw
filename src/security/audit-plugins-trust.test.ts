@@ -122,16 +122,6 @@ describe("security audit install metadata findings", () => {
         rootDir: path.join(stateDir, "extensions", pluginId),
         origin: "global" as const,
         enabled: true,
-        contributions: {
-          providers: [],
-          channels: [],
-          channelConfigs: [],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: true,
           memory: false,

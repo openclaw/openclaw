@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/startup: move gateway startup plugin planning onto the versioned cold registry index, with postinstall repair for older registry files that predate startup metadata. Thanks @vincentkoc.
 - Plugins/startup: normalize startup and provider plugin enablement through registry aliases so boot paths do not need the legacy manifest alias scan. Thanks @vincentkoc.
 - Providers/plugins: resolve provider ownership, provider discovery scopes, and catalog-hook provider ids from the cold plugin registry instead of rescanning manifests on those paths. Thanks @vincentkoc.
+- Plugins/registry: keep installed plugin index records focused on install/state/load paths and resolve plugin capabilities from manifests scoped to indexed plugins. Thanks @shakkernerd.
 - Plugins/chat commands: refresh the persisted plugin registry after `/plugins enable` and `/plugins disable`, matching the CLI mutation path. Thanks @vincentkoc.
 - Plugins/compat: mark `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY` as a deprecated break-glass switch and point operators at registry repair instead. Thanks @vincentkoc.
 - Plugins/registry: ignore stale persisted registry reads when plugin policy no longer matches current config, and stamp generated registry files with a do-not-edit warning. Thanks @vincentkoc.

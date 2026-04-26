@@ -39,16 +39,6 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         rootDir: "/plugins/demo",
         origin: "global",
         enabled: true,
-        contributions: {
-          providers: ["demo"],
-          channels: ["demo-chat"],
-          channelConfigs: ["demo-chat"],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: false,
           memory: false,
@@ -221,7 +211,6 @@ describe("installed plugin index persistence", () => {
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            contributions: expect.objectContaining({ providers: ["demo", "demo-next"] }),
           }),
         ],
       },

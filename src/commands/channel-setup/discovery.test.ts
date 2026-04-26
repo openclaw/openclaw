@@ -67,7 +67,7 @@ describe("listManifestInstalledChannelIds", () => {
       },
     });
     loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+      plugins: [{ pluginId: "slack" }],
       diagnostics: [],
     });
     listPluginContributionIds.mockReturnValue(["slack"]);
@@ -89,7 +89,7 @@ describe("listManifestInstalledChannelIds", () => {
     });
     expect(listPluginContributionIds).toHaveBeenCalledWith({
       index: {
-        plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+        plugins: [{ pluginId: "slack" }],
         diagnostics: [],
       },
       contribution: "channels",

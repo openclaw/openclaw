@@ -34,27 +34,14 @@ export type InstalledPluginIndexStoreInspection = {
   current: InstalledPluginIndex;
 };
 
-const ContributionArraySchema = z.array(z.string());
-
-const InstalledPluginIndexContributionsSchema = z
-  .object({
-    providers: ContributionArraySchema,
-    channels: ContributionArraySchema,
-    channelConfigs: ContributionArraySchema,
-    setupProviders: ContributionArraySchema,
-    cliBackends: ContributionArraySchema,
-    modelCatalogProviders: ContributionArraySchema,
-    commandAliases: ContributionArraySchema,
-    contracts: ContributionArraySchema,
-  })
-  .passthrough();
+const StringArraySchema = z.array(z.string());
 
 const InstalledPluginIndexStartupSchema = z
   .object({
     sidecar: z.boolean(),
     memory: z.boolean(),
     deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
-    agentHarnesses: ContributionArraySchema,
+    agentHarnesses: StringArraySchema,
   })
   .passthrough();
 
@@ -68,6 +55,8 @@ const InstalledPluginIndexRecordSchema = z
     packageInstall: z.unknown().optional(),
     manifestPath: z.string(),
     manifestHash: z.string(),
+    source: z.string().optional(),
+    setupSource: z.string().optional(),
     packageJson: z
       .object({
         path: z.string(),
@@ -78,7 +67,6 @@ const InstalledPluginIndexRecordSchema = z
     origin: z.string(),
     enabled: z.boolean(),
     enabledByDefault: z.boolean().optional(),
-    contributions: InstalledPluginIndexContributionsSchema,
     startup: InstalledPluginIndexStartupSchema,
     compat: z.array(z.string()),
   })

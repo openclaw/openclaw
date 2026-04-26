@@ -13,17 +13,16 @@ import {
   getInstalledPluginRecord,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   isInstalledPluginEnabled,
-  listInstalledPluginContributionIds,
   listInstalledPluginRecords,
   loadInstalledPluginIndex,
-  resolveInstalledPluginContributionOwners,
   resolveInstalledPluginIndexPolicyHash,
-  type InstalledPluginContributionKey,
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -66,13 +65,23 @@ export type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
+export type PluginRegistryContributionKey =
+  | "providers"
+  | "channels"
+  | "channelConfigs"
+  | "setupProviders"
+  | "cliBackends"
+  | "modelCatalogProviders"
+  | "commandAliases"
+  | "contracts";
+
 export type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
-  contribution: InstalledPluginContributionKey;
+  contribution: PluginRegistryContributionKey;
   matches: string | ((contributionId: string) => boolean);
 };
 
 export type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
-  contribution: InstalledPluginContributionKey;
+  contribution: PluginRegistryContributionKey;
 };
 
 export type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
@@ -103,24 +112,114 @@ function normalizePluginRegistryAliasKey(value: string): string {
   return normalizePluginRegistryAlias(value).toLowerCase();
 }
 
+function sortUnique(values: Iterable<string>): string[] {
+  return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
+  return value ? Object.keys(value) : [];
+}
+
+function collectContractKeys(plugin: PluginManifestRecord): readonly string[] {
+  const contracts = plugin.contracts;
+  if (!contracts) {
+    return [];
+  }
+  return Object.entries(contracts).flatMap(([key, value]) =>
+    Array.isArray(value) && value.length > 0 ? [key] : [],
+  );
+}
+
+function listManifestContributionIds(
+  plugin: PluginManifestRecord,
+  contribution: PluginRegistryContributionKey,
+): readonly string[] {
+  switch (contribution) {
+    case "providers":
+      return plugin.providers;
+    case "channels":
+      return plugin.channels;
+    case "channelConfigs":
+      return collectObjectKeys(plugin.channelConfigs);
+    case "setupProviders":
+      return plugin.setup?.providers?.map((provider) => provider.id) ?? [];
+    case "cliBackends":
+      return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
+    case "modelCatalogProviders":
+      return collectObjectKeys(plugin.modelCatalog?.providers);
+    case "commandAliases":
+      return plugin.commandAliases?.map((alias) => alias.name) ?? [];
+    case "contracts":
+      return collectContractKeys(plugin);
+  }
+  return [];
+}
+
+function resolveContributionPluginIds(params: {
+  index: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): readonly string[] {
+  if (params.includeDisabled) {
+    return params.index.plugins.map((plugin) => plugin.pluginId);
+  }
+  return params.index.plugins
+    .filter((plugin) => isInstalledPluginEnabled(params.index, plugin.pluginId, params.config))
+    .map((plugin) => plugin.pluginId);
+}
+
+function loadContributionManifestRegistry(
+  params: LoadPluginRegistryParams & {
+    index: PluginRegistrySnapshot;
+    includeDisabled?: boolean;
+  },
+): PluginManifestRegistry {
+  return loadPluginManifestRegistryForInstalledIndex({
+    index: params.index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    pluginIds: resolveContributionPluginIds({
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+    includeDisabled: true,
+  });
+}
+
 export function createPluginRegistryIdNormalizer(
   index: PluginRegistrySnapshot,
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
-  for (const plugin of [...index.plugins].toSorted((left, right) =>
-    left.pluginId.localeCompare(right.pluginId),
-  )) {
+  for (const plugin of index.plugins) {
     const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
+    if (pluginId) {
+      aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
+    }
+  }
+  const registry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    includeDisabled: true,
+  });
+  for (const plugin of [...registry.plugins].toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    const pluginId = normalizePluginRegistryAlias(plugin.id);
     if (!pluginId) {
       continue;
     }
-    aliases.set(normalizePluginRegistryAliasKey(pluginId), pluginId);
+    aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.id);
     for (const alias of [
-      ...plugin.contributions.providers,
-      ...plugin.contributions.channels,
-      ...plugin.contributions.setupProviders,
-      ...plugin.contributions.cliBackends,
-      ...plugin.contributions.modelCatalogProviders,
+      plugin.id,
+      ...listManifestContributionIds(plugin, "providers"),
+      ...listManifestContributionIds(plugin, "channels"),
+      ...listManifestContributionIds(plugin, "setupProviders"),
+      ...listManifestContributionIds(plugin, "cliBackends"),
+      ...listManifestContributionIds(plugin, "modelCatalogProviders"),
+      ...(plugin.legacyPluginIds ?? []),
     ]) {
       const normalizedAlias = normalizePluginRegistryAlias(alias);
       const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
@@ -241,23 +340,32 @@ export function isPluginEnabled(params: GetPluginRecordParams): boolean {
 export function listPluginContributionIds(
   params: ListPluginContributionIdsParams,
 ): readonly string[] {
-  return listInstalledPluginContributionIds(resolveSnapshot(params), params.contribution, {
-    includeDisabled: params.includeDisabled,
-    config: params.config,
+  const index = resolveSnapshot(params);
+  const registry = loadContributionManifestRegistry({
+    ...params,
+    index,
   });
+  return sortUnique(
+    registry.plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
+  );
 }
 
 export function resolvePluginContributionOwners(
   params: ResolvePluginContributionOwnersParams,
 ): readonly string[] {
-  return resolveInstalledPluginContributionOwners(
-    resolveSnapshot(params),
-    params.contribution,
-    params.matches,
-    {
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    },
+  const matcher =
+    typeof params.matches === "string"
+      ? (contributionId: string) => contributionId === params.matches
+      : params.matches;
+  const index = resolveSnapshot(params);
+  const registry = loadContributionManifestRegistry({
+    ...params,
+    index,
+  });
+  return sortUnique(
+    registry.plugins.flatMap((plugin) =>
+      listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
+    ),
   );
 }
 

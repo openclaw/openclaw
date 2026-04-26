@@ -11,12 +11,9 @@ import {
   getInstalledPluginRecord,
   isInstalledPluginEnabled,
   listEnabledInstalledPluginRecords,
-  listInstalledPluginContributionIds,
   listInstalledPluginRecords,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
-  resolveInstalledPluginContributionOwners,
-  resolveInstalledPluginContributions,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -168,6 +165,7 @@ describe("installed plugin index", () => {
           packageVersion: "1.2.3",
           origin: "global",
           rootDir: fixture.rootDir,
+          source: path.join(fixture.rootDir, "index.ts"),
           enabled: true,
           packageInstall: {
             defaultChoice: "npm",
@@ -181,16 +179,6 @@ describe("installed plugin index", () => {
               pinState: "exact-with-integrity",
             },
             warnings: [],
-          },
-          contributions: {
-            providers: ["demo"],
-            channels: ["demo-chat"],
-            channelConfigs: ["demo-chat"],
-            setupProviders: ["demo"],
-            cliBackends: ["demo-cli", "setup-cli"],
-            modelCatalogProviders: ["demo"],
-            commandAliases: ["demo-command"],
-            contracts: ["tools"],
           },
           compat: [
             "activation-channel-hint",
@@ -208,11 +196,6 @@ describe("installed plugin index", () => {
     });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
-
-    const contributions = resolveInstalledPluginContributions(index);
-    expect(contributions.providers.get("demo")).toEqual(["demo"]);
-    expect(contributions.channels.get("demo-chat")).toEqual(["demo"]);
-    expect(contributions.contracts.get("tools")).toEqual(["demo"]);
   });
 
   it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
@@ -242,7 +225,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("exposes cold registry records and owners for existing plugins without plugin indexs", () => {
+  it("exposes cold registry records for existing plugins without plugin runtimes", () => {
     const fixture = createRichPluginFixture();
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -260,11 +243,6 @@ describe("installed plugin index", () => {
     });
     expect(record?.installRecord).toBeUndefined();
     expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
-    expect(listInstalledPluginContributionIds(index, "providers")).toEqual(["demo"]);
-    expect(resolveInstalledPluginContributionOwners(index, "providers", "demo")).toEqual(["demo"]);
-    expect(resolveInstalledPluginContributionOwners(index, "channels", "demo-chat")).toEqual([
-      "demo",
-    ]);
   });
 
   it("keeps disabled plugins in inventory while excluding them from cold owner resolution", () => {
@@ -299,18 +277,6 @@ describe("installed plugin index", () => {
       enabled: false,
     });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
-    expect(listInstalledPluginContributionIds(index, "providers", { config })).toEqual([]);
-    expect(
-      listInstalledPluginContributionIds(index, "providers", { includeDisabled: true }),
-    ).toEqual(["demo"]);
-    expect(
-      resolveInstalledPluginContributionOwners(index, "providers", "demo", { config }),
-    ).toEqual([]);
-    expect(
-      resolveInstalledPluginContributionOwners(index, "providers", "demo", {
-        includeDisabled: true,
-      }),
-    ).toEqual(["demo"]);
   });
 
   it("uses runtime plugin id normalization for legacy enablement aliases", () => {
@@ -735,7 +701,6 @@ describe("installed plugin index", () => {
       }),
     ).toBe(false);
     expect(index.plugins[0]?.enabled).toBe(false);
-    expect(index.plugins[0]?.contributions.providers).toEqual(["demo"]);
   });
 
   it("tracks refresh reason without using the manifest cache", () => {
@@ -793,13 +758,11 @@ describe("installed plugin index", () => {
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
-      migrationVersion: 2 as 1,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "compat-registry-changed",
       "host-contract-changed",
-      "migration",
       "source-changed",
       "stale-manifest",
       "stale-package",
