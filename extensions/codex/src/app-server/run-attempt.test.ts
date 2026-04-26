@@ -784,9 +784,9 @@ describe("runCodexAppServerAttempt", () => {
           method: "thread/start",
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
-            approvalPolicy: "never",
-            sandbox: "danger-full-access",
-            approvalsReviewer: "user",
+            approvalPolicy: "on-request",
+            sandbox: "workspace-write",
+            approvalsReviewer: "auto_review",
             developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
           }),
         },
@@ -1358,9 +1358,9 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "danger-full-access",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      sandbox: "workspace-write",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });

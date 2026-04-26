@@ -445,14 +445,14 @@ version tied to the bundled plugin instead of whichever separate Codex CLI
 happens to be installed locally. Set `appServer.command` only when you
 intentionally want to run a different executable.
 
-By default, OpenClaw starts local Codex harness sessions in YOLO mode:
-`approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
-`sandbox: "danger-full-access"`. This is the trusted local operator posture used
-for autonomous heartbeats: Codex can use shell and network tools without
-stopping on native approval prompts that nobody is around to answer.
+By default, OpenClaw starts local Codex harness sessions in guardian mode:
+`approvalPolicy: "on-request"`, `approvalsReviewer: "auto_review"`, and
+`sandbox: "workspace-write"`. This keeps native Codex tool use bounded to the
+workspace and routes sandbox escapes, network access, and other native
+permission requests through Codex's reviewer.
 
-To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
-"guardian"`:
+To opt in to fully unchained local execution for a trusted local-only
+deployment, set `appServer.mode: "yolo"`:
 
 ```json5
 {
@@ -462,7 +462,7 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
         enabled: true,
         config: {
           appServer: {
-            mode: "guardian",
+            mode: "yolo",
             serviceTier: "fast",
           },
         },
@@ -472,12 +472,16 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 }
 ```
 
+YOLO mode expands to `approvalPolicy: "never"`, `approvalsReviewer: "user"`,
+and `sandbox: "danger-full-access"`. Use it only when prompts reaching the
+Codex harness are trusted enough to run native shell, filesystem, and network
+tools on the host without approval prompts.
+
 Guardian mode uses Codex's native auto-review approval path. When Codex asks to
 leave the sandbox, write outside the workspace, or add permissions like network
 access, Codex routes that approval request to the native reviewer instead of a
 human prompt. The reviewer applies Codex's risk framework and approves or denies
-the specific request. Use Guardian when you want more guardrails than YOLO mode
-but still need unattended agents to make progress.
+the specific request.
 
 The `guardian` preset expands to `approvalPolicy: "on-request"`,
 `approvalsReviewer: "auto_review"`, and `sandbox: "workspace-write"`.
@@ -519,10 +523,10 @@ Supported `appServer` fields:
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
 | `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                     |
 | `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                  |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                              |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                               |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                       |
-| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
+| `mode`              | `"guardian"`                             | Preset for guardian-reviewed execution or explicit YOLO local execution.                                     |
+| `approvalPolicy`    | mode-derived                             | Native Codex approval policy sent to thread start/resume/turn.                                               |
+| `sandbox`           | mode-derived                             | Native Codex sandbox mode sent to thread start/resume.                                                       |
+| `approvalsReviewer` | mode-derived                             | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
 | `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.    |
 
 Environment overrides remain available for local testing:

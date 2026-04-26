@@ -86,7 +86,7 @@
           "mode": {
             "type": "string",
             "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "default": "guardian"
           },
           "transport": {
             "type": "string",
@@ -200,7 +200,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Use guardian for Codex guardian-reviewed approvals or yolo for explicitly unchained local execution.",
       "advanced": true
     },
     "appServer.transport": {
@@ -241,17 +241,17 @@
     },
     "appServer.approvalPolicy": {
       "label": "Approval Policy",
-      "help": "Codex native approval policy sent to thread start, resume, and turns.",
+      "help": "Codex native approval policy sent to thread start, resume, and turns. Defaults are derived from appServer.mode.",
       "advanced": true
     },
     "appServer.sandbox": {
       "label": "Sandbox",
-      "help": "Codex native sandbox mode sent to thread start and resume.",
+      "help": "Codex native sandbox mode sent to thread start and resume. Defaults are derived from appServer.mode.",
       "advanced": true
     },
     "appServer.approvalsReviewer": {
       "label": "Approvals Reviewer",
-      "help": "Use user approvals or Codex auto_review for native app-server approvals. guardian_subagent remains accepted for compatibility.",
+      "help": "Use Codex auto_review or user approvals for native app-server approvals. Defaults are derived from appServer.mode; guardian_subagent remains accepted for compatibility.",
       "advanced": true
     },
     "appServer.serviceTier": {

@@ -87,7 +87,7 @@ describe("Codex app-server config", () => {
     ).toThrow("appServer.url is required");
   });
 
-  it("defaults native Codex approvals to unchained local execution", () => {
+  it("defaults native Codex approvals to guardian-reviewed workspace execution", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},
       env: {},
@@ -95,9 +95,9 @@ describe("Codex app-server config", () => {
 
     expect(runtime).toEqual(
       expect.objectContaining({
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        approvalsReviewer: "user",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
         start: expect.objectContaining({
           command: "codex",
           commandSource: "managed",
@@ -174,11 +174,11 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("allows plugin config to opt in to guardian-reviewed local execution", () => {
+  it("allows plugin config to opt in to unchained local execution", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
-          mode: "guardian",
+          mode: "yolo",
         },
       },
       env: {},
@@ -186,24 +186,24 @@ describe("Codex app-server config", () => {
 
     expect(runtime).toEqual(
       expect.objectContaining({
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        approvalsReviewer: "auto_review",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
       }),
     );
   });
 
-  it("allows environment mode fallback to opt in to guardian-reviewed local execution", () => {
+  it("allows environment mode fallback to opt in to unchained local execution", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},
-      env: { OPENCLAW_CODEX_APP_SERVER_MODE: "guardian" },
+      env: { OPENCLAW_CODEX_APP_SERVER_MODE: "yolo" },
     });
 
     expect(runtime).toEqual(
       expect.objectContaining({
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        approvalsReviewer: "auto_review",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
       }),
     );
   });
@@ -223,7 +223,7 @@ describe("Codex app-server config", () => {
     ).toBe("guardian_subagent");
   });
 
-  it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback", () => {
+  it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback without downgrading defaults", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},
       env: { OPENCLAW_CODEX_APP_SERVER_GUARDIAN: "1" },
@@ -231,9 +231,9 @@ describe("Codex app-server config", () => {
 
     expect(runtime).toEqual(
       expect.objectContaining({
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        approvalsReviewer: "user",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
       }),
     );
   });
@@ -327,6 +327,7 @@ describe("Codex app-server config", () => {
     const appServerProperties = manifest.configSchema.properties.appServer.properties;
 
     expect(appServerProperties.command?.default).toBeUndefined();
+    expect(appServerProperties.mode?.default).toBe("guardian");
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();

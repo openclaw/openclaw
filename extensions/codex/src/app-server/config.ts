@@ -193,7 +193,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const policyMode =
     resolvePolicyMode(config.mode) ??
     resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
-    "yolo";
+    "guardian";
   const serviceTier = resolveServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
