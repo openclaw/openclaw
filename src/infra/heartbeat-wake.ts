@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { emitContinuityDiagnostic } from "./continuity-diagnostics.js";
 import {
   isHeartbeatActionWakeReason,
   normalizeHeartbeatWakeReason,
@@ -86,6 +87,45 @@ function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
   return `${agentId ?? ""}::${sessionKey ?? ""}`;
 }
 
+function summarizeWakeBatch(batch: PendingWakeReason[]): Record<string, unknown> {
+  const reasons = Array.from(new Set(batch.map((wake) => wake.reason).filter(Boolean))).slice(
+    0,
+    8,
+  );
+  const targets = Array.from(
+    new Set(
+      batch.map((wake) =>
+        getWakeTargetKey({ agentId: wake.agentId, sessionKey: wake.sessionKey }),
+      ),
+    ),
+  ).slice(0, 8);
+  return {
+    count: batch.length,
+    reasons,
+    targets,
+  };
+}
+
+function emitHeartbeatWakeOrphanDiagnostic(params: {
+  phase: string;
+  agentId?: string;
+  sessionKey?: string;
+  reason?: string;
+  details?: Record<string, unknown>;
+}): void {
+  emitContinuityDiagnostic({
+    type: "diag.heartbeat.wake_orphaned",
+    severity: "warn",
+    phase: params.phase,
+    sessionKey: params.sessionKey,
+    correlation: {
+      agentId: params.agentId,
+      wakeReason: params.reason,
+    },
+    details: params.details,
+  });
+}
+
 function queuePendingWakeReason(params?: {
   reason?: string;
   requestedAt?: number;
@@ -153,10 +193,6 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     timerDueAt = null;
     timerKind = null;
     scheduled = false;
-    const active = handler;
-    if (!active) {
-      return;
-    }
     if (running) {
       scheduled = true;
       schedule(delay, kind);
@@ -165,6 +201,21 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
 
     const pendingBatch = Array.from(pendingWakes.values());
     pendingWakes.clear();
+    const active = handler;
+    if (!active) {
+      const summary = summarizeWakeBatch(pendingBatch);
+      emitHeartbeatWakeOrphanDiagnostic({
+        phase: "handler_missing",
+        agentId: pendingBatch[0]?.agentId,
+        sessionKey: pendingBatch[0]?.sessionKey,
+        reason: pendingBatch[0]?.reason,
+        details: {
+          ...summary,
+          handlerGeneration,
+        },
+      });
+      return;
+    }
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
@@ -187,6 +238,17 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         }
       }
     } catch {
+      const summary = summarizeWakeBatch(pendingBatch);
+      emitHeartbeatWakeOrphanDiagnostic({
+        phase: "handler_error_requeued",
+        agentId: pendingBatch[0]?.agentId,
+        sessionKey: pendingBatch[0]?.sessionKey,
+        reason: pendingBatch[0]?.reason,
+        details: {
+          ...summary,
+          handlerGeneration,
+        },
+      });
       // Error is already logged by the heartbeat runner; schedule a retry.
       for (const pendingWake of pendingBatch) {
         queuePendingWakeReason({

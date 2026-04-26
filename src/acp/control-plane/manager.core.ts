@@ -59,6 +59,7 @@ import {
 import {
   canonicalizeAcpSessionKey,
   createUnsupportedControlError,
+  emitAcpHandleDiagnostic,
   hasLegacyAcpIdentityProjection,
   normalizeAcpErrorCode,
   normalizeActorKey,
@@ -1862,9 +1863,26 @@ export class AcpSessionManager {
         if (!cached) {
           return;
         }
+        const idleMs = Math.max(0, now - lastTouchedAt);
         this.runtimeCache.clear(candidate.actorKey);
         this.evictedRuntimeCount += 1;
         this.lastEvictedAt = Date.now();
+        emitAcpHandleDiagnostic({
+          type: "diag.acp.handle_evicted",
+          phase: "idle_eviction",
+          sessionKey: candidate.state.handle.sessionKey,
+          actorKey: candidate.actorKey,
+          backend: cached.backend,
+          agent: cached.agent,
+          details: {
+            idleMs,
+            idleTtlMs,
+            mode: cached.mode,
+            cwd: cached.cwd,
+            evictedTotal: this.evictedRuntimeCount,
+            reason: "idle-evicted",
+          },
+        });
         try {
           await cached.runtime.close({
             handle: cached.handle,
@@ -1874,6 +1892,21 @@ export class AcpSessionManager {
           logVerbose(
             `acp-manager: idle eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
           );
+          emitAcpHandleDiagnostic({
+            type: "diag.acp.handle_eviction_close_failed",
+            severity: "warn",
+            phase: "idle_eviction_close",
+            sessionKey: candidate.state.handle.sessionKey,
+            actorKey: candidate.actorKey,
+            backend: cached.backend,
+            agent: cached.agent,
+            details: {
+              idleMs,
+              idleTtlMs,
+              mode: cached.mode,
+              error: formatErrorMessage(error),
+            },
+          });
         }
       });
     }

@@ -4,6 +4,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitContinuityDiagnostic } from "../../infra/continuity-diagnostics.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -111,6 +112,30 @@ export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
     return 0;
   }
   return Math.round(ttlMinutes * 60 * 1000);
+}
+
+export function emitAcpHandleDiagnostic(params: {
+  type: string;
+  severity?: "info" | "warn" | "error";
+  phase?: string;
+  sessionKey?: string;
+  actorKey?: string;
+  backend?: string;
+  agent?: string;
+  details?: Record<string, unknown>;
+}): void {
+  emitContinuityDiagnostic({
+    type: params.type,
+    severity: params.severity ?? "info",
+    phase: params.phase,
+    sessionKey: params.sessionKey,
+    correlation: {
+      actorKey: params.actorKey,
+      backend: params.backend,
+      agent: params.agent,
+    },
+    details: params.details,
+  });
 }
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {

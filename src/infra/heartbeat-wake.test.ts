@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const emitContinuityDiagnosticMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: emitContinuityDiagnosticMock,
+}));
+
 import {
   hasHeartbeatWakeHandler,
   hasPendingHeartbeatWake,
@@ -40,6 +47,7 @@ describe("heartbeat-wake", () => {
 
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
+    emitContinuityDiagnosticMock.mockClear();
   });
 
   afterEach(() => {
@@ -110,6 +118,39 @@ describe("heartbeat-wake", () => {
       initialReason: "exec-event",
       expectedRetryReason: "exec-event",
     });
+    expect(emitContinuityDiagnosticMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.heartbeat.wake_orphaned",
+        severity: "warn",
+        phase: "handler_error_requeued",
+        details: expect.objectContaining({ count: 1 }),
+      }),
+    );
+  });
+
+  it("emits an orphan diagnostic when a queued wake fires without a handler", async () => {
+    vi.useFakeTimers();
+
+    requestHeartbeatNow({
+      reason: "manual",
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(hasPendingHeartbeatWake()).toBe(false);
+    expect(emitContinuityDiagnosticMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.heartbeat.wake_orphaned",
+        severity: "warn",
+        phase: "handler_missing",
+        sessionKey: "agent:main:discord:direct:alice",
+        correlation: expect.objectContaining({ agentId: "main", wakeReason: "manual" }),
+        details: expect.objectContaining({ count: 1 }),
+      }),
+    );
   });
 
   it("stale disposer does not clear a newer handler", async () => {
@@ -236,23 +277,25 @@ describe("heartbeat-wake", () => {
     expect(handlerB).toHaveBeenCalledWith({ reason: "manual" });
   });
 
-  it("drains pending wake once a handler is registered", async () => {
+  it("clears orphaned pending wake when no handler is registered at fire time", async () => {
     vi.useFakeTimers();
 
     requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
-    expect(hasPendingHeartbeatWake()).toBe(true);
+    expect(hasPendingHeartbeatWake()).toBe(false);
+    expect(emitContinuityDiagnosticMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "diag.heartbeat.wake_orphaned",
+        phase: "handler_missing",
+        details: expect.objectContaining({ count: 1 }),
+      }),
+    );
 
     const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
     setHeartbeatWakeHandler(handler);
 
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(250);
     expect(handler).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({ reason: "manual" });
-    expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
   it("forwards wake target fields and preserves them across retries", async () => {

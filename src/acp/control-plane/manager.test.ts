@@ -13,14 +13,20 @@ const hoisted = vi.hoisted(() => {
   const upsertAcpSessionMetaMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
+  const emitContinuityDiagnosticMock = vi.fn();
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     getAcpRuntimeBackendMock,
     requireAcpRuntimeBackendMock,
+    emitContinuityDiagnosticMock,
   };
 });
+
+vi.mock("../../infra/continuity-diagnostics.js", () => ({
+  emitContinuityDiagnostic: hoisted.emitContinuityDiagnosticMock,
+}));
 
 vi.mock("../runtime/session-meta.js", () => ({
   listAcpSessionEntries: (params: unknown) => hoisted.listAcpSessionEntriesMock(params),
@@ -229,6 +235,7 @@ describe("AcpSessionManager", () => {
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockReset();
+    hoisted.emitContinuityDiagnosticMock.mockReset();
     hoisted.getAcpRuntimeBackendMock.mockReset().mockImplementation((backendId?: string) => {
       try {
         return hoisted.requireAcpRuntimeBackendMock(backendId);
@@ -1823,6 +1830,16 @@ describe("AcpSessionManager", () => {
           handle: expect.objectContaining({
             sessionKey: "agent:codex:acp:session-a",
           }),
+        }),
+      );
+      expect(hoisted.emitContinuityDiagnosticMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "diag.acp.handle_evicted",
+          severity: "info",
+          phase: "idle_eviction",
+          sessionKey: "agent:codex:acp:session-a",
+          correlation: expect.objectContaining({ backend: "acpx", agent: "codex" }),
+          details: expect.objectContaining({ idleTtlMs: 600, reason: "idle-evicted" }),
         }),
       );
     } finally {
