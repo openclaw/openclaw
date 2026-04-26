@@ -68,6 +68,9 @@ Docs: https://docs.openclaw.ai
 - TTS: strip model-emitted TTS directives from streamed block text before channel
   delivery, including directives split across adjacent blocks, while preserving
   the accumulated raw reply for final-mode synthesis. Fixes #38937.
+- TTS: keep explicit `provider=...` directive keys scoped to that provider and
+  warn on unsupported keys instead of letting another speech provider consume
+  overlapping keys. Fixes #60131.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
@@ -117,6 +120,8 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: keep queued subagent announces session-only when the requester has no external channel target, avoiding ambiguous multi-channel delivery failures. Fixes #59201. Thanks @larrylhollan.
 - Image understanding: preserve configured provider-prefixed vision model metadata when callers request the model without the provider prefix, so custom image models keep their `input: ["text", "image"]` capability. Fixes #33185. Thanks @Kobe9312 and @vincentkoc.
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
+- Plugins/install: reject native plugin archives that do not include a valid `openclaw.plugin.json`, preventing manifestless archives from writing install records that later show missing-manifest diagnostics. Thanks @shakkernerd.
+- Plugins/uninstall: remove tracked managed plugin install directories even when the persisted install path differs from the default id-derived target, while still refusing deletes outside the managed extensions root. Thanks @shakkernerd.
 - Plugins/update: restore previous plugin index records if core update or channel setup hits a concurrent config write conflict after plugin metadata changes. Thanks @shakkernerd.
 - Plugins/onboarding: defer channel/provider plugin install records until the owning config write commits, keeping setup failures from advancing the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Plugins/config: route configure and agent setup writes with pending plugin install records through the plugin index commit helper so provider onboarding metadata is not stripped by plain config writes. Thanks @shakkernerd.
@@ -169,6 +174,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/install: anchor bundled runtime-dependency npm installs with an OpenClaw-owned package manifest so Linux updates cannot accidentally write to a parent `$HOME/node_modules` tree. Fixes #71730.
 - Plugins/install: pass onboarding plugin config into plugin index writes so local plugin installs outside default discovery roots keep their install records. Thanks @shakkernerd.
 - Plugins/install: migrate shipped `plugins.installs` config records into the plugin index while stripping them from runtime config and future writes. Thanks @shakkernerd.
+- Plugins/install: durably remove shipped `plugins.installs` from `openclaw.json` after its records are copied into the plugin index, while rolling back the index write if config cleanup fails. Thanks @shakkernerd.
 - Plugins/install: keep migrated plugin install records in the plugin index even when the plugin manifest is missing or invalid, so update, uninstall, inspect, and audit can still recover broken installs. Thanks @shakkernerd.
 - Plugins/security: keep plugin audit JSON check ids stable while reporting plugin index install-record findings with updated wording. Thanks @shakkernerd.
 - CLI/config: reject direct `plugins.installs` edits with guidance to use `openclaw plugins install`, `openclaw plugins update`, or `openclaw plugins uninstall` instead. Thanks @shakkernerd.
@@ -262,6 +268,7 @@ Docs: https://docs.openclaw.ai
 - Codex media understanding: require approval-checked app-server image turns while explicitly declining tool, file, permission, and elicitation approval requests for the bounded image worker. (#71703) Thanks @vincentkoc.
 - Agents/Claude CLI: allow large live `stream-json` JSONL lines up to the existing per-turn raw limit, preventing large Telegram, WebChat, MCP, and image turns from aborting on the old stdout buffer cap. Fixes #71793, #71080, and #70766. (#71897) Thanks @chacher86, @shivamgrover21, and @tpjordan.
 - Agents/Claude CLI: unwrap nested Claude result envelopes in CLI JSON output so delegated agent responses surface as final text instead of raw result JSON. (#66819) Thanks @mraleko.
+- Agents/Claude CLI: apply the configured 1M context window override to eligible Claude CLI Opus and Sonnet models when `context1m` is enabled. (#70863) Thanks @bidadh.
 
 ## 2026.4.24
 

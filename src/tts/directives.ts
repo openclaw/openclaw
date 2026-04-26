@@ -64,6 +64,21 @@ function prioritizeProvider(
   return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
 }
 
+function resolveDirectiveProvider(
+  providers: readonly SpeechProviderPlugin[],
+  providerId: string,
+): SpeechProviderPlugin | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return providers.find(
+    (provider) =>
+      provider.id === normalized ||
+      provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
+  );
+}
+
 function collectMarkdownCodeRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
   const addMatches = (regex: RegExp) => {
@@ -255,13 +270,26 @@ export function parseTtsDirectives(
       }
     }
 
-    let orderedProviders: SpeechProviderPlugin[] | undefined;
-    const getOrderedProviders = () => {
-      orderedProviders ??= prioritizeProvider(
+    let directiveProviders: SpeechProviderPlugin[] | undefined;
+    const getDirectiveProviders = () => {
+      if (directiveProviders) {
+        return directiveProviders;
+      }
+      if (declaredProviderId) {
+        const declaredProvider = resolveDirectiveProvider(getProviders(), declaredProviderId);
+        if (!declaredProvider) {
+          warnings.push(`unknown provider "${declaredProviderId}"`);
+          directiveProviders = [];
+          return directiveProviders;
+        }
+        directiveProviders = [declaredProvider];
+        return directiveProviders;
+      }
+      directiveProviders = prioritizeProvider(
         getProviders(),
-        declaredProviderId ?? normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+        normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
       );
-      return orderedProviders;
+      return directiveProviders;
     };
 
     for (const token of tokens) {
@@ -279,11 +307,14 @@ export function parseTtsDirectives(
         continue;
       }
 
-      for (const provider of getOrderedProviders()) {
+      let handled = false;
+      const directiveProviders = getDirectiveProviders();
+      for (const provider of directiveProviders) {
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
           policy,
+          selectedProvider: declaredProviderId ? provider.id : undefined,
           providerConfig: resolveDirectiveProviderConfig(provider, options),
           currentOverrides: overrides.providerOverrides?.[provider.id],
         });
@@ -302,7 +333,11 @@ export function parseTtsDirectives(
         if (parsed.warnings?.length) {
           warnings.push(...parsed.warnings);
         }
+        handled = true;
         break;
+      }
+      if (!handled && declaredProviderId && directiveProviders.length > 0) {
+        warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }
     return "";

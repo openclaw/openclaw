@@ -50,6 +50,12 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
     return { plugins: [], diagnostics: [] };
   }
   const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+  const diagnostics = pluginIdSet
+    ? params.index.diagnostics.filter((diagnostic) => {
+        const pluginId = diagnostic.pluginId;
+        return !pluginId || pluginIdSet.has(pluginId);
+      })
+    : params.index.diagnostics;
   const candidates = params.index.plugins
     .filter((plugin) => params.includeDisabled || plugin.enabled)
     .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
@@ -60,6 +66,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
     env: params.env,
     cache: false,
     candidates,
+    diagnostics: [...diagnostics],
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
   });
 }

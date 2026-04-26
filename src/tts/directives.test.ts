@@ -11,10 +11,12 @@ function makeProvider(
   id: string,
   order: number,
   parse: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult | undefined,
+  options?: { aliases?: string[] },
 ): SpeechProviderPlugin {
   return {
     id,
     label: id,
+    aliases: options?.aliases,
     autoSelectOrder: order,
     parseDirectiveToken: parse,
     isConfigured: () => true,
@@ -123,24 +125,111 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.minimax).toBeUndefined();
   });
 
-  it("falls through when the preferred provider does not handle the key", () => {
+  it("does not fall through when the explicit provider does not handle the key", () => {
     const result = parseTtsDirectives("[[tts:provider=minimax style=0.4]]", fullPolicy, {
       providers: [elevenlabs, minimax],
     });
 
     expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ style: 0.4 });
+    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
     expect(result.overrides.providerOverrides?.minimax).toBeUndefined();
+    expect(result.warnings).toContain('unsupported minimax directive key "style"');
   });
 
-  it("routes mixed tokens independently in the same directive", () => {
+  it("keeps explicit-provider tokens scoped to the selected provider", () => {
     const result = parseTtsDirectives("[[tts:provider=minimax style=0.4 speed=1.2]]", fullPolicy, {
       providers: [elevenlabs, minimax],
     });
 
     expect(result.overrides.provider).toBe("minimax");
     expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ style: 0.4 });
+    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+    expect(result.warnings).toContain('unsupported minimax directive key "style"');
+  });
+
+  it("does not route explicit provider tokens to another provider with overlapping keys", () => {
+    const openai = makeProvider("openai", 10, ({ key, value }) => {
+      if (key === "model") {
+        return { handled: true, overrides: { model: value } };
+      }
+      return undefined;
+    });
+    const elevenlabsModel = makeProvider("elevenlabs", 20, ({ key, value }) => {
+      if (key === "model") {
+        return { handled: true, overrides: { modelId: value } };
+      }
+      return undefined;
+    });
+
+    const result = parseTtsDirectives("[[tts:provider=elevenlabs model=eleven_v3]]", fullPolicy, {
+      providers: [openai, elevenlabsModel],
+    });
+
+    expect(result.overrides.provider).toBe("elevenlabs");
+    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ modelId: "eleven_v3" });
+    expect(result.overrides.providerOverrides?.openai).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns instead of routing prefixed tokens to another provider when provider is explicit", () => {
+    const result = parseTtsDirectives(
+      "[[tts:provider=elevenlabs openai_model=gpt-4o-mini-tts]]",
+      fullPolicy,
+      { providers: [elevenlabs, minimax] },
+    );
+
+    expect(result.overrides.provider).toBe("elevenlabs");
+    expect(result.overrides.providerOverrides).toBeUndefined();
+    expect(result.warnings).toContain('unsupported elevenlabs directive key "openai_model"');
+  });
+
+  it("passes the selected provider id to the chosen provider parser", () => {
+    let selectedProvider: string | undefined;
+    const selected = makeProvider("selected", 10, (ctx) => {
+      selectedProvider = ctx.selectedProvider;
+      return { handled: true, overrides: { voice: ctx.value } };
+    });
+
+    const result = parseTtsDirectives("[[tts:provider=selected voice=test]]", fullPolicy, {
+      providers: [selected],
+    });
+
+    expect(result.overrides.providerOverrides?.selected).toEqual({ voice: "test" });
+    expect(selectedProvider).toBe("selected");
+  });
+
+  it("resolves explicit provider aliases without rewriting the requested provider value", () => {
+    const microsoft = makeProvider(
+      "microsoft",
+      10,
+      ({ key, value }) =>
+        key === "voice" ? { handled: true, overrides: { voice: value } } : undefined,
+      { aliases: ["edge"] },
+    );
+
+    const result = parseTtsDirectives(
+      "[[tts:provider=edge voice=en-US-MichelleNeural]]",
+      fullPolicy,
+      {
+        providers: [microsoft],
+      },
+    );
+
+    expect(result.overrides.provider).toBe("edge");
+    expect(result.overrides.providerOverrides?.microsoft).toEqual({
+      voice: "en-US-MichelleNeural",
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns once and drops non-provider tokens when the explicit provider is unknown", () => {
+    const result = parseTtsDirectives("[[tts:provider=missing speed=1.2 style=0.4]]", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.overrides.provider).toBe("missing");
+    expect(result.overrides.providerOverrides).toBeUndefined();
+    expect(result.warnings).toEqual(['unknown provider "missing"']);
   });
 
   it("keeps last-wins provider semantics", () => {
