@@ -31,6 +31,8 @@ export type RunEmbeddedPiAgentParams = {
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
+  /** Stable cron job identifier populated for cron-triggered runs. */
+  jobId?: string;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target for topic/thread routing. */

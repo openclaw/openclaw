@@ -25,6 +25,7 @@ export type RunCliAgentParams = {
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  jobId?: string;
   extraSystemPrompt?: string;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;

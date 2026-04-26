@@ -161,6 +161,7 @@ export const isConversationHookName = (hookName: PluginHookName): boolean =>
 
 export type PluginHookAgentContext = {
   runId?: string;
+  jobId?: string;
   trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
