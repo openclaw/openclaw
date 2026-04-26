@@ -69,10 +69,11 @@ import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
-  buildExecEventPrompt,
   buildCronEventPrompt,
+  buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  shouldKeepExecCompletionInternal,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
@@ -643,6 +644,7 @@ async function resolveHeartbeatPreflight(params: {
 type HeartbeatPromptResolution = {
   prompt: string | null;
   hasExecCompletion: boolean;
+  execCompletionInternalOnly: boolean;
   hasCronEvents: boolean;
 };
 
@@ -681,6 +683,7 @@ function resolveHeartbeatRunPrompt(params: {
         .map((event) => event.text)
     : [];
   const hasExecCompletion = execEvents.length > 0;
+  const execCompletionInternalOnly = shouldKeepExecCompletionInternal(execEvents);
   const hasCronEvents = cronEvents.length > 0;
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
@@ -709,9 +712,19 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }
       }
-      return { prompt, hasExecCompletion: false, hasCronEvents: false };
+      return {
+        prompt,
+        hasExecCompletion: false,
+        execCompletionInternalOnly: false,
+        hasCronEvents: false,
+      };
     }
-    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      execCompletionInternalOnly: false,
+      hasCronEvents: false,
+    };
   }
 
   const basePrompt = hasExecCompletion
@@ -721,7 +734,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
 
-  return { prompt, hasExecCompletion, hasCronEvents };
+  return { prompt, hasExecCompletion, execCompletionInternalOnly, hasCronEvents };
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -841,15 +854,16 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    workspaceDir,
-    startedAt,
-    heartbeatFileContent: preflight.heartbeatFileContent,
-  });
+  const { prompt, hasExecCompletion, execCompletionInternalOnly, hasCronEvents } =
+    resolveHeartbeatRunPrompt({
+      cfg,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      workspaceDir,
+      startedAt,
+      heartbeatFileContent: preflight.heartbeatFileContent,
+    });
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1000,7 +1014,7 @@ export async function runHeartbeatOnce(opts: {
     sessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to,
+    !execCompletionInternalOnly && visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const hasChatDelivery = Boolean(
     delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
@@ -1078,7 +1092,7 @@ export async function runHeartbeatOnce(opts: {
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
-    const includeReasoning = heartbeat?.includeReasoning === true;
+    const includeReasoning = !execCompletionInternalOnly && heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
@@ -1107,19 +1121,23 @@ export async function runHeartbeatOnce(opts: {
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-    // The model should be responding with exec results, not ack tokens.
-    // Also, if normalized.text is empty due to token stripping but we have exec completion,
-    // fall back to the original reply text.
+    // User-relay exec completions should not be lost just because the model
+    // includes HEARTBEAT_OK. Internal-only completions use normal ack skipping.
     const execFallbackText =
-      hasExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
+      hasExecCompletion &&
+      !execCompletionInternalOnly &&
+      !normalized.text.trim() &&
+      replyPayload.text?.trim()
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    const shouldSkipMain =
+      normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasExecCompletion || execCompletionInternalOnly);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

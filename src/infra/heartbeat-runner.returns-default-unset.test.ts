@@ -1653,4 +1653,124 @@ describe("runHeartbeatOnce", () => {
       replySpy.mockReset();
     }
   });
+
+  it.each([
+    {
+      name: "successful structured exec completion",
+      event: "Exec completed (abc12345, code 0) :: backup complete",
+      expectedPrompt: "completed or was terminated during cleanup",
+    },
+    {
+      name: "SIGTERM structured exec completion",
+      event: "Exec failed (abc12345, signal SIGTERM) :: openclaw gateway help text",
+      expectedPrompt: "completed or was terminated during cleanup",
+    },
+  ])(
+    "keeps $name internal and suppresses visible HEARTBEAT_OK",
+    async ({ event, expectedPrompt }) => {
+      const tmpDir = await createCaseDir("hb-exec-internal-only");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+      enqueueSystemEvent(event, {
+        sessionKey,
+        contextKey: "exec:backup",
+      });
+
+      const replySpy = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain(expectedPrompt);
+      expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    },
+  );
+
+  it("still relays non-SIGTERM exec failures", async () => {
+    const tmpDir = await createCaseDir("hb-exec-real-failure");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "whatsapp" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("Exec failed (abc12345, code 1) :: build failed", {
+      sessionKey,
+      contextKey: "exec:build",
+    });
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "The async command failed: build failed" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec-event",
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp.mock.calls[0]?.[1]).toContain("build failed");
+    const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+    expect(calledCtx.Provider).toBe("exec-event");
+    expect(calledCtx.Body).toContain("Please relay the command output to the user");
+  });
 });

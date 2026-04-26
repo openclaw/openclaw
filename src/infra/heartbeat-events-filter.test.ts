@@ -58,6 +58,42 @@ describe("heartbeat event prompts", () => {
       unexpected: ["system messages above", "Handle the result internally"],
     },
     {
+      name: "keeps successful structured exec completions internal",
+      events: ["Exec completed (abc12345, code 0) :: uploaded file"],
+      opts: undefined,
+      expected: ["Handle the result internally", "HEARTBEAT_OK only"],
+      unexpected: ["uploaded file", "Please relay the command output to the user"],
+    },
+    {
+      name: "keeps SIGTERM structured exec completions internal",
+      events: ["Exec failed (abc12345, signal SIGTERM) :: openclaw gateway help text"],
+      opts: undefined,
+      expected: ["terminated during cleanup", "Handle the result internally", "HEARTBEAT_OK only"],
+      unexpected: ["openclaw gateway help text", "Please relay the command output to the user"],
+    },
+    {
+      name: "relays non-SIGTERM structured exec failures",
+      events: ["Exec failed (abc12345, code 1) :: build failed"],
+      opts: undefined,
+      expected: [
+        "Exec failed",
+        "build failed",
+        "Please relay the command output to the user",
+        "If it failed",
+      ],
+      unexpected: ["Handle the result internally"],
+    },
+    {
+      name: "filters internal structured completions when mixed with a real failure",
+      events: [
+        "Exec completed (abc12345, code 0) :: uploaded file",
+        "Exec failed (def67890, code 1) :: build failed",
+      ],
+      opts: undefined,
+      expected: ["build failed", "Please relay the command output to the user"],
+      unexpected: ["uploaded file", "Handle the result internally"],
+    },
+    {
       name: "builds internal-only exec prompt when delivery is disabled",
       events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
