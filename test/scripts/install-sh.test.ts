@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/install.sh";
@@ -122,5 +124,53 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(result.stdout).toContain("ensure returned failure");
     expect(result.stdout).not.toContain("Node.js v24 was installed");
     expect(result.stdout).not.toContain("Add this to your shell profile");
+  });
+
+  it("falls back when gum reports raw-mode ioctl failures", () => {
+    expect(script).toContain("setrawmode|inappropriate ioctl");
+    expect(script).toContain(
+      'if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then',
+    );
+    expect(script).toContain(
+      'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
+    );
+    expect(script).toContain(
+      'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
+    );
+    expect(script).toContain('"$@"\n                return $?');
+  });
+
+  it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-install-sh-gum-"));
+    try {
+      const gumPath = join(dir, "gum");
+      const commandPath = join(dir, "command");
+      const markerPath = join(dir, "marker");
+      writeFileSync(
+        gumPath,
+        "#!/usr/bin/env bash\nprintf 'inappropriate ioctl for device\\n'\nexit 0\n",
+        { mode: 0o755 },
+      );
+      writeFileSync(commandPath, `#!/usr/bin/env bash\nprintf 'ran' >"${markerPath}"\n`, {
+        mode: 0o755,
+      });
+
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        gum_is_tty() { return 0; }
+        GUM="${gumPath}"
+        run_with_spinner "Installing node" "${commandPath}"
+        cat "${markerPath}"
+      `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "Spinner unavailable in this terminal; continuing without spinner",
+      );
+      expect(result.stdout).toContain("ran");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
