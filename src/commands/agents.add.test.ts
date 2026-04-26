@@ -75,4 +75,72 @@ describe("agents add command", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
+
+  it("uses peer-level workspace as initialValue for a brand-new agent (#71889)", async () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/Users/me/.openclaw/workspace" },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      parsed: cfg,
+      config: cfg,
+    });
+
+    const text = vi.fn().mockRejectedValue(new WizardCancelledError());
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn(),
+      note: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce("freshbug").mockImplementation(text),
+      confirm: vi.fn().mockResolvedValue(false),
+      outro: vi.fn(),
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Workspace directory",
+        initialValue: "/Users/me/.openclaw/workspace-freshbug",
+      }),
+    );
+  });
+
+  it("preserves the existing workspace as initialValue when updating an existing agent (#71889 follow-up)", async () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/Users/me/.openclaw/workspace" },
+        list: [
+          { id: "main", default: true },
+          { id: "agent-007", workspace: "/Users/me/code/agent-007-ws" },
+        ],
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      parsed: cfg,
+      config: cfg,
+    });
+
+    const text = vi.fn().mockRejectedValue(new WizardCancelledError());
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn(),
+      note: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce("agent-007").mockImplementation(text),
+      // First confirm = "Agent already exists. Update it?" → yes
+      confirm: vi.fn().mockResolvedValue(true),
+      outro: vi.fn(),
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Workspace directory",
+        initialValue: "/Users/me/code/agent-007-ws",
+      }),
+    );
+  });
 });
