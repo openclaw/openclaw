@@ -105,3 +105,14 @@ export function shouldAttemptTtsPayload(params: {
   }
   return raw?.enabled === true;
 }
+
+export function shouldCleanTtsDirectiveText(params: {
+  cfg: OpenClawConfig;
+  ttsAuto?: string;
+  agentId?: string;
+}): boolean {
+  if (!shouldAttemptTtsPayload(params)) {
+    return false;
+  }
+  return resolveEffectiveTtsConfig(params.cfg, params.agentId).modelOverrides?.enabled !== false;
+}

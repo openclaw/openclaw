@@ -1,3 +1,4 @@
+import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import {
@@ -688,9 +689,11 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    const cleanedText = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
     const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+      typeof delta === "string"
+        ? stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(delta).text)
+        : "";
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,

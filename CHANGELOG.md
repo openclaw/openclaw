@@ -65,6 +65,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TTS: strip model-emitted TTS directives from streamed block text before channel
+  delivery, including directives split across adjacent blocks, while preserving
+  the accumulated raw reply for final-mode synthesis. Fixes #38937.
+- TTS: keep explicit `provider=...` directive keys scoped to that provider and
+  warn on unsupported keys instead of letting another speech provider consume
+  overlapping keys. Fixes #60131.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
@@ -73,6 +79,9 @@ Docs: https://docs.openclaw.ai
   and honor configured `params.chat_template_kwargs` for OpenAI-compatible
   completions, so vLLM/Nemotron replies stay visible instead of becoming
   thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
+- Subagents/memory: keep inter-session completion wakes out of memory and
+  dreaming session exports, and strip internal runtime-context blocks from
+  realtime Control UI chat events.
 - Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
   retry once, repair replay, and allow configured model fallback instead of
   preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
