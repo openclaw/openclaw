@@ -194,14 +194,14 @@ openclaw tasks audit [--json]
 
 Surfaces operational issues. Findings also appear in `openclaw status` when issues are detected.
 
-| Finding                   | Severity | Trigger                                               |
-| ------------------------- | -------- | ----------------------------------------------------- |
-| `stale_queued`            | warn     | Queued for more than 10 minutes                       |
-| `stale_running`           | error    | Running for more than 30 minutes                      |
-| `lost`                    | error    | Runtime-backed task ownership disappeared             |
-| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
-| `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
-| `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
+| Finding                   | Severity   | Trigger                                                                                                      |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
+| `stale_queued`            | warn       | Queued for more than 10 minutes                                                                              |
+| `stale_running`           | error      | Running for more than 30 minutes                                                                             |
+| `lost`                    | warn/error | Runtime-backed task ownership disappeared; retained lost tasks warn until `cleanupAfter`, then become errors |
+| `delivery_failed`         | warn       | Delivery failed and notify policy is not `silent`                                                            |
+| `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
+| `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
 
 ### `tasks maintenance`
 
@@ -284,7 +284,7 @@ The registry loads into memory at gateway start and syncs writes to SQLite for d
 A sweeper runs every **60 seconds** and handles three things:
 
 1. **Reconciliation** — checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
-2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days).
+2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
 3. **Pruning** — deletes records past their `cleanupAfter` date.
 
 **Retention**: terminal task records are kept for **7 days**, then automatically pruned. No configuration needed.

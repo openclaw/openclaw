@@ -1342,6 +1342,13 @@ describe("task-registry", () => {
         error: "backing session missing",
       });
       expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+      expect(getInspectableTaskAuditSummary()).toMatchObject({
+        errors: 0,
+        warnings: 1,
+        byCode: expect.objectContaining({
+          lost: 1,
+        }),
+      });
     });
   });
 
