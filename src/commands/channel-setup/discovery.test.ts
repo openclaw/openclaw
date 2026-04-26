@@ -18,6 +18,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
 }));
