@@ -44,9 +44,7 @@ import {
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
@@ -64,6 +62,7 @@ import {
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import { createUpdateProgress, printResult } from "./progress.js";
@@ -628,17 +627,19 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await writePersistedInstalledPluginIndexInstallRecords(pluginConfig.plugins?.installs ?? {});
+    const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     const nextConfig = withoutPluginInstallRecords(pluginConfig);
-    await replaceConfigFile({
+    await commitPluginInstallRecordsWithConfig({
+      previousInstallRecords: pluginInstallRecords,
+      nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] },
     });
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,
       reason: "source-changed",
       workspaceDir: params.root,
+      installRecords: nextInstallRecords,
       logger: pluginLogger,
     });
   }
