@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/secrets-keyring-plugin",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw OS keyring provider plugin",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

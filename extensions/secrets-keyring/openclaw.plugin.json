@@ -1,0 +1,14 @@
+{
+  "id": "secrets-keyring",
+  "enabledByDefault": false,
+  "name": "OS Keyring",
+  "description": "Resolve SecretRef sources of type \"keyring\" via the OS-native credential store (macOS Keychain, Linux libsecret).",
+  "contracts": {
+    "secretProviders": ["keyring"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
