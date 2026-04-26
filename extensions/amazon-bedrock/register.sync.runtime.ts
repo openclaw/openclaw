@@ -10,11 +10,7 @@ import {
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import {
-  mergeImplicitBedrockProvider,
-  resolveBedrockConfigApiKey,
-  resolveImplicitBedrockProvider,
-} from "./api.js";
+import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type GuardrailConfig = {
@@ -330,6 +326,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        const { resolveImplicitBedrockProvider } = await import("./discovery.js");
         const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
           config: ctx.config,
