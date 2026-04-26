@@ -112,8 +112,8 @@ observation-only.
 - `event.params`
 - optional `event.runId`
 - optional `event.toolCallId`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`, and
-  diagnostic `ctx.trace`
+- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
+  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), and diagnostic `ctx.trace`
 
 It can return:
 
@@ -178,6 +178,9 @@ so your plugin does not depend on a legacy combined phase.
 
 `before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
 identify the active run. The same value is also available on `ctx.runId`.
+Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
+plugin hooks can scope metrics, side effects, or state to a specific scheduled
+job.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
