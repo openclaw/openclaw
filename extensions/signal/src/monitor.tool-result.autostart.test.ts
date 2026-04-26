@@ -161,7 +161,7 @@ describe("monitorSignalProvider autostart", () => {
     const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
       resolveExit = resolve;
     });
-    const stop = vi.fn(() => {
+    const stop = vi.fn(async () => {
       if (exited) {
         return;
       }
@@ -170,6 +170,7 @@ describe("monitorSignalProvider autostart", () => {
         throw new Error("Expected signal daemon exit resolver to be initialized");
       }
       resolveExit({ source: "process", code: null, signal: "SIGTERM" });
+      await exitedPromise;
     });
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -190,5 +191,44 @@ describe("monitorSignalProvider autostart", () => {
         abortSignal: abortController.signal,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("awaits daemon stop before resolving aborted monitor shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let resolveStop!: () => void;
+    const stopPromise = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
+    const stop = vi.fn(() => stopPromise);
+
+    spawnSignalDaemonMock.mockReturnValueOnce(
+      createMockSignalDaemonHandle({
+        stop,
+      }),
+    );
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    let settled = false;
+    const monitorPromise = runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      runtime,
+      abortSignal: abortController.signal,
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    resolveStop();
+    await monitorPromise;
+    expect(settled).toBe(true);
   });
 });
