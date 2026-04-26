@@ -8,7 +8,12 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
+vi.mock("../logger.js", () => ({
+  logWarn: vi.fn(),
+}));
+
 import { sendMessage } from "../infra/outbound/message.js";
+import { logWarn } from "../logger.js";
 import {
   buildExecApprovalFollowupPrompt,
   sendExecApprovalFollowup,
@@ -194,6 +199,37 @@ describe("exec approval followup", () => {
       expect.objectContaining({
         content: "Command did not run: approval timed out.",
         idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
+      }),
+    );
+  });
+
+  it("sanitizes session resume failure logs to prevent log forging (#72148, CWE-532)", async () => {
+    const multilineError = new Error("session missing\nINJECT: fake log line\rsecond injection");
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(multilineError);
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-log-injection",
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      resultText:
+        "Exec finished (gateway id=req-log-injection, session=sess_x, code 0)\nclean output",
+    });
+
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    const logged = vi.mocked(logWarn).mock.calls[0]?.[0];
+    expect(typeof logged).toBe("string");
+    // Single-line invariant: no newlines or tabs survive into the log line.
+    expect(logged).not.toMatch(/[\r\n\t]/);
+    // Original error content is reduced to a flat single-line form.
+    expect(logged).toContain("session missing INJECT: fake log line second injection");
+    // Diagnostic context still present.
+    expect(logged).toContain("approvalId=req-log-injection");
+    // User-facing message is unchanged from the prefix-free path.
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "clean output",
       }),
     );
   });

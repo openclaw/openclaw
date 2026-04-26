@@ -4,6 +4,7 @@ import {
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { logWarn } from "../logger.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -117,6 +118,16 @@ function formatDirectExecApprovalFollowupText(
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
 }
 
+// Sanitize error text before logging it: redact known secret patterns AND
+// collapse control characters / newlines so the warn line stays single-line
+// (defends against log forging). Caps length so a giant serialized error
+// can't dominate the diagnostic stream. (aisle CWE-532 on PR #72148)
+function sanitizeErrorForLog(value: string): string {
+  return redactSensitiveText(value)
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 2000);
+}
+
 function logSessionResumeFallback(params: { approvalId: string; sessionError: unknown }): void {
   // Internal-only diagnostic. Previously this prefix was prepended to the
   // user-facing message ("Automatic session resume failed, so sending the
@@ -125,8 +136,10 @@ function logSessionResumeFallback(params: { approvalId: string; sessionError: un
   // succeeded — only the session handoff failed. The prefix is now dropped
   // from the user message and the failure is logged for ops debugging
   // instead. (#72143)
+  const safeError = sanitizeErrorForLog(formatUnknownError(params.sessionError));
+  const safeApprovalId = sanitizeErrorForLog(params.approvalId);
   logWarn(
-    `exec-approval-followup: session resume failed; falling back to direct delivery (approvalId=${params.approvalId}, error=${formatUnknownError(params.sessionError)})`,
+    `exec-approval-followup: session resume failed; falling back to direct delivery (approvalId=${safeApprovalId}, error=${safeError})`,
   );
 }
 
