@@ -40,7 +40,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/
 
 FROM deps AS build
 
-COPY --chown=appuser:appuser tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts openclaw.mjs ./
+COPY --chown=appuser:appuser .oxlintrc.json tsconfig.json tsconfig.plugin-sdk.dts.json tsconfig.oxlint*.json tsdown.config.ts vitest.config.ts openclaw.mjs ./
 COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser test ./test
 COPY --chown=appuser:appuser scripts ./scripts
