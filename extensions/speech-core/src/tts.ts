@@ -21,6 +21,8 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
+  cloneReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -83,7 +85,10 @@ export type TtsAttemptReasonCode =
   | "not_configured"
   | "unsupported_for_telephony"
   | "timeout"
-  | "provider_error";
+  | "provider_error"
+  /** Provider was skipped because resolveText() returned empty for it (deliberate
+   * routing decision when a capability tier doesn't apply, not a provider failure). */
+  | "empty_speech_text";
 
 export type TtsProviderAttempt = {
   provider: string;
@@ -173,6 +178,81 @@ function normalizeConfiguredSpeechProviderId(
 
 function normalizeTtsPersonaId(personaId: string | null | undefined): string | undefined {
   return normalizeOptionalLowercaseString(personaId ?? undefined);
+}
+
+function preservesExpressiveSpeechSource(
+  provider: TtsProvider,
+  cfg: OpenClawConfig,
+  providerConfig?: SpeechProviderConfig,
+): boolean {
+  const speechProvider = getSpeechProvider(provider, cfg);
+  const capabilities = speechProvider?.capabilities;
+  if (capabilities?.sourceTextHandling !== "preserve_expressive_tags") {
+    return false;
+  }
+  // When the provider declares an `expressiveTagsModels` allowlist, also gate
+  // on the resolved model id (per chatgpt-codex P1 review on
+  // extensions/elevenlabs/speech-provider.ts:344 — ElevenLabs v2/turbo would
+  // speak `[whisper]` etc. as literal words).
+  // Per Copilot review on tts.ts:201 — an explicitly-empty `[]` allowlist
+  // means "no models support expressive tags", which must turn the gate OFF.
+  // Only treat the field as "all models OK" when it's *omitted* (undefined).
+  const expressiveModels = capabilities.expressiveTagsModels;
+  if (expressiveModels !== undefined) {
+    if (expressiveModels.length === 0) {
+      return false;
+    }
+    const modelId = resolveExpressiveTagsModelId(providerConfig);
+    if (!modelId || !expressiveModels.includes(modelId)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveExpressiveTagsModelId(
+  providerConfig: SpeechProviderConfig | undefined,
+): string | undefined {
+  if (!providerConfig) {
+    return undefined;
+  }
+  const candidates = [providerConfig.modelId, providerConfig.model];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Pick per-provider speech text. Tag-aware providers (those declaring
+ * `sourceTextHandling: "preserve_expressive_tags"` AND, when an
+ * `expressiveTagsModels` allowlist is set, having a matching configured
+ * model id) receive `expressiveText` untouched; all other providers receive
+ * `plainText`. Callers MUST supply `plainText` — this function does not
+ * strip tags on the fly so that the source-text routing layer stays
+ * orthogonal to whichever tag dialect a downstream PR chooses to ship.
+ */
+function resolveSpeechTextForProvider(params: {
+  provider: TtsProvider;
+  cfg: OpenClawConfig;
+  providerConfig?: SpeechProviderConfig;
+  expressiveText: string;
+  plainText: string;
+}): string {
+  const expressiveText = params.expressiveText.trim();
+  const plainText = params.plainText.trim();
+  if (!expressiveText && !plainText) {
+    return "";
+  }
+  if (preservesExpressiveSpeechSource(params.provider, params.cfg, params.providerConfig)) {
+    return expressiveText || plainText;
+  }
+  return plainText;
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
@@ -1046,6 +1126,7 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  resolveText?: (provider: TtsProvider, providerConfig?: SpeechProviderConfig) => string;
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;
@@ -1097,6 +1178,7 @@ export async function synthesizeSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  resolveText?: (provider: TtsProvider, providerConfig?: SpeechProviderConfig) => string;
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;
@@ -1132,6 +1214,12 @@ export async function synthesizeSpeech(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
+      // Per Copilot review on tts.ts:1214: resolve the per-provider config
+      // FIRST so persona-bound provider config (and any directive overrides
+      // merged in by `resolveText`'s callsite) is available before the model-
+      // gated routing call. The previous order called `resolveText` against
+      // the base config, which caused `expressiveTagsModels` checks to miss
+      // persona-bound model overrides.
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
         cfg: params.cfg,
@@ -1153,9 +1241,31 @@ export async function synthesizeSpeech(params: {
         logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const providerText =
+        params.resolveText?.(provider, resolvedProvider.providerConfig) ?? params.text;
+      if (!providerText.trim()) {
+        const skipMessage = `${provider}: empty speech text after per-provider routing`;
+        // Per Copilot review on tts.ts:1217: also push to `errors[]` so the
+        // final failure message ("no providers available") accurately reflects
+        // routing-skip reasons when every provider in the chain bails out due
+        // to empty resolveText output.
+        errors.push(skipMessage);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "empty_speech_text",
+          persona: persona?.id,
+          ...(resolvedProvider.personaBinding
+            ? { personaBinding: resolvedProvider.personaBinding }
+            : {}),
+          error: skipMessage,
+        });
+        logVerbose(`TTS: provider ${provider} skipped (empty resolved speech text)`);
+        continue;
+      }
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
-        text: params.text,
+        text: providerText,
         cfg: params.cfg,
         providerConfig: resolvedProvider.providerConfig,
         providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
@@ -1415,36 +1525,98 @@ export async function maybeApplyTtsToPayload(params: {
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
+  const replyMetadata = getReplyPayloadMetadata(params.payload);
+  const ttsSourceText = replyMetadata?.ttsSourceText;
+  const ttsPlainText = replyMetadata?.ttsPlainText;
+  // Directive parsing — routing/gating decisions (provider override, [[tts]]
+  // marker for tagged auto mode) ALWAYS come from the visible reply text.
+  // ttsSourceText / ttsPlainText are payload-text variants only; they must not
+  // change which provider runs or whether tagged-mode gating fires (per Copilot
+  // review on PR-A's tts.ts:1491 and tts.ts:1516 — using speechDirectives for
+  // routing dropped [[tts]] directives that lived in visible text).
   const directives = parseTtsDirectives(text, config.modelOverrides, {
     cfg: params.cfg,
     providerConfigs: config.providerConfigs,
     preferredProviderId: activeProvider,
   });
+  const plainSpeechDirectives =
+    ttsPlainText && ttsPlainText !== text
+      ? parseTtsDirectives(ttsPlainText, config.modelOverrides, {
+          cfg: params.cfg,
+          providerConfigs: config.providerConfigs,
+          preferredProviderId: activeProvider,
+        })
+      : directives;
+  const expressiveSpeechDirectives =
+    ttsSourceText && ttsSourceText !== text
+      ? parseTtsDirectives(ttsSourceText, config.modelOverrides, {
+          cfg: params.cfg,
+          providerConfigs: config.providerConfigs,
+          preferredProviderId: activeProvider,
+        })
+      : directives;
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
   }
 
+  // Routing decisions live on the visible directives only.
+  const effectiveProvider = directives.overrides?.provider
+    ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ?? activeProvider)
+    : activeProvider;
   if (isVerbose()) {
-    const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ?? activeProvider)
-      : activeProvider;
     logVerbose(
       `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
     );
   }
 
-  const cleanedText = directives.cleanedText;
-  const trimmedCleaned = cleanedText.trim();
-  const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
-  const ttsText = directives.ttsText?.trim() || visibleText;
+  const visibleCleanedText = directives.cleanedText;
+  const trimmedVisible = visibleCleanedText.trim();
+  const visibleText = trimmedVisible.length > 0 ? trimmedVisible : "";
+  // Per-variant text extraction: plain providers prefer ttsPlainText then visible
+  // text; tag-aware providers prefer ttsSourceText then visible. Either can fall
+  // back to the directives' [[tts]] block when present.
+  const plainSpeechText =
+    plainSpeechDirectives.ttsText?.trim() ||
+    plainSpeechDirectives.cleanedText.trim() ||
+    directives.ttsText?.trim() ||
+    visibleCleanedText.trim() ||
+    visibleText;
+  const expressiveSpeechText =
+    expressiveSpeechDirectives.ttsText?.trim() ||
+    expressiveSpeechDirectives.cleanedText.trim() ||
+    plainSpeechText;
+  // Initial routing uses the configured-active-provider's resolved config so
+  // model-aware capability gates (e.g. ElevenLabs `expressiveTagsModels: ["eleven_v3"]`)
+  // see the right modelId. Per chatgpt-codex P2 review on tts.ts:1590 — also
+  // merge any per-message directive `providerOverrides[effectiveProvider]` into
+  // the initial config so `[[tts:provider=elevenlabs model=eleven_v3]]` is
+  // honored by the gate at the pre-flight check too (not just fallback).
+  const initialDirectiveOverride = directives.overrides?.providerOverrides?.[effectiveProvider];
+  const initialProviderConfig: SpeechProviderConfig = (() => {
+    const base = getResolvedSpeechProviderConfig(config, effectiveProvider, params.cfg);
+    return initialDirectiveOverride ? { ...base, ...initialDirectiveOverride } : base;
+  })();
+  const initialTtsText = resolveSpeechTextForProvider({
+    provider: effectiveProvider,
+    cfg: params.cfg,
+    providerConfig: initialProviderConfig,
+    expressiveText: expressiveSpeechText,
+    plainText: plainSpeechText,
+  });
 
+  // Per Copilot review on tts.ts:1595 — `{ ...params.payload, text }` creates
+  // a NEW object, so the WeakMap-keyed `ReplyPayloadMetadata` (including
+  // `assistantMessageIndex`, `ttsSourceText`, `ttsPlainText`) does NOT carry
+  // over. Clone the metadata onto the new object so downstream consumers (e.g.
+  // PR-D's chat history projection) keep seeing the same metadata they had on
+  // the input payload.
   const nextPayload =
     visibleText === text.trim()
       ? params.payload
-      : {
+      : cloneReplyPayloadMetadata(params.payload, {
           ...params.payload,
           text: visibleText.length > 0 ? visibleText : undefined,
-        };
+        });
 
   if (autoMode === "tagged" && !directives.hasDirective) {
     return nextPayload;
@@ -1458,7 +1630,7 @@ export async function maybeApplyTtsToPayload(params: {
     return nextPayload;
   }
 
-  if (!ttsText.trim()) {
+  if (!initialTtsText.trim()) {
     return nextPayload;
   }
   if (reply.hasMedia) {
@@ -1467,12 +1639,12 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (ttsText.trim().length < 10) {
+  if (initialTtsText.trim().length < 10) {
     return nextPayload;
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = ttsText.trim();
+  let textForAudio = initialTtsText.trim();
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
@@ -1480,7 +1652,7 @@ export async function maybeApplyTtsToPayload(params: {
       logVerbose(
         `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );
-      textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
+      textForAudio = `${textForAudio.slice(0, Math.max(0, maxLength - 3))}...`;
     } else {
       try {
         const summary = await summarizeText({
@@ -1496,28 +1668,85 @@ export async function maybeApplyTtsToPayload(params: {
           logVerbose(
             `TTS: summary exceeded hard limit (${textForAudio.length} > ${config.maxTextLength}); truncating.`,
           );
-          textForAudio = `${textForAudio.slice(0, config.maxTextLength - 3)}...`;
+          textForAudio = `${textForAudio.slice(0, Math.max(0, config.maxTextLength - 3))}...`;
         }
       } catch (err) {
         const error = err as Error;
         logVerbose(`TTS: summarization failed, truncating instead: ${error.message}`);
-        textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
+        textForAudio = `${textForAudio.slice(0, Math.max(0, maxLength - 3))}...`;
       }
     }
   }
 
-  textForAudio = stripMarkdown(textForAudio).trim();
-  if (textForAudio.length < 10) {
+  // The text that survived gating/summarization is what the primary provider receives.
+  // For per-provider fallback routing we recompute the *other* variant from its
+  // unsummarized source so a fallback to a different capability tier still gets the
+  // right text. When summarization fired, the unsummarized variant is no longer safe
+  // to use — collapse both to the summarized text for any provider (degraded path).
+  // Per chatgpt-codex P2 review on PR-A's tts.ts:1608 — even when summarization
+  // didn't fire on the primary, the *other* variant could still exceed the
+  // configured maxLength (e.g. expressive variant carries `[warmly]…[softly]…`
+  // tags that inflate length beyond the plain version). Apply the same hard
+  // length cap to both variants so a fallback never bypasses the gate.
+  // Apply BOTH the user-configurable `maxLength` (prefs) AND the absolute
+  // `config.maxTextLength` hard cap (provider/schema-defined). Per chatgpt-codex
+  // P2 review on tts.ts:1672 — without the hard cap, a user prefs override that
+  // raises maxLength above the schema cap could let oversized expressive text
+  // slip through to providers that reject anything > config.maxTextLength.
+  const enforceMaxLength = (text: string): string => {
+    const trimmed = text.trim();
+    const cap = Math.min(maxLength, config.maxTextLength);
+    if (trimmed.length <= cap) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, Math.max(0, cap - 3))}...`;
+  };
+  const preparedPrimaryText = stripMarkdown(textForAudio).trim();
+  const preparedPlainText = wasSummarized
+    ? preparedPrimaryText
+    : enforceMaxLength(stripMarkdown(plainSpeechText).trim()) || preparedPrimaryText;
+  const preparedExpressiveText = wasSummarized
+    ? preparedPrimaryText
+    : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
+  const effectiveTextForAudio = resolveSpeechTextForProvider({
+    provider: effectiveProvider,
+    cfg: params.cfg,
+    providerConfig: initialProviderConfig,
+    expressiveText: preparedExpressiveText,
+    plainText: preparedPlainText,
+  });
+  if (effectiveTextForAudio.length < 10) {
     return nextPayload;
   }
 
   const ttsStart = Date.now();
   const result = await textToSpeech({
-    text: textForAudio,
+    text: effectiveTextForAudio,
     cfg: params.cfg,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    resolveText: (provider, resolvedProviderConfig) => {
+      // Per-fallback-attempt provider config: prefer the persona-merged config
+      // that synthesizeSpeech now hands us (post-`resolveReadySpeechProvider`),
+      // and fall back to the base resolution when called outside that loop
+      // (e.g. the initial pre-flight check). Then merge per-message directive
+      // overrides (`[[tts:provider=elevenlabs model=eleven_v3]]`) so a
+      // directive that switches the model is honored by the capability gate.
+      const baseConfig =
+        resolvedProviderConfig ?? getResolvedSpeechProviderConfig(config, provider, params.cfg);
+      const directiveOverride = directives.overrides?.providerOverrides?.[provider];
+      const providerConfig: SpeechProviderConfig = directiveOverride
+        ? { ...baseConfig, ...directiveOverride }
+        : baseConfig;
+      return resolveSpeechTextForProvider({
+        provider,
+        cfg: params.cfg,
+        providerConfig,
+        expressiveText: preparedExpressiveText,
+        plainText: preparedPlainText,
+      });
+    },
     agentId: params.agentId,
     accountId: params.accountId,
   });
@@ -1536,11 +1765,11 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    return {
+    return cloneReplyPayloadMetadata(nextPayload, {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
-    };
+    });
   }
 
   lastTtsAttempt = {
