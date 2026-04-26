@@ -1301,6 +1301,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-speech",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",

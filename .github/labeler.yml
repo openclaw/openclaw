@@ -3,6 +3,12 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"plugin: azure-speech":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/azure-speech/**"
+          - "docs/providers/azure-speech.md"
+          - "docs/tools/tts.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:

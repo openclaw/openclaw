@@ -8,6 +8,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Providers/Azure Speech: add Azure Speech as a bundled TTS provider with
+  Speech-resource auth, voice listing, SSML escaping, native Ogg/Opus
+  voice-note output, and telephony output. (#51776) Thanks @leonchui.
 - CLI/image generation: expose generic `--background` on
   `openclaw infer image generate` and `openclaw infer image edit`, keep
   `--openai-background` as an OpenAI alias, and let fal image generation honor
