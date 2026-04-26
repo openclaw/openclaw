@@ -142,13 +142,13 @@ describe("Codex app-server config", () => {
           },
         },
         env: {
-          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "ignored-plugin",
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "env-fallback-plugin",
         },
       }),
     ).toEqual({
       enabled: true,
       autoInstall: true,
-      pluginName: "ignored-plugin",
+      pluginName: "env-fallback-plugin",
       mcpServerName: "computer-use",
       marketplaceName: "desktop-tools",
     });

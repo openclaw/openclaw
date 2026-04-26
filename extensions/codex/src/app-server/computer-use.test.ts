@@ -41,7 +41,55 @@ describe("Codex Computer Use setup", () => {
       }),
     );
     expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
     expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
+  });
+
+  it("does not register marketplace sources during status checks", async () => {
+    const request = createComputerUseRequest({ installed: true });
+
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            marketplaceSource: "github:example/desktop-tools",
+          },
+        },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
+  });
+
+  it("fails closed when multiple marketplaces contain Computer Use", async () => {
+    const request = createAmbiguousComputerUseRequest();
+
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: { computerUse: { enabled: true } },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: false,
+        message:
+          "Multiple Codex marketplaces contain computer-use. Configure computerUse.marketplaceName or computerUse.marketplacePath to choose one.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/read", expect.anything());
   });
 
   it("installs Computer Use from a configured marketplace source", async () => {
@@ -87,6 +135,66 @@ describe("Codex Computer Use setup", () => {
       }),
     ).rejects.toThrow(CodexComputerUseSetupError);
     expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
+  });
+
+  it("skips setup writes when auto-install is already ready", async () => {
+    const request = createComputerUseRequest({ installed: true });
+
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplaceName: "desktop-tools",
+          },
+        },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
+  });
+
+  it("uses setup writes when auto-install needs to install", async () => {
+    const request = createComputerUseRequest({ installed: false });
+
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplaceSource: "github:example/desktop-tools",
+          },
+        },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("experimentalFeature/enablement/set", {
+      enablement: { plugins: true },
+    });
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: "github:example/desktop-tools",
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
   });
 });
 
@@ -167,11 +275,37 @@ function createComputerUseRequest(params: { installed: boolean }): CodexComputer
   }) as CodexComputerUseRequest;
 }
 
-function pluginSummary(installed: boolean) {
+function createAmbiguousComputerUseRequest(): CodexComputerUseRequest {
+  return vi.fn(async (method: string) => {
+    if (method === "plugin/list") {
+      return {
+        marketplaces: [
+          {
+            name: "desktop-tools",
+            path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+            interface: null,
+            plugins: [pluginSummary(true, "desktop-tools")],
+          },
+          {
+            name: "other-tools",
+            path: "/marketplaces/other-tools/.agents/plugins/marketplace.json",
+            interface: null,
+            plugins: [pluginSummary(true, "other-tools")],
+          },
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      };
+    }
+    throw new Error(`unexpected request ${method}`);
+  }) as CodexComputerUseRequest;
+}
+
+function pluginSummary(installed: boolean, marketplaceName = "desktop-tools") {
   return {
-    id: "computer-use@desktop-tools",
+    id: `computer-use@${marketplaceName}`,
     name: "computer-use",
-    source: { type: "local", path: "/marketplaces/desktop-tools/plugins/computer-use" },
+    source: { type: "local", path: `/marketplaces/${marketplaceName}/plugins/computer-use` },
     installed,
     enabled: installed,
     installPolicy: "AVAILABLE",

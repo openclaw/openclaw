@@ -290,6 +290,19 @@ describe("codex command", () => {
     });
   });
 
+  it("shows help when Computer Use option values are missing", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    await expect(
+      handleCodexCommand(createContext("computer-use install --source"), {
+        deps: createDeps({ installCodexComputerUse }),
+      }),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Usage: /codex computer-use"),
+    });
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
   it("explains compaction when no Codex thread is attached", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
 

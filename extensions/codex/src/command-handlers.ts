@@ -567,27 +567,52 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       continue;
     }
     if (arg === "--source" || arg === "--marketplace-source") {
-      parsed.overrides.marketplaceSource = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplaceSource = value;
       index += 1;
       continue;
     }
     if (arg === "--marketplace-path" || arg === "--path") {
-      parsed.overrides.marketplacePath = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplacePath = value;
       index += 1;
       continue;
     }
     if (arg === "--marketplace") {
-      parsed.overrides.marketplaceName = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.marketplaceName = value;
       index += 1;
       continue;
     }
     if (arg === "--plugin") {
-      parsed.overrides.pluginName = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.pluginName = value;
       index += 1;
       continue;
     }
     if (arg === "--server" || arg === "--mcp-server") {
-      parsed.overrides.mcpServerName = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.overrides.mcpServerName = value;
       index += 1;
       continue;
     }
@@ -596,6 +621,14 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
   parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
   return parsed;
+}
+
+function readRequiredOptionValue(args: string[], index: number): string | undefined {
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) {
+    return undefined;
+  }
+  return value;
 }
 
 function normalizeComputerUseStringOverrides(

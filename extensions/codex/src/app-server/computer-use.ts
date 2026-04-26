@@ -55,6 +55,11 @@ type MarketplaceRef = {
   remoteMarketplaceName?: string;
 };
 
+type MarketplaceResolution = {
+  marketplace?: MarketplaceRef;
+  message?: string;
+};
+
 export async function readCodexComputerUseStatus(
   params: CodexComputerUseSetupParams = {},
 ): Promise<CodexComputerUseStatus> {
@@ -83,8 +88,22 @@ export async function ensureCodexComputerUse(
   const status = await inspectCodexComputerUse({
     ...params,
     config,
-    installPlugin: config.autoInstall,
+    installPlugin: false,
   });
+  if (status.ready) {
+    return status;
+  }
+  if (config.autoInstall) {
+    const installedStatus = await inspectCodexComputerUse({
+      ...params,
+      config,
+      installPlugin: true,
+    });
+    if (!installedStatus.ready) {
+      throw new CodexComputerUseSetupError(installedStatus);
+    }
+    return installedStatus;
+  }
   if (!status.ready) {
     throw new CodexComputerUseSetupError(status);
   }
@@ -120,22 +139,33 @@ async function inspectCodexComputerUse(params: {
   installPlugin: boolean;
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
-  await request<v2.ExperimentalFeatureEnablementSetResponse>("experimentalFeature/enablement/set", {
-    enablement: { plugins: true },
-  } satisfies v2.ExperimentalFeatureEnablementSetParams);
+  if (params.installPlugin) {
+    await request<v2.ExperimentalFeatureEnablementSetResponse>(
+      "experimentalFeature/enablement/set",
+      {
+        enablement: { plugins: true },
+      } satisfies v2.ExperimentalFeatureEnablementSetParams,
+    );
+  }
 
   const marketplace = await resolveMarketplaceRef({
     request,
     config: params.config,
+    allowAdd: params.installPlugin,
   });
-  if (!marketplace) {
+  if (!marketplace.marketplace) {
     return unavailableStatus(
       params.config,
-      `No Codex marketplace containing ${params.config.pluginName} is registered. Configure computerUse.marketplaceSource or computerUse.marketplacePath, then run /codex computer-use install.`,
+      marketplace.message ??
+        `No Codex marketplace containing ${params.config.pluginName} is registered. Configure computerUse.marketplaceSource or computerUse.marketplacePath, then run /codex computer-use install.`,
     );
   }
 
-  let plugin = await readComputerUsePlugin(request, marketplace, params.config.pluginName);
+  let plugin = await readComputerUsePlugin(
+    request,
+    marketplace.marketplace,
+    params.config.pluginName,
+  );
   if (!plugin.summary.installed || !plugin.summary.enabled) {
     if (!params.installPlugin) {
       return statusFromPlugin({
@@ -147,10 +177,17 @@ async function inspectCodexComputerUse(params: {
     }
     await request<v2.PluginInstallResponse>(
       "plugin/install",
-      pluginRequestParams(marketplace, params.config.pluginName) satisfies v2.PluginInstallParams,
+      pluginRequestParams(
+        marketplace.marketplace,
+        params.config.pluginName,
+      ) satisfies v2.PluginInstallParams,
     );
     await reloadMcpServers(request);
-    plugin = await readComputerUsePlugin(request, marketplace, params.config.pluginName);
+    plugin = await readComputerUsePlugin(
+      request,
+      marketplace.marketplace,
+      params.config.pluginName,
+    );
   }
 
   let server = await readMcpServerStatus(request, params.config.mcpServerName);
@@ -178,9 +215,10 @@ async function inspectCodexComputerUse(params: {
 async function resolveMarketplaceRef(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
-}): Promise<MarketplaceRef | undefined> {
+  allowAdd: boolean;
+}): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
-  if (params.config.marketplaceSource) {
+  if (params.config.marketplaceSource && params.allowAdd) {
     const added = await params.request<v2.MarketplaceAddResponse>("marketplace/add", {
       source: params.config.marketplaceSource,
     } satisfies v2.MarketplaceAddParams);
@@ -188,10 +226,10 @@ async function resolveMarketplaceRef(params: {
   }
 
   if (params.config.marketplacePath) {
-    return {
-      ...(preferredMarketplaceName ? { name: preferredMarketplaceName } : {}),
-      path: params.config.marketplacePath,
-    };
+    const marketplace: MarketplaceRef = preferredMarketplaceName
+      ? { name: preferredMarketplaceName, path: params.config.marketplacePath }
+      : { path: params.config.marketplacePath };
+    return { marketplace };
   }
 
   const listed = await params.request<v2.PluginListResponse>("plugin/list", {
@@ -206,24 +244,38 @@ async function resolveMarketplaceRef(params: {
           plugin.id === `${params.config.pluginName}@${marketplace.name}`,
       ),
     )
-    .map((marketplace) => ({
-      name: marketplace.name,
-      ...(marketplace.path
-        ? { path: marketplace.path }
-        : { remoteMarketplaceName: marketplace.name }),
-    }));
+    .map((marketplace) => {
+      if (marketplace.path) {
+        return { name: marketplace.name, path: marketplace.path };
+      }
+      return { name: marketplace.name, remoteMarketplaceName: marketplace.name };
+    });
 
   if (preferredMarketplaceName) {
     const preferred = candidates.find((candidate) => candidate.name === preferredMarketplaceName);
     if (preferred) {
-      return preferred;
+      return { marketplace: preferred };
     }
     return {
-      name: preferredMarketplaceName,
-      remoteMarketplaceName: preferredMarketplaceName,
+      marketplace: {
+        name: preferredMarketplaceName,
+        remoteMarketplaceName: preferredMarketplaceName,
+      },
     };
   }
-  return candidates[0];
+  if (candidates.length > 1) {
+    return {
+      message: `Multiple Codex marketplaces contain ${params.config.pluginName}. Configure computerUse.marketplaceName or computerUse.marketplacePath to choose one.`,
+    };
+  }
+  if (params.config.marketplaceSource && !params.allowAdd && candidates.length === 0) {
+    return {
+      message:
+        "Computer Use marketplace source is configured but has not been registered. Run /codex computer-use install to register it.",
+    };
+  }
+  const marketplace = candidates[0];
+  return marketplace ? { marketplace } : {};
 }
 
 async function readComputerUsePlugin(
