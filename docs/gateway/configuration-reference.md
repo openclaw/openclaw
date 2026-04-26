@@ -91,6 +91,7 @@ target server during config edits.
 
 See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 [CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
+
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - Optional `channels.whatsapp.defaultAccount` overrides that fallback default account selection when it matches a configured account id.
 - Legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
