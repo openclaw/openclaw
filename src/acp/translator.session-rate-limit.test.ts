@@ -1189,4 +1189,56 @@ describe("acp final chat snapshots", () => {
     });
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("resets emitted text offsets when gateway messageId changes", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+    const imageLink = "/api/chat/media/outgoing/session/att/full";
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        message: {
+          id: "stable-container-id",
+          messageId: "assistant-text",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          id: "stable-container-id",
+          messageId: "assistant-media",
+          content: [{ type: "image", openUrl: imageLink }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "NO_REPLY" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Generated image: ${imageLink}` },
+      },
+    });
+    sessionStore.clearAllSessionsForTest();
+  });
 });

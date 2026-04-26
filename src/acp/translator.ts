@@ -178,8 +178,6 @@ type ReplayChunk = {
   text: string;
 };
 
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f-\x9f]/g;
-
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
@@ -370,11 +368,23 @@ function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
   return replayChunks;
 }
 
+function stripDisplayControlChars(value: string): string {
+  let result = "";
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if ((code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f)) {
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
 function normalizeDisplayUrl(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replace(CONTROL_CHAR_RE, "").trim();
+  const normalized = stripDisplayControlChars(value).trim();
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -395,12 +405,11 @@ function formatAssistantMessageText(content: GatewayChatContentBlock[] | undefin
     if (!block || typeof block !== "object" || Array.isArray(block)) {
       continue;
     }
-    const typedBlock = block as GatewayChatContentBlock;
-    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
-      parts.push(typedBlock.text);
+    if (block.type === "text" && typeof block.text === "string" && block.text) {
+      parts.push(block.text);
       continue;
     }
-    const mediaLinkText = formatGeneratedMediaLinkText(typedBlock);
+    const mediaLinkText = formatGeneratedMediaLinkText(block);
     if (mediaLinkText) {
       parts.push(mediaLinkText);
     }
@@ -417,7 +426,7 @@ function readGatewayMessageId(messageData: Record<string, unknown>): string | un
       return id;
     }
   }
-  for (const key of ["messageId", "id", "idempotencyKey"]) {
+  for (const key of ["messageId", "idempotencyKey"]) {
     const value = messageData[key];
     if (typeof value === "string" && value.trim()) {
       return value;
