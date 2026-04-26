@@ -34,6 +34,7 @@ import {
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
+import { buildTelegramTopicStatusLines } from "./telegram-topic-status.js";
 export type { BuildStatusTextParams } from "./status-text.types.js";
 
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
@@ -327,6 +328,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const channelStatusLines = buildTelegramTopicStatusLines({
+    cfg,
+    context: params.messageContext,
+    commandTo: params.commandTo,
+    sessionEntry,
+  });
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
@@ -374,6 +381,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       dropPolicy: queueSettings.dropPolicy,
       showDetails: queueOverrides,
     },
+    channelStatusLines,
     subagentsLine,
     taskLine,
     mediaDecisions: params.mediaDecisions,

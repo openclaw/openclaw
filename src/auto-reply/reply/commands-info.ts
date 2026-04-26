@@ -194,6 +194,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const reply = await buildStatusReply({
     cfg: params.cfg,
+    ctx: params.ctx,
     command: params.command,
     sessionEntry: targetSessionEntry,
     sessionKey: params.sessionKey,
