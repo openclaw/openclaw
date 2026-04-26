@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- UI/Windows: quote resolved pnpm `.cmd` launcher paths before spawning UI install/build/test commands so Node installs under `C:\Program Files` no longer fail as `C:\Program`. Fixes #45275. Thanks @Kobevictor, @stoppieboy, and @iubns.
 - Plugins/uninstall: remove tracked plugin files from their recorded managed extensions root even when the current state directory points somewhere else, so `openclaw plugins uninstall --force` does not leave the plugin discoverable. Thanks @shakkernerd.
 - Agents/runtime: add `agentRuntime.id` as the canonical config key, migrate
   legacy runtime-policy configs with `openclaw doctor --fix`, and route
