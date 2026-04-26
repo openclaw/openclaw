@@ -429,7 +429,8 @@ describe("msteams signin invoke handler registration", () => {
         const { sso, tokenStore } = createSsoDeps({ fetchImpl });
         const deps = createDepsWithoutSso({ cfg: scenario.cfg, sso });
         const { handler } = createActivityHandler();
-        const registered = registerMSTeamsHandlers(handler, deps).handler as MSTeamsActivityHandler & {
+        const registered = registerMSTeamsHandlers(handler, deps)
+          .handler as MSTeamsActivityHandler & {
           run: NonNullable<MSTeamsActivityHandler["run"]>;
         };
 

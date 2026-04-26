@@ -12,6 +12,7 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
+  consumeGatewayRestartIntentSync,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
@@ -31,8 +32,10 @@ import type { RuntimeEnv } from "../../runtime.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
+const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
+type RestartDrainTimeoutMs = number | undefined;
 
 export async function runGatewayLoop(params: {
   start: (params?: {
@@ -129,12 +132,12 @@ export async function runGatewayLoop(params: {
   const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
-  const resolveRestartDrainTimeoutMs = () => {
+  const resolveRestartDrainTimeoutMs = (): RestartDrainTimeoutMs => {
     try {
       const timeoutMs = loadConfig().gateway?.reload?.deferralTimeoutMs;
-      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs >= 0
+      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
         ? timeoutMs
-        : DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
+        : undefined;
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }
@@ -150,30 +153,65 @@ export async function runGatewayLoop(params: {
     const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs() : 0;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
-    const baseForceExitDeadlineMs =
-      Date.now() + SHUTDOWN_TIMEOUT_MS + (isRestart ? restartDrainTimeoutMs : 0);
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
-    const armForceExitTimer = (deadlineMs: number) => {
+    const armForceExitTimer = (forceExitMs: number, opts?: { replace?: boolean }) => {
       if (forceExitTimer) {
+        if (!opts?.replace) {
+          return;
+        }
         clearTimeout(forceExitTimer);
+        forceExitTimer = null;
       }
-      forceExitTimer = setTimeout(
-        () => {
-          gatewayLog.error("shutdown timed out; exiting without full cleanup");
-          writeStabilityBundle(
-            isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          );
-          // Keep the in-process watchdog below the supervisor stop budget so
-          // launchd/systemd doesn't escalate to a hard kill first. Exit
-          // non-zero on restart timeout so supervised installs restart cleanly;
-          // stop-timeout stays at 0 (graceful). (#36822)
-          exitProcess(isRestart ? 1 : 0);
-        },
-        Math.max(0, deadlineMs - Date.now()),
-      );
+      forceExitTimer = setTimeout(() => {
+        gatewayLog.error("shutdown timed out; exiting without full cleanup");
+        writeStabilityBundle(
+          isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+        );
+        // Keep the in-process watchdog below the supervisor stop budget so this
+        // path wins before launchd/systemd escalates to a hard kill. Exit
+        // non-zero on any timeout so supervised installs restart cleanly.
+        exitProcess(1);
+      }, forceExitMs);
       forceExitTimer.unref?.();
     };
-    armForceExitTimer(baseForceExitDeadlineMs);
+    const clearForceExitTimer = () => {
+      if (!forceExitTimer) {
+        return;
+      }
+      clearTimeout(forceExitTimer);
+      forceExitTimer = null;
+    };
+
+    if (!isRestart) {
+      armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+    } else if (restartDrainTimeoutMs !== undefined) {
+      // Allow extra time for draining active turns on explicitly capped restarts.
+      armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
+    }
+
+    const formatRestartDrainBudget = () =>
+      restartDrainTimeoutMs === undefined
+        ? "without a timeout"
+        : `with timeout ${restartDrainTimeoutMs}ms`;
+    const createStillPendingDrainLogger = () =>
+      setInterval(() => {
+        gatewayLog.warn(
+          `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
+        );
+      }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
+
+    const armCloseForceExitTimerForIndefiniteRestart = () => {
+      if (isRestart && restartDrainTimeoutMs === undefined) {
+        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+      }
+    };
+    const rearmRestartForceExitTimerAfterFlush = () => {
+      if (isRestart && restartDrainTimeoutMs !== undefined) {
+        armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS, {
+          replace: true,
+        });
+      }
+    };
 
     void (async () => {
       try {
@@ -197,9 +235,7 @@ export async function runGatewayLoop(params: {
           // Start the restart watchdog budget after the pre-shutdown debounce
           // flush so slow flush handlers do not steal time from the configured
           // restart drain window.
-          armForceExitTimer(
-            Date.now() + SHUTDOWN_TIMEOUT_MS + restartDrainTimeoutMs + FOLLOWUP_DRAIN_TIMEOUT_MS,
-          );
+          rearmRestartForceExitTimerAfterFlush();
 
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
@@ -212,8 +248,9 @@ export async function runGatewayLoop(params: {
 
           if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${restartDrainTimeoutMs}ms)`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
+            const stillPendingDrainLogger = createStillPendingDrainLogger();
             const [tasksDrain, runsDrain] = await Promise.all([
               activeTasks > 0
                 ? waitForActiveTasks(restartDrainTimeoutMs)
@@ -221,7 +258,7 @@ export async function runGatewayLoop(params: {
               activeRuns > 0
                 ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
                 : Promise.resolve({ drained: true }),
-            ]);
+            ]).finally(() => clearInterval(stillPendingDrainLogger));
             if (tasksDrain.drained && runsDrain.drained) {
               gatewayLog.info("all active work drained");
             } else {
@@ -252,6 +289,7 @@ export async function runGatewayLoop(params: {
           markGatewayDraining();
         }
 
+        armCloseForceExitTimerForIndefiniteRestart();
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
@@ -259,9 +297,7 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
-        if (forceExitTimer) {
-          clearTimeout(forceExitTimer);
-        }
+        clearForceExitTimer();
         server = null;
         if (isRestart) {
           await handleRestartAfterServerClose();
@@ -274,7 +310,7 @@ export async function runGatewayLoop(params: {
 
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
-    request("stop", "SIGTERM");
+    request(consumeGatewayRestartIntentSync() ? "restart" : "stop", "SIGTERM");
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");

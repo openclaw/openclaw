@@ -2,7 +2,7 @@
 summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
 read_when:
   - Changing channel routing or inbox behavior
-title: "Channel Routing"
+title: "Channel routing"
 ---
 
 # Channels & routing
@@ -141,3 +141,9 @@ Inbound replies include:
 - Quoted context is appended to `Body` as a `[Replying to ...]` block.
 
 This is consistent across channels.
+
+## Related
+
+- [Groups](/channels/groups)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Pairing](/channels/pairing)

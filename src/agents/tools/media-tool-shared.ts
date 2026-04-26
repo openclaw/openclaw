@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
@@ -9,7 +10,12 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
-import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildToolModelConfigFromCandidates,
@@ -76,6 +82,26 @@ export function applyMusicGenerationModelConfigDefaults(
   musicGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+}
+
+export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
+  const timeoutMs = readNumberParam(args, "timeoutMs", {
+    integer: true,
+    strict: true,
+  });
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (timeoutMs <= 0) {
+    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
+  }
+  return timeoutMs;
+}
+
+export function resolveRemoteMediaSsrfPolicy(
+  cfg: OpenClawConfig | undefined,
+): SsrFPolicy | undefined {
+  return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
 function applyAgentDefaultModelConfig(
@@ -401,7 +427,9 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId);
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
+    allowPluginNormalization: false,
+  });
   let model = params.modelRegistry.find(
     resolvedRef.provider,
     resolvedRef.model,

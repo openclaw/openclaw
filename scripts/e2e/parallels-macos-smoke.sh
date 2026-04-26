@@ -258,7 +258,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    MODEL_ID="openai/gpt-5.5"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -291,6 +291,28 @@ fi
 
 discord_smoke_enabled() {
   [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
+}
+
+successful_discord_smoke() {
+  discord_smoke_enabled || return 1
+  [[ "$FRESH_DISCORD_STATUS" == "pass" || "$UPGRADE_DISCORD_STATUS" == "pass" ]]
+}
+
+stop_vm_after_successful_discord_smoke() {
+  successful_discord_smoke || return 0
+
+  say "Stop $VM_NAME after successful Discord smoke"
+  set +e
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout --foreground 120s prlctl stop "$VM_NAME"
+  else
+    prlctl stop "$VM_NAME"
+  fi
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    warn "failed to stop $VM_NAME after successful Discord smoke (rc=$rc)"
+  fi
 }
 
 fresh_uses_host_tgz() {
@@ -1430,13 +1452,13 @@ EOF
 
 verify_gateway() {
   local attempt
-  for attempt in 1 2 3 4; do
-    if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 5000; then
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
       return 0
     fi
-    if (( attempt < 4 )); then
+    if (( attempt < 8 )); then
       printf 'gateway-status retry %s\n' "$attempt" >&2
-      sleep 3
+      sleep 5
     fi
   done
   return 1
@@ -1899,6 +1921,9 @@ run_fresh_main_lane() {
   phase_run "fresh.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+  if [[ -z "$FRESH_MAIN_VERSION" ]]; then
+    FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.verify-main-version)")"
+  fi
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
@@ -1936,6 +1961,9 @@ run_upgrade_lane() {
     phase_run "upgrade.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
     phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+    if [[ -z "$UPGRADE_MAIN_VERSION" ]]; then
+      UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.verify-main-version)")"
+    fi
     phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   else
     phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_DEV_S" run_dev_channel_update
@@ -2017,6 +2045,8 @@ if [[ "$KEEP_SERVER" -eq 0 && -n "${SERVER_PID:-}" ]]; then
   kill "$SERVER_PID" >/dev/null 2>&1 || true
   SERVER_PID=""
 fi
+
+stop_vm_after_successful_discord_smoke
 
 SUMMARY_JSON_PATH="$(
   SUMMARY_VM="$VM_NAME" \

@@ -77,6 +77,10 @@ export type TelegramInboundBodyResult = {
   locationData?: NormalizedLocation;
 };
 
+function formatAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
+
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -228,12 +232,14 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = preflightTranscript;
+    bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
 
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript || "<media:audio>";
+      bodyText = preflightTranscript
+        ? formatAudioTranscriptForAgent(preflightTranscript)
+        : "<media:audio>";
     } else {
       bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
     }

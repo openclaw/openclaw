@@ -1,14 +1,12 @@
 ---
-title: "Plugin Setup and Config"
-sidebarTitle: "Setup and Config"
 summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metadata"
+title: "Plugin setup and config"
+sidebarTitle: "Setup and Config"
 read_when:
   - You are adding a setup wizard to a plugin
   - You need to understand setup-entry.ts vs index.ts
   - You are defining plugin config schemas or package.json openclaw metadata
 ---
-
-# Plugin Setup and Config
 
 Reference for plugin packaging (`package.json` metadata), manifests
 (`openclaw.plugin.json`), setup entries, and config schemas.
@@ -411,12 +409,12 @@ For channel-specific config, use the channel config section instead:
 
 ### Building channel config schemas
 
-Use `buildChannelConfigSchema` from `openclaw/plugin-sdk/core` to convert a
-Zod schema into the `ChannelConfigSchema` wrapper that OpenClaw validates:
+Use `buildChannelConfigSchema` to convert a Zod schema into the
+`ChannelConfigSchema` wrapper used by plugin-owned config artifacts:
 
 ```typescript
 import { z } from "zod";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 
 const accountSchema = z.object({
   token: z.string().optional(),
@@ -427,6 +425,11 @@ const accountSchema = z.object({
 
 const configSchema = buildChannelConfigSchema(accountSchema);
 ```
+
+For third-party plugins, the cold-path contract is still the plugin manifest:
+mirror the generated JSON Schema into `openclaw.plugin.json#channelConfigs` so
+config schema, setup, and UI surfaces can inspect `channels.<id>` without
+loading runtime code.
 
 ## Setup wizards
 
@@ -551,8 +554,9 @@ openclaw plugins install <package-name>
 
 <Info>
   For npm-sourced installs, `openclaw plugins install` runs
-  `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
-  trees pure JS/TS and avoid packages that require `postinstall` builds.
+  project-local `npm install --ignore-scripts` (no lifecycle scripts), ignoring
+  inherited global npm install settings. Keep plugin dependency trees pure JS/TS
+  and avoid packages that require `postinstall` builds.
 </Info>
 
 Bundled OpenClaw-owned plugins are the only startup repair exception: when a
@@ -563,6 +567,6 @@ startup installs; keep using the explicit plugin installer.
 
 ## Related
 
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`
-- [Plugin Manifest](/plugins/manifest) -- full manifest schema reference
-- [Building Plugins](/plugins/building-plugins) -- step-by-step getting started guide
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin manifest](/plugins/manifest) — full manifest schema reference
+- [Building plugins](/plugins/building-plugins) — step-by-step getting started guide

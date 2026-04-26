@@ -4,7 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
-title: "gateway"
+title: "Gateway"
 ---
 
 # Gateway CLI
@@ -140,6 +140,7 @@ Notes:
 ### `gateway diagnostics export`
 
 Write a local diagnostics zip that is designed to attach to bug reports.
+For the privacy model and bundle contents, see [Diagnostics Export](/gateway/diagnostics).
 
 ```bash
 openclaw gateway diagnostics export
@@ -187,6 +188,9 @@ Notes:
 
 - `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
 - Default `gateway status` proves service state, WebSocket connect, and the auth capability visible at handshake time. It does not prove read/write/admin operations.
+- Diagnostic probes are non-mutating for first-time device auth: they reuse an
+  existing cached device token when one exists, but they do not create a new CLI
+  device identity or read-only device pairing record just to check status.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
@@ -224,6 +228,8 @@ Interpretation:
 - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
 - `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
 - `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
+- Like `gateway status`, probe reuses existing cached device auth but does not
+  create first-time device identity or pairing state.
 - Exit code is non-zero only when no probed target is reachable.
 
 JSON notes (`--json`):
@@ -370,3 +376,8 @@ Notes:
 - On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when
   `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort`
   stays optional there too.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

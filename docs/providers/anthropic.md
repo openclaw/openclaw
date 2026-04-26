@@ -5,8 +5,6 @@ read_when:
 title: "Anthropic"
 ---
 
-# Anthropic (Claude)
-
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)
@@ -278,11 +276,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="401 errors / token suddenly invalid">
-    Anthropic token auth can expire or be revoked. For new setups, migrate to an Anthropic API key.
+    Anthropic token auth expires and can be revoked. For new setups, use an Anthropic API key instead.
   </Accordion>
 
   <Accordion title='No API key found for provider "anthropic"'>
-    Auth is **per agent**. New agents don't inherit the main agent's keys. Re-run onboarding for that agent, or configure an API key on the gateway host, then verify with `openclaw models status`.
+    Anthropic auth is **per agent** — new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
   </Accordion>
 
   <Accordion title='No credentials found for profile "anthropic:default"'>
