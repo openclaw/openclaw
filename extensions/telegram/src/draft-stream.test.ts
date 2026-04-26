@@ -161,6 +161,28 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 
+  it("tracks when a message preview first became visible", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-26T01:00:00.000Z"));
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { previewTransport: "message" });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(stream.visibleSinceMs?.()).toBe(Date.parse("2026-04-26T01:00:00.000Z"));
+
+      vi.setSystemTime(new Date("2026-04-26T01:01:00.000Z"));
+      stream.update("Hello again");
+      await stream.flush();
+
+      expect(stream.visibleSinceMs?.()).toBe(Date.parse("2026-04-26T01:00:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
     const api = createMockDraftApi();
     delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;
@@ -487,6 +509,7 @@ describe("createTelegramDraftStream", () => {
       messageId: 17,
       textSnapshot: "Message A partial",
       parseMode: undefined,
+      visibleSinceMs: expect.any(Number),
     });
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B partial", undefined);
