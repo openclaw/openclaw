@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - ACP: wait for the configured runtime backend to become healthy before startup identity reconciliation, avoiding transient acpx warnings during Gateway boot. Fixes #40566.
 - Channels/ACP bindings: time out configured binding readiness checks instead of letting Discord preflight hang forever when an ACP target never settles. Fixes #68776.
 - Control UI: hide the chat loading skeleton during background history reloads when existing messages or active stream content are already visible, avoiding reload flashes on high-latency local gateways. Fixes #71844. Thanks @WolvenRA.
+- Control UI: keep locally optimistic chat messages visible when a history reload temporarily returns empty, avoiding lost first-turn messages on high-latency gateways. Fixes #71878. Thanks @WolvenRA.
 - Agents/images: scrub old `[media attached: ...]`, `[Image: source: ...]`,
   and `media://inbound/...` markers from pruned model replay context so stale
   media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks
