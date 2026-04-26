@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
@@ -20,7 +19,6 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
@@ -29,10 +27,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import {
-  stripInlineDirectiveTagsForDisplay,
-  sanitizeReplyDirectiveId,
-} from "../../utils/directive-tags.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
@@ -60,7 +55,6 @@ import {
 } from "../chat-display-projection.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
@@ -94,6 +88,7 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { buildTranscriptReplyTextFromPayloads } from "./webchat-transcript-reply-text.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
@@ -227,41 +222,7 @@ type SideResultPayload = {
   ts: number;
 };
 
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text?.trim();
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`MEDIA:${trimmed}`);
-        }
-      }
-      if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
+const buildTranscriptReplyText = buildTranscriptReplyTextFromPayloads;
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
