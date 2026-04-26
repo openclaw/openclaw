@@ -85,6 +85,46 @@ describe("buildAssistantMessage", () => {
     expect(msg.content).toHaveLength(1);
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
   });
+
+  it("parses tool call arguments when returned as a JSON string", () => {
+    const response = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [
+          {
+            function: {
+              name: "bash",
+              arguments: '{"command":"ls -la"}' as unknown as Record<string, unknown>,
+            },
+          },
+        ],
+      },
+      done: true,
+      prompt_eval_count: 100,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.content).toHaveLength(1);
+    const toolCall = msg.content[0] as { type: string; name: string; arguments: unknown };
+    expect(toolCall.type).toBe("toolCall");
+    expect(toolCall.name).toBe("bash");
+    expect(toolCall.arguments).toEqual({ command: "ls -la" });
+  });
+
+  it("passes through tool call arguments that are already objects", () => {
+    const response = makeOllamaResponse({
+      tool_calls: [{ function: { name: "read", arguments: { path: "/tmp/a" } } }],
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.content).toHaveLength(1);
+    const toolCall = msg.content[0] as { type: string; name: string; arguments: unknown };
+    expect(toolCall.type).toBe("toolCall");
+    expect(toolCall.name).toBe("read");
+    expect(toolCall.arguments).toEqual({ path: "/tmp/a" });
+  });
 });
 
 describe("createOllamaStreamFn thinking events", () => {
@@ -223,5 +263,38 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+
+  it("parses string tool_call arguments in the streaming path", async () => {
+    const chunks = [
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ function: { name: "bash", arguments: '{"command":"ls"}' } }],
+        },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 10,
+        eval_count: 5,
+      },
+    ];
+
+    const events = await streamOllamaEvents(chunks);
+    const done = events.find((e) => e.type === "done") as {
+      message?: { content: Array<{ type: string; name: string; arguments: unknown }> };
+    };
+    const toolCall = done?.message?.content?.find((c) => c.type === "toolCall");
+    expect(toolCall).toBeDefined();
+    expect(toolCall?.name).toBe("bash");
+    expect(toolCall?.arguments).toEqual({ command: "ls" });
   });
 });
