@@ -70,6 +70,7 @@ type SessionQueue = {
   queue: SystemEvent[];
   lastText: string | null;
   lastContextKey: string | null;
+  lastAudience: SystemEventAudience | null;
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
@@ -110,6 +111,7 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
     queue: [],
     lastText: null,
     lastContextKey: null,
+    lastAudience: null,
   };
   queues.set(key, created);
   return created;
@@ -140,18 +142,25 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
+  const audience: SystemEventAudience = options.audience ?? "user-facing";
   entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  // Consecutive-duplicate suppression keys on (text, audience) so two
+  // back-to-back events with identical text but different audiences (e.g.
+  // a user-facing emit followed by a hidden runtime-context emit of the
+  // same line) do not collapse into one and silently drop the second
+  // lane. Both must reach the queue or the wrap-on-drain contract breaks.
+  if (entry.lastText === cleaned && entry.lastAudience === audience) {
     return false;
-  } // skip consecutive duplicates
+  }
   entry.lastText = cleaned;
+  entry.lastAudience = audience;
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
-    audience: options.audience ?? "user-facing",
+    audience,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -169,6 +178,7 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.queue.length = 0;
   entry.lastText = null;
   entry.lastContextKey = null;
+  entry.lastAudience = null;
   queues.delete(key);
   return out;
 }
@@ -198,12 +208,14 @@ function resetQueueState(key: string, entry: SessionQueue) {
   if (entry.queue.length === 0) {
     entry.lastText = null;
     entry.lastContextKey = null;
+    entry.lastAudience = null;
     queues.delete(key);
     return;
   }
   const newest = entry.queue[entry.queue.length - 1];
   entry.lastText = newest.text;
   entry.lastContextKey = newest.contextKey ?? null;
+  entry.lastAudience = newest.audience ?? "user-facing";
 }
 
 export function consumeSystemEventEntries(

@@ -313,6 +313,25 @@ describe("system events (session routing)", () => {
       expect(drained[0]?.audience).toBe("user-facing");
     });
 
+    it("does not collapse same-text events that differ in audience (consecutive-duplicate suppression keys on text+audience)", () => {
+      // Without the audience guard in enqueueSystemEvent's duplicate-suppression
+      // check, a producer that emits the same line both as user-facing and as
+      // hidden runtime-context would see the second emit silently dropped,
+      // breaking the wrap-on-drain two-lane contract.
+      const key = "agent:main:test-audience-dedupe";
+      const first = enqueueSystemEvent("same body", { sessionKey: key });
+      const second = enqueueSystemEvent("same body", { sessionKey: key, audience: "internal" });
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      const peeked = peekSystemEventEntries(key);
+      expect(peeked.map((event) => event.audience)).toEqual(["user-facing", "internal"]);
+      // Same-text + same-audience back-to-back is still deduped (existing
+      // behavior preserved).
+      const third = enqueueSystemEvent("same body", { sessionKey: key, audience: "internal" });
+      expect(third).toBe(false);
+      expect(peekSystemEventEntries(key)).toHaveLength(2);
+    });
+
     it("treats audience as part of equality (consumeSystemEventEntries respects it)", () => {
       const key = "agent:main:test-audience-equality";
       enqueueSystemEvent("alpha", { sessionKey: key, audience: "internal" });
