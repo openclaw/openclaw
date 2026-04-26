@@ -61,6 +61,8 @@ export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
+export const planPluginUninstall: UnknownMock = vi.fn();
+export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
 export const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
@@ -314,6 +316,32 @@ vi.mock("../plugins/uninstall.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/uninstall.js")>();
   return {
     ...actual,
+    planPluginUninstall: ((
+      ...args: Parameters<(typeof import("../plugins/uninstall.js"))["planPluginUninstall"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../plugins/uninstall.js"))["planPluginUninstall"]>,
+        ReturnType<(typeof import("../plugins/uninstall.js"))["planPluginUninstall"]>
+      >(
+        planPluginUninstall,
+        ...args,
+      )) as (typeof import("../plugins/uninstall.js"))["planPluginUninstall"],
+    applyPluginUninstallDirectoryRemoval: ((
+      ...args: Parameters<
+        (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]
+      >
+    ) =>
+      invokeMock<
+        Parameters<
+          (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]
+        >,
+        ReturnType<
+          (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]
+        >
+      >(
+        applyPluginUninstallDirectoryRemoval,
+        ...args,
+      )) as (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"],
     uninstallPlugin: ((
       ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
     ) =>
@@ -496,6 +524,8 @@ export function resetPluginsCliTestState() {
   inspectPluginRegistry.mockReset();
   refreshPluginRegistry.mockReset();
   applyExclusiveSlotSelection.mockReset();
+  planPluginUninstall.mockReset();
+  applyPluginUninstallDirectoryRemoval.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
@@ -589,6 +619,23 @@ export function resetPluginsCliTestState() {
     config,
     warnings: [],
   })) as (...args: unknown[]) => unknown);
+  planPluginUninstall.mockImplementation((({
+    config,
+    pluginId,
+  }: {
+    config: OpenClawConfig;
+    pluginId: string;
+  }) => ({
+    ok: true,
+    config,
+    pluginId,
+    actions: createEmptyUninstallActions(),
+    directoryRemoval: null,
+  })) as (...args: unknown[]) => unknown);
+  applyPluginUninstallDirectoryRemoval.mockResolvedValue({
+    directoryRemoved: false,
+    warnings: [],
+  });
   uninstallPlugin.mockResolvedValue({
     ok: true,
     config: {} as OpenClawConfig,

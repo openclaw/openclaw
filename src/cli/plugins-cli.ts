@@ -25,12 +25,12 @@ import {
 } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
 import {
+  applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   formatUninstallSlotResetPreview,
+  planPluginUninstall,
   resolveUninstallChannelConfigKeys,
-  resolveUninstallDirectoryTarget,
   UNINSTALL_ACTION_LABELS,
-  uninstallPlugin,
 } from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -614,50 +614,51 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
 
-      const install = cfg.plugins?.installs?.[pluginId];
-      const isLinked = install?.source === "path";
+      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+      const plan = planPluginUninstall({
+        config: cfg,
+        pluginId,
+        channelIds,
+        deleteFiles: !keepFiles,
+        extensionsDir,
+      });
+      if (!plan.ok) {
+        defaultRuntime.error(plan.error);
+        return defaultRuntime.exit(1);
+      }
+
       const preview: string[] = [];
-      if (hasEntry) {
+      if (plan.actions.entry) {
         preview.push(UNINSTALL_ACTION_LABELS.entry);
       }
-      if (hasInstall) {
+      if (plan.actions.install) {
         preview.push(UNINSTALL_ACTION_LABELS.install);
       }
-      if (cfg.plugins?.allow?.includes(pluginId)) {
+      if (plan.actions.allowlist) {
         preview.push(UNINSTALL_ACTION_LABELS.allowlist);
       }
-      if (
-        isLinked &&
-        install?.sourcePath &&
-        cfg.plugins?.load?.paths?.includes(install.sourcePath)
-      ) {
+      if (plan.actions.denylist) {
+        preview.push(UNINSTALL_ACTION_LABELS.denylist);
+      }
+      if (plan.actions.loadPath) {
         preview.push(UNINSTALL_ACTION_LABELS.loadPath);
       }
-      if (cfg.plugins?.slots?.memory === pluginId) {
+      if (plan.actions.memorySlot) {
         preview.push(formatUninstallSlotResetPreview("memory"));
       }
-      if (cfg.plugins?.slots?.contextEngine === pluginId) {
+      if (plan.actions.contextEngineSlot) {
         preview.push(formatUninstallSlotResetPreview("contextEngine"));
       }
-      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
       const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (hasInstall && channels) {
+      if (plan.actions.channelConfig && hasInstall && channels) {
         for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
           if (Object.hasOwn(channels, key)) {
             preview.push(`${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${key})`);
           }
         }
       }
-      const deleteTarget = !keepFiles
-        ? resolveUninstallDirectoryTarget({
-            pluginId,
-            hasInstall,
-            installRecord: install,
-            extensionsDir,
-          })
-        : null;
-      if (deleteTarget) {
-        preview.push(`directory: ${shortenHomePath(deleteTarget)}`);
+      if (plan.directoryRemoval) {
+        preview.push(`directory: ${shortenHomePath(plan.directoryRemoval.target)}`);
       }
 
       const pluginName = plugin?.name || pluginId;
@@ -679,24 +680,8 @@ export function registerPluginsCli(program: Command) {
         }
       }
 
-      const result = await uninstallPlugin({
-        config: cfg,
-        pluginId,
-        channelIds,
-        deleteFiles: !keepFiles,
-        extensionsDir,
-      });
-
-      if (!result.ok) {
-        defaultRuntime.error(result.error);
-        return defaultRuntime.exit(1);
-      }
-      for (const warning of result.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-
       const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
-      const nextConfig = withoutPluginInstallRecords(result.config);
+      const nextConfig = withoutPluginInstallRecords(plan.config);
       await commitPluginInstallRecordsWithConfig({
         previousInstallRecords: installRecords,
         nextInstallRecords,
@@ -711,8 +696,15 @@ export function registerPluginsCli(program: Command) {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
       });
+      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      for (const warning of directoryResult.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
 
-      const removed = formatUninstallActionLabels(result.actions);
+      const removed = formatUninstallActionLabels({
+        ...plan.actions,
+        directory: directoryResult.directoryRemoved,
+      });
 
       defaultRuntime.log(
         `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,

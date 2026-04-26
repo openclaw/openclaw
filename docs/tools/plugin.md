@@ -337,8 +337,9 @@ plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
 
 When `plugins.allow` is already set, `openclaw plugins install` adds the
-installed plugin id to that allowlist before enabling it, so installs are
-immediately loadable after restart.
+installed plugin id to that allowlist before enabling it. If the same plugin id
+is present in `plugins.deny`, install removes that stale deny entry so the
+explicit install is immediately loadable after restart.
 
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,
