@@ -179,10 +179,13 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
       - `openclaw pairing approve bluebubbles <CODE>`
     - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 
+    - `allowFrom` and `groupAllowFrom` also accept SecretRef objects when phone numbers or handles should stay outside plaintext config.
+
   </Tab>
   <Tab title="Groups">
     - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
     - `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+    - SecretRefs in `allowFrom` and `groupAllowFrom` are resolved before runtime access checks.
 
   </Tab>
 </Tabs>

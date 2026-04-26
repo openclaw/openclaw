@@ -91,4 +91,30 @@ describe("secret target registry", () => {
     expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
   });
+
+  it("derives bundled plugin secret input target paths for phone number fields", () => {
+    const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
+    expect(coreTargetIds.has("plugins.entries.voice-call.config.fromNumber")).toBe(false);
+
+    const fromNumberTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "voice-call",
+      "config",
+      "fromNumber",
+    ]);
+    expect(fromNumberTarget).not.toBeNull();
+    expect(fromNumberTarget?.entry?.id).toBe("plugins.entries.voice-call.config.fromNumber");
+
+    const allowFromTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "voice-call",
+      "config",
+      "allowFrom",
+      "0",
+    ]);
+    expect(allowFromTarget).not.toBeNull();
+    expect(allowFromTarget?.entry?.id).toBe("plugins.entries.voice-call.config.allowFrom[]");
+  });
 });

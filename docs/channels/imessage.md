@@ -142,7 +142,7 @@ imsg send <handle> "test"
 
     Allowlist field: `channels.imessage.allowFrom`.
 
-    Allowlist entries can be handles or chat targets (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`).
+    Allowlist entries can be handles or chat targets (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`). `allowFrom`, `defaultTo`, and `groupAllowFrom` also accept SecretRef objects when phone numbers or handles should stay outside plaintext config.
 
   </Tab>
 
@@ -156,6 +156,7 @@ imsg send <handle> "test"
     Group sender allowlist: `channels.imessage.groupAllowFrom`.
 
     Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    SecretRefs in `allowFrom`, `defaultTo`, and `groupAllowFrom` are resolved before runtime send and access checks.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Mention gating for groups:

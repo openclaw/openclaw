@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CallMode } from "../config.js";
+import { normalizeResolvedVoiceCallPhoneNumber, type CallMode } from "../config.js";
 import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
   type EndReason,
@@ -150,7 +150,8 @@ export async function initiateCall(
 
   const callId = crypto.randomUUID();
   const from =
-    ctx.config.fromNumber || (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
+    normalizeResolvedVoiceCallPhoneNumber(ctx.config.fromNumber) ||
+    (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
   if (!from) {
     return { callId: "", success: false, error: "fromNumber not configured" };
   }

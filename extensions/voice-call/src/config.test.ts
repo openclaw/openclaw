@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
   resolveTwilioAuthToken,
   validateProviderConfig,
+  VoiceCallConfigSchema,
   normalizeVoiceCallConfig,
+  normalizeResolvedVoiceCallPhoneNumber,
   resolveVoiceCallConfig,
   type VoiceCallConfig,
 } from "./config.js";
@@ -255,6 +258,59 @@ describe("resolveVoiceCallConfig", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
     expect(config.staleCallReaperSeconds).toBe(120);
+  });
+});
+
+describe("VoiceCallConfigSchema SecretRefs", () => {
+  const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
+  it("accepts SecretRefs for phone-number config fields", () => {
+    const res = VoiceCallConfigSchema.safeParse({
+      fromNumber: envRef("VOICE_FROM_NUMBER"),
+      toNumber: "${VOICE_TO_NUMBER}",
+      allowFrom: [envRef("VOICE_ALLOWED_CALLER")],
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.fromNumber).toEqual(envRef("VOICE_FROM_NUMBER"));
+      expect(res.data.toNumber).toBe("${VOICE_TO_NUMBER}");
+    }
+  });
+
+  it("still rejects invalid literal phone numbers", () => {
+    const res = VoiceCallConfigSchema.safeParse({
+      fromNumber: "555-0123",
+      allowFrom: ["not-a-phone-number"],
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("does not treat unresolved SecretRef templates as dialable numbers", () => {
+    expect(normalizeResolvedVoiceCallPhoneNumber("${VOICE_FROM_NUMBER}")).toBeUndefined();
+  });
+});
+
+describe("voice-call manifest SecretRefs", () => {
+  it("declares phone-number config fields as secret inputs", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      configContracts?: {
+        secretInputs?: { paths?: Array<{ path: string; expected?: string }> };
+      };
+      uiHints?: Record<string, { sensitive?: boolean }>;
+    };
+
+    expect(manifest.configContracts?.secretInputs?.paths).toEqual([
+      { path: "fromNumber", expected: "string" },
+      { path: "toNumber", expected: "string" },
+      { path: "allowFrom[]", expected: "string" },
+    ]);
+    expect(manifest.uiHints?.fromNumber?.sensitive).toBe(true);
+    expect(manifest.uiHints?.toNumber?.sensitive).toBe(true);
+    expect(manifest.uiHints?.allowFrom?.sensitive).toBe(true);
   });
 });
 

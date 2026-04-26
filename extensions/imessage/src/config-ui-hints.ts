@@ -9,6 +9,18 @@ export const iMessageChannelConfigUiHints = {
     label: "iMessage DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
   },
+  allowFrom: {
+    label: "iMessage Allowlist",
+    sensitive: true,
+  },
+  defaultTo: {
+    label: "iMessage Default Recipient",
+    sensitive: true,
+  },
+  groupAllowFrom: {
+    label: "iMessage Group Allowlist",
+    sensitive: true,
+  },
   configWrites: {
     label: "iMessage Config Writes",
     help: "Allow iMessage to write config in response to channel events/commands (default: true).",

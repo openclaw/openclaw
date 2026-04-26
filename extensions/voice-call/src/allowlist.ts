@@ -7,7 +7,7 @@ export function normalizePhoneNumber(input?: string): string {
 
 export function isAllowlistedCaller(
   normalizedFrom: string,
-  allowFrom: string[] | undefined,
+  allowFrom: readonly string[] | undefined,
 ): boolean {
   if (!normalizedFrom) {
     return false;

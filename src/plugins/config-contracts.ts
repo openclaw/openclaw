@@ -21,11 +21,28 @@ type TraversalState = {
   value: unknown;
 };
 
-function normalizePathPattern(pathPattern: string): string[] {
+type PathPatternSegment =
+  | { kind: "literal"; value: string }
+  | { kind: "wildcard" }
+  | { field: string; kind: "array" };
+
+function normalizePathPattern(pathPattern: string): PathPatternSegment[] {
   return pathPattern
     .split(".")
     .map((segment) => segment.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((segment) => {
+      if (segment === "*") {
+        return { kind: "wildcard" } as const;
+      }
+      if (segment.endsWith("[]")) {
+        const field = segment.slice(0, -2).trim();
+        return field
+          ? ({ field, kind: "array" } as const)
+          : ({ kind: "literal", value: segment } as const);
+      }
+      return { kind: "literal", value: segment } as const;
+    });
 }
 
 function appendPathSegment(path: string, segment: string): string {
@@ -48,7 +65,7 @@ export function collectPluginConfigContractMatches(params: {
   for (const segment of pattern) {
     const nextStates: TraversalState[] = [];
     for (const state of states) {
-      if (segment === "*") {
+      if (segment.kind === "wildcard") {
         if (Array.isArray(state.value)) {
           for (const [index, value] of state.value.entries()) {
             nextStates.push({
@@ -68,22 +85,41 @@ export function collectPluginConfigContractMatches(params: {
         }
         continue;
       }
+      if (segment.kind === "array") {
+        if (!isRecord(state.value)) {
+          continue;
+        }
+        const items = state.value[segment.field];
+        if (!Array.isArray(items)) {
+          continue;
+        }
+        for (const [index, value] of items.entries()) {
+          nextStates.push({
+            segments: [...state.segments, segment.field, String(index)],
+            value,
+          });
+        }
+        continue;
+      }
       if (Array.isArray(state.value)) {
-        const index = Number.parseInt(segment, 10);
+        const index = Number.parseInt(segment.value, 10);
         if (Number.isInteger(index) && index >= 0 && index < state.value.length) {
           nextStates.push({
-            segments: [...state.segments, segment],
+            segments: [...state.segments, segment.value],
             value: state.value[index],
           });
         }
         continue;
       }
-      if (!isRecord(state.value) || !Object.prototype.hasOwnProperty.call(state.value, segment)) {
+      if (
+        !isRecord(state.value) ||
+        !Object.prototype.hasOwnProperty.call(state.value, segment.value)
+      ) {
         continue;
       }
       nextStates.push({
-        segments: [...state.segments, segment],
-        value: state.value[segment],
+        segments: [...state.segments, segment.value],
+        value: state.value[segment.value],
       });
     }
     states = nextStates;

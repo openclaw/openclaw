@@ -499,4 +499,71 @@ describe("collectPluginConfigAssignments", () => {
       "plugins.entries.other.config.service.tokens.secondary",
     ]);
   });
+
+  it("collects voice-call phone-number SecretRefs from scalar and array fields", () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "voice-call",
+          origin: "bundled",
+          providers: [],
+          legacyPluginIds: [],
+          configContracts: {
+            secretInputs: {
+              bundledDefaultEnabled: false,
+              paths: [
+                { path: "fromNumber", expected: "string" },
+                { path: "toNumber", expected: "string" },
+                { path: "allowFrom[]", expected: "string" },
+              ],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = asConfig({
+      plugins: {
+        entries: {
+          "voice-call": {
+            enabled: true,
+            config: {
+              fromNumber: envRef("VOICE_FROM_NUMBER"),
+              toNumber: "${VOICE_TO_NUMBER}",
+              allowFrom: [envRef("VOICE_ALLOWED_CALLER"), "+15550009999"],
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["voice-call", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual([
+      "plugins.entries.voice-call.config.allowFrom[0]",
+      "plugins.entries.voice-call.config.fromNumber",
+      "plugins.entries.voice-call.config.toNumber",
+    ]);
+    for (const assignment of context.assignments) {
+      assignment.apply(`resolved:${assignment.path}`);
+    }
+    const voiceCallEntry = config.plugins?.entries?.["voice-call"] as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    const voiceCallConfig = voiceCallEntry?.config;
+    const allowFrom = voiceCallConfig?.allowFrom;
+    expect(voiceCallConfig?.fromNumber).toBe(
+      "resolved:plugins.entries.voice-call.config.fromNumber",
+    );
+    expect(voiceCallConfig?.toNumber).toBe("resolved:plugins.entries.voice-call.config.toNumber");
+    expect(Array.isArray(allowFrom) ? allowFrom[0] : undefined).toBe(
+      "resolved:plugins.entries.voice-call.config.allowFrom[0]",
+    );
+  });
 });

@@ -212,7 +212,7 @@ content and identifiers.
     - `open` (requires `allowFrom` to include `"*"`)
     - `disabled`
 
-    `allowFrom` accepts E.164-style numbers (normalized internally).
+    `allowFrom` accepts E.164-style numbers (normalized internally). `allowFrom`, `defaultTo`, and `groupAllowFrom` also accept SecretRef objects when the number should stay outside plaintext config.
 
     Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
 
@@ -239,6 +239,7 @@ content and identifiers.
     Sender allowlist fallback:
 
     - if `groupAllowFrom` is unset, runtime falls back to `allowFrom` when available
+    - `allowFrom`, `defaultTo`, and `groupAllowFrom` SecretRefs are resolved before runtime access checks
     - sender allowlists are evaluated before mention/reply activation
 
     Note: if no `channels.whatsapp` block exists at all, runtime group-policy fallback is `allowlist` (with a warning log), even if `channels.defaults.groupPolicy` is set.

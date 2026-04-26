@@ -16,6 +16,7 @@ type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
 function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,
   configPath: string,
+  expectedResolvedValue: "string" = "string",
 ): SecretTargetRegistryEntry {
   const pathPattern = ["plugins", "entries", pluginId, "config", ...configPath.split(".")].join(
     ".",
@@ -26,11 +27,22 @@ function createPluginOpenClawConfigSecretTargetEntry(
     configFile: "openclaw.json",
     pathPattern,
     secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
+    expectedResolvedValue,
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
   };
+}
+
+function createPluginSecretInputTargetEntry(
+  pluginId: string,
+  secretInputPath: PluginManifestSecretInputPath,
+): SecretTargetRegistryEntry {
+  return createPluginOpenClawConfigSecretTargetEntry(
+    pluginId,
+    secretInputPath.path,
+    secretInputPath.expected ?? "string",
+  );
 }
 
 function hasSensitiveConfigHint(
@@ -87,6 +99,7 @@ function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegis
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
+
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];

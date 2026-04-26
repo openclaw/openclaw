@@ -50,6 +50,8 @@ Field reference:
 | `dmPolicy`  | DM access policy (`pairing` recommended)          |
 | `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
 
+`account`, `allowFrom`, `defaultTo`, `groupAllowFrom`, and `reactionAllowlist` also accept SecretRef objects when phone numbers or sender identifiers should stay outside plaintext config.
+
 ## What it is
 
 - Signal channel via `signal-cli` (not embedded libsignal).
@@ -190,6 +192,7 @@ DMs:
   - `openclaw pairing approve signal <CODE>`
 - Pairing is the default token exchange for Signal DMs. Details: [Pairing](/channels/pairing)
 - UUID-only senders (from `sourceUuid`) are stored as `uuid:<id>` in `channels.signal.allowFrom`.
+- `account`, `allowFrom`, `defaultTo`, `groupAllowFrom`, and `reactionAllowlist` SecretRefs are resolved before runtime send and access checks.
 
 Groups:
 

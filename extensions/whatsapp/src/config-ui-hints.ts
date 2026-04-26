@@ -13,6 +13,18 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  allowFrom: {
+    label: "WhatsApp Allowlist",
+    sensitive: true,
+  },
+  defaultTo: {
+    label: "WhatsApp Default Recipient",
+    sensitive: true,
+  },
+  groupAllowFrom: {
+    label: "WhatsApp Group Allowlist",
+    sensitive: true,
+  },
   debounceMs: {
     label: "WhatsApp Message Debounce (ms)",
     help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",

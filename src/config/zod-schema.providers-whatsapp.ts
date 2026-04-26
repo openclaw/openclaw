@@ -14,9 +14,13 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyToModeSchema,
+  SecretRefSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const WhatsAppSecretBackedSenderSchema = z.union([z.string(), SecretRefSchema]).register(sensitive);
+const WhatsAppSecretBackedSenderListSchema = z.array(WhatsAppSecretBackedSenderSchema);
 
 const WhatsAppGroupEntrySchema = z
   .object({
@@ -73,9 +77,9 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       ? DmPolicySchema.optional().default("pairing")
       : DmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.string()).optional(),
+    allowFrom: WhatsAppSecretBackedSenderListSchema.optional(),
+    defaultTo: WhatsAppSecretBackedSenderSchema.optional(),
+    groupAllowFrom: WhatsAppSecretBackedSenderListSchema.optional(),
     groupPolicy: params.useDefaults
       ? GroupPolicySchema.optional().default("allowlist")
       : GroupPolicySchema.optional(),

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "../config-api.js";
 
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
 function expectWhatsAppConfigValid(config: unknown) {
   const res = WhatsAppConfigSchema.safeParse(config);
   expect(res.success).toBe(true);
@@ -117,5 +119,26 @@ describe("whatsapp config schema", () => {
         },
       },
     });
+  });
+
+  it("accepts SecretRefs for phone-number config fields", () => {
+    const res = expectWhatsAppConfigValid({
+      allowFrom: [envRef("WHATSAPP_OWNER")],
+      defaultTo: envRef("WHATSAPP_DEFAULT_TO"),
+      groupAllowFrom: ["${WHATSAPP_GROUP_OWNER}"],
+      accounts: {
+        work: {
+          allowFrom: [envRef("WHATSAPP_WORK_OWNER")],
+          defaultTo: "${WHATSAPP_WORK_DEFAULT_TO}",
+          groupAllowFrom: [envRef("WHATSAPP_WORK_GROUP_OWNER")],
+        },
+      },
+    });
+
+    if (!res.success) {
+      return;
+    }
+    expect(res.data.allowFrom?.[0]).toEqual(envRef("WHATSAPP_OWNER"));
+    expect(res.data.accounts?.work?.defaultTo).toBe("${WHATSAPP_WORK_DEFAULT_TO}");
   });
 });
