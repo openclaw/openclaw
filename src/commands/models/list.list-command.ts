@@ -76,7 +76,7 @@ export async function modelsListCommand(
   if (!useManifestCatalogFastPath && !useProviderCatalogFastPath && opts.all && providerFilter) {
     const { loadProviderIndexCatalogRowsForList } =
       await import("./list.provider-index-catalog.js");
-    providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({ providerFilter });
+    providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({ cfg, providerFilter });
   }
   const useProviderIndexCatalogFastPath = providerIndexCatalogRows.length > 0;
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
