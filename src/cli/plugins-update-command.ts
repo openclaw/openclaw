@@ -2,14 +2,13 @@ import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import {
   resolveHookPackUpdateSelection,
@@ -121,19 +120,22 @@ export async function runPluginUpdateCommand(params: {
     const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
     const shouldPersistPluginInstallIndex =
       pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
-    if (shouldPersistPluginInstallIndex) {
-      await writePersistedInstalledPluginIndexInstallRecords(nextPluginInstallRecords);
-    }
     const nextConfig = shouldPersistPluginInstallIndex
       ? withoutPluginInstallRecords(hookResult.config)
       : hookResult.config;
-    await replaceConfigFile({
-      nextConfig,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-      ...(shouldPersistPluginInstallIndex
-        ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
-        : {}),
-    });
+    if (shouldPersistPluginInstallIndex) {
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords: nextPluginInstallRecords,
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    }
     if (pluginResult.changed) {
       await refreshPluginRegistryAfterConfigMutation({
         config: nextConfig,

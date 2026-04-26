@@ -59,6 +59,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when
+  the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables
+  itself for the current Gateway process after repeated failed restarts while
+  the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux,
+  @FiredMosquito831, and @spikefcz.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
@@ -82,6 +87,7 @@ Docs: https://docs.openclaw.ai
   metadata when callers request the model without the provider prefix, so custom
   image models keep their `input: ["text", "image"]` capability. Fixes #33185.
   Thanks @Kobe9312 and @vincentkoc.
+- Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
 - Sessions: keep embedded runtime context out of the visible user prompt by
   sending it as a hidden next-turn custom message, and teach doctor to repair
   affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.

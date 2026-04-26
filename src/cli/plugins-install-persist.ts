@@ -4,10 +4,8 @@ import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js"
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  PLUGIN_INSTALLS_CONFIG_PATH,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { defaultRuntime } from "../runtime.js";
@@ -18,6 +16,7 @@ import {
   logHookPackRestartHint,
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
+import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 
 function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -53,11 +52,11 @@ export async function persistPluginInstall(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
   next = withoutPluginInstallRecords(slotResult.config);
-  await writePersistedInstalledPluginIndexInstallRecords(nextInstallRecords);
-  await replaceConfigFile({
+  await commitPluginInstallRecordsWithConfig({
+    previousInstallRecords: installRecords,
+    nextInstallRecords,
     nextConfig: next,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
-    writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
