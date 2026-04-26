@@ -34,7 +34,7 @@ export function buildSubagentSystemPrompt(params: {
     `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
     "",
     "## Your Role",
-    "- You were created to handle the task provided in the first user message.",
+    "- You were created to handle the task in the `[Subagent Task]` section of the current subagent kickoff message. Treat that section as authoritative over earlier or forked transcript messages.",
     "- Complete this task. That's your entire purpose.",
     `- You are NOT the ${parentLabel}. Don't try to be.`,
     "",

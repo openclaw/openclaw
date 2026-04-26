@@ -997,7 +997,9 @@ describe("buildSubagentSystemPrompt", () => {
       maxSpawnDepth: 2,
     });
 
-    expect(prompt).toContain("task provided in the first user message");
+    expect(prompt).toContain("`[Subagent Task]` section");
+    expect(prompt).toContain("earlier or forked transcript messages");
+    expect(prompt).not.toContain("first user message");
     expect(prompt).not.toContain(task);
     expect(prompt).not.toContain("TRACE-72019");
   });
