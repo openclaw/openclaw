@@ -43,6 +43,83 @@ vi.mock("../icons.ts", () => ({
   icons: {},
 }));
 
+vi.mock("../chat/build-chat-items.ts", () => ({
+  buildChatItems: (props: {
+    messages: unknown[];
+    stream: string | null;
+    streamStartedAt: number | null;
+  }) => {
+    if (props.messages.length > 0) {
+      return [
+        {
+          kind: "group",
+          key: "group:assistant:test",
+          role: "assistant",
+          messages: props.messages.map((message, index) => ({
+            key: `message:${index}`,
+            message,
+          })),
+          timestamp: 1,
+          isStreaming: false,
+        },
+      ];
+    }
+    if (props.stream !== null) {
+      return props.stream
+        ? [
+            {
+              kind: "stream",
+              key: "stream:test",
+              text: props.stream,
+              startedAt: props.streamStartedAt ?? 1,
+            },
+          ]
+        : [{ kind: "reading-indicator", key: "reading:test" }];
+    }
+    return [];
+  },
+}));
+
+vi.mock("../chat/grouped-render.ts", () => ({
+  renderMessageGroup: (group: { messages: Array<{ message: unknown }> }) => {
+    const element = document.createElement("div");
+    element.className = "chat-group";
+    element.textContent = group.messages
+      .map(({ message }) => {
+        if (typeof message === "object" && message !== null && "content" in message) {
+          const content = (message as { content?: unknown }).content;
+          if (typeof content === "string") {
+            return content;
+          }
+          return content == null ? "" : JSON.stringify(content);
+        }
+        return String(message);
+      })
+      .join("\n");
+    return element;
+  },
+  renderReadingIndicatorGroup: () => {
+    const element = document.createElement("div");
+    element.className = "chat-reading-indicator";
+    return element;
+  },
+  renderStreamingGroup: (text: string) => {
+    const element = document.createElement("div");
+    element.className = "chat-stream";
+    element.textContent = text;
+    return element;
+  },
+}));
+
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
+vi.mock("../chat/tool-expansion-state.ts", () => ({
+  getExpandedToolCards: () => new Map<string, boolean>(),
+  syncToolCardExpansionState: () => undefined,
+}));
+
 vi.mock("../controllers/agents.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
@@ -454,8 +531,16 @@ describe("chat welcome", () => {
 });
 
 describe("chat session controls", () => {
-  it("patches the current session model from the chat header picker", async () => {
+  it("patches the current session model and refreshes active tool visibility", async () => {
     const { state, request } = createChatHeaderState();
+    state.agentsPanel = "tools";
+    state.agentsSelectedId = "main";
+    state.toolsEffectiveResultKey = "main:main";
+    state.toolsEffectiveResult = {
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    };
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
@@ -477,29 +562,6 @@ describe("chat session controls", () => {
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-  });
-
-  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
-    const { state, request } = createChatHeaderState();
-    state.agentsPanel = "tools";
-    state.agentsSelectedId = "main";
-    state.toolsEffectiveResultKey = "main:main";
-    state.toolsEffectiveResult = {
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-
-    modelSelect!.value = "openai/gpt-5-mini";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
     expect(request).toHaveBeenCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "main",
