@@ -75,6 +75,10 @@ a clear 501 error.
 What still works without Playwright:
 
 - ARIA snapshots
+- Role-style accessibility snapshots (`--interactive`, `--compact`,
+  `--depth`, `--efficient`) when a per-tab CDP WebSocket is available. This is
+  a fallback for inspection and ref discovery; Playwright remains the primary
+  action engine.
 - Page screenshots for the managed `openclaw` browser when a per-tab CDP
   WebSocket is available
 - Page screenshots for `existing-session` / Chrome MCP profiles
@@ -84,7 +88,7 @@ What still needs Playwright:
 
 - `navigate`
 - `act`
-- AI snapshots / role snapshots
+- AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
 
@@ -256,9 +260,12 @@ OpenClaw supports two “snapshot” styles:
   - Output: the accessibility tree as structured nodes.
   - Actions: `openclaw browser click ax12` works when the snapshot path can bind
     the ref through Playwright and Chrome backend DOM ids.
-  - If Playwright is unavailable, ARIA snapshots can still be useful for
-    inspection, but refs may not be actionable. Re-snapshot with `--format ai`
-    or `--interactive` when you need action refs.
+- If Playwright is unavailable, ARIA snapshots can still be useful for
+  inspection, but refs may not be actionable. Re-snapshot with `--format ai`
+  or `--interactive` when you need action refs.
+- Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
+  starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
+  snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
 
 Ref behavior:
 

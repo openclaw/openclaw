@@ -176,6 +176,11 @@ OpenClaw resolves that behavior by conversation type:
 - Groups/channels allow silence by default.
 - Internal orchestration allows silence by default.
 
+OpenClaw also uses silent replies for internal runner failures that happen
+before any assistant reply in non-direct chats, so groups/channels do not see
+gateway error boilerplate. Direct chats show compact failure copy by default;
+raw runner details are shown only when `/verbose` is `on` or `full`.
+
 Defaults live under `agents.defaults.silentReply` and
 `agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
 `surfaces.<id>.silentReplyRewrite` can override them per surface.

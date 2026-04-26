@@ -102,6 +102,43 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
   });
 
+  it("does not preserve prototype poison keys from persisted index JSON", async () => {
+    const stateDir = makeTempDir();
+    const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const index = createIndex({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+        },
+      },
+    });
+    Object.defineProperty(index, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+    Object.defineProperty(index.installRecords, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+    fs.writeFileSync(filePath, JSON.stringify(index), "utf8");
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+
+    expect(persisted).toMatchObject({
+      plugins: [expect.objectContaining({ pluginId: "demo" })],
+      installRecords: {
+        demo: expect.objectContaining({ source: "npm" }),
+      },
+    });
+    expect(Object.prototype.hasOwnProperty.call(persisted as object, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(persisted?.installRecords ?? {}, "__proto__")).toBe(
+      false,
+    );
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("returns null for missing or invalid persisted indexes", async () => {
     const stateDir = makeTempDir();
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();

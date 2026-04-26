@@ -36,7 +36,10 @@ describe("persistPluginInstall", () => {
     });
 
     const next = await persistPluginInstall({
-      config: baseConfig,
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
       pluginId: "alpha",
       install: {
         source: "npm",
@@ -65,5 +68,43 @@ describe("persistPluginInstall", () => {
       },
       reason: "source-changed",
     });
+  });
+
+  it("removes stale denylist entries before enabling installed plugins", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        deny: ["alpha", "other"],
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        deny: ["other"],
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockImplementation((...args: unknown[]) => {
+      const [cfg, pluginId] = args as [OpenClawConfig, string];
+      expect(pluginId).toBe("alpha");
+      expect(cfg.plugins?.deny).toEqual(["other"]);
+      return { config: enabledConfig };
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
   });
 });

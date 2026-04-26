@@ -380,12 +380,14 @@ function loadSetupManifestRegistry(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
 }) {
   const env = params?.env ?? process.env;
   return loadPluginManifestRegistryForPluginRegistry({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
+    pluginIds: params?.pluginIds,
     includeDisabled: true,
   });
 }
@@ -532,6 +534,7 @@ export function resolvePluginSetupRegistry(params?: {
   const manifestRegistry = loadSetupManifestRegistry({
     workspaceDir: params?.workspaceDir,
     env,
+    pluginIds: params?.pluginIds,
   });
 
   for (const record of manifestRegistry.plugins) {

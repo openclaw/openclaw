@@ -1,6 +1,6 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
-import { classifyCiaoUnhandledRejection } from "./ciao.js";
+import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
 export type GatewayBonjourAdvertiser = {
@@ -50,6 +50,7 @@ type CiaoModule = {
 type BonjourCycle = {
   responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
+  cleanupUncaughtException?: () => void;
   cleanupUnhandledRejection?: () => void;
 };
 
@@ -59,10 +60,12 @@ type ServiceStateTracker = {
 };
 
 type ConsoleLogFn = (...args: unknown[]) => void;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
+  registerUncaughtExceptionHandler?: (handler: UncaughtExceptionHandler) => () => void;
   registerUnhandledRejectionHandler?: (handler: UnhandledRejectionHandler) => () => void;
 };
 
@@ -175,19 +178,22 @@ export async function startGatewayBonjourAdvertiser(
   };
   const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
+  let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
 
-  const handleCiaoUnhandledRejection = (reason: unknown): boolean => {
-    const classification = classifyCiaoUnhandledRejection(reason);
+  const handleCiaoProcessError = (reason: unknown): boolean => {
+    const classification = classifyCiaoProcessError(reason);
     if (!classification) {
       return false;
     }
 
-    if (classification.kind === "interface-assertion") {
-      logger.warn(`bonjour: suppressing ciao interface assertion: ${classification.formatted}`);
-      return true;
+    if (classification.kind === "cancellation") {
+      logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+    } else {
+      const label =
+        classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+      logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
+      requestCiaoRecovery?.(classification);
     }
-
-    logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
     return true;
   };
 
@@ -255,10 +261,14 @@ export async function startGatewayBonjourAdvertiser(
 
       const cleanupUnhandledRejection =
         services.length > 0 && deps.registerUnhandledRejectionHandler
-          ? deps.registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
+          ? deps.registerUnhandledRejectionHandler(handleCiaoProcessError)
+          : undefined;
+      const cleanupUncaughtException =
+        services.length > 0 && deps.registerUncaughtExceptionHandler
+          ? deps.registerUncaughtExceptionHandler(handleCiaoProcessError)
           : undefined;
 
-      return { responder, services, cleanupUnhandledRejection };
+      return { responder, services, cleanupUncaughtException, cleanupUnhandledRejection };
     }
 
     async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
@@ -279,6 +289,7 @@ export async function startGatewayBonjourAdvertiser(
       } catch {
         /* ignore */
       } finally {
+        cycle.cleanupUncaughtException?.();
         cycle.cleanupUnhandledRejection?.();
       }
     }
@@ -387,6 +398,9 @@ export async function startGatewayBonjourAdvertiser(
         recreatePromise = null;
       });
       return recreatePromise;
+    };
+    requestCiaoRecovery = (classification) => {
+      void recreateAdvertiser(`ciao ${classification.kind}: ${classification.formatted}`);
     };
 
     const lastRepairAttempt = new Map<string, number>();

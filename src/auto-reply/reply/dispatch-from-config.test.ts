@@ -2352,6 +2352,47 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBeUndefined();
   });
 
+  it("normalizes accumulated block TTS-only media before final delivery", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
+      async (payload: ReplyPayload) => ({
+        ...payload,
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+      }),
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:main:feishu:ou_user",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from block streaming." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(replyMediaPathMocks.createReplyMediaPathNormalizer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "feishu",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+        audioAsVoice: true,
+        spokenText: "Hello from block streaming.",
+      }),
+    );
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);

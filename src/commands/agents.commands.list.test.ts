@@ -2,9 +2,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 
-const { buildProviderStatusIndexMock, requireValidConfigMock } = vi.hoisted(() => ({
+const {
+  buildProviderStatusIndexMock,
+  buildProviderSummaryMetadataIndexMock,
+  listProvidersForAgentMock,
+  providerSummaryMetadataMock,
+  requireValidConfigMock,
+  summarizeBindingsMock,
+} = vi.hoisted(() => ({
   buildProviderStatusIndexMock: vi.fn(),
+  buildProviderSummaryMetadataIndexMock: vi.fn(),
+  listProvidersForAgentMock: vi.fn(),
+  providerSummaryMetadataMock: new Map([
+    [
+      "telegram",
+      {
+        label: "Telegram",
+        defaultAccountId: "default",
+        visibleInConfiguredLists: true,
+      },
+    ],
+  ]),
   requireValidConfigMock: vi.fn(),
+  summarizeBindingsMock: vi.fn(),
 }));
 
 vi.mock("./agents.command-shared.js", () => ({
@@ -13,8 +33,9 @@ vi.mock("./agents.command-shared.js", () => ({
 
 vi.mock("./agents.providers.js", () => ({
   buildProviderStatusIndex: buildProviderStatusIndexMock,
-  listProvidersForAgent: () => ["Telegram default: configured"],
-  summarizeBindings: () => ["Telegram default"],
+  buildProviderSummaryMetadataIndex: buildProviderSummaryMetadataIndexMock,
+  listProvidersForAgent: listProvidersForAgentMock,
+  summarizeBindings: summarizeBindingsMock,
 }));
 
 const { agentsListCommand } = await import("./agents.commands.list.js");
@@ -47,6 +68,9 @@ describe("agentsListCommand", () => {
     vi.clearAllMocks();
     requireValidConfigMock.mockResolvedValue(createConfig());
     buildProviderStatusIndexMock.mockResolvedValue(new Map());
+    buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
+    listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
+    summarizeBindingsMock.mockReturnValue(["Telegram default"]);
   });
 
   it("keeps plain JSON output on the config-only path", async () => {
@@ -67,6 +91,19 @@ describe("agentsListCommand", () => {
     await agentsListCommand({ json: true, bindings: true }, runtime);
 
     expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
+    expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
+    expect(summarizeBindingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: expect.any(Object) }),
+      [expect.objectContaining({ agentId: "main" })],
+      providerSummaryMetadataMock,
+    );
+    expect(listProvidersForAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({ agents: expect.any(Object) }),
+        bindings: [expect.objectContaining({ agentId: "main" })],
+        providerMetadata: providerSummaryMetadataMock,
+      }),
+    );
     expect(runtime.json[0]).toEqual([
       expect.objectContaining({
         id: "main",

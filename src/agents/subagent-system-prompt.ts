@@ -7,7 +7,7 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
-  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  /** Whether ACP-specific routing guidance should be included. Defaults to false. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
@@ -25,7 +25,7 @@ export function buildSubagentSystemPrompt(params: {
     typeof params.maxSpawnDepth === "number"
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  const acpEnabled = params.acpEnabled !== false;
+  const acpEnabled = params.acpEnabled === true;
   const nativeCodexCommandAvailable = (params.nativeCommandNames ?? []).some(
     (name) => name.trim().replace(/^\/+/, "").toLowerCase() === "codex",
   );

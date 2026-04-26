@@ -59,9 +59,9 @@ pnpm qa:otel:smoke
 That script starts a local OTLP/HTTP trace receiver, runs the
 `otel-trace-smoke` QA scenario with the `diagnostics-otel` plugin enabled, then
 decodes the exported protobuf spans and asserts the release-critical shape:
-`openclaw.run`, `openclaw.model.call`, `openclaw.context.assembled`, and
-`openclaw.message.delivery` must be present; model calls must not export
-`StreamAbandoned` on successful turns; raw diagnostic IDs and
+`openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
+`openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
+model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
 `openclaw.content.*` attributes must stay out of the trace. It writes
 `otel-smoke-summary.json` next to the QA suite artifacts.
 

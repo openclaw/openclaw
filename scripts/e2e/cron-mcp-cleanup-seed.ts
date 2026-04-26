@@ -80,6 +80,9 @@ async function main() {
       },
       agents: {
         defaults: {
+          skipBootstrap: true,
+          contextInjection: "never",
+          skills: [],
           subagents: {
             runTimeoutSeconds: 8,
           },

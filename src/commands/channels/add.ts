@@ -15,7 +15,8 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { channelLabel } from "./runtime-label.js";
+import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
 type OnboardChannelsModule = typeof import("../onboard-channels.js");

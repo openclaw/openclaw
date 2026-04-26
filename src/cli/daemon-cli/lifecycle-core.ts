@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
 import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
@@ -120,18 +121,38 @@ async function resolveServiceLoadedOrFail(params: {
  * may produce false positives, but the check is intentionally best-effort —
  * a false positive here is safer than a crash on startup. (#35862)
  */
-async function getConfigValidationError(): Promise<string | null> {
+type ConfigActionPreflightFailure = {
+  message: string;
+  hints?: string[];
+};
+
+async function getConfigActionPreflightFailure(
+  action: string,
+): Promise<ConfigActionPreflightFailure | null> {
+  let snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   try {
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.exists || snapshot.valid) {
-      return null;
+    snapshot = await readConfigFileSnapshot();
+    if (snapshot.exists && !snapshot.valid) {
+      return {
+        message:
+          snapshot.issues.length > 0
+            ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+            : "Unknown validation issue.",
+      };
     }
-    return snapshot.issues.length > 0
-      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
-      : "Unknown validation issue.";
   } catch {
     return null;
   }
+
+  const futureBlock = resolveFutureConfigActionBlock({ action, snapshot });
+  if (futureBlock) {
+    return {
+      message: futureBlock.message,
+      hints: futureBlock.hints,
+    };
+  }
+
+  return null;
 }
 
 export async function runServiceUninstall(params: {
@@ -147,6 +168,14 @@ export async function runServiceUninstall(params: {
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service uninstall is disabled.");
     return;
+  }
+
+  {
+    const preflight = await getConfigActionPreflightFailure("uninstall the gateway service");
+    if (preflight) {
+      fail(`${params.serviceNoun} uninstall blocked: ${preflight.message}`, preflight.hints);
+      return;
+    }
   }
 
   let loaded = false;
@@ -207,10 +236,13 @@ export async function runServiceStart(params: {
   // Pre-flight config validation (#35862) — run for both loaded and not-loaded
   // to prevent launching from invalid config in any start path.
   {
-    const configError = await getConfigValidationError();
-    if (configError) {
+    const preflight = await getConfigActionPreflightFailure("start the gateway service");
+    if (preflight) {
       fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        preflight.hints
+          ? `${params.serviceNoun} start blocked: ${preflight.message}`
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        preflight.hints,
       );
       return;
     }
@@ -294,6 +326,13 @@ export async function runServiceStop(params: {
   });
   if (loaded === null) {
     return;
+  }
+  {
+    const preflight = await getConfigActionPreflightFailure("stop the gateway service");
+    if (preflight) {
+      fail(`${params.serviceNoun} stop blocked: ${preflight.message}`, preflight.hints);
+      return;
+    }
   }
   if (!loaded) {
     try {
@@ -390,10 +429,13 @@ export async function runServiceRestart(params: {
   // Pre-flight config validation: check before any restart action (including
   // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
   {
-    const configError = await getConfigValidationError();
-    if (configError) {
+    const preflight = await getConfigActionPreflightFailure("restart the gateway service");
+    if (preflight) {
       fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        preflight.hints
+          ? `${params.serviceNoun} restart blocked: ${preflight.message}`
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        preflight.hints,
       );
       return false;
     }

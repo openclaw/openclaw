@@ -14,7 +14,6 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import { inspectPluginRegistry, refreshPluginRegistry } from "../plugins/plugin-registry.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
@@ -26,9 +25,12 @@ import {
 } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
 import {
+  applyPluginUninstallDirectoryRemoval,
+  formatUninstallActionLabels,
+  formatUninstallSlotResetPreview,
+  planPluginUninstall,
   resolveUninstallChannelConfigKeys,
-  resolveUninstallDirectoryTarget,
-  uninstallPlugin,
+  UNINSTALL_ACTION_LABELS,
 } from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -612,47 +614,51 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
 
-      const install = cfg.plugins?.installs?.[pluginId];
-      const isLinked = install?.source === "path";
-      const preview: string[] = [];
-      if (hasEntry) {
-        preview.push("config entry");
-      }
-      if (hasInstall) {
-        preview.push("install record");
-      }
-      if (cfg.plugins?.allow?.includes(pluginId)) {
-        preview.push("allowlist entry");
-      }
-      if (
-        isLinked &&
-        install?.sourcePath &&
-        cfg.plugins?.load?.paths?.includes(install.sourcePath)
-      ) {
-        preview.push("load path");
-      }
-      if (cfg.plugins?.slots?.memory === pluginId) {
-        preview.push(`memory slot (will reset to "${defaultSlotIdForKey("memory")}")`);
-      }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+      const plan = planPluginUninstall({
+        config: cfg,
+        pluginId,
+        channelIds,
+        deleteFiles: !keepFiles,
+        extensionsDir,
+      });
+      if (!plan.ok) {
+        defaultRuntime.error(plan.error);
+        return defaultRuntime.exit(1);
+      }
+
+      const preview: string[] = [];
+      if (plan.actions.entry) {
+        preview.push(UNINSTALL_ACTION_LABELS.entry);
+      }
+      if (plan.actions.install) {
+        preview.push(UNINSTALL_ACTION_LABELS.install);
+      }
+      if (plan.actions.allowlist) {
+        preview.push(UNINSTALL_ACTION_LABELS.allowlist);
+      }
+      if (plan.actions.denylist) {
+        preview.push(UNINSTALL_ACTION_LABELS.denylist);
+      }
+      if (plan.actions.loadPath) {
+        preview.push(UNINSTALL_ACTION_LABELS.loadPath);
+      }
+      if (plan.actions.memorySlot) {
+        preview.push(formatUninstallSlotResetPreview("memory"));
+      }
+      if (plan.actions.contextEngineSlot) {
+        preview.push(formatUninstallSlotResetPreview("contextEngine"));
+      }
       const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (hasInstall && channels) {
+      if (plan.actions.channelConfig && hasInstall && channels) {
         for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
           if (Object.hasOwn(channels, key)) {
-            preview.push(`channel config (channels.${key})`);
+            preview.push(`${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${key})`);
           }
         }
       }
-      const deleteTarget = !keepFiles
-        ? resolveUninstallDirectoryTarget({
-            pluginId,
-            hasInstall,
-            installRecord: install,
-            extensionsDir,
-          })
-        : null;
-      if (deleteTarget) {
-        preview.push(`directory: ${shortenHomePath(deleteTarget)}`);
+      if (plan.directoryRemoval) {
+        preview.push(`directory: ${shortenHomePath(plan.directoryRemoval.target)}`);
       }
 
       const pluginName = plugin?.name || pluginId;
@@ -674,24 +680,8 @@ export function registerPluginsCli(program: Command) {
         }
       }
 
-      const result = await uninstallPlugin({
-        config: cfg,
-        pluginId,
-        channelIds,
-        deleteFiles: !keepFiles,
-        extensionsDir,
-      });
-
-      if (!result.ok) {
-        defaultRuntime.error(result.error);
-        return defaultRuntime.exit(1);
-      }
-      for (const warning of result.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-
       const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
-      const nextConfig = withoutPluginInstallRecords(result.config);
+      const nextConfig = withoutPluginInstallRecords(plan.config);
       await commitPluginInstallRecordsWithConfig({
         previousInstallRecords: installRecords,
         nextInstallRecords,
@@ -706,29 +696,15 @@ export function registerPluginsCli(program: Command) {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
       });
+      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      for (const warning of directoryResult.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
 
-      const removed: string[] = [];
-      if (result.actions.entry) {
-        removed.push("config entry");
-      }
-      if (result.actions.install) {
-        removed.push("install record");
-      }
-      if (result.actions.allowlist) {
-        removed.push("allowlist");
-      }
-      if (result.actions.loadPath) {
-        removed.push("load path");
-      }
-      if (result.actions.memorySlot) {
-        removed.push("memory slot");
-      }
-      if (result.actions.channelConfig) {
-        removed.push("channel config");
-      }
-      if (result.actions.directory) {
-        removed.push("directory");
-      }
+      const removed = formatUninstallActionLabels({
+        ...plan.actions,
+        directory: directoryResult.directoryRemoved,
+      });
 
       defaultRuntime.log(
         `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,

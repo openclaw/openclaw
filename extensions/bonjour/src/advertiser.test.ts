@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
   getResponder: vi.fn(),
   shutdown: vi.fn(),
+  registerUncaughtExceptionHandler: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
   logger: {
     info: vi.fn(),
@@ -12,7 +13,14 @@ const mocks = vi.hoisted(() => ({
     debug: vi.fn(),
   },
 }));
-const { createService, getResponder, shutdown, registerUnhandledRejectionHandler, logger } = mocks;
+const {
+  createService,
+  getResponder,
+  shutdown,
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+  logger,
+} = mocks;
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
@@ -77,6 +85,7 @@ const startAdvertiser = (
 ): ReturnType<StartGatewayBonjourAdvertiser> =>
   startGatewayBonjourAdvertiser(opts, {
     logger,
+    registerUncaughtExceptionHandler: (handler) => registerUncaughtExceptionHandler(handler),
     registerUnhandledRejectionHandler: (handler) => registerUnhandledRejectionHandler(handler),
   });
 
@@ -103,6 +112,7 @@ describe("gateway bonjour advertiser", () => {
     createService.mockClear();
     getResponder.mockReset();
     shutdown.mockClear();
+    registerUncaughtExceptionHandler.mockClear();
     registerUnhandledRejectionHandler.mockClear();
     logger.info.mockClear();
     logger.warn.mockClear();
@@ -220,7 +230,7 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("does not install a process-level unhandled rejection handler by default", async () => {
+  it("does not install process-level ciao handlers by default", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -237,11 +247,12 @@ describe("gateway bonjour advertiser", () => {
     );
 
     expect(processOn).not.toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
+    expect(processOn).not.toHaveBeenCalledWith("uncaughtException", expect.any(Function));
 
     await started.stop();
   });
 
-  it("cleans up unhandled rejection handler after shutdown", async () => {
+  it("cleans up ciao process handlers after shutdown", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -252,10 +263,14 @@ describe("gateway bonjour advertiser", () => {
     });
     mockCiaoService({ advertise, destroy });
 
-    const cleanup = vi.fn(() => {
-      order.push("cleanup");
+    const cleanupException = vi.fn(() => {
+      order.push("cleanup-exception");
     });
-    registerUnhandledRejectionHandler.mockImplementation(() => cleanup);
+    const cleanupRejection = vi.fn(() => {
+      order.push("cleanup-rejection");
+    });
+    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
+    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -264,9 +279,11 @@ describe("gateway bonjour advertiser", () => {
 
     await started.stop();
 
+    expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
     expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["shutdown", "cleanup"]);
+    expect(cleanupException).toHaveBeenCalledTimes(1);
+    expect(cleanupRejection).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["shutdown", "cleanup-exception", "cleanup-rejection"]);
   });
 
   it("logs ciao handler classifications at the bonjour caller", async () => {
@@ -284,7 +301,11 @@ describe("gateway bonjour advertiser", () => {
     const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
       | ((reason: unknown) => boolean)
       | undefined;
+    const exceptionHandler = registerUncaughtExceptionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
     expect(handler).toBeTypeOf("function");
+    expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
     expect(logger.debug).toHaveBeenCalledWith(
@@ -297,6 +318,21 @@ describe("gateway bonjour advertiser", () => {
     ).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("suppressing ciao interface assertion"),
+    );
+
+    logger.warn.mockClear();
+    expect(
+      exceptionHandler?.(
+        Object.assign(
+          new Error(
+            "IP address version must match. Netmask cannot have a version different from the address!",
+          ),
+          { name: "AssertionError" },
+        ),
+      ),
+    ).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao netmask assertion"),
     );
 
     await started.stop();

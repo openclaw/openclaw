@@ -35,6 +35,13 @@ vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime,
 }));
 
+vi.mock("./providers.js", () => ({
+  resolveCatalogHookProviderPluginIds: vi.fn(() => []),
+  resolveExternalAuthProfileCompatFallbackPluginIds: vi.fn(() => []),
+  resolveExternalAuthProfileProviderPluginIds: vi.fn(() => []),
+  resolveOwningPluginIdsForProvider: vi.fn(() => ["anthropic-vertex"]),
+}));
+
 import { resolveProviderSyntheticAuthWithPlugin } from "./provider-runtime.js";
 
 describe("resolveProviderSyntheticAuthWithPlugin", () => {
@@ -53,7 +60,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
       source: "gcp-vertex-credentials (ADC)",
       mode: "api-key",
     });
-    expect(resolveProviderRuntimePlugin).toHaveBeenCalled();
+    expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
     expect(resolvePluginDiscoveryProvidersRuntime).toHaveBeenCalled();
   });
 });

@@ -202,3 +202,29 @@ export async function clearCliSessionInStore(params: {
   sessionStore[sessionKey] = persisted;
   return persisted;
 }
+
+export async function recordCliCompactionInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return undefined;
+  }
+
+  const next = { ...entry };
+  clearCliSession(next, provider);
+  next.compactionCount = (entry.compactionCount ?? 0) + 1;
+  next.updatedAt = Date.now();
+
+  const persisted = await updateSessionStore(storePath, (store) => {
+    const merged = mergeSessionEntry(store[sessionKey], next);
+    store[sessionKey] = merged;
+    return merged;
+  });
+  sessionStore[sessionKey] = persisted;
+  return persisted;
+}

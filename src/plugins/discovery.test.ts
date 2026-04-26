@@ -391,6 +391,68 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("ignores packaged bundled plugin paths in configured load paths", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "feishu");
+    mkdirSafe(bundledPluginDir);
+    writePluginManifest({ pluginDir: bundledPluginDir, id: "feishu" });
+    writePluginEntry(path.join(bundledPluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      extraPaths: [bundledPluginDir],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    expect(candidates.filter((candidate) => candidate.idHint === "feishu")).toEqual([
+      expect.objectContaining({ origin: "bundled" }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        source: bundledPluginDir,
+        message: expect.stringContaining("ignored plugins.load.paths entry"),
+      }),
+    ]);
+  });
+
+  it("ignores legacy bundled plugin load paths that would shadow packaged bundled plugins", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist-runtime", "extensions");
+    const bundledPluginDir = path.join(bundledRoot, "telegram");
+    const legacyPluginDir = path.join(packageRoot, "extensions", "telegram");
+    mkdirSafe(bundledPluginDir);
+    mkdirSafe(legacyPluginDir);
+    writePluginManifest({ pluginDir: bundledPluginDir, id: "telegram" });
+    writePluginManifest({ pluginDir: legacyPluginDir, id: "telegram" });
+    writePluginEntry(path.join(bundledPluginDir, "index.js"));
+    writePluginEntry(path.join(legacyPluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      extraPaths: [legacyPluginDir],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+    });
+
+    expect(candidates.filter((candidate) => candidate.idHint === "telegram")).toEqual([
+      expect.objectContaining({ origin: "bundled" }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        source: legacyPluginDir,
+        message: expect.stringContaining("legacy bundled plugin directory"),
+      }),
+    ]);
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
@@ -435,6 +497,35 @@ describe("discoverOpenClawPlugins", () => {
     expect(fs.realpathSync(candidate?.setupSource ?? "")).toBe(
       fs.realpathSync(path.join(pluginDir, "dist", "setup-entry.js")),
     );
+  });
+
+  it("rejects package runtimeExtensions that do not match extension entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "runtime-mismatch-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/runtime-mismatch-pack",
+      extensions: ["./src/one.ts", "./src/two.ts"],
+      runtimeExtensions: ["./dist/one.js"],
+    });
+    writePluginEntry(path.join(pluginDir, "src", "one.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "two.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "one.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["runtime-mismatch-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("runtimeExtensions length (1)") &&
+          entry.message.includes("extensions length (2)"),
+      ),
+    ).toBe(true);
   });
 
   it("infers built dist entries for installed TypeScript package plugins", async () => {
