@@ -12,6 +12,8 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
+const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 1_000;
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
@@ -43,6 +45,34 @@ function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
       }
     },
   };
+}
+
+async function triggerGatewayLifecycleHookWithTimeout(params: {
+  event: ReturnType<typeof createInternalHookEvent>;
+  hookName: "gateway:shutdown" | "gateway:pre-restart";
+  timeoutMs: number;
+}): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const hookPromise = triggerInternalHook(params.event);
+  void hookPromise.catch(() => undefined);
+  try {
+    const result = await Promise.race([
+      hookPromise.then(() => "completed" as const),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), params.timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+    if (result === "timeout") {
+      shutdownLog.warn(
+        `${params.hookName} hook timed out after ${params.timeoutMs}ms; continuing shutdown`,
+      );
+    }
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function runGatewayClosePrelude(params: {
@@ -119,7 +149,11 @@ export function createGatewayCloseHandler(params: {
           reason,
           restartExpectedMs,
         });
-        await triggerInternalHook(shutdownEvent);
+        await triggerGatewayLifecycleHookWithTimeout({
+          event: shutdownEvent,
+          hookName: "gateway:shutdown",
+          timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+        });
         if (restartExpectedMs !== null) {
           const preRestartEvent = createInternalHookEvent(
             "gateway",
@@ -130,7 +164,11 @@ export function createGatewayCloseHandler(params: {
               restartExpectedMs,
             },
           );
-          await triggerInternalHook(preRestartEvent);
+          await triggerGatewayLifecycleHookWithTimeout({
+            event: preRestartEvent,
+            hookName: "gateway:pre-restart",
+            timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS,
+          });
         }
       } catch {
         // Best-effort only; shutdown should proceed even if hooks fail.
