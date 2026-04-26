@@ -32,3 +32,10 @@ export function requireApiKey(auth: ResolvedProviderAuth, provider: string): str
   }
   throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
 }
+
+export function requireApiKeyAllowAwsSdk(auth: ResolvedProviderAuth, provider: string): string {
+  if (auth.mode === "aws-sdk") {
+    return normalizeSecretInput(auth.apiKey) ?? "";
+  }
+  return requireApiKey(auth, provider);
+}

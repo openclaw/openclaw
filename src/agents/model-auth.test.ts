@@ -88,6 +88,7 @@ let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOve
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
+let requireApiKeyAllowAwsSdk: typeof import("./model-auth.js").requireApiKeyAllowAwsSdk;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
@@ -105,6 +106,7 @@ beforeAll(async () => {
     applyLocalNoAuthHeaderOverride,
     hasUsableCustomProviderApiKey,
     requireApiKey,
+    requireApiKeyAllowAwsSdk,
     resolveApiKeyForProvider,
     resolveAwsSdkEnvVarName,
     resolveModelAuthMode,

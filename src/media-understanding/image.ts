@@ -3,7 +3,7 @@ import { complete } from "@mariozechner/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
   getApiKeyForModel,
-  requireApiKey,
+  requireApiKeyAllowAwsSdk,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
@@ -202,7 +202,7 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  const apiKey = requireApiKeyAllowAwsSdk(apiKeyInfo, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
 }
@@ -304,7 +304,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     agentDir: params.agentDir,
   });
   return {
-    apiKey: requireApiKey(auth, params.provider),
+    apiKey: requireApiKeyAllowAwsSdk(auth, params.provider),
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }

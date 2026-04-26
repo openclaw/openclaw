@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
     mode: "oauth",
   })),
   requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+  requireApiKeyAllowAwsSdkMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
   setRuntimeApiKeyMock: vi.fn(),
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   getApiKeyForModelMock,
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
+  requireApiKeyAllowAwsSdkMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
   fetchMock,
@@ -60,6 +62,7 @@ vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
+  requireApiKeyAllowAwsSdk: requireApiKeyAllowAwsSdkMock,
 }));
 
 vi.mock("../agents/provider-stream.js", () => ({
@@ -145,7 +148,7 @@ describe("describeImageWithModel", () => {
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({ store: authStore }),
     );
-    expect(requireApiKeyMock).toHaveBeenCalled();
+    expect(requireApiKeyAllowAwsSdkMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.minimax.io/v1/coding_plan/vlm",
@@ -612,5 +615,52 @@ describe("describeImageWithModel", () => {
       }),
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("does not throw for amazon-bedrock aws-sdk auth mode without an API key", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "aws-sdk",
+      mode: "aws-sdk",
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "anthropic.claude-sonnet-4-6",
+        api: "anthropic-messages",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-sonnet-4-6",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "bedrock ok" }],
+    });
+    requireApiKeyAllowAwsSdkMock.mockReturnValueOnce("");
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-sonnet-4-6",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "bedrock ok",
+      model: "anthropic.claude-sonnet-4-6",
+    });
+    expect(requireApiKeyAllowAwsSdkMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "aws-sdk" }),
+      "amazon-bedrock",
+    );
   });
 });

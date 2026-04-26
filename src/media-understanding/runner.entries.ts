@@ -4,7 +4,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKeyAllowAwsSdk, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
@@ -404,7 +404,7 @@ async function resolveProviderExecutionAuth(params: {
   return {
     apiKeys: collectProviderApiKeysForExecution({
       provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
+      primaryApiKey: requireApiKeyAllowAwsSdk(auth, params.providerId),
     }),
     providerConfig: params.cfg.models?.providers?.[params.providerId],
   };
