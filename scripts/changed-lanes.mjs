@@ -10,6 +10,8 @@ const TOOLING_PATH_RE =
   /^(?:scripts\/|test\/vitest\/|\.github\/|git-hooks\/|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.gitignore$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
+const LIVE_DOCKER_TOOLING_PATH_RE =
+  /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
 const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
@@ -28,7 +30,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "src/config/schema.base.generated.ts",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -56,6 +58,7 @@ export function createEmptyChangedLanes() {
     apps: false,
     docs: false,
     tooling: false,
+    liveDockerTooling: false,
     releaseMetadata: false,
     all: false,
   };
@@ -66,9 +69,9 @@ export function createEmptyChangedLanes() {
  * @returns {ChangedLaneResult}
  */
 export function detectChangedLanes(changedPaths) {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
+    .toSorted((left, right) => left.localeCompare(right))
+    .filter((changedPath) => changedPath !== "--");
   const lanes = createEmptyChangedLanes();
   const reasons = [];
   let extensionImpactFromCore = false;
@@ -100,6 +103,12 @@ export function detectChangedLanes(changedPaths) {
     }
 
     hasNonDocs = true;
+
+    if (LIVE_DOCKER_TOOLING_PATH_RE.test(changedPath)) {
+      lanes.liveDockerTooling = true;
+      reasons.push(`${changedPath}: live Docker tooling surface`);
+      continue;
+    }
 
     if (ROOT_GLOBAL_PATH_RE.test(changedPath)) {
       lanes.all = true;
@@ -262,6 +271,9 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
+        if (arg === "--") {
+          return "handled";
+        }
         target.paths.push(arg);
         return "handled";
       },

@@ -81,6 +81,14 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("ignores the explicit path separator", () => {
+    const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
+
+    expect(result.paths).toEqual(["scripts/test-live-acp-bind-docker.sh"]);
+    expect(result.lanes.liveDockerTooling).toBe(true);
+    expect(result.lanes.all).toBe(false);
+  });
+
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -230,6 +238,51 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runChangedTestsBroad).toBe(false);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes live Docker ACP tooling changes through a focused gate", () => {
+    const result = detectChangedLanes([
+      "scripts/lib/live-docker-auth.sh",
+      "scripts/test-docker-all.mjs",
+      "scripts/test-live-acp-bind-docker.sh",
+      "src/gateway/gateway-acp-bind.live.test.ts",
+      "docs/help/testing-live.md",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      liveDockerTooling: true,
+      all: false,
+      tooling: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.runChangedTestsBroad).toBe(false);
+    expect(plan.commands.map((command) => command.name)).toEqual([
+      "conflict markers",
+      "typecheck core tests",
+      "lint core",
+      "lint scripts",
+      "live Docker shell syntax",
+      "live Docker scheduler dry run",
+      "ACP bind unit tests",
+      "ACPX extension tests",
+    ]);
+    expect(
+      plan.commands.find((command) => command.name === "live Docker shell syntax"),
+    ).toMatchObject({
+      bin: "bash",
+      args: expect.arrayContaining(["-n", "scripts/test-live-acp-bind-docker.sh"]),
+    });
+    expect(
+      plan.commands.find((command) => command.name === "live Docker scheduler dry run"),
+    ).toMatchObject({
+      bin: "node",
+      args: ["scripts/test-docker-all.mjs"],
+      env: expect.objectContaining({
+        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+        OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
+      }),
+    });
   });
 
   it("keeps release metadata commits off the full changed gate", () => {
@@ -383,6 +436,7 @@ describe("scripts/changed-lanes", () => {
       apps: false,
       docs: false,
       tooling: false,
+      liveDockerTooling: false,
       releaseMetadata: false,
       all: false,
     });
