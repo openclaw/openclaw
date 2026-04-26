@@ -42,6 +42,15 @@ function positiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function isAnthropicMessagesEndpoint(endpoint: string): boolean {
+  const normalized = endpoint.trim().toLowerCase();
+  return (
+    normalized === "/messages" ||
+    normalized.endsWith("/messages") ||
+    normalized.includes("anthropic")
+  );
+}
+
 export function mapCopilotWireModel(entry: CopilotModelWireEntry): ModelDefinitionConfig | null {
   const id =
     typeof entry.id === "string" && entry.id.trim()
@@ -74,9 +83,7 @@ export function mapCopilotWireModel(entry: CopilotModelWireEntry): ModelDefiniti
   return {
     id,
     name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : id,
-    api: endpoints.some((endpoint) => endpoint.includes("/v1/messages"))
-      ? "anthropic-messages"
-      : "openai-responses",
+    api: endpoints.some(isAnthropicMessagesEndpoint) ? "anthropic-messages" : "openai-responses",
     reasoning: supportsReasoning,
     input: supportsVision ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

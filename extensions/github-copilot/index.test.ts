@@ -149,6 +149,23 @@ describe("github-copilot plugin", () => {
     });
   });
 
+  it("maps Anthropic-compatible endpoints broadly", () => {
+    for (const endpoint of [
+      "/v1/messages",
+      "/messages",
+      "/chat/v1/messages",
+      "/anthropic/messages",
+    ]) {
+      expect(
+        mapCopilotWireModel({
+          id: "claude-opus-4.7",
+          capabilities: { limits: {}, supports: {} },
+          supported_endpoints: [endpoint],
+        }),
+      ).toMatchObject({ api: "anthropic-messages" });
+    }
+  });
+
   it("fetches Copilot /models during catalog discovery", async () => {
     resolveCopilotApiTokenMock.mockResolvedValueOnce({
       token: "copilot_api_token",
