@@ -41,9 +41,16 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   recommended replacement can shift as plugin ownership, externalization, and
   config footprint move, so do not blindly copy stale replacement annotations
   into release notes.
-- Do not delete or rewrite beta tags after they leave the machine. If a
-  published or pushed beta needs a fix, commit the fix on the release branch and
+- Do not delete or rewrite any beta tag after the matching npm package has been
+  published, or after a GitHub release/prerelease was created from that tag. If
+  an npm-published beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
+- Beta-only Git tags that were pushed for preflight but never published to npm
+  may be moved or replaced when the operator explicitly approves it. Before
+  retagging, verify `npm view openclaw@YYYY.M.D-beta.N version` is unpublished
+  and no GitHub release/prerelease exists for the tag; after retagging, push the
+  updated tag intentionally and rerun npm preflight because older preflight
+  artifacts are tied to the previous tag SHA.
 - For a beta release train, run the fast local preflight first, publish the
   beta to npm `beta`, then run the expensive published-package roster focused
   on install/update/Docker/Parallels/NPM Telegram. If anything fails, fix it on
