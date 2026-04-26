@@ -56,11 +56,14 @@ import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
+  getTtsPersona,
+  listTtsPersonas,
   listSpeechVoices,
   resolveExplicitTtsOverrides,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setTtsEnabled,
+  setTtsPersona,
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
@@ -257,6 +260,13 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "provider ids, configured state, models, voices",
   },
   {
+    id: "tts.personas",
+    description: "List TTS personas.",
+    transports: ["local", "gateway"],
+    flags: ["--local", "--gateway", "--json"],
+    resultShape: "persona ids, labels, providers, active persona",
+  },
+  {
     id: "tts.status",
     description: "Show gateway-managed TTS state.",
     transports: ["gateway"],
@@ -283,6 +293,13 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     transports: ["local", "gateway"],
     flags: ["--provider", "--local", "--gateway", "--json"],
     resultShape: "selected provider",
+  },
+  {
+    id: "tts.set-persona",
+    description: "Set the active TTS persona.",
+    transports: ["local", "gateway"],
+    flags: ["--persona", "--off", "--local", "--gateway", "--json"],
+    resultShape: "selected persona",
   },
   {
     id: "video.generate",
@@ -1181,6 +1198,30 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+async function runTtsPersonas(transport: CapabilityTransport) {
+  if (transport === "gateway") {
+    return await callGateway({
+      method: "tts.personas",
+      timeoutMs: 30_000,
+    });
+  }
+  const cfg = loadConfig();
+  const config = resolveTtsConfig(cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const active = getTtsPersona(config, prefsPath);
+  return {
+    active: active?.id ?? null,
+    personas: listTtsPersonas(config).map((persona) => ({
+      id: persona.id,
+      label: persona.label,
+      description: persona.description,
+      provider: persona.provider,
+      fallbackPolicy: persona.fallbackPolicy,
+      providers: Object.keys(persona.providers ?? {}),
+    })),
+  };
+}
+
 async function runTtsVoices(providerRaw?: string) {
   const cfg = loadConfig();
   const config = resolveTtsConfig(cfg);
@@ -1194,9 +1235,10 @@ async function runTtsVoices(providerRaw?: string) {
 }
 
 async function runTtsStateMutation(params: {
-  capability: "tts.enable" | "tts.disable" | "tts.set-provider";
+  capability: "tts.enable" | "tts.disable" | "tts.set-provider" | "tts.set-persona";
   transport: CapabilityTransport;
   provider?: string;
+  persona?: string | null;
 }) {
   if (params.transport === "gateway") {
     const method =
@@ -1204,10 +1246,17 @@ async function runTtsStateMutation(params: {
         ? "tts.enable"
         : params.capability === "tts.disable"
           ? "tts.disable"
-          : "tts.setProvider";
+          : params.capability === "tts.set-provider"
+            ? "tts.setProvider"
+            : "tts.setPersona";
     const payload = await callGateway({
       method,
-      params: params.provider ? { provider: params.provider } : undefined,
+      params:
+        params.capability === "tts.set-provider"
+          ? { provider: params.provider }
+          : params.capability === "tts.set-persona"
+            ? { persona: params.persona ?? "off" }
+            : undefined,
       timeoutMs: 30_000,
     });
     return payload;
@@ -1223,6 +1272,20 @@ async function runTtsStateMutation(params: {
   if (params.capability === "tts.disable") {
     setTtsEnabled(prefsPath, false);
     return { enabled: false };
+  }
+  if (params.capability === "tts.set-persona") {
+    if (!params.persona) {
+      setTtsPersona(prefsPath, null);
+      return { persona: null };
+    }
+    const persona = listTtsPersonas(config).find(
+      (entry) => entry.id === normalizeLowercaseStringOrEmpty(params.persona ?? ""),
+    );
+    if (!persona) {
+      throw new Error(`Unknown TTS persona: ${params.persona}`);
+    }
+    setTtsPersona(prefsPath, persona.id);
+    return { persona: persona.id };
   }
   if (!params.provider) {
     throw new Error("--provider is required");
@@ -1747,6 +1810,27 @@ export function registerCapabilityCli(program: Command) {
     });
 
   tts
+    .command("personas")
+    .description("List TTS personas")
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "local",
+        });
+        const result = await runTtsPersonas(transport);
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
+  tts
     .command("status")
     .description("Show TTS status")
     .option("--gateway", "Force gateway execution", false)
@@ -1815,6 +1899,36 @@ export function registerCapabilityCli(program: Command) {
         const result = await runTtsStateMutation({
           capability: "tts.set-provider",
           provider: String(opts.provider),
+          transport,
+        });
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
+  tts
+    .command("set-persona")
+    .description("Set the active TTS persona")
+    .option("--persona <id>", "TTS persona id")
+    .option("--off", "Disable the active TTS persona", false)
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "gateway",
+        });
+        if (!opts.off && !opts.persona) {
+          throw new Error("--persona is required unless --off is set");
+        }
+        const result = await runTtsStateMutation({
+          capability: "tts.set-persona",
+          persona: opts.off ? null : String(opts.persona),
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>

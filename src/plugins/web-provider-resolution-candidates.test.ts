@@ -63,6 +63,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         onlyPluginIds: [],
       }),
     ).toEqual([]);
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("keeps runtime fallback for scoped plugins with no declared web candidates", () => {
@@ -73,6 +74,11 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         onlyPluginIds: ["missing-plugin"],
       }),
     ).toBeUndefined();
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["missing-plugin"],
+      }),
+    );
   });
 
   it("derives provider candidates from a single manifest-registry read", () => {

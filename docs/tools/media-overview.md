@@ -58,6 +58,10 @@ Video and music generation run as background tasks because provider processing t
 
 Deepgram, ElevenLabs, Mistral, OpenAI, SenseAudio, and xAI can all transcribe
 inbound audio through the batch `tools.media.audio` path when configured.
+Channel plugins that preflight a voice note for mention gating or command
+parsing mark the transcribed attachment on the inbound context, so the shared
+media-understanding pass reuses that transcript instead of making a second STT
+call for the same audio.
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.

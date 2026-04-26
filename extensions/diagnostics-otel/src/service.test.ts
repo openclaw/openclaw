@@ -896,6 +896,7 @@ describe("diagnostics-otel service", () => {
       type: "model.usage",
       sessionKey: "session-key",
       channel: "webchat",
+      agentId: "ops",
       provider: "openai",
       model: "gpt-5.4",
       usage: {
@@ -919,6 +920,14 @@ describe("diagnostics-otel service", () => {
       }),
     );
     const genAiTokenUsage = telemetryState.histograms.get("gen_ai.client.token.usage");
+    const tokens = telemetryState.counters.get("openclaw.tokens");
+    expect(tokens?.add).toHaveBeenCalledWith(12, {
+      "openclaw.channel": "webchat",
+      "openclaw.agent": "ops",
+      "openclaw.provider": "openai",
+      "openclaw.model": "gpt-5.4",
+      "openclaw.token": "input",
+    });
     expect(genAiTokenUsage?.record).toHaveBeenCalledTimes(2);
     expect(genAiTokenUsage?.record).toHaveBeenCalledWith(12, {
       "gen_ai.operation.name": "chat",
@@ -933,6 +942,33 @@ describe("diagnostics-otel service", () => {
       "gen_ai.token.type": "output",
     });
     expect(JSON.stringify(genAiTokenUsage?.record.mock.calls)).not.toContain("session-key");
+    await service.stop?.(ctx);
+  });
+
+  test("bounds agent identifiers on model usage metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      agentId: "Bearer sk-test-secret-value",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 2 },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(2, {
+      "openclaw.channel": "unknown",
+      "openclaw.agent": "unknown",
+      "openclaw.provider": "openai",
+      "openclaw.model": "gpt-5.4",
+      "openclaw.token": "input",
+    });
+    expect(
+      JSON.stringify(telemetryState.counters.get("openclaw.tokens")?.add.mock.calls),
+    ).not.toContain("sk-test-secret-value");
     await service.stop?.(ctx);
   });
 

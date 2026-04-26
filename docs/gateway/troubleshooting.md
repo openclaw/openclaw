@@ -30,6 +30,42 @@ Expected healthy signals:
 - `openclaw channels status --probe` shows live per-account transport status and,
   where supported, probe/audit results such as `works` or `audit ok`.
 
+## Split brain installs and newer config guard
+
+Use this when a gateway service unexpectedly stops after an update, or logs show
+that one `openclaw` binary is older than the version that last wrote
+`openclaw.json`.
+
+OpenClaw stamps config writes with `meta.lastTouchedVersion`. Read-only commands
+can still inspect a config written by a newer OpenClaw, but process and service
+mutations refuse to continue from an older binary. Blocked actions include
+gateway service start, stop, restart, uninstall, forced service reinstall,
+service-mode gateway startup, and `gateway --force` port cleanup.
+
+```bash
+which openclaw
+openclaw --version
+openclaw gateway status --deep
+openclaw config get meta.lastTouchedVersion
+```
+
+Fix options:
+
+1. Fix `PATH` so `openclaw` resolves to the newer install, then rerun the action.
+2. Reinstall the intended gateway service from the newer install:
+
+   ```bash
+   openclaw gateway install --force
+   openclaw gateway restart
+   ```
+
+3. Remove stale system package or old wrapper entries that still point at an old
+   `openclaw` binary.
+
+For intentional downgrade or emergency recovery only, set
+`OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command.
+Leave it unset for normal operation.
+
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include:

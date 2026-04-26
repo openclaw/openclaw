@@ -1512,6 +1512,7 @@ describe("handleFeishuMessage command authorization", () => {
         Transcript: "voice transcript",
         MediaPaths: ["/tmp/inbound-voice.ogg"],
         MediaTypes: ["audio/ogg"],
+        MediaTranscribedIndexes: [0],
       }),
     );
     const finalized = mockFinalizeInboundContext.mock.calls[0]?.[0];

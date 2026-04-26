@@ -167,7 +167,9 @@ Tool summaries can redact sensitive tokens before they hit the console:
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction affects **console output only** and does not alter file logs.
+Redaction applies at the logging sinks for **console output**, **stderr-routed
+console diagnostics**, and **file logs**. File logs stay JSONL, but matching
+secret values are masked before the line is written to disk.
 
 ## Diagnostics and OpenTelemetry
 

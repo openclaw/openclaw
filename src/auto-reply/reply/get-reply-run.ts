@@ -45,7 +45,12 @@ import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
-import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import {
+  buildDirectChatContext,
+  buildGroupChatContext,
+  buildGroupIntro,
+  resolveGroupSilentReplyBehavior,
+} from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -346,6 +351,14 @@ export async function runPreparedReply(
         silentReplyRewrite: silentReplySettings.rewrite,
       })
     : "";
+  const allowEmptyAssistantReplyAsSilent =
+    isGroupChat &&
+    resolveGroupSilentReplyBehavior({
+      sessionEntry,
+      defaultActivation,
+      silentReplyPolicy: silentReplySettings.policy,
+      silentReplyRewrite: silentReplySettings.rewrite,
+    }).allowEmptyAssistantReplyAsSilent;
   const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
@@ -818,6 +831,7 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
+      allowEmptyAssistantReplyAsSilent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,

@@ -142,6 +142,12 @@ export type RunEmbeddedPiAgentParams = {
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /**
+   * Treat a clean empty assistant stop as an intentional silent reply.
+   * Only set when the caller's prompt policy already allows an exact NO_REPLY
+   * final answer for silence.
+   */
+  allowEmptyAssistantReplyAsSilent?: boolean;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,

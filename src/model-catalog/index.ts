@@ -8,6 +8,10 @@ export {
   normalizeModelCatalogProviderRows,
   normalizeModelCatalogRows,
 } from "./normalize.js";
+export {
+  loadOpenClawProviderIndex,
+  normalizeOpenClawProviderIndex,
+} from "./provider-index/index.js";
 export { planManifestModelCatalogRows } from "./manifest-planner.js";
 export type {
   ManifestModelCatalogConflict,
@@ -30,3 +34,8 @@ export type {
   ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
 } from "./types.js";
+export type {
+  OpenClawProviderIndex,
+  OpenClawProviderIndexPlugin,
+  OpenClawProviderIndexProvider,
+} from "./provider-index/index.js";

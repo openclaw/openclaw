@@ -18,6 +18,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
+  agentId?: string;
   provider?: string;
   model?: string;
   usage: {

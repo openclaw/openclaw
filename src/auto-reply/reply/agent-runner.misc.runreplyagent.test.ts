@@ -334,6 +334,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(usageEvent).toMatchObject({
       type: "model.usage",
+      agentId: "main",
       usage: {
         input: 75_000,
         output: 5_000,

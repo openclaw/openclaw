@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
@@ -366,7 +367,8 @@ final class AppState {
         if resolvedConnectionMode == .remote,
            configRemoteTransport != .direct,
            storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let host = AppState.remoteHost(from: configRemoteUrl)
+           let host = AppState.remoteHost(from: configRemoteUrl),
+           !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {
@@ -435,6 +437,32 @@ final class AppState {
         return trimmed
     }
 
+    private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
+        let fallback = "ws://127.0.0.1:18789"
+        let trimmed = existingUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return fallback
+        }
+
+        let preservePort: Bool
+        if LoopbackHost.isLoopbackHost(host) {
+            preservePort = true
+        } else if let expectedRemoteHost {
+            preservePort =
+                OpenClawConfigFile.canonicalHostForComparison(host) ==
+                OpenClawConfigFile.canonicalHostForComparison(expectedRemoteHost)
+        } else {
+            preservePort = false
+        }
+        guard preservePort else { return fallback }
+
+        return "ws://127.0.0.1:\(url.port ?? 18789)"
+    }
+
     private static func updateGatewayString(
         _ dictionary: inout [String: Any],
         key: String,
@@ -491,17 +519,14 @@ final class AppState {
         case .ssh:
             changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
 
-            if let host = draft.remoteHost {
-                let existingUrl = (remote["url"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                let port = parsedExisting?.port ?? 18789
-                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
-            }
-
             let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
+            let existingUrl = (remote["url"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let desiredUrl = Self.sshTunnelGatewayUrl(
+                existingUrl: existingUrl,
+                expectedRemoteHost: expectedRemoteHost)
+            changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
             changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: draft.remoteIdentity) || changed
         }
@@ -569,7 +594,8 @@ final class AppState {
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote,
            remoteTransport != .direct,
-           let host = AppState.remoteHost(from: remoteUrl)
+           let host = AppState.remoteHost(from: remoteUrl),
+           !LoopbackHost.isLoopbackHost(host)
         {
             self.updateRemoteTarget(host: host)
         }
