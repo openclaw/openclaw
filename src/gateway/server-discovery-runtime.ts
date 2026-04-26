@@ -29,9 +29,9 @@ export async function startGatewayDiscovery(params: {
   const bonjourEnabled =
     mdnsMode !== "off" &&
     !isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) &&
+    (process.env.OPENCLAW_ENABLE_BONJOUR === "1" || process.platform !== "win32") &&
     process.env.NODE_ENV !== "test" &&
-    !process.env.VITEST &&
-    process.platform !== "win32";
+    !process.env.VITEST;
   const localDiscoveryEnabled = bonjourEnabled;
   const mdnsMinimal = mdnsMode !== "full";
   const tailscaleEnabled = params.tailscaleMode !== "off";

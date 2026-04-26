@@ -26,11 +26,12 @@ export function registerSubclawCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/subclaw", "docs.openclaw.ai/cli/subclaw")}\n`,
     )
     .action(async (directory, opts) => {
+      const targetDir = path.resolve(directory ?? process.cwd());
+      const originalCwd = process.cwd();
+      if (directory) {
+        process.chdir(targetDir);
+      }
       try {
-        const targetDir = path.resolve(directory ?? process.cwd());
-        if (directory) {
-          process.chdir(targetDir);
-        }
         const config = loadConfig();
         const agentId = resolveAgentIdByWorkspacePath(config, targetDir) ?? resolveDefaultAgentId(config);
         const sessionKey =
@@ -48,6 +49,10 @@ export function registerSubclawCli(program: Command) {
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
+      } finally {
+        if (directory) {
+          process.chdir(originalCwd);
+        }
       }
     });
 }

@@ -39,18 +39,24 @@ export async function prepareGatewayPluginBootstrap(params: {
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
   if (shouldRunStartupMaintenance) {
     // Run channel maintenance and session migration in parallel since they are independent.
-    await Promise.all([
+    // Session migration is skipped in minimal test gateways to avoid side effects.
+    const tasks = [
       runChannelPluginStartupMaintenance({
         cfg: startupMaintenanceConfig,
         env: process.env,
         log: params.log,
       }),
-      runStartupSessionMigration({
-        cfg: params.cfgAtStart,
-        env: process.env,
-        log: params.log,
-      }),
-    ]);
+    ];
+    if (!params.minimalTestGateway) {
+      tasks.push(
+        runStartupSessionMigration({
+          cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+      );
+    }
+    await Promise.all(tasks);
   }
 
   initSubagentRegistry();
