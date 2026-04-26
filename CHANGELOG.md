@@ -69,6 +69,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
+- Security/audit: read channel exposure and plugin allowlist ownership from read-only plugin index metadata so cold audits do not depend on loaded channel runtime. Thanks @shakkernerd.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
 - macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
   start browser-capable CLI node services through the restored
