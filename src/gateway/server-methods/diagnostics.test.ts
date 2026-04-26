@@ -4,6 +4,10 @@ import {
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
 import {
+  __resetGatewayModelPricingCacheForTest,
+  replaceGatewayModelPricingCache,
+} from "../model-pricing-cache-state.js";
+import {
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
@@ -57,6 +61,49 @@ describe("diagnostics gateway methods", () => {
       }),
       undefined,
     );
+  });
+
+  it("returns pricing cache meta when empty", async () => {
+    __resetGatewayModelPricingCacheForTest();
+    const respond = vi.fn();
+    await diagnosticsHandlers["diagnostics.pricing"]({
+      req: { type: "req", id: "1", method: "diagnostics.pricing", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ cachedAt: null, age: null, size: 0 }),
+      undefined,
+    );
+  });
+
+  it("returns pricing cache meta when populated", async () => {
+    const now = Date.now();
+    replaceGatewayModelPricingCache(
+      new Map([["anthropic/claude-sonnet-4-6", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }]]),
+      now,
+    );
+    const respond = vi.fn();
+    await diagnosticsHandlers["diagnostics.pricing"]({
+      req: { type: "req", id: "1", method: "diagnostics.pricing", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond,
+    });
+
+    const payload = respond.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.cachedAt).toBe(now);
+    expect(payload.size).toBe(1);
+    expect(typeof payload.age).toBe("number");
+    expect(typeof payload.ttlMs).toBe("number");
+    __resetGatewayModelPricingCacheForTest();
   });
 
   it("rejects invalid stability params", async () => {
