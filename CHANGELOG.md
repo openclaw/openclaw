@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/tokenjuice: bump the bundled tokenjuice runtime to 0.6.3. Thanks @vincentkoc.
 - TTS/agents: allow `agents.list[].tts` to override global `messages.tts` for per-agent voices while keeping shared provider credentials and preferences in the existing TTS config surface.
+- TTS/agents: make `/tts audio`, `/tts status`, and the `tts` agent tool honor the active `agents.list[].tts` voice/provider override.
 - Providers/Azure Speech: add Azure Speech as a bundled TTS provider with Speech-resource auth, voice listing, SSML escaping, native Ogg/Opus voice-note output, and telephony output. (#51776) Thanks @leonchui.
 - CLI/image generation: expose generic `--background` on `openclaw infer image generate` and `openclaw infer image edit`, keep `--openai-background` as an OpenAI alias, and let fal image generation honor `--output-format png|jpeg`. Thanks @steipete.
 - Browser/config: allow local managed Chrome launch discovery and post-launch CDP readiness timeouts to be raised for slower hosts such as Raspberry Pi. Fixes #66803. Thanks @beat843796.
