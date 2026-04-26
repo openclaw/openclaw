@@ -157,4 +157,16 @@ describe("resolvePreferredRunAuthProfile", () => {
       preferredProfileIdSource: "user",
     });
   });
+
+  it("does not override a legacy source-less requested auth profile", () => {
+    expect(
+      resolvePreferredRunAuthProfile({
+        requestedAuthProfileId: "openai-codex:plus",
+        hookAuthProfileOverride: "openai-codex:pro",
+      }),
+    ).toEqual({
+      preferredProfileId: "openai-codex:plus",
+      preferredProfileIdSource: "user",
+    });
+  });
 });

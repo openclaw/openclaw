@@ -121,7 +121,10 @@ export function resolvePreferredRunAuthProfile(params: {
   preferredProfileIdSource?: "auto" | "user";
 } {
   const requestedProfileId = params.requestedAuthProfileId?.trim() || undefined;
-  if (params.requestedAuthProfileIdSource === "user") {
+  const isUserRequestedProfile =
+    params.requestedAuthProfileIdSource === "user" ||
+    (Boolean(requestedProfileId) && params.requestedAuthProfileIdSource !== "auto");
+  if (isUserRequestedProfile) {
     return {
       preferredProfileId: requestedProfileId,
       preferredProfileIdSource: requestedProfileId ? "user" : undefined,
