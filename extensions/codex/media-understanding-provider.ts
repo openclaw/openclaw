@@ -9,6 +9,12 @@ import type { CodexAppServerClient } from "./src/app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./src/app-server/config.js";
 import { readModelListResult } from "./src/app-server/models.js";
 import {
+  assertCodexThreadStartResponse,
+  assertCodexTurnStartResponse,
+  readCodexErrorNotification,
+  readCodexTurnCompletedNotification,
+} from "./src/app-server/protocol-validators.js";
+import {
   isJsonObject,
   type CodexServerNotification,
   type CodexThreadItem,
@@ -16,14 +22,8 @@ import {
   type CodexTurn,
   type CodexTurnStartParams,
   type JsonObject,
+  type JsonValue,
 } from "./src/app-server/protocol.js";
-import {
-  assertCodexThreadStartResponse,
-  assertCodexTurnStartResponse,
-  readCodexErrorNotification,
-  readCodexTurnCompletedNotification,
-} from "./src/app-server/protocol-validators.js";
-import { createIsolatedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
@@ -83,11 +83,14 @@ async function describeCodexImages(
   const ownsClient = !options.clientFactory;
   const client = options.clientFactory
     ? await options.clientFactory(appServer.start, req.profile)
-    : await createIsolatedCodexAppServerClient({
-        startOptions: appServer.start,
-        timeoutMs,
-        authProfileId: req.profile,
-      });
+    : await import("./src/app-server/shared-client.js").then(
+        ({ createIsolatedCodexAppServerClient }) =>
+          createIsolatedCodexAppServerClient({
+            startOptions: appServer.start,
+            timeoutMs,
+            authProfileId: req.profile,
+          }),
+      );
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort("timeout"), timeoutMs);
   timeout.unref?.();
@@ -106,7 +109,7 @@ async function describeCodexImages(
           model,
           modelProvider: "openai",
           cwd: req.agentDir || process.cwd(),
-          approvalPolicy: "never",
+          approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
           developerInstructions:
@@ -121,6 +124,7 @@ async function describeCodexImages(
     );
     const collector = createCodexImageTurnCollector(thread.thread.id);
     const cleanup = client.addNotificationHandler(collector.handleNotification);
+    const requestCleanup = client.addRequestHandler(denyCodexImageApprovalRequest);
     try {
       const turn = assertCodexTurnStartResponse(
         await client.request<unknown>(
@@ -135,7 +139,7 @@ async function describeCodexImages(
               })),
             ],
             cwd: req.agentDir || process.cwd(),
-            approvalPolicy: "never",
+            approvalPolicy: "on-request",
             model,
             effort: "low",
           } satisfies CodexTurnStartParams,
@@ -148,6 +152,7 @@ async function describeCodexImages(
       });
       return { text, model };
     } finally {
+      requestCleanup();
       cleanup();
     }
   } finally {
@@ -156,6 +161,31 @@ async function describeCodexImages(
       client.close();
     }
   }
+}
+
+function denyCodexImageApprovalRequest(request: { method: string }): JsonValue | undefined {
+  if (
+    request.method === "item/commandExecution/requestApproval" ||
+    request.method === "item/fileChange/requestApproval"
+  ) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw Codex image understanding does not grant tool or file approvals.",
+    };
+  }
+  if (request.method === "item/permissions/requestApproval") {
+    return { permissions: {}, scope: "turn" };
+  }
+  if (request.method.includes("requestApproval")) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw Codex image understanding does not grant native approvals.",
+    };
+  }
+  if (request.method === "mcpServer/elicitation/request") {
+    return { action: "decline" };
+  }
+  return undefined;
 }
 
 async function assertCodexModelSupportsImage(params: {
@@ -229,7 +259,8 @@ function createCodexImageTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "turn/completed") {
-      completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
+      completedTurn =
+        readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
       resolveCompletion?.();
       return;
     }

@@ -143,7 +143,10 @@ describe("bun global install smoke", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
     const releaseChecks = readFileSync(RELEASE_CHECKS_WORKFLOW_PATH, "utf8");
 
+    expect(workflow).not.toContain("pull_request:");
+    expect(workflow).not.toContain("branches: [main]");
     expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain('cron: "17 3 * * *"');
     expect(workflow).toContain("run_bun_global_install_smoke:");
     expect(workflow).toContain(
       "install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}",
@@ -157,20 +160,17 @@ describe("bun global install smoke", () => {
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
     );
     expect(workflow).toContain("format('{0}-manual-{1}', github.workflow, github.run_id)");
-    expect(workflow).toContain("OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE");
-    expect(workflow).toContain(
-      "github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call'",
-    );
     expect(workflow).not.toContain(
       "github.event_name == 'workflow_call' || github.event_name == 'push'",
     );
+    expect(workflow).not.toContain("github.event_name == 'pull_request'");
+    expect(workflow).not.toContain("node scripts/ci-changed-scope.mjs");
     expect(workflow).toContain("OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE");
     expect(workflow).toContain('if [ "$event_name" = "schedule" ]; then');
     expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
-    expect(workflow).toContain('if [ "$force_full_install_smoke" = "true" ]; then');
-    expect(workflow).toContain(
-      '[ "$event_name" != "push" ] && [ "$run_changed_full_install_smoke" = "true" ]',
-    );
+    expect(workflow).toContain("run_fast_install_smoke=true");
+    expect(workflow).toContain("run_full_install_smoke=true");
+    expect(workflow).toContain("run_install_smoke=true");
     expect(workflow).toContain("install-smoke-fast:");
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");

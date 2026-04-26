@@ -47,9 +47,14 @@ Notes:
 - `models list` is read-only: it reads config, auth profiles, existing catalog
   state, and provider-owned catalog rows, but it does not rewrite
   `models.json`.
-- `models list --all` includes bundled provider-owned static catalog rows even
-  when you have not authenticated with that provider yet. Those rows still show
-  as unavailable until matching auth is configured.
+- `models list --all --provider <id>` can include provider-owned static catalog
+  rows from plugin manifests or bundled provider catalog metadata even when you
+  have not authenticated with that provider yet. Those rows still show as
+  unavailable until matching auth is configured.
+- `models list` keeps native model metadata and runtime caps distinct. In table
+  output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime
+  cap differs from the native context window; JSON rows include `contextTokens`
+  when a provider exposes that cap.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or
   `openai-codex`. It does not accept display labels from interactive provider
   pickers, such as `Moonshot AI`.
@@ -61,6 +66,35 @@ Notes:
   falls back to the first configured provider/model instead of surfacing a
   stale removed-provider default.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
+
+### `models scan`
+
+`models scan` reads OpenRouter's public `:free` catalog and ranks candidates for
+fallback use. The catalog itself is public, so metadata-only scans do not need
+an OpenRouter key.
+
+By default OpenClaw tries to probe tool and image support with live model calls.
+If no OpenRouter key is configured, the command falls back to metadata-only
+output and explains that `:free` models still require `OPENROUTER_API_KEY` for
+probes and inference.
+
+Options:
+
+- `--no-probe` (metadata only; no config/secrets lookup)
+- `--min-params <b>`
+- `--max-age-days <days>`
+- `--provider <name>`
+- `--max-candidates <n>`
+- `--timeout <ms>` (catalog request and per-probe timeout)
+- `--concurrency <n>`
+- `--yes`
+- `--no-input`
+- `--set-default`
+- `--set-image`
+- `--json`
+
+`--set-default` and `--set-image` require live probes; metadata-only scan
+results are informational and are not applied to config.
 
 ### `models status`
 
@@ -142,3 +176,9 @@ Notes:
   relative duration such as `365d` or `12h`.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
 - Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
+
+## Related
+
+- [CLI reference](/cli)
+- [Model selection](/concepts/model-providers)
+- [Model failover](/concepts/model-failover)

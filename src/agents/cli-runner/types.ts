@@ -19,11 +19,13 @@ export type RunCliAgentParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  jobId?: string;
   extraSystemPrompt?: string;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
@@ -43,6 +45,12 @@ export type RunCliAgentParams = {
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  /**
+   * Close any long-lived CLI live session created for this run after the run
+   * finishes. Intended for temporary helper calls that should not keep process
+   * handles alive after returning.
+   */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {
@@ -71,6 +79,7 @@ export type PreparedCliRunContext = {
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
+  openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;
   authEpoch?: string;
   authEpochVersion: number;

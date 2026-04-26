@@ -77,6 +77,10 @@ four lifecycle points:
 4. **After turn** — called after a run completes. The engine can persist state,
    trigger background compaction, or update indexes.
 
+For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by
+projecting assembled context into Codex developer instructions and the current
+turn prompt. Codex still owns its native thread history and native compactor.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:
@@ -206,7 +210,10 @@ enabled for the run:
 - `true` — the engine owns compaction behavior. OpenClaw disables Pi's built-in
   auto-compaction for that run, and the engine's `compact()` implementation is
   responsible for `/compact`, overflow recovery compaction, and any proactive
-  compaction it wants to do in `afterTurn()`.
+  compaction it wants to do in `afterTurn()`. OpenClaw may still run the
+  pre-prompt overflow safeguard; when it predicts the full transcript will
+  overflow, the recovery path calls the active engine's `compact()` before
+  submitting another prompt.
 - `false` or unset — Pi's built-in auto-compaction may still run during prompt
   execution, but the active engine's `compact()` method is still called for
   `/compact` and overflow recovery.

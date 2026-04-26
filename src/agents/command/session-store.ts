@@ -30,6 +30,13 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function resolvePositiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -42,6 +49,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   result: RunResult;
+  touchInteraction?: boolean;
 }) {
   const {
     cfg,
@@ -55,6 +63,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     fallbackModel,
     result,
   } = params;
+  const now = Date.now();
+  const touchInteraction = params.touchInteraction !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -62,25 +72,31 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextTokens =
-    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-      ? params.contextTokensOverride
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
+    runtimeContextTokens !== undefined
+      ? runtimeContextTokens
+      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+        ? params.contextTokensOverride
+        : ((await getContextModule()).resolveContextTokensForModel({
+            cfg,
+            provider: providerUsed,
+            model: modelUsed,
+            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+            allowAsyncLoad: false,
+          }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: now,
   };
   const next: SessionEntry = {
     ...entry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
+    lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
     contextTokens,
   };
   setSessionRuntimeModel(next, {
@@ -176,6 +192,32 @@ export async function clearCliSessionInStore(params: {
 
   const next = { ...entry };
   clearCliSession(next, provider);
+  next.updatedAt = Date.now();
+
+  const persisted = await updateSessionStore(storePath, (store) => {
+    const merged = mergeSessionEntry(store[sessionKey], next);
+    store[sessionKey] = merged;
+    return merged;
+  });
+  sessionStore[sessionKey] = persisted;
+  return persisted;
+}
+
+export async function recordCliCompactionInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return undefined;
+  }
+
+  const next = { ...entry };
+  clearCliSession(next, provider);
+  next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
 
   const persisted = await updateSessionStore(storePath, (store) => {

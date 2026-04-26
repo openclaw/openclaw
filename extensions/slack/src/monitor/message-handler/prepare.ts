@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { formatSlackFileReference } from "../../file-reference.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
@@ -47,12 +48,16 @@ import {
   resolveChannelContextVisibilityMode,
   resolveStorePath,
 } from "../config.runtime.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import {
+  normalizeSlackChannelType,
+  resolveSlackChatType,
+  type SlackMonitorContext,
+} from "../context.js";
 import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
-import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
+import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -451,11 +456,9 @@ export async function prepareSlackMessage(params: {
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
-    const fallbackFile = message.files?.[0]?.name
-      ? `[Slack file: ${message.files[0].name}]`
-      : message.files?.length
-        ? "[Slack file]"
-        : "";
+    const fallbackFile = message.files?.length
+      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
+      : "";
     const pendingBody = pendingText || fallbackFile;
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
@@ -541,6 +544,7 @@ export async function prepareSlackMessage(params: {
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const senderName = await resolveSenderName();
+  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -558,7 +562,7 @@ export async function prepareSlackMessage(params: {
 
   const envelopeFrom =
     resolveConversationLabel({
-      ChatType: isDirectMessage ? "direct" : "channel",
+      ChatType: chatType,
       SenderName: senderName,
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
@@ -581,7 +585,7 @@ export async function prepareSlackMessage(params: {
     from: envelopeFrom,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     body: textWithId,
-    chatType: isDirectMessage ? "direct" : "channel",
+    chatType,
     sender: { name: senderName, id: senderId },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -665,7 +669,7 @@ export async function prepareSlackMessage(params: {
     To: slackTo,
     SessionKey: sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "channel",
+    ChatType: chatType,
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSpace: ctx.teamId || undefined,

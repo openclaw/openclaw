@@ -115,12 +115,23 @@ stateDiagram-v2
 
 Transitions happen automatically — when the associated agent run ends, the task status updates to match.
 
+Agent run completion is authoritative for active task records. A successful
+detached run finalizes as `succeeded`, ordinary run errors finalize as
+`failed`, and timeout or abort outcomes finalize as `timed_out`. If an operator
+already cancelled the task, or the runtime already recorded a stronger terminal
+state such as `failed`, `timed_out`, or `lost`, a later success signal does not
+downgrade that terminal status.
+
 `lost` is runtime-aware:
 
 - ACP tasks: backing ACP child session metadata disappeared.
 - Subagent tasks: backing child session disappeared from the target agent store.
 - Cron tasks: the cron runtime no longer tracks the job as active.
-- CLI tasks: isolated child-session tasks use the child session; chat-backed CLI tasks use the live run context instead, so lingering channel/group/direct session rows do not keep them alive.
+- CLI tasks: isolated child-session tasks use the child session; chat-backed
+  CLI tasks use the live run context instead, so lingering
+  channel/group/direct session rows do not keep them alive. Gateway-backed
+  `openclaw agent` runs also finalize from their run result, so completed runs
+  do not sit active until the sweeper marks them `lost`.
 
 ## Delivery and notifications
 
@@ -194,14 +205,14 @@ openclaw tasks audit [--json]
 
 Surfaces operational issues. Findings also appear in `openclaw status` when issues are detected.
 
-| Finding                   | Severity | Trigger                                               |
-| ------------------------- | -------- | ----------------------------------------------------- |
-| `stale_queued`            | warn     | Queued for more than 10 minutes                       |
-| `stale_running`           | error    | Running for more than 30 minutes                      |
-| `lost`                    | error    | Runtime-backed task ownership disappeared             |
-| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
-| `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
-| `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
+| Finding                   | Severity   | Trigger                                                                                                      |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
+| `stale_queued`            | warn       | Queued for more than 10 minutes                                                                              |
+| `stale_running`           | error      | Running for more than 30 minutes                                                                             |
+| `lost`                    | warn/error | Runtime-backed task ownership disappeared; retained lost tasks warn until `cleanupAfter`, then become errors |
+| `delivery_failed`         | warn       | Delivery failed and notify policy is not `silent`                                                            |
+| `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
+| `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
 
 ### `tasks maintenance`
 
@@ -284,7 +295,7 @@ The registry loads into memory at gateway start and syncs writes to SQLite for d
 A sweeper runs every **60 seconds** and handles three things:
 
 1. **Reconciliation** — checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
-2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days).
+2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
 3. **Pruning** — deletes records past their `cleanupAfter` date.
 
 **Retention**: terminal task records are kept for **7 days**, then automatically pruned. No configuration needed.

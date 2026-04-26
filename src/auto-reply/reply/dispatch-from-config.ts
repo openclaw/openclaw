@@ -9,6 +9,7 @@ import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -25,6 +26,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -40,15 +42,18 @@ import {
   toPluginConversationBinding,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
   resolveConfiguredTtsMode,
+  shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -56,6 +61,7 @@ import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
   loadSessionStore,
@@ -78,6 +84,7 @@ let getReplyFromConfigRuntimePromise: Promise<
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+let runtimePluginsPromise: Promise<typeof import("../../agents/runtime-plugins.js")> | null = null;
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
 
@@ -101,6 +108,11 @@ function loadTtsRuntime() {
   return ttsRuntimePromise;
 }
 
+function loadRuntimePlugins() {
+  runtimePluginsPromise ??= import("../../agents/runtime-plugins.js");
+  return runtimePluginsPromise;
+}
+
 function loadReplyMediaPathsRuntime() {
   replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
   return replyMediaPathsRuntimePromise;
@@ -109,7 +121,9 @@ function loadReplyMediaPathsRuntime() {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (!shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto })) {
+  if (
+    !shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto, agentId: params.agentId })
+  ) {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
@@ -151,6 +165,26 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   return AUDIO_HEADER_RE.test(trimmed);
 };
 
+const resolveRoutedPolicyConversationType = (
+  ctx: FinalizedMsgContext,
+): "direct" | "group" | undefined => {
+  if (
+    ctx.CommandSource === "native" &&
+    ctx.CommandTargetSessionKey &&
+    ctx.CommandTargetSessionKey !== ctx.SessionKey
+  ) {
+    return undefined;
+  }
+  const chatType = normalizeChatType(ctx.ChatType);
+  if (chatType === "direct") {
+    return "direct";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return "group";
+  }
+  return undefined;
+};
+
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -182,6 +216,37 @@ const resolveSessionStoreLookup = (
       storePath,
     };
   }
+};
+
+const resolveBoundAcpDispatchSessionKey = (params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+}): string | undefined => {
+  const bindingContext = resolveConversationBindingContextFromMessage({
+    cfg: params.cfg,
+    ctx: params.ctx,
+  });
+  if (!bindingContext) {
+    return undefined;
+  }
+
+  const binding = getSessionBindingService().resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+  });
+  const targetSessionKey = normalizeOptionalString(binding?.targetSessionKey);
+  if (!binding || !targetSessionKey || !isAcpSessionKey(targetSessionKey)) {
+    return undefined;
+  }
+  if (isPluginOwnedSessionBindingRecord(binding)) {
+    return undefined;
+  }
+  getSessionBindingService().touch(binding.bindingId);
+  return targetSessionKey;
 };
 
 const createShouldEmitVerboseProgress = (params: {
@@ -273,8 +338,13 @@ export async function dispatchReplyFromConfig(
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
-  const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
-  const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
+  const acpDispatchSessionKey =
+    boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
+  const sessionStoreEntry = boundAcpDispatchSessionKey
+    ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
+    : initialSessionStoreEntry;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
@@ -297,6 +367,9 @@ export async function dispatchReplyFromConfig(
     ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const { ensureRuntimePluginsLoaded } = await loadRuntimePlugins();
+  ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)
@@ -357,7 +430,7 @@ export async function dispatchReplyFromConfig(
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg,
     sessionKey: acpDispatchSessionKey,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+    workspaceDir,
     messageProvider: deliveryChannel,
     accountId: replyRoute.accountId,
     groupId,
@@ -391,6 +464,7 @@ export async function dispatchReplyFromConfig(
         ctx.CommandSource === "native"
           ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
           : ctx.SessionKey,
+      policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: replyRoute.accountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
@@ -512,7 +586,7 @@ export async function dispatchReplyFromConfig(
         ? await hookRunner.runInboundClaimForPluginOutcome(
             pluginOwnedBinding.pluginId,
             inboundClaimEvent,
-            inboundClaimContext,
+            { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
           )
         : (() => {
             const pluginLoaded =
@@ -526,6 +600,9 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
+          if (targetedClaimOutcome.result.reply) {
+            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+          }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
@@ -640,8 +717,12 @@ export async function dispatchReplyFromConfig(
       return { queuedFinal, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
-    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const isSlackNonDirectSurface =
+      (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
+    const shouldSendVerboseProgressMessages =
+      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
+    const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -652,6 +733,7 @@ export async function dispatchReplyFromConfig(
         kind: "final",
         inboundAudio,
         ttsAuto: sessionTtsAuto,
+        agentId: sessionAgentId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
@@ -803,7 +885,7 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress()) {
+      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -851,7 +933,15 @@ export async function dispatchReplyFromConfig(
     // When block streaming succeeds, there's no final reply, so we need to generate
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
+    let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
+      cfg,
+      ttsAuto: sessionTtsAuto,
+      agentId: sessionAgentId,
+    })
+      ? createTtsDirectiveTextStreamCleaner()
+      : undefined;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -919,6 +1009,7 @@ export async function dispatchReplyFromConfig(
               kind: "tool",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
@@ -995,11 +1086,27 @@ export async function dispatchReplyFromConfig(
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
             if (payload.text && !payload.isCompactionNotice) {
+              const joinsBufferedTtsDirective =
+                cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
               accumulatedBlockText += payload.text;
+              if (accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+                accumulatedBlockTtsText += "\n";
+              }
+              accumulatedBlockTtsText += payload.text;
               blockCount++;
+            }
+            const visiblePayload =
+              payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                ? (() => {
+                    const text = cleanBlockTtsDirectiveText.push(payload.text);
+                    return { ...payload, text: text.trim() ? text : undefined };
+                  })()
+                : payload;
+            if (!resolveSendableOutboundReplyParts(visiblePayload).hasContent) {
+              return;
             }
             // Channels that keep a live draft preview may need to rotate their
             // preview state at the logical block boundary before queued block
@@ -1012,14 +1119,15 @@ export async function dispatchReplyFromConfig(
                     assistantMessageIndex: payloadMetadata.assistantMessageIndex,
                   }
                 : context;
-            await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
+            await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
             const ttsPayload = await maybeApplyTtsToReplyPayload({
-              payload,
+              payload: visiblePayload,
               cfg,
               channel: deliveryChannel,
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
@@ -1090,7 +1198,7 @@ export async function dispatchReplyFromConfig(
         routedFinalCount += finalReply.routedFinalCount;
       }
 
-      const ttsMode = resolveConfiguredTtsMode(cfg);
+      const ttsMode = resolveConfiguredTtsMode(cfg, sessionAgentId);
       // Generate TTS-only reply after block streaming completes (when there's no final reply).
       // This handles the case where block streaming succeeds and drops final payloads,
       // but we still want TTS audio to be generated from the accumulated block content.
@@ -1098,25 +1206,29 @@ export async function dispatchReplyFromConfig(
         ttsMode === "final" &&
         replies.length === 0 &&
         blockCount > 0 &&
-        accumulatedBlockText.trim()
+        accumulatedBlockTtsText.trim()
       ) {
         try {
           const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-            payload: { text: accumulatedBlockText },
+            payload: { text: accumulatedBlockTtsText },
             cfg,
             channel: deliveryChannel,
             kind: "final",
             inboundAudio,
             ttsAuto: sessionTtsAuto,
+            agentId: sessionAgentId,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
+            // Keep the spoken text only for hooks/archive consumers.
             const ttsOnlyPayload: ReplyPayload = {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
+              spokenText: accumulatedBlockTtsText,
             };
-            const result = await routeReplyToOriginating(ttsOnlyPayload);
+            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {
               queuedFinal = result.ok || queuedFinal;
               if (result.ok) {
@@ -1128,7 +1240,7 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
-              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
           }

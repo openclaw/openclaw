@@ -16,7 +16,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.24 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+> **Requires OpenClaw 2026.4.25 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
 
 <Steps>
   <Step title="Run the channel setup wizard">
@@ -414,6 +414,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Video/media
 - ✅ Stickers
 
+Inbound Feishu/Lark audio messages are normalized as media placeholders instead
+of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
+downloads the voice-note resource and runs shared audio transcription before the
+agent turn, so the agent receives the spoken transcript. If Feishu includes
+transcript text directly in the audio payload, that text is used without another
+ASR call. Without an audio transcription provider, the agent still receives a
+`<media:audio>` placeholder plus the saved attachment, not the raw Feishu
+resource payload.
+
 ### Send
 
 - ✅ Text
@@ -424,11 +433,25 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Interactive cards (including streaming updates)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
+Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
+is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
+transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
+delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
+replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
+conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
 ### Threads and replies
 
 - ✅ Inline replies
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
+
+For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
+Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
+topic session key. Normal group replies that OpenClaw turns into threads keep
+using the reply root message ID (`om_*`) so the first turn and follow-up turn
+stay in the same session.
 
 ---
 

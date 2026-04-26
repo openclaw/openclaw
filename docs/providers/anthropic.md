@@ -5,8 +5,6 @@ read_when:
 title: "Anthropic"
 ---
 
-# Anthropic (Claude)
-
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)
@@ -261,6 +259,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on requests.
+
+    `params.context1m: true` also applies to the Claude CLI backend
+    (`claude-cli/*`) for eligible Opus and Sonnet models, expanding the runtime
+    context window for those CLI sessions to match the direct-API behavior.
 
     <Warning>
     Requires long-context access on your Anthropic credential. Legacy token auth (`sk-ant-oat-*`) is rejected for 1M context requests — OpenClaw logs a warning and falls back to the standard context window.

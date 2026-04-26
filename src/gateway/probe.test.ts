@@ -18,8 +18,14 @@ const gatewayClientState = vi.hoisted(() => ({
 }));
 
 const deviceIdentityState = vi.hoisted(() => ({
-  value: { id: "test-device-identity" } as Record<string, unknown>,
+  value: { deviceId: "test-device-identity" } as Record<string, unknown>,
   throwOnLoad: false,
+  cachedToken: {
+    token: "cached-operator-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 1,
+  } as Record<string, unknown> | null,
 }));
 
 class MockGatewayClientRequestError extends Error {
@@ -100,6 +106,16 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
+  loadDeviceIdentityIfPresent: () => {
+    if (deviceIdentityState.throwOnLoad) {
+      throw new Error("read-only identity dir");
+    }
+    return deviceIdentityState.value;
+  },
+}));
+
+vi.mock("../infra/device-auth-store.js", () => ({
+  loadDeviceAuthToken: () => deviceIdentityState.cachedToken,
 }));
 
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
@@ -107,6 +123,12 @@ const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 describe("probeGateway", () => {
   beforeEach(() => {
     deviceIdentityState.throwOnLoad = false;
+    deviceIdentityState.cachedToken = {
+      token: "cached-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
     gatewayClientState.startMode = "hello";
     gatewayClientState.close = { code: 1008, reason: "pairing required" };
     gatewayClientState.helloAuth = {
@@ -157,6 +179,19 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("does not create or attach a device identity for first-time authenticated probes", async () => {
+    deviceIdentityState.cachedToken = null;
+
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
   });
 
   it("keeps device identity disabled for unauthenticated loopback probes", async () => {

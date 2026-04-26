@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
+import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
-} from "./auth-profiles.js";
-import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
+} from "./auth-profiles/store.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.hoisted(() =>
@@ -21,6 +21,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => {
     const codexHome = process.env.CODEX_HOME;
     if (!codexHome) {

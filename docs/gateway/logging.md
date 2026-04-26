@@ -111,3 +111,9 @@ Behavior:
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
+
+## Related
+
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
+- [Diagnostics export](/gateway/diagnostics)

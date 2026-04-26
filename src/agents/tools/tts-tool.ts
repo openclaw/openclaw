@@ -57,6 +57,7 @@ function sanitizeTranscriptForToolContent(text: string): string {
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  agentId?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -75,6 +76,7 @@ export function createTtsTool(opts?: {
         cfg,
         channel: channel ?? opts?.agentChannel,
         timeoutMs,
+        agentId: opts?.agentId,
       });
 
       if (result.success && result.audioPath) {
@@ -92,7 +94,7 @@ export function createTtsTool(opts?: {
             media: {
               mediaUrl: result.audioPath,
               trustedLocalMedia: true,
-              ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
+              ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },
         };

@@ -8,6 +8,13 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as nativeHookRelayTesting } from "../../../../src/agents/harness/native-hook-relay.js";
+import { buildAgentRuntimePlan } from "../../../../src/agents/runtime-plan/build.js";
+import {
+  onAgentEvent,
+  resetAgentEventsForTest,
+  type AgentEventPayload,
+} from "../../../../src/infra/agent-events.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -46,6 +53,28 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   } as EmbeddedRunAttemptParams;
 }
 
+function createParamsWithRuntimePlan(
+  sessionFile: string,
+  workspaceDir: string,
+): EmbeddedRunAttemptParams {
+  const params = createParams(sessionFile, workspaceDir);
+  return {
+    ...params,
+    runtimePlan: buildAgentRuntimePlan({
+      provider: params.provider,
+      modelId: params.modelId,
+      model: params.model,
+      modelApi: params.model.api,
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      config: params.config,
+      workspaceDir,
+      agentDir: tempDir,
+      thinkingLevel: params.thinkLevel,
+    }),
+  } as EmbeddedRunAttemptParams;
+}
+
 function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -59,7 +88,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -188,7 +217,7 @@ function expectResumeRequest(
     expect.arrayContaining([
       {
         method: "thread/resume",
-        params,
+        params: expect.objectContaining(params),
       },
     ]),
   );
@@ -258,13 +287,31 @@ function createMessageDynamicTool(
   };
 }
 
+function extractRelayIdFromThreadRequest(params: unknown): string {
+  const command = (
+    params as {
+      config?: {
+        "hooks.PreToolUse"?: Array<{ hooks?: Array<{ command?: string }> }>;
+      };
+    }
+  ).config?.["hooks.PreToolUse"]?.[0]?.hooks?.[0]?.command;
+  const match = command?.match(/--relay-id ([^ ]+)/);
+  if (!match?.[1]) {
+    throw new Error(`relay id missing from command: ${command}`);
+  }
+  return match[1];
+}
+
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
+    resetAgentEventsForTest();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
   });
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
+    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    resetAgentEventsForTest();
     resetGlobalHookRunner();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -324,6 +371,9 @@ describe("runCodexAppServerAttempt", () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
     const agentEnd = vi.fn();
+    const onRunAgentEvent = vi.fn();
+    const globalAgentEvents: AgentEventPayload[] = [];
+    onAgentEvent((event) => globalAgentEvents.push(event));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "llm_input", handler: llmInput },
@@ -337,7 +387,9 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParamsWithRuntimePlan(sessionFile, workspaceDir);
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
 
@@ -374,6 +426,56 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["hello back"]);
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
+    expect(agentEvents).toEqual(
+      expect.arrayContaining([
+        {
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "start",
+            startedAt: expect.any(Number),
+          }),
+        },
+        {
+          stream: "assistant",
+          data: { text: "hello back" },
+        },
+        {
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "end",
+            startedAt: expect.any(Number),
+            endedAt: expect.any(Number),
+          }),
+        },
+      ]),
+    );
+    const startIndex = agentEvents.findIndex(
+      (event) => event.stream === "lifecycle" && event.data.phase === "start",
+    );
+    const assistantIndex = agentEvents.findIndex((event) => event.stream === "assistant");
+    const endIndex = agentEvents.findIndex(
+      (event) => event.stream === "lifecycle" && event.data.phase === "end",
+    );
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeGreaterThan(startIndex);
+    expect(endIndex).toBeGreaterThan(assistantIndex);
+    expect(globalAgentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-1",
+          sessionKey: "agent:main:session-1",
+          stream: "assistant",
+          data: { text: "hello back" },
+        }),
+        expect.objectContaining({
+          runId: "run-1",
+          sessionKey: "agent:main:session-1",
+          stream: "lifecycle",
+          data: expect.objectContaining({ phase: "end" }),
+        }),
+      ]),
+    );
 
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -381,6 +483,8 @@ describe("runCodexAppServerAttempt", () => {
         sessionId: "session-1",
         provider: "codex",
         model: "gpt-5.4-codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         assistantTexts: ["hello back"],
         lastAssistant: expect.objectContaining({
           role: "assistant",
@@ -406,8 +510,115 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+        gatewayTimeoutMs: 4321,
+        hookTimeoutSec: 9,
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          "features.codex_hooks": true,
+          "hooks.PreToolUse": [
+            expect.objectContaining({
+              hooks: [
+                expect.objectContaining({
+                  type: "command",
+                  timeout: 9,
+                  command: expect.stringContaining("--event pre_tool_use --timeout 4321"),
+                }),
+              ],
+            }),
+          ],
+        }),
+      }),
+    );
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("sends clearing Codex native hook config when the relay is disabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: { enabled: false },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: {
+          "features.codex_hooks": false,
+          "hooks.PreToolUse": [],
+          "hooks.PostToolUse": [],
+          "hooks.PermissionRequest": [],
+          "hooks.Stop": [],
+        },
+      }),
+    );
+  });
+
+  it("cleans up native hook relay state when turn/start fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new Error("turn start exploded");
+      }
+      return undefined;
+    });
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        nativeHookRelay: { enabled: true },
+      }),
+    ).rejects.toThrow("turn start exploded");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("cleans up native hook relay state when the Codex turn aborts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: { enabled: true },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(abortAgentHarnessRun("session-1")).toBe(true);
+
+    const result = await run;
+
+    expect(result.aborted).toBe(true);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
   it("fires agent_end with failure metadata when the codex turn fails", async () => {
     const agentEnd = vi.fn();
+    const onRunAgentEvent = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
@@ -415,7 +626,9 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir);
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await harness.notify({
       method: "turn/completed",
@@ -434,6 +647,25 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBe("codex exploded");
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
+    expect(agentEvents).toEqual(
+      expect.arrayContaining([
+        {
+          stream: "lifecycle",
+          data: expect.objectContaining({ phase: "start", startedAt: expect.any(Number) }),
+        },
+        {
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "error",
+            startedAt: expect.any(Number),
+            endedAt: expect.any(Number),
+            error: "codex exploded",
+          }),
+        },
+      ]),
+    );
+    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
@@ -469,9 +701,9 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
-      "turn start exploded",
-    );
+    await expect(
+      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
+    ).rejects.toThrow("turn start exploded");
 
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
@@ -481,6 +713,8 @@ describe("runCodexAppServerAttempt", () => {
         assistantTexts: [],
         model: "gpt-5.4-codex",
         provider: "codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         runId: "run-1",
         sessionId: "session-1",
       }),
@@ -550,7 +784,6 @@ describe("runCodexAppServerAttempt", () => {
           method: "thread/start",
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
-            modelProvider: "openai",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
             approvalsReviewer: "user",
@@ -641,6 +874,97 @@ describe("runCodexAppServerAttempt", () => {
         threadId: "thread-1",
         turnId: "turn-1",
       }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
+  it("routes request_user_input prompts through the active run follow-up queue", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBlockReply = vi.fn();
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () => expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      { interval: 1 },
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    const response = handleRequest?.({
+      id: "request-input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ask-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["Deep"] } },
+    });
+    expect(request).not.toHaveBeenCalledWith(
+      "turn/steer",
+      expect.objectContaining({ expectedTurnId: "turn-1" }),
     );
 
     await notify({
@@ -1034,7 +1358,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
@@ -1079,6 +1402,58 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(binding.threadId).toBe("thread-existing");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("passes native hook relay config on thread start and resume", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const config = {
+      "features.codex_hooks": true,
+      "hooks.PreToolUse": [],
+    };
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config,
+    });
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config,
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config,
+        }),
+      ],
+      [
+        "thread/resume",
+        expect.objectContaining({
+          config,
+        }),
+      ],
+    ]);
   });
 
   it("starts a new Codex thread when dynamic tool schemas change", async () => {
@@ -1136,7 +1511,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1151,6 +1525,7 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
+            sandboxPolicy: { type: "dangerFullAccess" },
             serviceTier: "fast",
             model: "gpt-5.4-codex",
           }),
@@ -1207,7 +1582,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
       threadId: "thread-1",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1224,6 +1598,7 @@ describe("runCodexAppServerAttempt", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
+        sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
       }),
     );

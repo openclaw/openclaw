@@ -8,10 +8,12 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 const routeState = existingSessionRouteState;
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
+  fillChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -29,11 +31,12 @@ const navigationGuardMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
+  clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
-  fillChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
@@ -107,8 +110,10 @@ describe("existing-session browser routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
     routeState.profileCtx.listTabs.mockClear();
+    chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
@@ -135,6 +140,7 @@ describe("existing-session browser routes", () => {
     });
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
@@ -148,7 +154,7 @@ describe("existing-session browser routes", () => {
       {
         params: {},
         query: {},
-        body: { ref: "btn-1", type: "jpeg" },
+        body: { ref: "btn-1", type: "jpeg", timeoutMs: 4321 },
       },
       response.res,
     );
@@ -161,10 +167,12 @@ describe("existing-session browser routes", () => {
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       uid: "btn-1",
       fullPage: false,
       format: "jpeg",
+      timeoutMs: 4321,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
@@ -238,6 +246,25 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
+  it("fails closed for existing-session type timeout overrides", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "type", ref: "input-1", text: "hello", timeoutMs: 1234 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("type does not support timeoutMs"),
+    });
+    expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+  });
+
   it("supports glob URL waits for existing-session profiles", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.evaluateChromeMcpScript.mockImplementation(
@@ -260,6 +287,8 @@ describe("existing-session browser routes", () => {
     expect(response.body).toMatchObject({ ok: true, targetId: "7" });
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
       profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      userDataDir: undefined,
       targetId: "7",
       fn: "() => window.location.href",
     });
@@ -283,12 +312,39 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledWith({
       profileName: "chrome-live",
-      userDataDir: undefined,
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       uid: "btn-1",
       doubleClick: false,
       timeoutMs: 1234,
       signal: ctrl.signal,
+    });
+  });
+
+  it("supports coordinate clicks for existing-session profiles", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "clickCoords", x: 25, y: "32", doubleClick: true, delayMs: 5 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7", url: "https://example.com" });
+    expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+      targetId: "7",
+      x: 25,
+      y: 32,
+      doubleClick: true,
+      button: undefined,
+      delayMs: 5,
     });
   });
 });

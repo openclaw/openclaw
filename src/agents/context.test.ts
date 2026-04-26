@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
@@ -6,6 +6,8 @@ import {
   resolveContextTokensForModel,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
+
+vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {
@@ -231,6 +233,36 @@ describe("resolveContextTokensForModel", () => {
       },
       provider: "anthropic",
       model: "claude-opus-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M context when claude-cli context1m is enabled for opus/sonnet", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "claude-cli": {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-7", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-opus-4-7": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
       fallbackContextTokens: 200_000,
       allowAsyncLoad: false,
     });

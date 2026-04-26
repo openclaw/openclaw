@@ -73,15 +73,17 @@ let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
+let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeAll(async () => {
+    undiciGlobalDispatcherModule = await import("./undici-global-dispatcher.js");
     ({
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
       resetGlobalUndiciStreamTimeoutsForTests,
-    } = await import("./undici-global-dispatcher.js"));
+    } = undiciGlobalDispatcherModule);
   });
 
   beforeEach(() => {
@@ -125,12 +127,13 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     });
   });
 
-  it("does not override unsupported custom proxy dispatcher types", () => {
+  it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
 
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
 
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(undiciGlobalDispatcherModule._globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("is idempotent for unchanged dispatcher kind and network policy", () => {

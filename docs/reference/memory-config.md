@@ -219,6 +219,17 @@ to an existing local file. `hf:` and HTTP(S) model references can still be used
 explicitly with `provider: "local"`, but they do not make `auto` select local
 before the model is available on disk.
 
+### Inline embedding timeout
+
+| Key                                 | Type     | Default          | Description                                                              |
+| ----------------------------------- | -------- | ---------------- | ------------------------------------------------------------------------ |
+| `sync.embeddingBatchTimeoutSeconds` | `number` | provider default | Override the timeout for inline embedding batches during memory indexing |
+
+Unset uses the provider default: 600 seconds for local/self-hosted providers
+such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers.
+
+Increase this when local CPU-bound embedding batches are healthy but slow.
+
 ---
 
 ## Hybrid search config
@@ -347,6 +358,10 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically
 fastest and cheapest for large backfills.
 
+This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls inline
+embedding calls used by local/self-hosted providers and hosted providers when
+provider batch APIs are not active.
+
 ---
 
 ## Session memory search (experimental)
@@ -436,7 +451,7 @@ runtime environment.
 ### Scope
 
 Controls which sessions can receive QMD search results. Same schema as
-[`session.sendPolicy`](/gateway/configuration-reference#session):
+[`session.sendPolicy`](/gateway/config-agents#session):
 
 ```json5
 {
@@ -531,3 +546,9 @@ Notes:
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Configuration reference](/gateway/configuration-reference)

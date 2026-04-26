@@ -6,6 +6,7 @@ import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.registry.js";
 import {
@@ -78,6 +79,35 @@ function shouldSuppressListModel(params: {
   });
 }
 
+function appendVisibleRow(params: {
+  rows: ModelRow[];
+  model: ListRowModel;
+  key: string;
+  context: RowBuilderContext;
+  seenKeys?: Set<string>;
+  allowProviderAvailabilityFallback?: boolean;
+}): boolean {
+  if (params.seenKeys?.has(params.key)) {
+    return false;
+  }
+  if (!matchesRowFilter(params.context.filter, params.model)) {
+    return false;
+  }
+  if (shouldSuppressListModel({ model: params.model, context: params.context })) {
+    return false;
+  }
+  params.rows.push(
+    buildRow({
+      model: params.model,
+      key: params.key,
+      context: params.context,
+      allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
+    }),
+  );
+  params.seenKeys?.add(params.key);
+  return true;
+}
+
 function resolveConfiguredModelInput(params: {
   model: Partial<ModelDefinitionConfig>;
 }): Array<"text" | "image"> {
@@ -101,6 +131,18 @@ function toConfiguredProviderListModel(params: {
     baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     input: resolveConfiguredModelInput({ model: params.model }),
     contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: params.model.contextTokens,
+  };
+}
+
+function toManifestCatalogListModel(row: NormalizedModelCatalogRow): ListRowModel {
+  return {
+    provider: row.provider,
+    id: row.id,
+    name: row.name,
+    baseUrl: row.baseUrl,
+    input: [...row.input],
+    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
 
@@ -108,15 +150,13 @@ function shouldListConfiguredProviderModel(params: {
   providerConfig: Partial<ModelProviderConfig>;
   model: Partial<ModelDefinitionConfig>;
 }): boolean {
-  return (
-    params.providerConfig.apiKey !== undefined &&
-    (params.providerConfig.api !== undefined || params.model.api !== undefined)
-  );
+  return params.providerConfig.api !== undefined || params.model.api !== undefined;
 }
 
 export function appendDiscoveredRows(params: {
   rows: ModelRow[];
   models: Model<Api>[];
+  modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
 }): Set<string> {
   const seenKeys = new Set<string>();
@@ -129,21 +169,27 @@ export function appendDiscoveredRows(params: {
   });
 
   for (const model of sorted) {
-    if (shouldSuppressListModel({ model, context: params.context })) {
-      continue;
-    }
-    if (!matchesRowFilter(params.context.filter, model)) {
-      continue;
-    }
     const key = modelKey(model.provider, model.id);
-    params.rows.push(
-      buildRow({
-        model,
-        key,
-        context: params.context,
-      }),
-    );
-    seenKeys.add(key);
+    const resolvedModel = params.modelRegistry
+      ? resolveModelWithRegistry({
+          provider: model.provider,
+          modelId: model.id,
+          modelRegistry: params.modelRegistry,
+          cfg: params.context.cfg,
+          agentDir: params.context.agentDir,
+        })
+      : undefined;
+    const rowModel =
+      resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
+        ? resolvedModel
+        : model;
+    appendVisibleRow({
+      rows: params.rows,
+      model: rowModel,
+      key,
+      context: params.context,
+      seenKeys,
+    });
   }
 
   return seenKeys;
@@ -162,31 +208,46 @@ export function appendConfiguredProviderRows(params: {
         continue;
       }
       const key = modelKey(provider, configuredModel.id);
-      if (params.seenKeys.has(key)) {
-        continue;
-      }
       const model = toConfiguredProviderListModel({
         provider,
         providerConfig,
         model: configuredModel,
       });
-      if (!matchesRowFilter(params.context.filter, model)) {
-        continue;
-      }
-      if (shouldSuppressListModel({ model, context: params.context })) {
-        continue;
-      }
-      params.rows.push(
-        buildRow({
-          model,
-          key,
-          context: params.context,
-          allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
-        }),
-      );
-      params.seenKeys.add(key);
+      appendVisibleRow({
+        rows: params.rows,
+        model,
+        key,
+        context: params.context,
+        seenKeys: params.seenKeys,
+        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+      });
     }
   }
+}
+
+export function appendManifestCatalogRows(params: {
+  rows: ModelRow[];
+  context: RowBuilderContext;
+  seenKeys: Set<string>;
+  manifestRows: readonly NormalizedModelCatalogRow[];
+}): number {
+  let appended = 0;
+  for (const manifestRow of params.manifestRows) {
+    const key = modelKey(manifestRow.provider, manifestRow.id);
+    if (
+      appendVisibleRow({
+        rows: params.rows,
+        model: toManifestCatalogListModel(manifestRow),
+        key,
+        context: params.context,
+        seenKeys: params.seenKeys,
+        allowProviderAvailabilityFallback: true,
+      })
+    ) {
+      appended += 1;
+    }
+  }
+  return appended;
 }
 
 export async function appendCatalogSupplementRows(params: {
@@ -204,30 +265,23 @@ export async function appendCatalogSupplementRows(params: {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);
-    if (params.seenKeys.has(key)) {
-      continue;
-    }
     const model = resolveModelWithRegistry({
       provider: entry.provider,
       modelId: entry.id,
       modelRegistry: params.modelRegistry,
       cfg: params.context.cfg,
     });
-    if (!model || !matchesRowFilter(params.context.filter, model)) {
+    if (!model) {
       continue;
     }
-    if (shouldSuppressListModel({ model, context: params.context })) {
-      continue;
-    }
-    params.rows.push(
-      buildRow({
-        model,
-        key,
-        context: params.context,
-        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
-      }),
-    );
-    params.seenKeys.add(key);
+    appendVisibleRow({
+      rows: params.rows,
+      model,
+      key,
+      context: params.context,
+      seenKeys: params.seenKeys,
+      allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+    });
   }
 
   if (params.context.filter.local) {
@@ -245,32 +299,30 @@ export async function appendProviderCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
   seenKeys: Set<string>;
-}): Promise<void> {
+  staticOnly?: boolean;
+}): Promise<number> {
+  let appended = 0;
   for (const model of await loadProviderCatalogModelsForList({
     cfg: params.context.cfg,
     agentDir: params.context.agentDir,
     providerFilter: params.context.filter.provider,
+    staticOnly: params.staticOnly,
   })) {
-    if (!matchesRowFilter(params.context.filter, model)) {
-      continue;
-    }
-    if (shouldSuppressListModel({ model, context: params.context })) {
-      continue;
-    }
     const key = modelKey(model.provider, model.id);
-    if (params.seenKeys.has(key)) {
-      continue;
-    }
-    params.rows.push(
-      buildRow({
+    if (
+      appendVisibleRow({
+        rows: params.rows,
         model,
         key,
         context: params.context,
+        seenKeys: params.seenKeys,
         allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
-      }),
-    );
-    params.seenKeys.add(key);
+      })
+    ) {
+      appended += 1;
+    }
   }
+  return appended;
 }
 
 export function appendConfiguredRows(params: {

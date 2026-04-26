@@ -75,7 +75,7 @@ Cancels a running background task.
 openclaw tasks audit [--severity <warn|error>] [--code <name>] [--limit <n>] [--json]
 ```
 
-Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task Flow records.
+Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task Flow records. Lost tasks retained until `cleanupAfter` are warnings; expired or unstamped lost tasks are errors.
 
 ### `maintenance`
 
@@ -94,3 +94,8 @@ openclaw tasks flow cancel <lookup>
 ```
 
 Inspects or cancels durable Task Flow state under the task ledger.
+
+## Related
+
+- [CLI reference](/cli)
+- [Background tasks](/automation/tasks)

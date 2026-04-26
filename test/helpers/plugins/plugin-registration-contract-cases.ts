@@ -55,6 +55,7 @@ export const pluginRegistrationContractCases = {
     pluginId: "google",
     providerIds: ["google", "google-gemini-cli"],
     webSearchProviderIds: ["gemini"],
+    realtimeVoiceProviderIds: ["google"],
     speechProviderIds: ["google"],
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
@@ -121,10 +122,18 @@ export const pluginRegistrationContractCases = {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
   },
+  senseaudio: {
+    pluginId: "senseaudio",
+    mediaUnderstandingProviderIds: ["senseaudio"],
+  },
   tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],
     toolNames: ["tavily_search", "tavily_extract"],
+  },
+  "tts-local-cli": {
+    pluginId: "tts-local-cli",
+    speechProviderIds: ["tts-local-cli", "cli"],
   },
   xai: {
     pluginId: "xai",

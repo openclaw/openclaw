@@ -1,9 +1,11 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import {
   appendCatalogSupplementRows,
   appendConfiguredProviderRows,
   appendConfiguredRows,
   appendDiscoveredRows,
+  appendManifestCatalogRows,
   appendProviderCatalogRows,
   type RowBuilderContext,
 } from "./list.rows.js";
@@ -13,20 +15,81 @@ type AllModelRowSources = {
   rows: ModelRow[];
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
+  manifestCatalogRows?: readonly NormalizedModelCatalogRow[];
+  useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
+};
+
+type AppendAllModelRowSourcesResult = {
+  requiresRegistryFallback: boolean;
 };
 
 export function modelRowSourcesRequireRegistry(params: {
   all?: boolean;
+  providerFilter?: string;
+  useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
 }): boolean {
-  return !(params.all && params.useProviderCatalogFastPath);
+  if (!params.all) {
+    return false;
+  }
+  if (
+    params.providerFilter &&
+    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+  ) {
+    return false;
+  }
+  return true;
 }
 
-export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {
+export async function appendAllModelRowSources(
+  params: AllModelRowSources,
+): Promise<AppendAllModelRowSourcesResult> {
+  if (
+    params.context.filter.provider &&
+    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+  ) {
+    let seenKeys = new Set<string>();
+    appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
+    let catalogRows = 0;
+    if (params.useManifestCatalogFastPath) {
+      catalogRows = appendManifestCatalogRows({
+        rows: params.rows,
+        context: params.context,
+        seenKeys,
+        manifestRows: params.manifestCatalogRows ?? [],
+      });
+    }
+    if (catalogRows === 0 && params.useProviderCatalogFastPath) {
+      catalogRows = await appendProviderCatalogRows({
+        rows: params.rows,
+        context: params.context,
+        seenKeys,
+        staticOnly: true,
+      });
+    }
+    if (catalogRows === 0) {
+      if (!params.modelRegistry) {
+        return { requiresRegistryFallback: true };
+      }
+      appendDiscoveredRows({
+        rows: params.rows,
+        models: params.modelRegistry.getAll(),
+        modelRegistry: params.modelRegistry,
+        context: params.context,
+      });
+    }
+    return { requiresRegistryFallback: false };
+  }
+
   const seenKeys = appendDiscoveredRows({
     rows: params.rows,
     models: params.modelRegistry?.getAll() ?? [],
+    modelRegistry: params.modelRegistry,
     context: params.context,
   });
 
@@ -43,16 +106,15 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
       context: params.context,
       seenKeys,
     });
-    return;
+    return { requiresRegistryFallback: false };
   }
 
-  if (params.useProviderCatalogFastPath) {
-    await appendProviderCatalogRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-    });
-  }
+  await appendProviderCatalogRows({
+    rows: params.rows,
+    context: params.context,
+    seenKeys,
+  });
+  return { requiresRegistryFallback: false };
 }
 
 export function appendConfiguredModelRowSources(params: {

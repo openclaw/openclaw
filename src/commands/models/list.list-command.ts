@@ -1,10 +1,12 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
-import { loadListModelRegistry } from "./list.registry-load.js";
+import { hasProviderStaticCatalogForFilter } from "./list.provider-catalog.js";
+import { loadConfiguredListModelRegistry, loadListModelRegistry } from "./list.registry-load.js";
 import {
   appendAllModelRowSources,
   appendConfiguredModelRowSources,
@@ -58,34 +60,46 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
+  const { entries } = resolveConfiguredEntries(cfg);
+  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  let manifestCatalogRows: readonly NormalizedModelCatalogRow[] = [];
+  if (opts.all && providerFilter) {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    manifestCatalogRows = loadStaticManifestCatalogRowsForList({ cfg, providerFilter });
+  }
+  const useManifestCatalogFastPath = manifestCatalogRows.length > 0;
+  const useProviderCatalogFastPath =
+    !useManifestCatalogFastPath && opts.all && providerFilter
+      ? await hasProviderStaticCatalogForFilter({ cfg, providerFilter })
+      : false;
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
     all: opts.all,
+    providerFilter,
+    useManifestCatalogFastPath,
     useProviderCatalogFastPath,
   });
+  const loadRegistryState = async () => {
+    const loaded = await loadListModelRegistry(cfg, { providerFilter });
+    modelRegistry = loaded.registry;
+    discoveredKeys = loaded.discoveredKeys;
+    availableKeys = loaded.availableKeys;
+    availabilityErrorMessage = loaded.availabilityErrorMessage;
+  };
   try {
     if (shouldLoadRegistry) {
-      const loaded = await loadListModelRegistry(cfg, { providerFilter });
+      await loadRegistryState();
+    } else if (!opts.all) {
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
-      availabilityErrorMessage = loaded.availabilityErrorMessage;
     }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
     process.exitCode = 1;
     return;
   }
-  if (availabilityErrorMessage !== undefined) {
-    runtime.error(
-      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
-    );
-  }
-  const { entries } = resolveConfiguredEntries(cfg);
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-
-  const rows: ModelRow[] = [];
-  const rowContext = {
+  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentDir,
     authStore,
@@ -96,16 +110,39 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
-    skipRuntimeModelSuppression: useProviderCatalogFastPath,
-  };
+    skipRuntimeModelSuppression,
+  });
+  const rows: ModelRow[] = [];
 
   if (opts.all) {
-    await appendAllModelRowSources({
+    let rowContext = buildRowContext(useManifestCatalogFastPath || useProviderCatalogFastPath);
+    const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
       modelRegistry,
+      manifestCatalogRows,
+      useManifestCatalogFastPath,
       useProviderCatalogFastPath,
     });
+    if (initialAppend.requiresRegistryFallback) {
+      try {
+        await loadRegistryState();
+      } catch (err) {
+        runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+      rows.length = 0;
+      rowContext = buildRowContext(false);
+      await appendAllModelRowSources({
+        rows,
+        context: rowContext,
+        modelRegistry,
+        manifestCatalogRows: [],
+        useManifestCatalogFastPath: false,
+        useProviderCatalogFastPath: false,
+      });
+    }
   } else {
     const registry = modelRegistry;
     if (!registry) {
@@ -117,8 +154,14 @@ export async function modelsListCommand(
       rows,
       entries,
       modelRegistry: registry,
-      context: rowContext,
+      context: buildRowContext(false),
     });
+  }
+
+  if (availabilityErrorMessage !== undefined) {
+    runtime.error(
+      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
+    );
   }
 
   if (rows.length === 0) {

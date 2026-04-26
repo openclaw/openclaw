@@ -137,6 +137,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
+  it("routes precise plugin contract helpers without broad-running every shard", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/plugins/tts-contract-suites.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ]);
+  });
+
   it("keeps the broad changed run for unknown root surfaces", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -259,6 +270,22 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes changed ui support files to the ui lane without dead include globs", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/styles/base.css",
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes auto-reply route source files to route regression tests", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -271,6 +298,80 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "src/auto-reply/reply/dispatch-from-config.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    });
+  });
+
+  it("routes ACP command source files to ACP command regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/auto-reply/reply/commands-acp.ts",
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/commands-acp.test.ts",
+        "src/auto-reply/reply/dispatch-acp-command-bypass.test.ts",
+      ],
+    });
+  });
+
+  it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/cli.test.ts"],
+    });
+  });
+
+  it("routes Google Meet OAuth edits to the lightweight OAuth tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/oauth.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/oauth.test.ts"],
+    });
+  });
+
+  it("routes Google Meet entry edits to the plugin entry tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/index.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/index.test.ts"],
+    });
+  });
+
+  it("routes memory doctor and embedding default edits to focused tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/commands/doctor-memory-search.ts",
+        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "src/memory-host-sdk/host/embeddings.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/doctor-memory-search.test.ts",
+        "src/memory-host-sdk/host/embeddings.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider auth choice edits to focused auth-choice tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugins/provider-auth-choice.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/auth-choice.apply.plugin-provider.test.ts",
+        "src/commands/auth-choice.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider env var edits to focused secret tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/secrets/provider-env-vars.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/secrets/provider-env-vars.dynamic.test.ts",
+        "src/secrets/provider-env-vars.test.ts",
       ],
     });
   });
@@ -413,6 +514,12 @@ describe("scripts/test-projects changed-target routing", () => {
 });
 
 describe("scripts/test-projects local heavy-check lock", () => {
+  const localCheckEnv = () => ({
+    ...process.env,
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: undefined,
+    OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
+  });
+
   it("skips the lock for a single scoped tooling run", () => {
     expect(
       shouldAcquireLocalHeavyCheckLock(
@@ -423,7 +530,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(false);
   });
@@ -438,9 +545,27 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(true);
+  });
+
+  it("skips the lock when a parent changed gate already holds it", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.unit.config.ts",
+            includePatterns: ["src/infra/vitest-config.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...localCheckEnv(),
+          OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+        },
+      ),
+    ).toBe(false);
   });
 
   it("allows forcing the lock back on", () => {
@@ -454,7 +579,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
           },
         ],
         {
-          ...process.env,
+          ...localCheckEnv(),
           OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
         },
       ),
@@ -509,7 +634,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(3);
   });
 
-  it("splits untargeted runs into fixed core shards and per-extension configs", () => {
+  it("keeps serial untargeted runs on aggregate shards", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
@@ -529,31 +654,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-runtime.config.ts",
         "test/vitest/vitest.full-agentic.config.ts",
         "test/vitest/vitest.full-auto-reply.config.ts",
-        "test/vitest/vitest.extension-acpx.config.ts",
-        "test/vitest/vitest.extension-bluebubbles.config.ts",
-        "test/vitest/vitest.extension-diffs.config.ts",
-        "test/vitest/vitest.extension-discord.config.ts",
-        "test/vitest/vitest.extension-feishu.config.ts",
-        "test/vitest/vitest.extension-imessage.config.ts",
-        "test/vitest/vitest.extension-irc.config.ts",
-        "test/vitest/vitest.extension-line.config.ts",
-        "test/vitest/vitest.extension-mattermost.config.ts",
-        "test/vitest/vitest.extension-matrix.config.ts",
-        "test/vitest/vitest.extension-memory.config.ts",
-        "test/vitest/vitest.extension-messaging.config.ts",
-        "test/vitest/vitest.extension-msteams.config.ts",
-        "test/vitest/vitest.extension-provider-openai.config.ts",
-        "test/vitest/vitest.extension-providers.config.ts",
-        "test/vitest/vitest.extension-signal.config.ts",
-        "test/vitest/vitest.extension-slack.config.ts",
-        "test/vitest/vitest.extension-telegram.config.ts",
-        "test/vitest/vitest.extension-voice-call.config.ts",
-        "test/vitest/vitest.extension-whatsapp.config.ts",
-        "test/vitest/vitest.extension-zalo.config.ts",
-        "test/vitest/vitest.extension-browser.config.ts",
-        "test/vitest/vitest.extension-qa.config.ts",
-        "test/vitest/vitest.extension-media.config.ts",
-        "test/vitest/vitest.extension-misc.config.ts",
+        "test/vitest/vitest.full-extensions.config.ts",
       ]);
     } finally {
       if (previousParallel === undefined) {

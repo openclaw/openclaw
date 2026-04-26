@@ -130,15 +130,15 @@ Recommended defaults:
 Rules:
 
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
-- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
+- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription; inbound reply context receives a deterministic placeholder transcript so the agent knows the note was too small.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
 - If the active primary image model already supports vision natively, OpenClaw
   skips the `[Image]` summary block and passes the original image into the
   model instead.
 - If a Gateway/WebChat primary model is text-only, image attachments are
-  preserved as offloaded `media://inbound/*` refs so the image tool or configured
-  image model can still inspect them instead of losing the attachment.
+  preserved as offloaded `media://inbound/*` refs so the image/PDF tools or
+  configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --model <provider/model>` requests
   are different: they run that image-capable provider/model directly, including
   Ollama refs such as `ollama/qwen2.5vl:7b`.
@@ -167,7 +167,7 @@ working option**:
      example through `agents.defaults.imageModel` or
      `openclaw infer image describe --model ollama/<vision-model>`.
    - Bundled fallback order:
-     - Audio: OpenAI → Groq → xAI → Deepgram → Google → Mistral
+     - Audio: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
      - Video: Google → Qwen → Moonshot
 
@@ -228,7 +228,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 | Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                                                      | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                                                                                                               |
+| Audio      | OpenAI, Groq, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral                                                         | Provider transcription (Whisper/Groq/xAI/Deepgram/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                                    |
 | Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
 
 MiniMax note:

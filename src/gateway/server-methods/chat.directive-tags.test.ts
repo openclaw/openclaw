@@ -234,23 +234,7 @@ vi.mock("../../media/store.js", async () => {
 const { chatHandlers } = await import("./chat.js");
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
-    }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
-  }
+  await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
 function createTranscriptFixture(prefix: string) {
@@ -323,6 +307,7 @@ function createChatContext(): Pick<
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastLen"
   | "chatAbortedRuns"
+  | "addChatRun"
   | "removeChatRun"
   | "dedupe"
   | "loadGatewayModelCatalog"
@@ -338,6 +323,7 @@ function createChatContext(): Pick<
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatAbortedRuns: new Map(),
+    addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     loadGatewayModelCatalog: async () =>
@@ -1690,6 +1676,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
       },
     });
+    const finalBroadcast = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
+    expect(finalBroadcast).toBeUndefined();
   });
 
   it("adds persisted media paths to the user transcript update", async () => {

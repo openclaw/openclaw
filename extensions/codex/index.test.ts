@@ -18,6 +18,8 @@ describe("codex plugin", () => {
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
     const registerProvider = vi.fn();
+    const on = vi.fn();
+    const onConversationBindingResolved = vi.fn();
 
     plugin.register(
       createTestPluginApi({
@@ -31,6 +33,8 @@ describe("codex plugin", () => {
         registerCommand,
         registerMediaUnderstandingProvider,
         registerProvider,
+        on,
+        onConversationBindingResolved,
       }),
     );
 
@@ -51,6 +55,8 @@ describe("codex plugin", () => {
       name: "codex",
       description: "Inspect and control the Codex app-server harness",
     });
+    expect(on).toHaveBeenCalledWith("inbound_claim", expect.any(Function));
+    expect(onConversationBindingResolved).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("only claims the codex provider by default", () => {
