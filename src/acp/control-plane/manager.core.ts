@@ -741,6 +741,7 @@ export class AcpSessionManager {
           let onCallerAbort: (() => void) | undefined;
           let activeTurnStarted = false;
           let sawTurnOutput = false;
+          let turnError: AcpRuntimeError | null = null;
           let retryFreshHandle = false;
           let skipPostTurnCleanup = false;
           try {
@@ -855,33 +856,40 @@ export class AcpSessionManager {
               },
             });
             if (streamError) {
-              throw streamError;
-            }
-            this.recordTurnCompletion({
-              startedAt: turnStartedAt,
-            });
-            if (taskContext) {
-              const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-              this.markBackgroundTaskTerminal(taskContext.runId, {
+              turnError = streamError;
+              retryFreshHandle = this.shouldRetryTurnWithFreshHandle({
+                attempt,
                 sessionKey,
-                status: "succeeded",
-                endedAt: Date.now(),
-                lastEventAt: Date.now(),
-                error: undefined,
-                progressSummary: taskProgressSummary || null,
-                terminalSummary: terminalResult.terminalSummary ?? null,
-                terminalOutcome: terminalResult.terminalOutcome,
+                error: turnError,
+                sawTurnOutput,
               });
+            } else {
+              this.recordTurnCompletion({
+                startedAt: turnStartedAt,
+              });
+              if (taskContext) {
+                const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+                this.markBackgroundTaskTerminal(taskContext.runId, {
+                  sessionKey,
+                  status: "succeeded",
+                  endedAt: Date.now(),
+                  lastEventAt: Date.now(),
+                  error: undefined,
+                  progressSummary: taskProgressSummary || null,
+                  terminalSummary: terminalResult.terminalSummary ?? null,
+                  terminalOutcome: terminalResult.terminalOutcome,
+                });
+              }
+              await this.setSessionState({
+                cfg: input.cfg,
+                sessionKey,
+                state: "idle",
+                clearLastError: true,
+              });
+              return;
             }
-            await this.setSessionState({
-              cfg: input.cfg,
-              sessionKey,
-              state: "idle",
-              clearLastError: true,
-            });
-            return;
           } catch (error) {
-            const acpError = toAcpRuntimeError({
+            turnError = toAcpRuntimeError({
               error,
               fallbackCode: activeTurnStarted ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
               fallbackMessage: activeTurnStarted
@@ -892,36 +900,11 @@ export class AcpSessionManager {
               attempt,
               cfg: input.cfg,
               sessionKey,
-              error: acpError,
+              error: turnError,
               sawTurnOutput,
               runtime,
               meta,
             });
-            if (retryFreshHandle) {
-              continue;
-            }
-            this.recordTurnCompletion({
-              startedAt: turnStartedAt,
-              errorCode: acpError.code,
-            });
-            if (taskContext) {
-              this.markBackgroundTaskTerminal(taskContext.runId, {
-                sessionKey,
-                status: resolveBackgroundTaskFailureStatus(acpError),
-                endedAt: Date.now(),
-                lastEventAt: Date.now(),
-                error: acpError.message,
-                progressSummary: taskProgressSummary || null,
-                terminalSummary: null,
-              });
-            }
-            await this.setSessionState({
-              cfg: input.cfg,
-              sessionKey,
-              state: "error",
-              lastError: acpError.message,
-            });
-            throw acpError;
           } finally {
             if (input.signal && onCallerAbort) {
               input.signal.removeEventListener("abort", onCallerAbort);
@@ -963,6 +946,30 @@ export class AcpSessionManager {
           }
           if (retryFreshHandle) {
             continue;
+          }
+          if (turnError) {
+            this.recordTurnCompletion({
+              startedAt: turnStartedAt,
+              errorCode: turnError.code,
+            });
+            if (taskContext) {
+              this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
+                status: resolveBackgroundTaskFailureStatus(turnError),
+                endedAt: Date.now(),
+                lastEventAt: Date.now(),
+                error: turnError.message,
+                progressSummary: taskProgressSummary || null,
+                terminalSummary: null,
+              });
+            }
+            await this.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "error",
+              lastError: turnError.message,
+            });
+            throw turnError;
           }
         }
       },
