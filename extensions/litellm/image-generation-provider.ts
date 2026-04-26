@@ -155,30 +155,57 @@ type LitellmChatCompletionResponse = {
 
 type ParsedImage = ImageGenerationResult["images"][number];
 
+// Resource limits for parsing chat-completion responses. A misconfigured or
+// hostile LiteLLM endpoint could ship a huge JSON body or pack many giant
+// `data:` URLs into the content; without caps the base64 decode would block
+// the event loop or OOM the gateway. Limits chosen to comfortably cover real
+// outputs (up to 4 generations, ~15MB decoded each) while bounding the worst
+// case.
+const MAX_PARSED_IMAGES = 4;
+const MAX_SCAN_CHARS = 2_000_000; // ~2MB; skip content scans larger than this
+const MAX_B64_CHARS = 20_000_000; // ~15MB decoded per image
+
 const DATA_URL_RE = /data:([^;,]+)(?:;base64)?,([A-Za-z0-9+/=_-]+)/g;
 
+function tryPushDecodedImage(into: ParsedImage[], b64: string, mime: string): boolean {
+  if (into.length >= MAX_PARSED_IMAGES) {
+    return false;
+  }
+  if (b64.length > MAX_B64_CHARS) {
+    return false;
+  }
+  const normalizedMime = mime || DEFAULT_OUTPUT_MIME;
+  into.push({
+    buffer: Buffer.from(b64, "base64"),
+    mimeType: normalizedMime,
+    fileName: `image-${into.length + 1}.${normalizedMime === "image/jpeg" ? "jpg" : "png"}`,
+  });
+  return true;
+}
+
 function pushDataUrl(into: ParsedImage[], url: string): void {
+  if (into.length >= MAX_PARSED_IMAGES) {
+    return;
+  }
+  if (url.length > MAX_SCAN_CHARS) {
+    return;
+  }
   // Single-shot match (anchored at start) for known-good URLs from typed
   // image_url fields. Falls back to a scan if the typed shape ships a longer
   // string with prefix/suffix noise.
   const single = /^data:([^;,]+)(?:;base64)?,([A-Za-z0-9+/=_-]+)$/.exec(url);
   if (single) {
     const [, mime, b64] = single;
-    into.push({
-      buffer: Buffer.from(b64, "base64"),
-      mimeType: mime || DEFAULT_OUTPUT_MIME,
-      fileName: `image-${into.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
-    });
+    tryPushDecodedImage(into, b64, mime);
     return;
   }
   DATA_URL_RE.lastIndex = 0;
   for (const m of url.matchAll(DATA_URL_RE)) {
+    if (into.length >= MAX_PARSED_IMAGES) {
+      break;
+    }
     const [, mime, b64] = m;
-    into.push({
-      buffer: Buffer.from(b64, "base64"),
-      mimeType: mime || DEFAULT_OUTPUT_MIME,
-      fileName: `image-${into.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
-    });
+    tryPushDecodedImage(into, b64, mime);
   }
 }
 
@@ -197,16 +224,15 @@ function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedI
     // empty/missing (some routes only ship one or the other).
     const before = images.length;
     for (const standalone of message.images ?? []) {
+      if (images.length >= MAX_PARSED_IMAGES) {
+        break;
+      }
       if (typeof standalone === "string") {
         if (standalone.startsWith("data:")) {
           pushDataUrl(images, standalone);
         } else {
           // Assume bare base64 with default mime.
-          images.push({
-            buffer: Buffer.from(standalone, "base64"),
-            mimeType: DEFAULT_OUTPUT_MIME,
-            fileName: `image-${images.length + 1}.png`,
-          });
+          tryPushDecodedImage(images, standalone, DEFAULT_OUTPUT_MIME);
         }
         continue;
       }
@@ -219,11 +245,7 @@ function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedI
       const b64 = standalone.b64_json ?? standalone.data;
       const mime = standalone.mime_type ?? standalone.mimeType ?? DEFAULT_OUTPUT_MIME;
       if (b64) {
-        images.push({
-          buffer: Buffer.from(b64, "base64"),
-          mimeType: mime,
-          fileName: `image-${images.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
-        });
+        tryPushDecodedImage(images, b64, mime);
       } else if (url) {
         if (url.startsWith("data:")) {
           pushDataUrl(images, url);
@@ -241,6 +263,9 @@ function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedI
     const content = message.content;
     if (Array.isArray(content)) {
       for (const part of content) {
+        if (images.length >= MAX_PARSED_IMAGES) {
+          break;
+        }
         const imageUrl = part.image_url;
         const url = typeof imageUrl === "string" ? imageUrl : imageUrl?.url;
         if (url && url.startsWith("data:")) {
