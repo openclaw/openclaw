@@ -363,6 +363,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: plamo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/plamo/**"
 "extensions: qianfan":
   - changed-files:
       - any-glob-to-any-file:

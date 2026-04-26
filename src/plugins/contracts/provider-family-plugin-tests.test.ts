@@ -43,6 +43,9 @@ const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedShared
   openai: {
     toolCompatFamilies: ["openai"],
   },
+  plamo: {
+    replayFamilies: ["openai-compatible"],
+  },
 };
 
 function toRepoRelative(path: string): string {

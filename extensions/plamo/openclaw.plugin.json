@@ -1,0 +1,32 @@
+{
+  "id": "plamo",
+  "enabledByDefault": true,
+  "providers": ["plamo"],
+  "nonSecretAuthMarkers": ["plamo-request-auth"],
+  "modelSupport": {
+    "modelPrefixes": ["plamo-"]
+  },
+  "providerAuthEnvVars": {
+    "plamo": ["PLAMO_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "plamo",
+      "method": "api-key",
+      "choiceId": "plamo-api-key",
+      "choiceLabel": "PLaMo API key",
+      "groupId": "plamo",
+      "groupLabel": "PLaMo",
+      "groupHint": "API key",
+      "optionKey": "plamoApiKey",
+      "cliFlag": "--plamo-api-key",
+      "cliOption": "--plamo-api-key <key>",
+      "cliDescription": "PLaMo API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

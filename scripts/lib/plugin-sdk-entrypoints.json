@@ -258,6 +258,7 @@
   "provider-entry",
   "provider-env-vars",
   "provider-http",
+  "provider-http-runtime",
   "provider-model-types",
   "provider-model-shared",
   "opencode",

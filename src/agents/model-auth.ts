@@ -605,6 +605,7 @@ export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" 
 
 export { resolveEnvApiKey } from "./model-auth-env.js";
 export type { EnvApiKeyResult } from "./model-auth-env.js";
+export { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 
 export function resolveModelAuthMode(
   provider?: string,

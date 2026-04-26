@@ -7,6 +7,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   applyLocalNoAuthHeaderOverride,
   getApiKeyForModel,
+  isNonSecretApiKeyMarker,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -16,6 +17,8 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { resolveModel } from "./pi-embedded-runner/model.js";
+import { getModelProviderRequestTransport } from "./provider-request-config.js";
+import { registerProviderStreamForModel } from "./provider-stream.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -27,6 +30,14 @@ type CompletionRuntimeCredential = {
 };
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
+const SIMPLE_COMPLETION_AUTH_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-proxy-token",
+  "x-auth-token",
+  "x-api-key",
+  "api-key",
+]);
 
 export type SimpleCompletionModelOptions = {
   maxTokens?: number;
@@ -150,6 +161,41 @@ function hasMissingApiKeyAllowance(params: {
   return Boolean(params.allowMissingApiKeyModes?.includes(params.mode));
 }
 
+function shouldUseRequestAuthenticatedSimpleCompletion(params: {
+  model: Model<Api>;
+  auth: ResolvedProviderAuth;
+}): boolean {
+  const requestTransport = getModelProviderRequestTransport(params.model);
+  return (
+    Boolean(requestTransport?.auth && requestTransport.auth.mode !== "provider-default") ||
+    (Boolean(params.auth.apiKey?.trim()) &&
+      isNonSecretApiKeyMarker(params.auth.apiKey!.trim()) &&
+      (hasAuthLikeModelHeaders(requestTransport?.headers) ||
+        hasAuthLikeModelHeaders((params.model as { headers?: unknown }).headers)))
+  );
+}
+
+function hasRequestAuthenticatedSimpleCompletionModel(model: Model<Api>): boolean {
+  const requestTransport = getModelProviderRequestTransport(model);
+  return (
+    Boolean(requestTransport?.auth && requestTransport.auth.mode !== "provider-default") ||
+    hasAuthLikeModelHeaders(requestTransport?.headers) ||
+    hasAuthLikeModelHeaders((model as { headers?: unknown }).headers)
+  );
+}
+
+function hasAuthLikeModelHeaders(headers: unknown): boolean {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return false;
+  }
+  return Object.entries(headers).some(
+    ([headerName, headerValue]) =>
+      SIMPLE_COMPLETION_AUTH_HEADER_NAMES.has(headerName.trim().toLowerCase()) &&
+      typeof headerValue === "string" &&
+      headerValue.trim().length > 0,
+  );
+}
+
 export async function prepareSimpleCompletionModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -196,7 +242,11 @@ export async function prepareSimpleCompletionModel(params: {
 
   let resolvedApiKey = rawApiKey;
   let resolvedModel = resolved.model;
-  if (rawApiKey) {
+  const requestAuthenticatedSimpleCompletion = shouldUseRequestAuthenticatedSimpleCompletion({
+    model: resolved.model,
+    auth,
+  });
+  if (rawApiKey && !requestAuthenticatedSimpleCompletion) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
       authStorage: resolved.authStorage,
       model: resolved.model,
@@ -214,6 +264,8 @@ export async function prepareSimpleCompletionModel(params: {
         baseUrl: runtimeBaseUrl,
       };
     }
+  } else if (requestAuthenticatedSimpleCompletion) {
+    resolvedApiKey = undefined;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
@@ -272,8 +324,16 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   context: Parameters<typeof complete>[1];
   options?: SimpleCompletionModelOptions;
 }) {
-  return await complete(params.model, params.context, {
+  const options = {
     ...params.options,
     apiKey: params.auth.apiKey,
-  });
+  };
+  if (!params.auth.apiKey?.trim() && hasRequestAuthenticatedSimpleCompletionModel(params.model)) {
+    const providerStreamFn = registerProviderStreamForModel({ model: params.model });
+    if (providerStreamFn) {
+      const stream = await providerStreamFn(params.model, params.context, options);
+      return await stream.result();
+    }
+  }
+  return await complete(params.model, params.context, options);
 }

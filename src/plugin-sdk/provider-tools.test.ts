@@ -5,6 +5,7 @@ import {
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
   inspectOpenAIToolSchemas,
+  normalizeOpenAICompatibleToolParameters,
   normalizeGeminiToolSchemas,
   normalizeOpenAIToolSchemas,
   resolveXaiModelCompatPatch,
@@ -113,6 +114,25 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  it("normalizes parameter-free schemas for openai-compatible transports", () => {
+    expect(normalizeOpenAICompatibleToolParameters({})).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(
+      normalizeOpenAICompatibleToolParameters({
+        type: "object",
+      }),
+    ).toEqual({
       type: "object",
       properties: {},
       required: [],

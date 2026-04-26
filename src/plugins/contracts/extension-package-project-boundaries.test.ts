@@ -148,6 +148,12 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-http.d.ts",
     );
+    expect(packageJson.exports?.["./provider-http-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-http-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./provider-http-runtime"]?.default).toBe(
+      "./src/provider-http-runtime.ts",
+    );
     expect(packageJson.exports?.["./provider-usage"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-usage.d.ts",
     );

@@ -115,6 +115,13 @@ function setOwningProviderManifestPluginsWithWorkspace() {
       },
     }),
     createManifestProviderPlugin({
+      id: "plamo",
+      providerIds: ["plamo"],
+      modelSupport: {
+        modelPrefixes: ["plamo-"],
+      },
+    }),
+    createManifestProviderPlugin({
       id: "workspace-provider",
       providerIds: ["workspace-provider"],
       origin: "workspace",
@@ -1241,6 +1248,10 @@ describe("resolvePluginProviders", () => {
     {
       model: "claude-sonnet-4-6",
       expectedPluginIds: ["anthropic"],
+    },
+    {
+      model: "plamo-3.0-prime-beta",
+      expectedPluginIds: ["plamo"],
     },
     {
       model: "openai/gpt-5.4",

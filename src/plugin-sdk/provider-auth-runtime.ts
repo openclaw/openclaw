@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,

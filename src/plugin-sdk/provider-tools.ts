@@ -1,4 +1,3 @@
-import type { TSchema } from "typebox";
 import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
@@ -139,7 +138,7 @@ export function normalizeGeminiToolSchemas(
     }
     return {
       ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
+      parameters: cleanSchemaForGemini(tool.parameters as Record<string, unknown>),
     };
   });
 }
@@ -170,7 +169,7 @@ export function normalizeOpenAIToolSchemas(
     if (tool.parameters == null) {
       return {
         ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
+        parameters: normalizeOpenAIToolParametersForAgentTool({}),
       };
     }
     if (typeof tool.parameters !== "object") {
@@ -178,15 +177,26 @@ export function normalizeOpenAIToolSchemas(
     }
     return {
       ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
+      parameters: normalizeOpenAIToolParametersForAgentTool(tool.parameters),
     };
   });
 }
 
-function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeOpenAIStrictCompatSchemaRecursive(schema, {
-    promoteEmptyObject: true,
-  }) as TSchema;
+/**
+ * Normalizes a single tool parameter schema for OpenAI-compatible transports
+ * that require an object-root schema but do not use the native OpenAI strict
+ * tool-routing hooks.
+ */
+export function normalizeOpenAICompatibleToolParameters(schema: unknown): unknown {
+  return normalizeOpenAIStrictCompatSchema(schema ?? {});
+}
+
+function normalizeOpenAIToolParametersForAgentTool(schema: unknown): AnyAgentTool["parameters"] {
+  return normalizeOpenAIStrictCompatSchema(schema) as AnyAgentTool["parameters"];
+}
+
+function normalizeOpenAIStrictCompatSchema(schema: unknown): unknown {
+  return normalizeOpenAIStrictCompatSchemaRecursive(schema, { promoteEmptyObject: true });
 }
 
 function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): boolean {

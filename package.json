@@ -1091,6 +1091,10 @@
       "types": "./dist/plugin-sdk/provider-http.d.ts",
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-http-runtime": {
+      "types": "./dist/plugin-sdk/provider-http-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-http-runtime.js"
+    },
     "./plugin-sdk/provider-model-types": {
       "types": "./dist/plugin-sdk/provider-model-types.d.ts",
       "default": "./dist/plugin-sdk/provider-model-types.js"
