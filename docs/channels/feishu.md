@@ -414,6 +414,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Video/media
 - ✅ Stickers
 
+Inbound Feishu/Lark audio messages are normalized as media placeholders instead
+of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
+downloads the voice-note resource and runs shared audio transcription before the
+agent turn, so the agent receives the spoken transcript. If Feishu includes
+transcript text directly in the audio payload, that text is used without another
+ASR call. Without an audio transcription provider, the agent still receives a
+`<media:audio>` placeholder plus the saved attachment, not the raw Feishu
+resource payload.
+
 ### Send
 
 - ✅ Text

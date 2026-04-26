@@ -80,6 +80,9 @@ Docs: https://docs.openclaw.ai
 - TTS/Feishu: normalize final-mode streamed TTS-only audio before delivery so
   generated voice-note files use the same safe media path and native voice
   routing as normal final replies. Fixes #71920.
+- Feishu: transcribe inbound voice-note audio with the shared media audio path
+  before agent dispatch and keep raw Feishu `file_key` payloads out of message
+  text. Fixes #67120 and #61876.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
