@@ -20,7 +20,9 @@ export type TtsAttemptReasonCode =
   | "not_configured"
   | "unsupported_for_telephony"
   | "timeout"
-  | "provider_error";
+  | "provider_error"
+  | "empty_speech_text"
+  | "speech_text_too_short";
 
 export type TtsProviderAttempt = {
   provider: string;
