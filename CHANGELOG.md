@@ -104,6 +104,10 @@ Docs: https://docs.openclaw.ai
   OpenClaw config path in bundled runtimes, so packaged gateways stop falling
   back to `/tmp/openclaw`. Fixes #59370, #67168, and #61295. Thanks @KeaneYan,
   @Pan9hu, and @zsjlovelike.
+- Logging: rotate file logs at `logging.maxFileBytes`, keep bounded numbered
+  archives, and make long-lived rolling loggers follow the current-day file
+  instead of suppressing diagnostics or writing stale dated files. Fixes #58583
+  and #62381. Thanks @jpeghead and @zhaoleink.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
 - macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
   start browser-capable CLI node services through the restored
