@@ -24,6 +24,10 @@ fun BuddyModeScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         .background(Color(0xFF030507)),
   ) {
     NemoFace(state = snapshot.state, modifier = Modifier.fillMaxSize())
+    BuddyTouchLayer(
+      onAction = viewModel::handleBuddyAction,
+      modifier = Modifier.fillMaxSize(),
+    )
     BuddyOverlay(
       snapshot = snapshot,
       modifier =
