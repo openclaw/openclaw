@@ -99,12 +99,15 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const nextAuthProfileId = normalizeOptionalString(next.authProfileId);
+  const currentAuthProfileId =
+    nextAuthProfileId || current.authProfileIdSource === "user"
+      ? normalizeOptionalString(current.authProfileId)
+      : undefined;
   return (
     current.provider !== next.provider ||
     current.model !== next.model ||
-    normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
-    (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
-      next.authProfileIdSource
+    currentAuthProfileId !== nextAuthProfileId
   );
 }
 

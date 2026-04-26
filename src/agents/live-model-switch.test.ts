@@ -379,6 +379,84 @@ describe("live model switch", () => {
     ).toBe(false);
   });
 
+  it("ignores an automatic current auth profile when the persisted selection has none", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("compares automatic current auth profiles when the persisted selection has one", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "auto",
+        },
+      ),
+    ).toBe(false);
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:plus",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "auto",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("treats the same effective auth profile as matching even when sources differ", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "user",
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("does not track persisted live selection when the run started on a transient model override", async () => {
     const { shouldTrackPersistedLiveSessionModelSelection } = await loadModule();
 
