@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docker: copy patched dependency files into runtime images so downstream `pnpm install` layers keep working. Fixes #69224. Thanks @gucasbrg.
 - Agents/runtime: submit heartbeat, cron, and exec wakeups as transient runtime context instead of visible user prompts, keeping synthetic system work out of chat transcripts. Fixes #66496 and #66814. Thanks @jeades and @mandomaker.
 - Telegram: preserve exact selected quote text when sending native quote replies, and retry with legacy replies if Telegram rejects quote parameters. (#71952) Thanks @rubencu.
 - Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
