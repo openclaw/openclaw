@@ -5,6 +5,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 describe("pickSummaryFromPayloads", () => {
@@ -167,5 +168,54 @@ describe("isHeartbeatOnlyResponse", () => {
         ACK_MAX,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveCronPayloadOutcome ===DONE_OK=== sentinel", () => {
+  it("downgrades a trailing error payload when the final assistant text emits ===DONE_OK===", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Did the work successfully." },
+        { text: "Edit: in memory/log.jsonl failed", isError: true },
+      ],
+      finalAssistantVisibleText: "Done.\n===DONE_OK===",
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+  });
+
+  it("downgrades a trailing error payload when the sentinel is in a payload's text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Step 1 complete. ===DONE_OK===" },
+        { text: "Edit: bookkeeping write failed", isError: true },
+      ],
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("still flags a fatal error when no sentinel is emitted", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Started work…" }, { text: "Edit: failed", isError: true }],
+      finalAssistantVisibleText: "Started work…",
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBeDefined();
+  });
+
+  it("ignores the sentinel when there is a runLevelError", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "===DONE_OK===" }, { text: "Edit: failed", isError: true }],
+      runLevelError: new Error("session crashed"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
+
+  it("tolerates whitespace variants of the sentinel", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Edit: failed", isError: true }],
+      finalAssistantVisibleText: "===  DONE_OK  ===",
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
   });
 });
