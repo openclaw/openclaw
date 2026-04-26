@@ -503,6 +503,7 @@ function resolveRegistry(params: LoadInstalledPluginIndexParams): {
         env: params.env,
         candidates: params.candidates,
         diagnostics: params.diagnostics,
+        installRecords: params.installRecords,
       }),
     };
   }
@@ -523,6 +524,7 @@ function resolveRegistry(params: LoadInstalledPluginIndexParams): {
       env: params.env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
+      installRecords: params.installRecords,
     }),
   };
 }

@@ -399,6 +399,57 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
+  it("uses in-flight install records to rank installed globals over bundled duplicates", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    writeRuntimeEntry(bundledDir);
+    writeRuntimeEntry(globalDir);
+    writePluginManifest(bundledDir, {
+      id: "duplicate-demo",
+      configSchema: { type: "object" },
+    });
+    writePluginManifest(globalDir, {
+      id: "duplicate-demo",
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir: bundledDir,
+          idHint: "duplicate-demo",
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          rootDir: globalDir,
+          idHint: "duplicate-demo",
+          origin: "global",
+        }),
+      ],
+      installRecords: {
+        "duplicate-demo": {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.installRecords).toMatchObject({
+      "duplicate-demo": {
+        source: "npm",
+        installPath: globalDir,
+      },
+    });
+    expect(index.plugins).toHaveLength(1);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "duplicate-demo",
+      origin: "global",
+      rootDir: globalDir,
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+  });
+
   it("indexes npm plugin index records written before a process reload", () => {
     const fixture = createRichPluginFixture();
     const cfg = recordPluginInstall(
