@@ -7,6 +7,8 @@ import type {
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
+import { appendSessionRecoveryEvent } from "../../config/sessions/recovery-log.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -435,6 +437,74 @@ function emitMessageDeliveryError(params: {
     durationMs: params.durationMs,
     errorCategory: diagnosticErrorCategory(params.error),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+function resolveOutboundRecoveryContext(params: DeliverOutboundPayloadsCoreParams):
+  | {
+      storePath: string;
+      sessionKey: string;
+      agentId: string;
+    }
+  | undefined {
+  const sessionKey = params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
+  const agentId = params.session?.agentId ?? params.mirror?.agentId;
+  if (!sessionKey || !agentId) {
+    return undefined;
+  }
+  return {
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    sessionKey,
+    agentId,
+  };
+}
+
+async function appendOutboundRecoveryEvent(params: {
+  context?: ReturnType<typeof resolveOutboundRecoveryContext>;
+  eventType: "outbound.sent" | "outbound.failed";
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+  payloadSummary: NormalizedOutboundPayload;
+  deliveryKind: DiagnosticMessageDeliveryKind;
+  results?: readonly OutboundDeliveryResult[];
+  error?: unknown;
+}): Promise<void> {
+  const context = params.context;
+  if (!context) {
+    return;
+  }
+  await appendSessionRecoveryEvent({
+    storePath: context.storePath,
+    eventType: params.eventType,
+    sessionKey: context.sessionKey,
+    agentId: context.agentId,
+    source: {
+      kind: "outbound",
+      channel: params.channel,
+    },
+    details: {
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+      threadId: params.threadId,
+      replyToId: params.replyToId,
+      deliveryKind: params.deliveryKind,
+      textLength: params.payloadSummary.text.length,
+      mediaCount: params.payloadSummary.mediaUrls.length,
+      hasHookContent: Boolean(params.payloadSummary.hookContent),
+      resultCount: params.results?.length,
+      messageIds: params.results?.map((entry) => entry.messageId).filter(Boolean),
+      error: params.error ? formatErrorMessage(params.error) : undefined,
+    },
+  }).catch((err) => {
+    log.warn("Failed to append outbound recovery event.", {
+      channel: params.channel,
+      to: params.to,
+      error: formatErrorMessage(err),
+    });
   });
 }
 
@@ -941,6 +1011,7 @@ async function deliverOutboundPayloadsCore(
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
+  const outboundRecoveryContext = resolveOutboundRecoveryContext(params);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
@@ -1041,6 +1112,20 @@ async function deliverOutboundPayloadsCore(
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
       const deliveryTarget = handler.buildTargetRef({ threadId: sendOverrides.threadId });
+      const recordOutboundSent = async (deliveredResults: readonly OutboundDeliveryResult[]) => {
+        await appendOutboundRecoveryEvent({
+          context: outboundRecoveryContext,
+          eventType: "outbound.sent",
+          channel,
+          to,
+          accountId,
+          threadId: sendOverrides.threadId,
+          replyToId: sendOverrides.replyToId,
+          payloadSummary,
+          deliveryKind,
+          results: deliveredResults,
+        });
+      };
       if (
         handler.sendPayload &&
         (hasReplyPayloadContent({
@@ -1068,6 +1153,7 @@ async function deliverOutboundPayloadsCore(
           results: [delivery],
         });
         completeDeliveryDiagnostics(1);
+        await recordOutboundSent([delivery]);
         emitMessageSent({
           success: true,
           content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1103,6 +1189,7 @@ async function deliverOutboundPayloadsCore(
           results: deliveredResults,
         });
         completeDeliveryDiagnostics(deliveredResults.length);
+        await recordOutboundSent(deliveredResults);
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1144,6 +1231,7 @@ async function deliverOutboundPayloadsCore(
           results: deliveredResults,
         });
         completeDeliveryDiagnostics(deliveredResults.length);
+        await recordOutboundSent(deliveredResults);
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1185,7 +1273,9 @@ async function deliverOutboundPayloadsCore(
         target: deliveryTarget,
         results: results.slice(beforeCount),
       });
-      completeDeliveryDiagnostics(results.length - beforeCount);
+      const deliveredResults = results.slice(beforeCount);
+      completeDeliveryDiagnostics(deliveredResults.length);
+      await recordOutboundSent(deliveredResults);
       emitMessageSent({
         success: true,
         content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1193,6 +1283,18 @@ async function deliverOutboundPayloadsCore(
       });
     } catch (err) {
       errorDeliveryDiagnostics(err);
+      await appendOutboundRecoveryEvent({
+        context: outboundRecoveryContext,
+        eventType: "outbound.failed",
+        channel,
+        to,
+        accountId,
+        threadId: params.threadId,
+        replyToId: params.replyToId,
+        payloadSummary,
+        deliveryKind,
+        error: err,
+      });
       emitMessageSent({
         success: false,
         content: payloadSummary.hookContent ?? payloadSummary.text,

@@ -48,6 +48,9 @@ const queueMocks = vi.hoisted(() => ({
     ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
   >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
 }));
+const recoveryMocks = vi.hoisted(() => ({
+  appendSessionRecoveryEvent: vi.fn(async () => undefined),
+}));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
@@ -82,6 +85,9 @@ vi.mock("./delivery-queue.js", () => ({
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
+}));
+vi.mock("../../config/sessions/recovery-log.js", () => ({
+  appendSessionRecoveryEvent: recoveryMocks.appendSessionRecoveryEvent,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -284,6 +290,8 @@ describe("deliverOutboundPayloads", () => {
       status: "claimed",
       value: await fn(),
     }));
+    recoveryMocks.appendSessionRecoveryEvent.mockClear();
+    recoveryMocks.appendSessionRecoveryEvent.mockResolvedValue(undefined);
     logMocks.warn.mockClear();
   });
 
@@ -291,6 +299,92 @@ describe("deliverOutboundPayloads", () => {
     resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("records outbound.sent recovery events for delivered payloads", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        ...matrixChunkConfig,
+        session: { store: "/tmp/openclaw-{agentId}-sessions.json" },
+      } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      accountId: "work",
+      threadId: "thread-1",
+      replyToId: "reply-1",
+      payloads: [{ text: "secret delivery body" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:direct:user-1",
+        agentId: "main",
+      },
+    });
+
+    expect(recoveryMocks.appendSessionRecoveryEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/openclaw-main-sessions.json",
+        eventType: "outbound.sent",
+        sessionKey: "agent:main:matrix:direct:user-1",
+        agentId: "main",
+        source: { kind: "outbound", channel: "matrix" },
+        details: expect.objectContaining({
+          channel: "matrix",
+          to: "!room:example",
+          accountId: "work",
+          threadId: "thread-1",
+          replyToId: "reply-1",
+          deliveryKind: "text",
+          textLength: "secret delivery body".length,
+          mediaCount: 0,
+          resultCount: 1,
+          messageIds: ["m1"],
+        }),
+      }),
+    );
+  });
+
+  it("records outbound.failed recovery events without blocking best-effort delivery", async () => {
+    const sendMatrix = vi.fn().mockRejectedValue(new Error("network down"));
+    const onError = vi.fn();
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {
+          ...matrixChunkConfig,
+          session: { store: "/tmp/openclaw-{agentId}-sessions.json" },
+        } as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "failed body" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: true,
+        onError,
+        session: {
+          key: "agent:main:matrix:direct:user-1",
+          agentId: "main",
+        },
+      }),
+    ).resolves.toEqual([]);
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(recoveryMocks.appendSessionRecoveryEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/openclaw-main-sessions.json",
+        eventType: "outbound.failed",
+        sessionKey: "agent:main:matrix:direct:user-1",
+        agentId: "main",
+        details: expect.objectContaining({
+          channel: "matrix",
+          to: "!room:example",
+          deliveryKind: "text",
+          textLength: "failed body".length,
+          mediaCount: 0,
+          error: "network down",
+        }),
+      }),
+    );
   });
 
   it("emits bounded delivery diagnostics for successful outbound sends", async () => {
