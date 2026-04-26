@@ -104,6 +104,24 @@ describe("plugin contract registry", () => {
     });
   });
 
+  it("keeps video-only provider auth choices out of text onboarding", () => {
+    const registry = loadPluginManifestRegistry({});
+
+    for (const pluginId of ["alibaba", "runway"]) {
+      const plugin = registry.plugins.find(
+        (entry) => entry.origin === "bundled" && entry.id === pluginId,
+      );
+      expect(plugin?.providerAuthChoices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: pluginId,
+            onboardingScopes: ["image-generation"],
+          }),
+        ]),
+      );
+    }
+  });
+
   it("covers every bundled speech plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: pluginRegistrationContractRegistry

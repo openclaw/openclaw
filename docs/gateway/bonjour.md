@@ -3,15 +3,16 @@ summary: "Bonjour/mDNS discovery + debugging (Gateway beacons, clients, and comm
 read_when:
   - Debugging Bonjour discovery issues on macOS/iOS
   - Changing mDNS service types, TXT records, or discovery UX
-title: "Bonjour Discovery"
+title: "Bonjour discovery"
 ---
 
 # Bonjour / mDNS discovery
 
 OpenClaw uses Bonjour (mDNS / DNS‑SD) to discover an active Gateway (WebSocket endpoint).
-Multicast `local.` browsing is a **LAN-only convenience**. For cross-network discovery, the
-same beacon can also be published through a configured wide-area DNS-SD domain. Discovery is
-still best-effort and does **not** replace SSH or Tailnet-based connectivity.
+Multicast `local.` browsing is a **LAN-only convenience**. The bundled `bonjour`
+plugin owns LAN advertising and is enabled by default. For cross-network discovery,
+the same beacon can also be published through a configured wide-area DNS-SD domain.
+Discovery is still best-effort and does **not** replace SSH or Tailnet-based connectivity.
 
 ## Wide-area Bonjour (Unicast DNS-SD) over Tailscale
 
@@ -79,7 +80,9 @@ For tailnet‑only setups:
 
 ## What advertises
 
-Only the Gateway advertises `_openclaw-gw._tcp`.
+Only the Gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising is
+provided by the bundled `bonjour` plugin; wide-area DNS-SD publishing remains
+Gateway-owned.
 
 ## Service types
 
@@ -97,7 +100,7 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
 - `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `transport=gateway`
-- `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+- `tailnetDns=<magicdns>` (mDNS full mode only, optional hint when Tailnet is available)
 - `sshPort=<port>` (mDNS full mode only; wide-area DNS-SD may omit it)
 - `cliPath=<path>` (mDNS full mode only; wide-area DNS-SD still writes it as a remote-install hint)
 
@@ -136,6 +139,7 @@ The Gateway writes a rolling log file (printed on startup as
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 - `bonjour: watchdog detected non-announced service ...`
+- `bonjour: disabling advertiser after ... failed restarts ...`
 
 ## Debugging on iOS node
 
@@ -152,6 +156,10 @@ The log includes browser state transitions and result‑set changes.
 
 - **Bonjour doesn’t cross networks**: use Tailnet or SSH.
 - **Multicast blocked**: some Wi‑Fi networks disable mDNS.
+- **Advertiser stuck in probing/announcing**: hosts with blocked multicast,
+  container bridges, WSL, or interface churn can leave the ciao advertiser in a
+  non-announced state. OpenClaw retries a few times and then disables Bonjour
+  for the current Gateway process instead of restarting the advertiser forever.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or
   punctuation), then restart the Gateway. The service instance name derives from
@@ -167,10 +175,12 @@ sequences (e.g. spaces become `\032`).
 
 ## Disabling / configuration
 
-- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising (legacy: `OPENCLAW_DISABLE_BONJOUR`).
+- `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
+- `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
+- `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
-- `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT (legacy: `OPENCLAW_TAILNET_DNS`).
+- `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT when mDNS full mode is enabled (legacy: `OPENCLAW_TAILNET_DNS`).
 - `OPENCLAW_CLI_PATH` overrides the advertised CLI path (legacy: `OPENCLAW_CLI_PATH`).
 
 ## Related docs

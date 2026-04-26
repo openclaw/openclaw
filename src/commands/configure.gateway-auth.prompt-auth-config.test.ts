@@ -168,7 +168,7 @@ describe("promptAuthConfig", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.4": { alias: "GPT" },
+              "openai/gpt-5.5": { alias: "GPT" },
               "anthropic/claude-opus-4-6": { alias: "Opus" },
             },
           },
@@ -193,7 +193,7 @@ describe("promptAuthConfig", () => {
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
     expect(result.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.4": { alias: "GPT" },
+      "openai/gpt-5.5": { alias: "GPT" },
       "anthropic/claude-sonnet-4-6": {},
     });
   });
@@ -211,5 +211,27 @@ describe("promptAuthConfig", () => {
         preferredProvider: "openai",
       }),
     );
+  });
+
+  it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped
+      .mockResolvedValueOnce("provider-plugin:wecom:default")
+      .mockResolvedValueOnce("kilocode-api-key");
+    mocks.applyAuthChoice
+      .mockResolvedValueOnce({ config: {}, retrySelection: true })
+      .mockResolvedValueOnce(createApplyAuthChoiceConfig());
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePreferredProviderForAuthChoice
+      .mockResolvedValueOnce("wecom")
+      .mockResolvedValueOnce("kilocode");
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
   });
 });

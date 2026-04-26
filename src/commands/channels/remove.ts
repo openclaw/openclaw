@@ -4,7 +4,13 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import {
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  withoutPluginInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -171,10 +177,27 @@ export async function channelsRemoveCommand(
     });
   }
 
+  const shouldMovePluginInstalls = Boolean(
+    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
+  );
+  if (shouldMovePluginInstalls) {
+    await writePersistedInstalledPluginIndexInstallRecords(next.plugins?.installs ?? {});
+    next = withoutPluginInstallRecords(next);
+  }
   await replaceConfigFile({
     nextConfig: next,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    ...(shouldMovePluginInstalls
+      ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+      : {}),
   });
+  if (shouldMovePluginInstalls || resolvedPluginState?.pluginInstalled) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: next,
+      reason: "source-changed",
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig

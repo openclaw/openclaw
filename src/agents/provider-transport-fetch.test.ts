@@ -75,6 +75,25 @@ describe("buildGuardedModelFetch", () => {
     );
   });
 
+  it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model, 123_456);
+    await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 123_456,
+      }),
+    );
+  });
+
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";
@@ -194,6 +213,46 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response("Sorry, you've exceeded your weekly rate limit.", {
+          status: 429,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+        finalUrl: "https://api.individual.githubcopilot.com/responses",
+        release: vi.fn(async () => undefined),
+      });
+
+      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.individual.githubcopilot.com/responses",
+        { method: "POST" },
+      );
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      await expect(response.text()).resolves.toContain("weekly rate limit");
+    });
+
+    it("keeps short retry-after 429 responses retryable", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+
+      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
     it("can be disabled with OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=0", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "0";
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -233,7 +292,7 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
-    it("ignores malformed retry-after values", async () => {
+    it("treats malformed 429 retry-after values as terminal", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
           status: 429,
@@ -249,7 +308,7 @@ describe("buildGuardedModelFetch", () => {
         { method: "POST" },
       );
 
-      expect(response.headers.get("x-should-retry")).toBeNull();
+      expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
     it("ignores retry-after on non-retryable responses", async () => {

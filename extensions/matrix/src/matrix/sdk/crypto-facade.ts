@@ -1,3 +1,4 @@
+import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";
 import type {
@@ -10,6 +11,7 @@ import type {
 type MatrixCryptoFacadeClient = {
   getRoom: (roomId: string) => { hasEncryptionStateEvent: () => boolean } | null;
   getCrypto: () => unknown;
+  getUserId: () => string | null;
 };
 
 export type MatrixCryptoFacade = {
@@ -68,8 +70,31 @@ let matrixCryptoNodeRuntimePromise: Promise<MatrixCryptoNodeRuntime> | null = nu
 
 async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
   // Keep the native crypto package out of the main CLI startup graph.
-  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js");
+  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js").catch((error: unknown) => {
+    matrixCryptoNodeRuntimePromise = null;
+    throw error;
+  });
   return await matrixCryptoNodeRuntimePromise;
+}
+
+async function loadMatrixCryptoNodeBindings() {
+  await ensureMatrixCryptoRuntime();
+  const runtime = await loadMatrixCryptoNodeRuntime();
+  return runtime.loadMatrixCryptoNodeBindings();
+}
+
+function trackInProgressToDeviceVerifications(deps: {
+  client: MatrixCryptoFacadeClient;
+  verificationManager: MatrixVerificationManager;
+}) {
+  const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
+  const userId = deps.client.getUserId();
+  if (!userId || typeof crypto?.getVerificationRequestsToDeviceInProgress !== "function") {
+    return;
+  }
+  for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
+    deps.verificationManager.trackVerificationRequest(request);
+  }
 }
 
 export function createMatrixCryptoFacade(deps: {
@@ -118,7 +143,7 @@ export function createMatrixCryptoFacade(deps: {
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {
-      const { Attachment } = await loadMatrixCryptoNodeRuntime();
+      const { Attachment } = await loadMatrixCryptoNodeBindings();
       const encrypted = Attachment.encrypt(new Uint8Array(buffer));
       const mediaInfoJson = encrypted.mediaEncryptionInfo;
       if (!mediaInfoJson) {
@@ -139,7 +164,7 @@ export function createMatrixCryptoFacade(deps: {
       file: EncryptedFile,
       opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
     ): Promise<Buffer> => {
-      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeRuntime();
+      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeBindings();
       const encrypted = await deps.downloadContent(file.url, opts);
       const metadata: EncryptedFile = {
         url: file.url,
@@ -159,6 +184,7 @@ export function createMatrixCryptoFacade(deps: {
       return deps.recoveryKeyStore.getRecoveryKeySummary();
     },
     listVerifications: async () => {
+      trackInProgressToDeviceVerifications(deps);
       return deps.verificationManager.listVerifications();
     },
     ensureVerificationDmTracked: async ({ roomId, userId }) => {
@@ -177,30 +203,39 @@ export function createMatrixCryptoFacade(deps: {
       return await deps.verificationManager.requestVerification(crypto, params);
     },
     acceptVerification: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.acceptVerification(id);
     },
     cancelVerification: async (id, params) => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.cancelVerification(id, params);
     },
     startVerification: async (id, method = "sas") => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.startVerification(id, method);
     },
     generateVerificationQr: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.generateVerificationQr(id);
     },
     scanVerificationQr: async (id, qrDataBase64) => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.scanVerificationQr(id, qrDataBase64);
     },
     confirmVerificationSas: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return await deps.verificationManager.confirmVerificationSas(id);
     },
     mismatchVerificationSas: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return deps.verificationManager.mismatchVerificationSas(id);
     },
     confirmVerificationReciprocateQr: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return deps.verificationManager.confirmVerificationReciprocateQr(id);
     },
     getVerificationSas: async (id) => {
+      trackInProgressToDeviceVerifications(deps);
       return deps.verificationManager.getVerificationSas(id);
     },
   };
