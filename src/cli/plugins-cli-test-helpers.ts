@@ -3,6 +3,7 @@ import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { createEmptyUninstallActions } from "../plugins/uninstall.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -309,20 +310,24 @@ vi.mock("../plugins/slots.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/uninstall.js", () => ({
-  uninstallPlugin: ((
-    ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>,
-      ReturnType<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-    >(uninstallPlugin, ...args)) as (typeof import("../plugins/uninstall.js"))["uninstallPlugin"],
-  resolveUninstallDirectoryTarget: ({
-    installRecord,
-  }: {
-    installRecord?: { installPath?: string; sourcePath?: string };
-  }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
-}));
+vi.mock("../plugins/uninstall.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/uninstall.js")>();
+  return {
+    ...actual,
+    uninstallPlugin: ((
+      ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>,
+        ReturnType<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
+      >(uninstallPlugin, ...args)) as (typeof import("../plugins/uninstall.js"))["uninstallPlugin"],
+    resolveUninstallDirectoryTarget: ({
+      installRecord,
+    }: {
+      installRecord?: { installPath?: string; sourcePath?: string };
+    }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
+  };
+});
 
 vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: ((
@@ -588,15 +593,7 @@ export function resetPluginsCliTestState() {
     ok: true,
     config: {} as OpenClawConfig,
     warnings: [],
-    actions: {
-      entry: false,
-      install: false,
-      allowlist: false,
-      loadPath: false,
-      memorySlot: false,
-      contextEngineSlot: false,
-      directory: false,
-    },
+    actions: createEmptyUninstallActions(),
   });
   updateNpmInstalledPlugins.mockResolvedValue({
     outcomes: [],

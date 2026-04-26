@@ -73,6 +73,12 @@ the installer, pass `--install-method git --no-onboard` or
 npm i -g openclaw@latest
 ```
 
+When `openclaw update` manages a global npm install, it first runs the normal
+global install command. If that command fails, OpenClaw retries once with
+`--omit=optional`. That retry helps hosts where native optional dependencies
+cannot compile, while keeping the original failure visible if the fallback also
+fails.
+
 ```bash
 pnpm add -g openclaw@latest
 ```

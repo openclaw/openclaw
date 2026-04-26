@@ -19,6 +19,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -33,13 +34,10 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
-  collectInstalledGlobalPackageErrors,
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
-  globalInstallFallbackArgs,
   globalInstallArgs,
-  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
@@ -399,86 +397,45 @@ async function runPackageInstallUpdate(params: {
     }
   }
 
-  const updateStep = await runUpdateStep({
-    name: "global update",
-    argv: globalInstallArgs(installTarget, installSpec),
-    env: installEnv,
+  const packageUpdate = await runGlobalPackageUpdateSteps({
+    installTarget,
+    installSpec,
+    packageName,
+    packageRoot: pkgRoot,
+    runCommand,
     timeoutMs: params.timeoutMs,
-    progress: params.progress,
+    ...(installEnv === undefined ? {} : { env: installEnv }),
+    runStep: (stepParams) =>
+      runUpdateStep({
+        ...stepParams,
+        progress: params.progress,
+      }),
+    postVerifyStep: async (verifiedPackageRoot) => {
+      const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+      if (entryPath) {
+        return await runUpdateStep({
+          name: `${CLI_NAME} doctor`,
+          argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
+          env: {
+            ...process.env,
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          },
+          timeoutMs: params.timeoutMs,
+          progress: params.progress,
+        });
+      }
+      return null;
+    },
   });
 
-  const steps = [updateStep];
-  let finalInstallStep = updateStep;
-  if (updateStep.exitCode !== 0) {
-    const fallbackArgv = globalInstallFallbackArgs(installTarget, installSpec);
-    if (fallbackArgv) {
-      const fallbackStep = await runUpdateStep({
-        name: "global update (omit optional)",
-        argv: fallbackArgv,
-        env: installEnv,
-        timeoutMs: params.timeoutMs,
-        progress: params.progress,
-      });
-      steps.push(fallbackStep);
-      finalInstallStep = fallbackStep;
-    }
-  }
-  let afterVersion = beforeVersion;
-
-  const verifiedPackageRoot =
-    (
-      await resolveGlobalInstallTarget({
-        manager: installTarget,
-        runCommand,
-        timeoutMs: params.timeoutMs,
-      })
-    ).packageRoot ?? pkgRoot;
-  if (verifiedPackageRoot) {
-    afterVersion = await readPackageVersion(verifiedPackageRoot);
-    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
-    const verificationErrors = await collectInstalledGlobalPackageErrors({
-      packageRoot: verifiedPackageRoot,
-      expectedVersion,
-    });
-    if (verificationErrors.length > 0) {
-      steps.push({
-        name: "global install verify",
-        command: `verify ${verifiedPackageRoot}`,
-        cwd: verifiedPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-        stdoutTail: null,
-      });
-    }
-    const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
-    if (entryPath) {
-      const doctorStep = await runUpdateStep({
-        name: `${CLI_NAME} doctor`,
-        argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
-        env: {
-          ...process.env,
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        },
-        timeoutMs: params.timeoutMs,
-        progress: params.progress,
-      });
-      steps.push(doctorStep);
-    }
-  }
-
-  const failedStep =
-    finalInstallStep.exitCode !== 0
-      ? finalInstallStep
-      : (steps.find((step) => step !== updateStep && step.exitCode !== 0) ?? null);
   return {
-    status: failedStep ? "error" : "ok",
+    status: packageUpdate.failedStep ? "error" : "ok",
     mode: manager,
-    root: verifiedPackageRoot ?? params.root,
-    reason: failedStep ? failedStep.name : undefined,
+    root: packageUpdate.verifiedPackageRoot ?? params.root,
+    reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
-    after: { version: afterVersion },
-    steps,
+    after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
   };
 }

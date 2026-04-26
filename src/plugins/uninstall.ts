@@ -18,6 +18,60 @@ export type UninstallActions = {
   directory: boolean;
 };
 
+export const UNINSTALL_ACTION_LABELS = {
+  entry: "config entry",
+  install: "install record",
+  allowlist: "allowlist entry",
+  loadPath: "load path",
+  memorySlot: "memory slot",
+  contextEngineSlot: "context engine slot",
+  channelConfig: "channel config",
+  directory: "directory",
+} satisfies Record<keyof UninstallActions, string>;
+
+const UNINSTALL_ACTION_ORDER = [
+  "entry",
+  "install",
+  "allowlist",
+  "loadPath",
+  "memorySlot",
+  "contextEngineSlot",
+  "channelConfig",
+  "directory",
+] as const satisfies ReadonlyArray<keyof UninstallActions>;
+
+export function createEmptyUninstallActions(
+  overrides: Partial<UninstallActions> = {},
+): UninstallActions {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+    directory: false,
+    ...overrides,
+  };
+}
+
+export function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
+  const { directory: _directory, ...actions } = createEmptyUninstallActions();
+  return actions;
+}
+
+export function formatUninstallActionLabels(actions: UninstallActions): string[] {
+  return UNINSTALL_ACTION_ORDER.flatMap((key) =>
+    actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
+  );
+}
+
+export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
+  const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
+  return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
+}
+
 export type UninstallPluginResult =
   | {
       ok: true;
@@ -150,15 +204,7 @@ export function removePluginFromConfig(
   pluginId: string,
   opts?: { channelIds?: string[] },
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
-  const actions: Omit<UninstallActions, "directory"> = {
-    entry: false,
-    install: false,
-    allowlist: false,
-    loadPath: false,
-    memorySlot: false,
-    contextEngineSlot: false,
-    channelConfig: false,
-  };
+  const actions = createEmptyConfigUninstallActions();
 
   const pluginsConfig = cfg.plugins ?? {};
 
