@@ -847,6 +847,50 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("accepts Claude live stream-json lines larger than 256 KiB", async () => {
+    const largeText = "x".repeat(270 * 1024);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-large",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-large",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-large-line",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toHaveLength(largeText.length);
+    expect(result.text).toBe(largeText);
+  });
+
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let markWriteReady: (() => void) | undefined;
