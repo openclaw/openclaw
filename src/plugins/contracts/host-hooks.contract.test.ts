@@ -1,14 +1,21 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "../../../test/helpers/plugins/contracts-testkit.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../gateway/protocol/index.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
+import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
 import {
   cleanupReplacedPluginHostRegistry,
@@ -20,7 +27,7 @@ import {
   getPluginRunContext,
   listPluginSessionSchedulerJobs,
 } from "../host-hook-runtime.js";
-import { buildPluginAgentTurnPrepareContext } from "../host-hooks.js";
+import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -128,6 +135,50 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
+    expect(
+      isPluginJsonValue({
+        state: "waiting",
+        attempts: 1,
+        nested: [{ ok: true }, null],
+      }),
+    ).toBe(true);
+    expect(isPluginJsonValue({ value: Number.NaN })).toBe(false);
+    expect(isPluginJsonValue({ value: undefined })).toBe(false);
+    expect(isPluginJsonValue(new Date(0))).toBe(false);
+    expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
+  });
+
+  it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "descriptor-fixture",
+        name: "Descriptor Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "bad-schema",
+          surface: "session",
+          label: "Bad schema",
+          schema: new Date(0) as never,
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "descriptor-fixture",
+          message: "control UI descriptor schema must be JSON-compatible: bad-schema",
+        }),
+      ]),
+    );
+  });
+
   it("projects registered session extensions into gateway session rows", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -233,6 +284,71 @@ describe("host-hook fixture plugin contract", () => {
     ).toBe(false);
     expect(validatePluginsUiDescriptorsParams({})).toBe(true);
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
+  });
+
+  it("enforces command requiredScopes while preserving continueAgent command results", async () => {
+    const handlerCalls: string[] = [];
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "approval-command-fixture",
+        name: "Approval Command Fixture",
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "approval-fixture",
+          description: "Continue the agent after approval.",
+          requiredScopes: [APPROVALS_SCOPE],
+          acceptsArgs: true,
+          handler: async (ctx) => {
+            handlerCalls.push(ctx.args ?? "");
+            return { text: "approval queued", continueAgent: true };
+          },
+        });
+      },
+    });
+    const registration = registry.registry.commands[0];
+    expect(registration).toBeTruthy();
+    const command = {
+      ...registration.command,
+      pluginId: registration.pluginId,
+      pluginName: registration.pluginName,
+      pluginRoot: registration.rootDir,
+    };
+
+    await expect(
+      executePluginCommand({
+        command,
+        args: "resume",
+        senderId: "owner",
+        channel: "whatsapp",
+        isAuthorizedSender: true,
+        gatewayClientScopes: [READ_SCOPE, WRITE_SCOPE],
+        sessionKey: "agent:main:main",
+        commandBody: "/approval-fixture resume",
+        config,
+      }),
+    ).resolves.toEqual({
+      text: `⚠️ This command requires gateway scope: ${APPROVALS_SCOPE}.`,
+    });
+    expect(handlerCalls).toEqual([]);
+
+    await expect(
+      executePluginCommand({
+        command,
+        args: "resume",
+        senderId: "owner",
+        channel: "whatsapp",
+        isAuthorizedSender: true,
+        gatewayClientScopes: [APPROVALS_SCOPE],
+        sessionKey: "agent:main:main",
+        commandBody: "/approval-fixture resume",
+        config,
+      }),
+    ).resolves.toEqual({ text: "approval queued", continueAgent: true });
+    expect(handlerCalls).toEqual(["resume"]);
   });
 
   it("dispatches sanitized agent events and clears plugin run context on run end", async () => {
@@ -376,7 +492,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 1,
       pluginExtensions: {
@@ -420,16 +536,35 @@ describe("host-hook fixture plugin contract", () => {
       ],
     });
 
-    await runPluginHostCleanup({
-      registry: registry.registry,
-      pluginId: "cleanup-fixture",
-      reason: "reset",
-      sessionKey: "agent:main:main",
-    });
-    await cleanupReplacedPluginHostRegistry({
-      previousRegistry: registry.registry,
-      nextRegistry: createEmptyPluginRegistry(),
-    });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-state-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: path.join(stateDir, "sessions.json") },
+        },
+        run: async () => {
+          await runPluginHostCleanup({
+            registry: registry.registry,
+            pluginId: "cleanup-fixture",
+            reason: "reset",
+            sessionKey: "agent:main:main",
+          });
+          await cleanupReplacedPluginHostRegistry({
+            previousRegistry: registry.registry,
+            nextRegistry: createEmptyPluginRegistry(),
+          });
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
 
     expect(cleanupEvents).toEqual([
       "session:reset:agent:main:main",
@@ -439,5 +574,103 @@ describe("host-hook fixture plugin contract", () => {
       "runtime:disable:",
     ]);
     expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toEqual([]);
+  });
+
+  it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "cleanup-fixture",
+        name: "Cleanup Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "cleanup test",
+        });
+      },
+    });
+
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-hooks-store-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: storePath },
+        },
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              pluginExtensions: {
+                "cleanup-fixture": { workflow: { state: "waiting" } },
+                "other-plugin": { workflow: { state: "keep" } },
+              },
+              pluginNextTurnInjections: {
+                "cleanup-fixture": [
+                  {
+                    id: "resume",
+                    pluginId: "cleanup-fixture",
+                    text: "resume",
+                    placement: "prepend_context",
+                    createdAt: 1,
+                  },
+                ],
+                "other-plugin": [
+                  {
+                    id: "keep",
+                    pluginId: "other-plugin",
+                    text: "keep",
+                    placement: "append_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            };
+            return undefined;
+          });
+
+          await expect(
+            runPluginHostCleanup({
+              registry: registry.registry,
+              pluginId: "cleanup-fixture",
+              reason: "disable",
+            }),
+          ).resolves.toMatchObject({ failures: [] });
+
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          expect(stored["agent:main:main"]).toEqual(
+            expect.objectContaining({
+              pluginExtensions: {
+                "other-plugin": { workflow: { state: "keep" } },
+              },
+              pluginNextTurnInjections: {
+                "other-plugin": [
+                  {
+                    id: "keep",
+                    pluginId: "other-plugin",
+                    text: "keep",
+                    placement: "append_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            }),
+          );
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

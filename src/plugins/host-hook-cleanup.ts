@@ -1,4 +1,9 @@
-import type { SessionEntry } from "../config/sessions.js";
+import fs from "node:fs";
+import { loadConfig } from "../config/config.js";
+import { updateSessionStore } from "../config/sessions/store.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { cleanupPluginSessionSchedulerJobs, clearPluginRunContext } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -38,6 +43,63 @@ export function clearPluginOwnedSessionState(entry: SessionEntry, pluginId?: str
   }
 }
 
+function hasPluginOwnedSessionState(entry: SessionEntry, pluginId?: string): boolean {
+  if (!pluginId) {
+    return Boolean(entry.pluginExtensions || entry.pluginNextTurnInjections);
+  }
+  return Boolean(entry.pluginExtensions?.[pluginId] || entry.pluginNextTurnInjections?.[pluginId]);
+}
+
+function matchesCleanupSession(
+  entryKey: string,
+  entry: SessionEntry,
+  sessionKey?: string,
+): boolean {
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!normalizedSessionKey) {
+    return true;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
+    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
+  );
+}
+
+async function clearPluginOwnedSessionStores(params: {
+  pluginId?: string;
+  sessionKey?: string;
+}): Promise<number> {
+  if (!params.pluginId && !params.sessionKey) {
+    return 0;
+  }
+  const cfg = loadConfig();
+  const storePaths = new Set(
+    resolveAllAgentSessionStoreTargetsSync(cfg)
+      .map((target) => target.storePath)
+      .filter((storePath) => fs.existsSync(storePath)),
+  );
+  let cleared = 0;
+  for (const storePath of storePaths) {
+    cleared += await updateSessionStore(storePath, (store) => {
+      let clearedInStore = 0;
+      const now = Date.now();
+      for (const [entryKey, entry] of Object.entries(store)) {
+        if (
+          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
+          !hasPluginOwnedSessionState(entry, params.pluginId)
+        ) {
+          continue;
+        }
+        clearPluginOwnedSessionState(entry, params.pluginId);
+        entry.updatedAt = now;
+        clearedInStore += 1;
+      }
+      return clearedInStore;
+    });
+  }
+  return cleared;
+}
+
 export async function runPluginHostCleanup(params: {
   registry?: PluginRegistry | null;
   pluginId?: string;
@@ -45,12 +107,16 @@ export async function runPluginHostCleanup(params: {
   sessionKey?: string;
   runId?: string;
 }): Promise<PluginHostCleanupResult> {
+  const persistentCleanupCount = await clearPluginOwnedSessionStores({
+    pluginId: params.pluginId,
+    sessionKey: params.sessionKey,
+  });
   const registry = params.registry;
   if (!registry) {
-    return { cleanupCount: 0, failures: [] };
+    return { cleanupCount: persistentCleanupCount, failures: [] };
   }
   const failures: PluginHostCleanupFailure[] = [];
-  let cleanupCount = 0;
+  let cleanupCount = persistentCleanupCount;
   for (const registration of registry.sessionExtensions ?? []) {
     if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
       continue;

@@ -125,6 +125,7 @@ export type PluginAgentEventSubscriptionRegistration = {
   handle: (
     event: AgentEventPayload,
     ctx: {
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
       getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
         namespace: string,
       ) => T | undefined;
@@ -204,6 +205,10 @@ export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
     return value.every(isPluginJsonValue);
   }
   if (typeof value !== "object") {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
     return false;
   }
   return Object.values(value as Record<string, unknown>).every(isPluginJsonValue);

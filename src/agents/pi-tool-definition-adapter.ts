@@ -323,9 +323,10 @@ export function toClientToolDefinitions(
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
+        const initialParamsRecord = coerceParamsRecord(params);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
-          params,
+          params: initialParamsRecord,
           toolCallId,
           ctx: hookContext,
         });

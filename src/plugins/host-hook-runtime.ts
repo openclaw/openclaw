@@ -94,6 +94,7 @@ export function setPluginRunContext(params: {
   return true;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
 export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
   pluginId: string;
   get: PluginRunContextGetParams;
@@ -161,6 +162,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
     const ctx = {
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
       getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
         getPluginRunContext<T>({ pluginId, get: { runId, namespace } }),
       setRunContext: (namespace: string, value: PluginJsonValue) => {
@@ -212,7 +214,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     if (!jobs) {
       continue;
     }
-    for (const [jobId, record] of [...jobs.entries()]) {
+    for (const [jobId, record] of jobs.entries()) {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
         continue;
       }

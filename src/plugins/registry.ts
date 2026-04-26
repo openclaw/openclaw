@@ -54,6 +54,7 @@ import {
 } from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
+  isPluginJsonValue,
   normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
   type PluginControlUiDescriptor,
@@ -1451,6 +1452,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "control UI descriptor registration requires id and label",
+      });
+      return;
+    }
+    if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor schema must be JSON-compatible: ${id}`,
       });
       return;
     }

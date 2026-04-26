@@ -335,6 +335,7 @@ export type PluginRecord = {
   channelIds: string[];
   cliBackendIds: string[];
   providerIds: string[];
+  syntheticAuthRefs?: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];

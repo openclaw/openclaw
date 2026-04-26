@@ -106,4 +106,28 @@ describe("handlePluginCommand", () => {
       }),
     );
   });
+
+  it("continues the agent without leaking continueAgent into the reply payload", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "card" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue({
+      text: "from plugin",
+      continueAgent: true,
+    });
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/card", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: true,
+      reply: { text: "from plugin" },
+    });
+  });
 });

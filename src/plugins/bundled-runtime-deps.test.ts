@@ -1,11 +1,21 @@
-import { spawnSync } from "node:child_process";
+import type { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  __testing as bundledRuntimeDepsTesting,
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps.js";
+
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: spawnSyncMock,
+}));
+
+vi.resetModules();
+
+const {
+  __testing: bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
@@ -15,15 +25,7 @@ import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(),
-}));
-
-const spawnSyncMock = vi.mocked(spawnSync);
+} = await import("./bundled-runtime-deps.js");
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {

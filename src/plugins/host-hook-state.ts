@@ -251,7 +251,6 @@ export async function drainPluginNextTurnInjections(params: {
   if (!loaded.entry) {
     return [];
   }
-  const canonicalKey = loaded.canonicalKey ?? sessionKey;
   const now = params.now ?? Date.now();
   return await updateSessionStore(loaded.storePath, (store) => {
     const entry = store[loaded.storeKey];

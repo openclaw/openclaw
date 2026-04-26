@@ -249,8 +249,10 @@ the model on the next turn but should not become permanent system prompt text.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
-`restart` so plugins can release scheduler jobs, run context, pending
-injections, and UI-adjacent state when the host tears down the owning lifecycle.
+`restart`. The host removes the owning plugin's persistent session extension
+state and pending next-turn injections, then cleanup callbacks let plugins
+release scheduler jobs, run context, and other out-of-band resources when the
+host tears down the owning lifecycle.
 
 ## Message hooks
 

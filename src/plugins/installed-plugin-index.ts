@@ -106,6 +106,7 @@ export type InstalledPluginIndexRecord = {
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
+  syntheticAuthRefs?: readonly string[];
 };
 
 export type InstalledPluginIndex = {
@@ -592,9 +593,6 @@ function buildInstalledPluginIndex(
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
-    }
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
     }
@@ -604,8 +602,8 @@ function buildInstalledPluginIndex(
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    if (record.syntheticAuthRefs?.length) {
+      indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
     }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;
