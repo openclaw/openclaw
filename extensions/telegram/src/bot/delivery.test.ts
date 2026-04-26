@@ -745,6 +745,50 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("uses the native quote candidate that matches each reply target", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        { text: "First", replyToId: "500" },
+        { text: "Second", replyToId: "501" },
+      ],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteByMessageId: {
+        "500": { text: "first quote", position: 0 },
+        "501": { text: "second quote", position: 0 },
+      },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: "first quote",
+          quote_position: 0,
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 501,
+          quote: "second quote",
+          quote_position: 0,
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+  });
+
   it("retries with legacy reply id when native quote parameters are rejected", async () => {
     const runtime = createRuntime();
     const sendMessage = vi

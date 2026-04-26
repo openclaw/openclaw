@@ -472,6 +472,96 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("passes native quote candidates for current message replies", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+          text: "Original current message",
+          entities: [{ type: "bold", offset: 0, length: 8 }],
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ replyToId: "1001" })],
+        replyQuoteByMessageId: {
+          "1001": {
+            text: "Original current message",
+            position: 0,
+            entities: [{ type: "bold", offset: 0, length: 8 }],
+          },
+        },
+      }),
+    );
+  });
+
+  it("passes native quote candidates for explicit reply targets", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "9001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          ReplyToId: "9001",
+          ReplyToBody: "trimmed body",
+          ReplyToQuoteSourceText: "  exact reply body",
+          ReplyToQuoteSourceEntities: [{ type: "italic", offset: 2, length: 5 }],
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ replyToId: "9001" })],
+        replyQuoteByMessageId: {
+          "9001": {
+            text: "  exact reply body",
+            position: 0,
+            entities: [{ type: "italic", offset: 2, length: 5 }],
+          },
+        },
+      }),
+    );
+  });
+
+  it("does not build native quote candidates when reply mode is off", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+          text: "Original current message",
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      replyToMode: "off",
+    });
+
+    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("replyQuoteByMessageId.1001");
+  });
+
   it("keeps answer draft preview for selected quotes when reply mode is off", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -350,6 +350,8 @@ export async function buildTelegramInboundContextPayload(params: {
     ReplyToQuoteText: visibleReplyTarget?.quoteText,
     ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
     ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
+    ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
+    ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
     ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
     ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
     ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,

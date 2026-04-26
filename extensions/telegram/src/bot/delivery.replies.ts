@@ -40,6 +40,7 @@ import {
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
+import type { TelegramNativeQuoteCandidateByMessageId } from "./native-quote.js";
 import {
   markReplyApplied,
   resolveReplyToForSend,
@@ -60,6 +61,13 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+};
+
+type TelegramReplyQuoteForSend = {
+  messageId?: number;
+  text?: string;
+  position?: number;
+  entities?: unknown[];
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
@@ -103,6 +111,46 @@ function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: reado
   // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
   // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
+}
+
+function resolveReplyQuoteForSend(params: {
+  replyToId?: number;
+  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
+  replyQuoteMessageId?: number;
+  replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
+}): TelegramReplyQuoteForSend {
+  if (params.replyToId != null) {
+    const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
+    if (mapped?.text) {
+      const quote: TelegramReplyQuoteForSend = {
+        messageId: params.replyToId,
+        text: mapped.text,
+      };
+      if (typeof mapped.position === "number") {
+        quote.position = mapped.position;
+      }
+      if (mapped.entities) {
+        quote.entities = mapped.entities;
+      }
+      return quote;
+    }
+  }
+  const quote: TelegramReplyQuoteForSend = {};
+  if (params.replyQuoteMessageId != null) {
+    quote.messageId = params.replyQuoteMessageId;
+  }
+  if (params.replyQuoteText != null) {
+    quote.text = params.replyQuoteText;
+  }
+  if (params.replyQuotePosition != null) {
+    quote.position = params.replyQuotePosition;
+  }
+  if (params.replyQuoteEntities != null) {
+    quote.entities = params.replyQuoteEntities;
+  }
+  return quote;
 }
 
 async function deliverTextReply(params: {
@@ -643,6 +691,8 @@ export async function deliverReplies(params: {
   replyQuotePosition?: number;
   /** Telegram entities that belong to the selected quote text. */
   replyQuoteEntities?: unknown[];
+  /** Native Telegram quote candidates keyed by message id. */
+  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
@@ -707,6 +757,14 @@ export async function deliverReplies(params: {
     const rawContent = reply.text || "";
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    const replyQuote = resolveReplyQuoteForSend({
+      replyToId,
+      replyQuoteByMessageId: params.replyQuoteByMessageId,
+      replyQuoteMessageId: params.replyQuoteMessageId,
+      replyQuoteText: params.replyQuoteText,
+      replyQuotePosition: params.replyQuotePosition,
+      replyQuoteEntities: params.replyQuoteEntities,
+    });
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
@@ -750,10 +808,10 @@ export async function deliverReplies(params: {
           chunkText,
           replyText: reply.text || "",
           replyMarkup,
-          replyQuoteMessageId: params.replyQuoteMessageId,
-          replyQuoteText: params.replyQuoteText,
-          replyQuotePosition: params.replyQuotePosition,
-          replyQuoteEntities: params.replyQuoteEntities,
+          replyQuoteMessageId: replyQuote.messageId,
+          replyQuoteText: replyQuote.text,
+          replyQuotePosition: replyQuote.position,
+          replyQuoteEntities: replyQuote.entities,
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
@@ -775,10 +833,10 @@ export async function deliverReplies(params: {
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
           silent: params.silent,
-          replyQuoteMessageId: params.replyQuoteMessageId,
-          replyQuoteText: params.replyQuoteText,
-          replyQuotePosition: params.replyQuotePosition,
-          replyQuoteEntities: params.replyQuoteEntities,
+          replyQuoteMessageId: replyQuote.messageId,
+          replyQuoteText: replyQuote.text,
+          replyQuotePosition: replyQuote.position,
+          replyQuoteEntities: replyQuote.entities,
           replyMarkup,
           replyToId,
           replyToMode: params.replyToMode,

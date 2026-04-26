@@ -52,7 +52,12 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import { resolveTelegramReplyId } from "./bot/helpers.js";
+import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  addTelegramNativeQuoteCandidate,
+  buildTelegramNativeQuoteCandidate,
+  type TelegramNativeQuoteCandidateByMessageId,
+} from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -354,8 +359,41 @@ export const dispatchTelegramMessage = async ({
     replyQuoteText && !ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(ctxPayload.ReplyToId)
       : undefined;
+  const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
+  if (replyToMode !== "off") {
+    if (replyQuoteText && replyQuoteMessageId != null) {
+      addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
+        text: replyQuoteText,
+        ...(typeof ctxPayload.ReplyToQuotePosition === "number"
+          ? { position: ctxPayload.ReplyToQuotePosition }
+          : {}),
+        ...(Array.isArray(ctxPayload.ReplyToQuoteEntities)
+          ? { entities: ctxPayload.ReplyToQuoteEntities }
+          : {}),
+      });
+    }
+
+    addTelegramNativeQuoteCandidate(
+      replyQuoteByMessageId,
+      ctxPayload.MessageSid ?? msg.message_id,
+      buildTelegramNativeQuoteCandidate(getTelegramTextParts(msg)),
+    );
+
+    if (!ctxPayload.ReplyToIsExternal && typeof ctxPayload.ReplyToQuoteSourceText === "string") {
+      addTelegramNativeQuoteCandidate(
+        replyQuoteByMessageId,
+        ctxPayload.ReplyToId,
+        buildTelegramNativeQuoteCandidate({
+          text: ctxPayload.ReplyToQuoteSourceText,
+          entities: Array.isArray(ctxPayload.ReplyToQuoteSourceEntities)
+            ? ctxPayload.ReplyToQuoteSourceEntities
+            : undefined,
+        }),
+      );
+    }
+  }
   const hasNativeQuoteReply =
-    replyToMode !== "off" && replyQuoteText != null && replyQuoteMessageId != null;
+    replyToMode !== "off" && Object.keys(replyQuoteByMessageId).length > 0;
   const canStreamAnswerDraft =
     previewStreamingEnabled &&
     !hasNativeQuoteReply &&
@@ -620,6 +658,7 @@ export const dispatchTelegramMessage = async ({
     replyQuoteText,
     replyQuotePosition,
     replyQuoteEntities,
+    replyQuoteByMessageId,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;

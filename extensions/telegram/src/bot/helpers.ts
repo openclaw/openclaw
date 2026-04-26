@@ -382,6 +382,8 @@ export type TelegramReplyTarget = {
   quoteEntities?: TelegramTextEntity[];
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
+  quoteSourceText?: string;
+  quoteSourceEntities?: TelegramTextEntity[];
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
@@ -401,15 +403,17 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const rawReplyText =
+    replyLike && typeof replyLike.text === "string"
+      ? replyLike.text
+      : replyLike && typeof replyLike.caption === "string"
+        ? replyLike.caption
+        : undefined;
+  const safeReplyText = resolveTelegramTextContent(rawReplyText);
+  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const rawReplyText =
-      typeof replyLike.text === "string"
-        ? replyLike.text
-        : typeof replyLike.caption === "string"
-          ? replyLike.caption
-          : undefined;
-    const replyBody = resolveTelegramTextContent(rawReplyText).trim();
+    const replyBody = safeReplyText.trim();
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
@@ -453,5 +457,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     quotePosition,
     quoteEntities,
     forwardedFrom,
+    quoteSourceText: replyTextParts?.text || undefined,
+    quoteSourceEntities: replyTextParts?.entities,
   };
 }

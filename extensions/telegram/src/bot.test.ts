@@ -1522,6 +1522,7 @@ describe("createTelegramBot", () => {
     expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
     expect(telegramPayload.ReplyToQuotePosition).toBe(8);
     expect(telegramPayload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 1, length: 9 }]);
+    expect(telegramPayload.ReplyToQuoteSourceText).toBe("Can you summarize this?");
   });
 
   it("keeps reply linkage while omitting filtered binary reply captions", async () => {
