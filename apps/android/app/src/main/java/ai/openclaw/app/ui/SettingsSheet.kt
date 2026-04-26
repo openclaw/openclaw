@@ -643,9 +643,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
             ListItem(
               modifier = Modifier.fillMaxWidth(),
               colors = listItemColors,
-              headlineContent = { Text("SMS", style = mobileHeadline) },
+              headlineContent = { Text("SMS / MMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send and search SMS from this device.", style = mobileCallout)
+                Text("Send, search, and read SMS & MMS messages from this device.", style = mobileCallout)
               },
               trailingContent = {
                 Button(
