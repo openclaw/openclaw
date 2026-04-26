@@ -19,7 +19,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
  * Replaces every `'` with `'\''` (end quote, escaped quote, resume quote).
- * For batch scripts, validates against special characters instead.
+ * For Windows task names, validates against shell metacharacters instead.
  */
 function shellEscape(value: string): string {
   return value.replace(/'/g, "'\\''");
@@ -27,6 +27,7 @@ function shellEscape(value: string): string {
 
 /** Validates a task name is safe for embedding in Windows restart scripts. */
 function isWindowsTaskNameSafe(value: string): boolean {
+  // Keep the old batch-safe subset: schtasks.exe still receives this value.
   return /^[A-Za-z0-9 _\-().]+$/.test(value);
 }
 
@@ -82,7 +83,7 @@ export async function prepareRestartScript(
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
-# Standalone restart script — survives parent process termination.
+# Standalone restart script - survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
 ${logSetup}
@@ -111,7 +112,7 @@ exit "$status"
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
-# Standalone restart script — survives parent process termination.
+# Standalone restart script - survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
 # Capture launchctl output so bootstrap/kickstart failures leave a durable
@@ -342,8 +343,8 @@ exit $status
  * Executes the prepared restart script as a **detached** process.
  *
  * The script must outlive the CLI process because the CLI itself is part
- * of the service being restarted — `systemctl restart` / `launchctl
- * kickstart -k` will terminate the current process tree.  Using
+ * of the service being restarted - `systemctl restart` / `launchctl
+ * kickstart -k` will terminate the current process tree. Using
  * `spawn({ detached: true })` + `unref()` ensures the script survives
  * the parent's exit.
  *

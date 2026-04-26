@@ -316,6 +316,9 @@ exit 0
       expect(content).not.toContain("-File");
       expect(content).toContain('$ErrorActionPreference = "Continue"');
       expect(content).toContain("gateway-restart.log");
+      expect(content).toContain(
+        'Write-RestartLog "openclaw restart attempt source=update target=$taskName"',
+      );
       expect(content).toContain("$taskName = 'OpenClaw Gateway'");
       expect(content).toContain("function Invoke-OpenClawSchtasksWithTimeout");
       expect(content).toContain("function Get-OpenClawScheduledTaskState");
@@ -488,9 +491,9 @@ exit 0
       expect(mockChild.unref).toHaveBeenCalled();
     });
 
-    it("uses cmd.exe on Windows", async () => {
+    it("uses hidden cmd wrapper on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\fake-script.bat";
+      const scriptPath = "C:\\Temp\\fake-script.cmd";
       const mockChild = { unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
@@ -506,7 +509,7 @@ exit 0
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
+      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.cmd";
       const mockChild = { unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
