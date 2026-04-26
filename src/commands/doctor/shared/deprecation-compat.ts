@@ -241,8 +241,7 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
 
 export type DoctorDeprecationCompatCode =
   (typeof DOCTOR_DEPRECATION_COMPAT_RECORDS)[number]["code"];
-export type KnownDoctorDeprecationCompatRecord =
-  DoctorDeprecationCompatRecord<DoctorDeprecationCompatCode>;
+export type KnownDoctorDeprecationCompatRecord = DoctorDeprecationCompatRecord;
 
 const doctorDeprecationCompatRecordByCode = new Map<
   DoctorDeprecationCompatCode,
@@ -260,7 +259,7 @@ export function listDeprecatedDoctorDeprecationCompatRecords(): readonly KnownDo
 }
 
 export function isDoctorDeprecationCompatCode(code: string): code is DoctorDeprecationCompatCode {
-  return doctorDeprecationCompatRecordByCode.has(code as DoctorDeprecationCompatCode);
+  return doctorDeprecationCompatRecordByCode.has(code);
 }
 
 export function getDoctorDeprecationCompatRecord(
