@@ -617,6 +617,7 @@ Notes:
 
 - Image blocks are never trimmed/cleared.
 - Ratios are character-based (approximate), not exact token counts.
+- `softTrimRatio` and `hardClearRatio` each accept values in the range 0.0–1.0 (inclusive); values outside this range are rejected by config validation.
 - If fewer than `keepLastAssistants` assistant messages exist, pruning is skipped.
 
 </Accordion>
