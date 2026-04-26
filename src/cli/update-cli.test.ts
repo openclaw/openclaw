@@ -1202,7 +1202,7 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive"],
+      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive", "--fix"],
       expect.objectContaining({
         env: expect.objectContaining({
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -1271,7 +1271,7 @@ describe("update-cli", () => {
       expect.any(Object),
     );
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive"],
+      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive", "--fix"],
       expect.any(Object),
     );
     expect(updateNpmInstalledPlugins).toHaveBeenCalled();

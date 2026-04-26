@@ -439,7 +439,7 @@ async function runPackageInstallUpdate(params: {
     if (entryPath) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
-        argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
+        argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
         env: {
           ...process.env,
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
