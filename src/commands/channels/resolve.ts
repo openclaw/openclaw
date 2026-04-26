@@ -12,8 +12,8 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import {
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../plugins/install-ledger-store.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -149,7 +149,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
     );
     if (shouldMovePluginInstalls) {
-      await writePersistedPluginInstallLedger(cfg.plugins?.installs ?? {});
+      await writePersistedInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
       cfg = withoutPluginInstallRecords(cfg);
     }
     await replaceConfigFile({

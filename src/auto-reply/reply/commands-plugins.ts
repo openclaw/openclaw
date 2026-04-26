@@ -18,8 +18,8 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
-import { loadPluginInstallRecords } from "../../plugins/install-ledger-store.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
@@ -416,7 +416,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (pluginsCommand.action === "inspect") {
-    const installRecords = await loadPluginInstallRecords({ config: loaded.config });
+    const installRecords = await loadInstalledPluginIndexInstallRecords();
     if (!pluginsCommand.name) {
       return {
         shouldContinue: false,

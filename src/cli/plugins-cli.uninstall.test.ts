@@ -10,9 +10,10 @@ import {
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   uninstallPlugin,
   writeConfigFile,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -76,6 +77,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
     buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
@@ -103,7 +105,7 @@ describe("plugins cli uninstall", () => {
         deleteFiles: false,
       }),
     );
-    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
     expect(writeConfigFile).toHaveBeenCalledWith({
       plugins: {
         entries: {},
@@ -115,6 +117,7 @@ describe("plugins cli uninstall", () => {
           entries: {},
         },
       },
+      installRecords: {},
       reason: "source-changed",
     });
   });

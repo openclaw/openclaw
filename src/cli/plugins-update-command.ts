@@ -1,12 +1,12 @@
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import {
-  loadPluginInstallRecords,
+  loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
   withPluginInstallRecords,
-} from "../plugins/install-ledger-store.js";
+} from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
@@ -23,7 +23,7 @@ export async function runPluginUpdateCommand(params: {
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = loadConfig();
-  const pluginInstallRecords = await loadPluginInstallRecords({ config: cfg });
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
@@ -119,18 +119,18 @@ export async function runPluginUpdateCommand(params: {
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
     const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
-    const shouldPersistPluginInstallLedger =
+    const shouldPersistPluginInstallIndex =
       pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
-    if (shouldPersistPluginInstallLedger) {
-      await writePersistedPluginInstallLedger(nextPluginInstallRecords);
+    if (shouldPersistPluginInstallIndex) {
+      await writePersistedInstalledPluginIndexInstallRecords(nextPluginInstallRecords);
     }
-    const nextConfig = shouldPersistPluginInstallLedger
+    const nextConfig = shouldPersistPluginInstallIndex
       ? withoutPluginInstallRecords(hookResult.config)
       : hookResult.config;
     await replaceConfigFile({
       nextConfig,
       baseHash: (await sourceSnapshotPromise)?.hash,
-      ...(shouldPersistPluginInstallLedger
+      ...(shouldPersistPluginInstallIndex
         ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
         : {}),
     });
@@ -138,6 +138,7 @@ export async function runPluginUpdateCommand(params: {
       await refreshPluginRegistryAfterConfigMutation({
         config: nextConfig,
         reason: "source-changed",
+        installRecords: nextPluginInstallRecords,
         logger,
       });
     }

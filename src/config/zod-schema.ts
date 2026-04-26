@@ -19,7 +19,6 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -1001,16 +1000,6 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
-        installs: z
-          .record(
-            z.string(),
-            z
-              .object({
-                ...PluginInstallRecordShape,
-              })
-              .strict(),
-          )
-          .optional(),
       })
       .strict()
       .optional(),

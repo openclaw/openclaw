@@ -232,6 +232,40 @@ do not run in live chat traffic, check these first:
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.
 
+### Duplicate channel or tool ownership
+
+Symptoms:
+
+- `channel already registered: <channel-id> (<plugin-id>)`
+- `channel setup already registered: <channel-id> (<plugin-id>)`
+- `plugin tool name conflict (<plugin-id>): <tool-name>`
+
+These mean more than one enabled plugin is trying to own the same channel,
+setup flow, or tool name. The most common cause is an external channel plugin
+installed beside a bundled plugin that now provides the same channel id.
+
+Debug steps:
+
+- Run `openclaw plugins list --enabled --verbose` to see every enabled plugin
+  and origin.
+- Run `openclaw plugins inspect <id> --json` for each suspected plugin and
+  compare `channels`, `channelConfigs`, `tools`, and diagnostics.
+- Run `openclaw plugins registry --refresh` after installing or removing
+  plugin packages so persisted metadata reflects the current install.
+- Restart the Gateway after install, registry, or config changes.
+
+Fix options:
+
+- If one plugin intentionally replaces another for the same channel id, the
+  preferred plugin should declare `channelConfigs.<channel-id>.preferOver` with
+  the lower-priority plugin id. See [/plugins/manifest#replacing-another-channel-plugin](/plugins/manifest#replacing-another-channel-plugin).
+- If the duplicate is accidental, disable one side with
+  `plugins.entries.<plugin-id>.enabled: false` or remove the stale plugin
+  install.
+- If you explicitly enabled both plugins, OpenClaw keeps that request and
+  reports the conflict. Pick one owner for the channel or rename plugin-owned
+  tools so the runtime surface is unambiguous.
+
 ## Plugin slots (exclusive categories)
 
 Some categories are exclusive (only one active at a time):
@@ -266,7 +300,7 @@ openclaw plugins info <id>                 # inspect alias
 openclaw plugins doctor                    # diagnostics
 openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
-openclaw doctor --fix                      # repair registry/ledger migration state
+openclaw doctor --fix                      # repair plugin registry state
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
@@ -280,7 +314,7 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id-or-npm-spec> # update one plugin
 openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
-openclaw plugins uninstall <id>          # remove config and install ledger records
+openclaw plugins uninstall <id>          # remove config and plugin index records
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
@@ -305,13 +339,11 @@ immediately loadable after restart.
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,
 uninstall, enable, and disable flows refresh that registry after changing plugin
-state. If the registry is missing, stale, or invalid, `openclaw plugins registry
---refresh` rebuilds it from the durable install ledger, config policy, and
+state. The same `plugins/installs.json` file keeps durable install metadata in
+top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
+the registry is missing, stale, or invalid, `openclaw plugins registry
+--refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
-If a machine still has legacy `plugins.installs` records in config, run
-`openclaw doctor --fix` to move them into the managed
-`plugins/installs.json` ledger and remove the config copy.
-
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
 back to the tracked plugin record and records the new spec for future updates.

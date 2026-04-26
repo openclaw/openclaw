@@ -43,12 +43,12 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import {
-  loadPluginInstallRecords,
+  loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
   withPluginInstallRecords,
-} from "../../plugins/install-ledger-store.js";
+} from "../../plugins/installed-plugin-index-records.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -584,9 +584,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.heading("Updating plugins..."));
   }
 
-  const pluginInstallRecords = await loadPluginInstallRecords({
-    config: params.configSnapshot.sourceConfig,
-  });
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const syncResult = await syncPluginsForUpdateChannel({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: params.channel,
@@ -630,7 +628,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await writePersistedPluginInstallLedger(pluginConfig.plugins?.installs ?? {});
+    await writePersistedInstalledPluginIndexInstallRecords(pluginConfig.plugins?.installs ?? {});
     const nextConfig = withoutPluginInstallRecords(pluginConfig);
     await replaceConfigFile({
       nextConfig,

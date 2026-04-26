@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
-import { writePersistedPluginInstallLedger } from "./install-ledger-store.js";
+import {
+  loadInstalledPluginIndexInstallRecordsSync,
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "./installed-plugin-index-records.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
   getInstalledPluginRecord,
@@ -156,7 +159,7 @@ describe("installed plugin index", () => {
 
     expect(index).toMatchObject({
       version: 1,
-      migrationVersion: 2,
+      migrationVersion: 1,
       generatedAtMs: 1777118400000,
       plugins: [
         {
@@ -239,7 +242,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("exposes cold registry records and owners for existing plugins without install ledgers", () => {
+  it("exposes cold registry records and owners for existing plugins without plugin indexs", () => {
     const fixture = createRichPluginFixture();
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -347,34 +350,30 @@ describe("installed plugin index", () => {
     expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
   });
 
-  it("records the config install ledger separately from package install intent", () => {
+  it("records explicit install records separately from package install intent", () => {
     const fixture = createRichPluginFixture();
 
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@vendor/demo-plugin@latest",
-              installPath: "plugins/demo",
-              resolvedName: "@vendor/demo-plugin",
-              resolvedVersion: "1.2.3",
-              resolvedSpec: "@vendor/demo-plugin@1.2.3",
-              integrity: "sha512-installed",
-              shasum: "abc123",
-              resolvedAt: "2026-04-25T11:00:00.000Z",
-              installedAt: "2026-04-25T11:01:00.000Z",
-            },
-          },
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "@vendor/demo-plugin@latest",
+          installPath: "plugins/demo",
+          resolvedName: "@vendor/demo-plugin",
+          resolvedVersion: "1.2.3",
+          resolvedSpec: "@vendor/demo-plugin@1.2.3",
+          integrity: "sha512-installed",
+          shasum: "abc123",
+          resolvedAt: "2026-04-25T11:00:00.000Z",
+          installedAt: "2026-04-25T11:01:00.000Z",
         },
       },
       env: hermeticEnv(),
     });
 
-    expect(index.plugins[0]).toMatchObject({
-      installRecord: {
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
         installPath: "plugins/demo",
@@ -386,6 +385,8 @@ describe("installed plugin index", () => {
         resolvedAt: "2026-04-25T11:00:00.000Z",
         installedAt: "2026-04-25T11:01:00.000Z",
       },
+    });
+    expect(index.plugins[0]).toMatchObject({
       packageInstall: {
         npm: {
           spec: "@vendor/demo-plugin@1.2.3",
@@ -394,10 +395,62 @@ describe("installed plugin index", () => {
         },
       },
     });
+    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
-  it("indexes npm install ledger records written before a process reload", () => {
+  it("uses in-flight install records to rank installed globals over bundled duplicates", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    writeRuntimeEntry(bundledDir);
+    writeRuntimeEntry(globalDir);
+    writePluginManifest(bundledDir, {
+      id: "duplicate-demo",
+      configSchema: { type: "object" },
+    });
+    writePluginManifest(globalDir, {
+      id: "duplicate-demo",
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir: bundledDir,
+          idHint: "duplicate-demo",
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          rootDir: globalDir,
+          idHint: "duplicate-demo",
+          origin: "global",
+        }),
+      ],
+      installRecords: {
+        "duplicate-demo": {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.installRecords).toMatchObject({
+      "duplicate-demo": {
+        source: "npm",
+        installPath: globalDir,
+      },
+    });
+    expect(index.plugins).toHaveLength(1);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "duplicate-demo",
+      origin: "global",
+      rootDir: globalDir,
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+  });
+
+  it("indexes npm plugin index records written before a process reload", () => {
     const fixture = createRichPluginFixture();
     const cfg = recordPluginInstall(
       {},
@@ -420,12 +473,16 @@ describe("installed plugin index", () => {
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       config: cfg,
+      installRecords: cfg.plugins?.installs,
       env: hermeticEnv(),
     });
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
         installPath: fixture.rootDir,
@@ -441,10 +498,10 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("indexes persisted install ledger records from an explicit state directory", async () => {
+  it("indexes persisted plugin index records from an explicit state directory", async () => {
     const fixture = createRichPluginFixture();
     const stateDir = makeTempDir();
-    await writePersistedPluginInstallLedger(
+    await writePersistedInstalledPluginIndexInstallRecords(
       {
         demo: {
           source: "npm",
@@ -455,18 +512,22 @@ describe("installed plugin index", () => {
           integrity: "sha512-installed",
         },
       },
-      { stateDir },
+      { stateDir, candidates: [fixture.candidate] },
     );
 
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       env: hermeticEnv(),
       stateDir,
+      installRecords: loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
     });
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@1.2.3",
         installPath: fixture.rootDir,
@@ -477,7 +538,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("indexes local fallback install ledger records written before a process reload", () => {
+  it("indexes local fallback plugin index records written before a process reload", () => {
     const fixture = createRichPluginFixture();
     const cfg = recordPluginInstall(
       {},
@@ -493,12 +554,16 @@ describe("installed plugin index", () => {
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       config: cfg,
+      installRecords: cfg.plugins?.installs,
       env: hermeticEnv(),
     });
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "path",
         sourcePath: "./plugins/demo",
         spec: "@vendor/demo-plugin@1.2.3",
@@ -511,17 +576,13 @@ describe("installed plugin index", () => {
     const fixture = createRichPluginFixture();
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo-plugin",
-              resolvedVersion: "1.2.3",
-              resolvedSpec: "@vendor/demo-plugin@1.2.3",
-              integrity: "sha512-installed",
-            },
-          },
+      installRecords: {
+        demo: {
+          source: "npm",
+          resolvedName: "@vendor/demo-plugin",
+          resolvedVersion: "1.2.3",
+          resolvedSpec: "@vendor/demo-plugin@1.2.3",
+          integrity: "sha512-installed",
         },
       },
       env: hermeticEnv(),
@@ -540,38 +601,30 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([]);
   });
 
-  it("treats install ledger changes as source invalidation", () => {
+  it("treats plugin index changes as source invalidation", () => {
     const fixture = createRichPluginFixture();
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo-plugin",
-              resolvedVersion: "1.2.3",
-              resolvedSpec: "@vendor/demo-plugin@1.2.3",
-              integrity: "sha512-old",
-            },
-          },
+      installRecords: {
+        demo: {
+          source: "npm",
+          resolvedName: "@vendor/demo-plugin",
+          resolvedVersion: "1.2.3",
+          resolvedSpec: "@vendor/demo-plugin@1.2.3",
+          integrity: "sha512-old",
         },
       },
       env: hermeticEnv(),
     });
     const current = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo-plugin",
-              resolvedVersion: "1.2.3",
-              resolvedSpec: "@vendor/demo-plugin@1.2.3",
-              integrity: "sha512-new",
-            },
-          },
+      installRecords: {
+        demo: {
+          source: "npm",
+          resolvedName: "@vendor/demo-plugin",
+          resolvedVersion: "1.2.3",
+          resolvedSpec: "@vendor/demo-plugin@1.2.3",
+          integrity: "sha512-new",
         },
       },
       env: hermeticEnv(),
@@ -731,20 +784,16 @@ describe("installed plugin index", () => {
             packageVersion: "1.2.4",
           },
         ],
-        config: {
-          plugins: {
-            installs: {
-              demo: {
-                source: "npm",
-                resolvedVersion: "1.2.4",
-              },
-            },
+        installRecords: {
+          demo: {
+            source: "npm",
+            resolvedVersion: "1.2.4",
           },
         },
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
-      migrationVersion: 3 as 2,
+      migrationVersion: 2 as 1,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
