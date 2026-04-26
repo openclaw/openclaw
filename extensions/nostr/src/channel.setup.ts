@@ -2,10 +2,10 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
-  createDelegatedSetupWizardProxy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   type ChannelSetupAdapter,
+  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
@@ -169,31 +169,27 @@ const nostrSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-const nostrSetupWizard = createDelegatedSetupWizardProxy({
+const nostrSetupWizard: ChannelSetupWizard = {
   channel,
-  loadWizard: async () => (await import("./setup-surface.js")).nostrSetupWizard,
-  status: {
-    ...createStandardChannelSetupStatus({
-      channelLabel: "Nostr",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs private key",
-      configuredHint: "configured",
-      unconfiguredHint: "needs private key",
-      configuredScore: 1,
-      unconfiguredScore: 0,
-      includeStatusLine: true,
-      resolveConfigured: ({ cfg, accountId }) =>
-        resolveSetupNostrAccount({ cfg, accountId }).configured,
-      resolveExtraStatusLines: ({ cfg }) => {
-        const account = resolveSetupNostrAccount({ cfg });
-        return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
-      },
-    }),
-  },
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Nostr",
+    configuredLabel: "configured",
+    unconfiguredLabel: "needs private key",
+    configuredHint: "configured",
+    unconfiguredHint: "needs private key",
+    configuredScore: 1,
+    unconfiguredScore: 0,
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg, accountId }) =>
+      resolveSetupNostrAccount({ cfg, accountId }).configured,
+    resolveExtraStatusLines: ({ cfg }) => {
+      const account = resolveSetupNostrAccount({ cfg });
+      return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
+    },
+  }),
   resolveShouldPromptAccountIds: () => false,
-  delegatePrepare: true,
-  delegateFinalize: true,
-});
+  credentials: [],
+};
 
 export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrSetupAccount> = {
   id: channel,
