@@ -56,6 +56,30 @@ describe("buildOllamaChatRequest", () => {
       model: "qwen3:14b-q8_0",
     });
   });
+
+  it("strips custom-named ollama-compat provider prefixes from chat model ids (#72353)", () => {
+    for (const modelId of [
+      "ollama-spark/qwen3:32b",
+      "ollama-studio2/qwen3:32b",
+      "ollama-remote/llama3.2:8b",
+    ]) {
+      expect(
+        buildOllamaChatRequest({
+          modelId,
+          messages: [{ role: "user", content: "hi" }],
+        }).model,
+      ).toBe(modelId.split("/").slice(1).join("/"));
+    }
+  });
+
+  it("leaves non-ollama provider prefixes untouched so Ollama registry namespaces survive", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "library/llama3",
+        messages: [{ role: "user", content: "hi" }],
+      }).model,
+    ).toBe("library/llama3");
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {

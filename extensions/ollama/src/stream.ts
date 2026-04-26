@@ -239,9 +239,16 @@ export function createConfiguredOllamaCompatStreamWrapper(
 // Ollama compat wrapper now owns more than num_ctx injection.
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
+// Strips the routing-side provider key prefix (e.g. "ollama/", "ollama-spark/",
+// "ollama-studio2/") so the wire model field matches what the Ollama backend
+// catalogs. Custom-named ollama-compat providers all surface as "ollama-<key>/"
+// at this layer; only those are stripped, leaving real Ollama registry
+// namespaces such as "library/llama3" untouched. Issue #72353.
+const OLLAMA_PROVIDER_PREFIX_RE = /^ollama(?:-[a-zA-Z0-9_-]+)?\//;
+
 function normalizeOllamaWireModelId(modelId: string): string {
   const trimmed = modelId.trim();
-  return trimmed.startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+  return trimmed.replace(OLLAMA_PROVIDER_PREFIX_RE, "");
 }
 
 export function buildOllamaChatRequest(params: {

@@ -78,12 +78,17 @@ async function withRemoteHttpResponse<T>(params: {
   }
 }
 
+// Mirrors normalizeOllamaWireModelId in stream.ts — strips routing-side
+// "ollama/" or "ollama-<key>/" prefixes so custom-named ollama-compat providers
+// match the bare names the Ollama backend serves. Issue #72353.
+const OLLAMA_PROVIDER_PREFIX_RE = /^ollama(?:-[a-zA-Z0-9_-]+)?\//;
+
 function normalizeEmbeddingModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OLLAMA_EMBEDDING_MODEL;
   }
-  return trimmed.startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+  return trimmed.replace(OLLAMA_PROVIDER_PREFIX_RE, "");
 }
 
 function resolveMemorySecretInputString(params: {
