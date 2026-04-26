@@ -138,6 +138,7 @@ Current source-of-truth:
     - `/fast [status|on|off]` shows or sets fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
     - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
+    - `/emotions [on|off|full]` toggles per-session emotion mode for ElevenLabs v3 expressive-tag passthrough. `off` (default) — no expressive layer; `on` — expressive tags reach tag-aware TTS providers via reply metadata but stay hidden from normal display; `full` — expressive tags remain visible in chat (operator debug).
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists providers or models for a provider.

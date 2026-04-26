@@ -46,6 +46,24 @@ export type ReplyPayload = {
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /**
+   * Speech-preparation source text for tag-aware TTS providers (e.g. ElevenLabs v3).
+   * When present, providers that declare `sourceTextHandling: "preserve_expressive_tags"`
+   * receive this text verbatim.
+   *
+   * Pair with `ttsPlainText` when the visible reply text may still contain expressive
+   * tags (e.g. `/emotions full` mode) — otherwise non-tag-aware providers in the
+   * fallback chain will speak the tag words out loud.
+   */
+  ttsSourceText?: string;
+  /**
+   * Display-sanitized speech text for TTS providers that declare
+   * `sourceTextHandling: "strip_expressive_tags"` (the default). When omitted, the
+   * runtime falls back to the visible reply text — which is correct in
+   * `/emotions off|on` modes where visible text is already display-sanitized, but
+   * leaks tag words to plain providers in `/emotions full` mode.
+   */
+  ttsPlainText?: string;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
@@ -61,4 +79,15 @@ export function setReplyPayloadMetadata<T extends object>(
 
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/**
+ * Copy `ReplyPayloadMetadata` from `source` onto `target`. Use when you create
+ * a new payload object via spread (`{...source, text: visible}`) — the metadata
+ * is keyed by object identity in a `WeakMap`, so spread creates a new object
+ * that has no metadata. Per Copilot review on the speech-core TTS pipeline.
+ */
+export function cloneReplyPayloadMetadata<T extends object>(source: object, target: T): T {
+  const metadata = replyPayloadMetadata.get(source);
+  return metadata ? setReplyPayloadMetadata(target, metadata) : target;
 }

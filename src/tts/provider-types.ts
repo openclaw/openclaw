@@ -10,6 +10,29 @@ export type SpeechProviderConfig = Record<string, unknown>;
 
 export type SpeechProviderOverrides = Record<string, unknown>;
 
+export type SpeechSourceTextHandlingMode = "strip_expressive_tags" | "preserve_expressive_tags";
+
+export type SpeechProviderCapabilities = {
+  /**
+   * Declares whether the provider wants speech-preparation source text with
+   * expressive tags preserved, or whether OpenClaw should sanitize it down to
+   * plain speakable text first. Providers that omit this field default to
+   * `strip_expressive_tags`.
+   */
+  sourceTextHandling?: SpeechSourceTextHandlingMode;
+  /**
+   * Optional allowlist of model ids that actually understand expressive tags.
+   * When set together with `sourceTextHandling: "preserve_expressive_tags"`,
+   * the routing layer only forwards expressive source text when the resolved
+   * provider config's model id is in this list. Providers that omit this
+   * field are treated as "all models accept expressive tags".
+   *
+   * Example: ElevenLabs declares `["eleven_v3"]` because v2 / turbo /
+   * monolingual would speak the tag words out loud rather than interpret them.
+   */
+  expressiveTagsModels?: readonly string[];
+};
+
 export type SpeechModelOverridePolicy = {
   enabled: boolean;
   allowText: boolean;

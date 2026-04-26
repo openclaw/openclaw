@@ -51,6 +51,7 @@ export function createEmptyInlineDirectives(): InlineDirectives {
     hasVerboseDirective: false,
     hasFastDirective: false,
     hasReasoningDirective: false,
+    hasEmotionsDirective: false,
     hasTraceDirective: false,
     hasElevatedDirective: false,
     hasExecDirective: false,

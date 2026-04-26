@@ -1324,6 +1324,7 @@ export async function runReplyAgent(params: {
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
+      emotionMode: followupRun.run.emotionMode,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
