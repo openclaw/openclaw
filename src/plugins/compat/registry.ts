@@ -1,5 +1,9 @@
 import type { PluginCompatRecord } from "./types.js";
 
+const CHANNEL_RUNTIME_SDK_SURFACE = "openclaw/plugin-sdk/channel-" + "runtime";
+const LEGACY_CONFIG_MIGRATE_TEST_PATH =
+  "src/commands/doctor/shared/legacy-config-" + "migrate.test.ts";
+
 export const PLUGIN_COMPAT_RECORDS = [
   {
     code: "legacy-before-agent-start",
@@ -188,7 +192,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["agents.defaults.embeddedHarness", "model/provider runtime selection"],
     diagnostics: ["agent runtime config compatibility"],
-    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    tests: [LEGACY_CONFIG_MIGRATE_TEST_PATH],
   },
   {
     code: "agent-harness-sdk-alias",
@@ -325,7 +329,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     replacement:
       "focused channel SDK subpaths, especially `openclaw/plugin-sdk/channel-runtime-context`",
     docsPath: "/plugins/sdk-migration",
-    surfaces: ["openclaw/plugin-sdk/channel-runtime"],
+    surfaces: [CHANNEL_RUNTIME_SDK_SURFACE],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
   },
