@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -29,11 +28,10 @@ import {
 } from "../../../plugins/provider-model-compat.js";
 import {
   resolveProviderSystemPromptContribution,
-  resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -52,20 +50,10 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
-  analyzeBootstrapBudget,
-  buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
-  buildBootstrapInjectionStats,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import {
-  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-  hasCompletedBootstrapTurn,
-  isWorkspaceBootstrapPending,
-  makeBootstrapWarn,
-  resolveBootstrapContextForRun,
-  resolveContextInjectionMode,
-} from "../../bootstrap-files.js";
+import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -89,14 +77,10 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
-import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -110,9 +94,7 @@ import {
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
-import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
-import { registerProviderStreamForModel } from "../../provider-stream.js";
 import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
@@ -121,10 +103,7 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  sanitizeToolUseResultPairing,
-  stripToolResultDetails,
-} from "../../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -142,18 +121,12 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import {
-  applyExtraParamsToAgent,
-  resolveAgentTransportOverride,
-  resolveExplicitSettingsTransport,
-} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -164,7 +137,6 @@ import {
   completePromptCacheObservation,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
-import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   normalizeAssistantReplayContent,
   sanitizeSessionHistory,
@@ -182,7 +154,6 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -213,19 +184,28 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  resolveAttemptWorkspaceBootstrapRouting,
-  shouldStripBootstrapFromEmbeddedContext,
-} from "./attempt-bootstrap-routing.js";
+import { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { summarizeSessionContext } from "./attempt-message-summary.js";
+import {
+  isPrimaryBootstrapRun,
+  normalizeMessagesForLlmBoundary,
+  prepareAttemptBootstrapPromptContext,
+  remapInjectedContextFilesToWorkspace,
+} from "./attempt-prompt.js";
+export {
+  isPrimaryBootstrapRun,
+  normalizeMessagesForLlmBoundary,
+  remapInjectedContextFilesToWorkspace,
+} from "./attempt-prompt.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   collectAttemptExplicitToolAllowlistSources,
   resolveUnknownToolGuardThreshold,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tools.js";
+import { configureAttemptTransportRuntime } from "./attempt-transport.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -233,7 +213,6 @@ import {
   findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
-  resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
@@ -269,7 +248,6 @@ import {
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
-  shouldUseOpenAIWebSocketTransport,
 } from "./attempt.thread-helpers.js";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -353,37 +331,6 @@ export {
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tools.js";
 
-export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
-  return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
-}
-
-export function remapInjectedContextFilesToWorkspace(params: {
-  files: EmbeddedContextFile[];
-  sourceWorkspaceDir: string;
-  targetWorkspaceDir: string;
-}): EmbeddedContextFile[] {
-  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
-    return params.files;
-  }
-  return params.files.map((file) => {
-    const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    const canRemap = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-    return canRemap
-      ? {
-          ...file,
-          path:
-            relative === ""
-              ? params.targetWorkspaceDir
-              : path.join(params.targetWorkspaceDir, relative),
-        }
-      : file;
-  });
-}
-
-export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
-}
-
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -462,7 +409,6 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
     const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
     const runTrace = freezeDiagnosticTraceContext(
@@ -566,82 +512,26 @@ export async function runEmbeddedAttempt(
             return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
           })();
     const toolsEnabled = supportsModelTools(params.model);
-    const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
-    const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
-      trigger: params.trigger,
-      sessionKey: params.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-      effectiveWorkspace,
-      resolvedWorkspace,
-      hasBootstrapFileAccess: bootstrapHasFileAccess,
-    });
-    const bootstrapMode = bootstrapRouting.bootstrapMode;
-    const shouldStripBootstrapFromContext = bootstrapRouting.shouldStripBootstrapFromContext;
     const {
-      bootstrapFiles: hookAdjustedBootstrapFiles,
-      contextFiles: resolvedContextFiles,
-      shouldRecordCompletedBootstrapTurn,
-    } = await resolveAttemptBootstrapContext({
-      contextInjectionMode,
-      bootstrapContextMode: params.bootstrapContextMode,
-      bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
-      bootstrapMode,
-      sessionFile: params.sessionFile,
-      hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: async () =>
-        await resolveBootstrapContextForRun({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          warn: makeBootstrapWarn({
-            sessionLabel,
-            workspaceDir: resolvedWorkspace,
-            warn: (message) => log.warn(message),
-          }),
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }),
-    });
-    const remappedContextFiles = remapInjectedContextFilesToWorkspace({
-      files: resolvedContextFiles,
-      sourceWorkspaceDir: resolvedWorkspace,
-      targetWorkspaceDir: effectiveWorkspace,
-    });
-    const contextFiles = shouldStripBootstrapFromContext
-      ? remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()))
-      : remappedContextFiles;
-    const bootstrapFilesForInjectionStats = shouldStripBootstrapFromContext
-      ? hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME)
-      : hookAdjustedBootstrapFiles;
-    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
-    const bootstrapAnalysis = analyzeBootstrapBudget({
-      files: buildBootstrapInjectionStats({
-        bootstrapFiles: bootstrapFilesForInjectionStats,
-        injectedFiles: contextFiles,
-      }),
+      hookAdjustedBootstrapFiles,
+      contextFiles,
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
+      bootstrapAnalysis,
+      bootstrapPromptWarningMode,
+      bootstrapPromptWarning,
+      workspaceNotes,
+      shouldRecordCompletedBootstrapTurn,
+      userPromptPrefixText,
+    } = await prepareAttemptBootstrapPromptContext({
+      attempt: params,
+      sessionLabel,
+      resolvedWorkspace,
+      effectiveWorkspace,
+      toolsEnabled,
+      toolsRaw,
+      logWarn: (message) => log.warn(message),
     });
-    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
-    const bootstrapPromptWarning = buildBootstrapPromptWarning({
-      analysis: bootstrapAnalysis,
-      mode: bootstrapPromptWarningMode,
-      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-      previousSignature: params.bootstrapPromptWarningSignature,
-    });
-    const workspaceNotes: string[] = [];
-    if (
-      hookAdjustedBootstrapFiles.some(
-        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-      )
-    ) {
-      workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
-    }
     if (isEmbeddedMode()) {
       workspaceNotes.push(
         "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
@@ -1013,7 +903,6 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = bootstrapRouting.userPromptPrefixText;
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -1353,116 +1242,32 @@ export async function runEmbeddedAttempt(
         }),
       );
 
-      // Rebuild each turn from the session's original stream base so prior-turn
-      // wrappers do not pin us to stale provider/API transport behavior.
-      const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
-        session: activeSession,
-      });
-      const providerStreamFn = registerProviderStreamForModel({
-        model: params.model,
-        cfg: params.config,
-        agentDir,
-        workspaceDir: effectiveWorkspace,
-      });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+      const {
+        effectiveExtraParams,
+        effectivePromptCacheRetention,
+        effectiveAgentTransport,
+        streamStrategy,
+      } = await configureAttemptTransportRuntime({
+        activeSession,
+        config: params.config,
         provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
-      const wsApiKey = shouldUseWebSocketTransport
-        ? await resolveEmbeddedAgentApiKey({
-            provider: params.provider,
-            resolvedApiKey: params.resolvedApiKey,
-            authStorage: params.authStorage,
-          })
-        : undefined;
-      if (shouldUseWebSocketTransport && !wsApiKey) {
-        log.warn(
-          `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
-        );
-      }
-      const streamStrategy = describeEmbeddedAgentStreamStrategy({
-        currentStreamFn: defaultSessionStreamFn,
-        providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
+        modelId: params.modelId,
         model: params.model,
-      });
-      activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
-        currentStreamFn: defaultSessionStreamFn,
-        providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
+        agentDir,
+        effectiveWorkspace,
         sessionId: params.sessionId,
-        signal: runAbortController.signal,
-        model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
-      });
-      const providerTextTransforms = resolveProviderTextTransforms({
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-      });
-      if (providerTextTransforms) {
-        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
-          streamFn: activeSession.agent.streamFn,
-          input: providerTextTransforms.input,
-          output: providerTextTransforms.output,
-          transformSystemPrompt: false,
-        });
-      }
-
-      const resolvedTransport = resolveExplicitSettingsTransport({
+        runAbortSignal: runAbortController.signal,
         settingsManager,
-        sessionTransport: activeSession.agent.transport,
-      });
-      const streamExtraParamsOverride = {
-        ...params.streamParams,
+        streamParams: params.streamParams,
         fastMode: params.fastMode,
-      };
-      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
-        extraParamsOverride: streamExtraParamsOverride,
-        thinkingLevel: params.thinkLevel,
-        agentId: sessionAgentId,
-        workspaceDir: effectiveWorkspace,
-        model: params.model,
-        resolvedTransport,
-      });
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
-        activeSession.agent,
-        params.config,
-        params.provider,
-        params.modelId,
-        streamExtraParamsOverride,
-        params.thinkLevel,
+        thinkLevel: params.thinkLevel,
         sessionAgentId,
-        effectiveWorkspace,
-        params.model,
-        agentDir,
-        resolvedTransport,
-        preparedRuntimeExtraParams
-          ? { preparedExtraParams: preparedRuntimeExtraParams }
-          : undefined,
-      );
-      const effectivePromptCacheRetention = resolveCacheRetention(
-        effectiveExtraParams,
-        params.provider,
-        params.model.api,
-        params.modelId,
-      );
-      const agentTransportOverride = resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams,
+        runtimePlan: params.runtimePlan,
+        logDebug: (message) => log.debug(message),
+        logWarn: (message) => log.warn(message),
       });
-      const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
-      if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
-        const previousTransport = activeSession.agent.transport;
-        log.debug(
-          `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-            `(${params.provider}/${params.modelId})`,
-        );
-      }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(
