@@ -523,6 +523,32 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.join(stateDir, "workspace-work"));
   });
 
+  it("non-default agent does not nest through a symlink to the main workspace", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-symlink-"));
+    try {
+      const stateDir = path.join(rootDir, ".openclaw");
+      const mainWorkspace = path.join(stateDir, "workspace");
+      const workspaceLink = path.join(rootDir, "workspace-link");
+      fs.mkdirSync(mainWorkspace, { recursive: true });
+      fs.symlinkSync(mainWorkspace, workspaceLink);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: workspaceLink },
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      };
+
+      const workspace = resolveAgentWorkspaceDir(cfg, "work");
+      expect(workspace).toBe(path.join(stateDir, "workspace-work"));
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("non-default agent does not nest after changing OPENCLAW_PROFILE", () => {
     const home = path.join(path.sep, "tmp", "test-home");
     const stateDir = path.join(home, ".openclaw");

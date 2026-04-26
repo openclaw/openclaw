@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -53,13 +54,23 @@ function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
 }
 
+function canonicalizePathForComparison(input: string): string {
+  const resolved = path.resolve(stripNullBytes(input));
+  try {
+    const realpath = fs.realpathSync.native(resolved);
+    return process.platform === "win32" ? realpath.toLowerCase() : realpath;
+  } catch {
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+}
+
 function isManagedMainWorkspaceDir(workspaceDir: string, env: NodeJS.ProcessEnv): boolean {
-  const resolved = path.resolve(workspaceDir);
-  const stateDir = stripNullBytes(resolveStateDir(env));
-  const defaultWorkspaceDir = stripNullBytes(resolveDefaultAgentWorkspaceDir(env));
+  const resolved = canonicalizePathForComparison(workspaceDir);
+  const stateDir = resolveStateDir(env);
+  const defaultWorkspaceDir = resolveDefaultAgentWorkspaceDir(env);
   return (
-    resolved === path.resolve(stateDir, "workspace") ||
-    resolved === path.resolve(defaultWorkspaceDir)
+    resolved === canonicalizePathForComparison(path.join(stateDir, "workspace")) ||
+    resolved === canonicalizePathForComparison(defaultWorkspaceDir)
   );
 }
 
