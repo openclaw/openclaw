@@ -868,6 +868,41 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("plans thread memory search when the trigger appears outside the last user text", async () => {
+    const server = await startMockServer();
+
+    const responseText = await expectResponsesText(server, {
+      stream: true,
+      instructions:
+        "Runtime context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first.",
+      input: [makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan.")],
+    });
+
+    expect(responseText).toContain('"name":"memory_search"');
+    expect(responseText).toContain("hidden thread codename ORBIT-22");
+  });
+
+  it("answers thread memory prompts after memory tool output", async () => {
+    const server = await startMockServer();
+
+    const response = await expectResponsesJson<Record<string, unknown>>(server, {
+      stream: false,
+      instructions:
+        "Runtime context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first.",
+      input: [
+        makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan."),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({ text: "Thread-hidden codename: ORBIT-22." }),
+        },
+      ],
+    });
+
+    expect(JSON.stringify(response)).toContain(
+      "Protocol note: I checked memory in-thread and the hidden thread codename is ORBIT-22.",
+    );
+  });
+
   it("plans memory tools and serves mock image generations", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

@@ -147,6 +147,10 @@ export async function runGatewayLoop(params: {
     shuttingDown = true;
     const isRestart = action === "restart";
     const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs() : 0;
+    const restartDrainDeadlineAt =
+      isRestart && restartDrainTimeoutMs !== undefined
+        ? Date.now() + restartDrainTimeoutMs
+        : undefined;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -242,6 +246,9 @@ export async function runGatewayLoop(params: {
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
+          ...(isRestart && restartDrainDeadlineAt !== undefined
+            ? { drainTimeoutMs: Math.max(0, restartDrainDeadlineAt - Date.now()) }
+            : {}),
         });
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
