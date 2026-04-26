@@ -17,7 +17,7 @@ All external binaries required by skills must be installed at image build time.
 
 The examples below show three common binaries only:
 
-- `gog` for Gmail access
+- `gog` (from `gogcli`) for Gmail access
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
 
@@ -37,13 +37,19 @@ FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+# Example binary 1: Gmail CLI (gogcli — installs as `gog`)
+ARG GOGCLI_VERSION=0.13.0
+RUN curl -L https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_amd64.tar.gz \
+  | tar -xz -C /tmp \
+  && mv /tmp/gog /usr/local/bin/gog \
+  && chmod +x /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+ARG GOPLACES_VERSION=0.3.0
+RUN curl -L https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_${GOPLACES_VERSION}_linux_amd64.tar.gz \
+  | tar -xz -C /tmp \
+  && mv /tmp/goplaces /usr/local/bin/goplaces \
+  && chmod +x /usr/local/bin/goplaces
 
 # Example binary 3: WhatsApp CLI
 RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
@@ -70,7 +76,7 @@ CMD ["node","dist/index.js"]
 ```
 
 <Note>
-The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace the download URLs with the appropriate ARM64 variants from each tool's release page.
+The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace `linux_amd64` with `linux_arm64` in the gogcli and goplaces URLs (and check the appropriate ARM64 variant for any additional tools from each tool's release page).
 </Note>
 
 ## Build and launch
