@@ -940,6 +940,9 @@ describe("qa mock openai server", () => {
 
     const threadPrompt =
       "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
+    const workshopInstructions =
+      "Review transcript for durable skill updates.\nReturn JSON only. No markdown unless inside JSON strings.";
+
     const res = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -947,8 +950,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        instructions:
-          "Review transcript for durable skill updates.\nReturn JSON only. No markdown unless inside JSON strings.",
+        instructions: workshopInstructions,
         input: [
           {
             role: "user",
@@ -962,6 +964,48 @@ describe("qa mock openai server", () => {
     expect(text).toContain('"name":"memory_search"');
     expect(text).not.toContain('"action":"create"');
     expect(text).not.toContain("animated-gif-workflow");
+
+    const resTextBlocks = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions: workshopInstructions,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "text", text: threadPrompt }],
+          },
+        ],
+      }),
+    });
+    expect(resTextBlocks.status).toBe(200);
+    const textBlocksBody = await resTextBlocks.text();
+    expect(textBlocksBody).toContain('"name":"memory_search"');
+    expect(textBlocksBody).not.toContain('"action":"create"');
+
+    const resStringContent = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions: workshopInstructions,
+        input: [
+          {
+            role: "user",
+            content: threadPrompt,
+          },
+        ],
+      }),
+    });
+    expect(resStringContent.status).toBe(200);
+    const stringContentBody = await resStringContent.text();
+    expect(stringContentBody).toContain('"name":"memory_search"');
+    expect(stringContentBody).not.toContain('"action":"create"');
   });
 
   it("supports advanced QA memory and subagent recovery prompts", async () => {

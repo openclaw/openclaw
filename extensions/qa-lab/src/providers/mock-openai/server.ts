@@ -247,13 +247,42 @@ function buildDeterministicEmbedding(text: string, dimensions = 16) {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
+function extractInputText(content: unknown[]): string {
+  const parts: string[] = [];
+  for (const entry of content) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { type?: unknown; text?: unknown };
+    if (typeof record.text !== "string") {
+      continue;
+    }
+    const type = record.type;
+    if (type === "input_text" || type === "text") {
+      parts.push(record.text);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+/** User `content` may be a plain string or a parts array (input_text and/or text blocks). */
+function extractUserMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return extractInputText(content);
+  }
+  return "";
+}
+
 function extractLastUserText(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
+    if (item.role !== "user") {
       continue;
     }
-    const text = extractInputText(item.content);
+    const text = extractUserMessageText(item.content);
     if (text) {
       return text;
     }
@@ -264,7 +293,10 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 function findLastUserIndex(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item.role === "user" && Array.isArray(item.content)) {
+    if (item.role !== "user") {
+      continue;
+    }
+    if (typeof item.content === "string" || Array.isArray(item.content)) {
       return index;
     }
   }
@@ -282,27 +314,13 @@ function extractToolOutput(input: ResponsesInputItem[]) {
   return "";
 }
 
-function extractInputText(content: unknown[]): string {
-  return content
-    .filter(
-      (entry): entry is { type: "input_text"; text: string } =>
-        !!entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_text" &&
-        typeof (entry as { text?: unknown }).text === "string",
-    )
-    .map((entry) => entry.text)
-    .join("\n")
-    .trim();
-}
-
 function extractAllUserTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
-    if (item.role !== "user" || !Array.isArray(item.content)) {
+    if (item.role !== "user") {
       continue;
     }
-    const text = extractInputText(item.content);
+    const text = extractUserMessageText(item.content);
     if (text) {
       texts.push(text);
     }
@@ -315,6 +333,10 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
   for (const item of input) {
     if (typeof item.output === "string" && item.output.trim()) {
       texts.push(item.output.trim());
+    }
+    if (typeof item.content === "string" && item.content.trim()) {
+      texts.push(item.content.trim());
+      continue;
     }
     if (!Array.isArray(item.content)) {
       continue;
@@ -718,7 +740,10 @@ function buildAssistantText(
   if (/hot install marker/i.test(prompt)) {
     return "HOT-INSTALL-OK";
   }
-  if (/memory tools check/i.test(prompt) && orbitCode) {
+  if (
+    (/memory tools check/i.test(prompt) || /memory tools check/i.test(allInputText)) &&
+    orbitCode
+  ) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
   if (/silent snack recall check/i.test(prompt) && snackPreference) {
@@ -747,10 +772,17 @@ function buildAssistantText(
       "Status: blocked",
     ].join("\n");
   }
-  if (/session memory ranking check/i.test(prompt) && orbitCode) {
+  if (
+    (/session memory ranking check/i.test(prompt) ||
+      /session memory ranking check/i.test(allInputText)) &&
+    orbitCode
+  ) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (
+    (/thread memory check/i.test(prompt) || /thread memory check/i.test(allInputText)) &&
+    orbitCode
+  ) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
@@ -1274,7 +1306,8 @@ async function buildResponsesPayload(
   }
   if (
     QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText) &&
-    !QA_SKILL_WORKSHOP_REVIEW_DEFER_LAST_USER_RE.test(prompt)
+    !QA_SKILL_WORKSHOP_REVIEW_DEFER_LAST_USER_RE.test(prompt) &&
+    !QA_SKILL_WORKSHOP_REVIEW_DEFER_LAST_USER_RE.test(allInputText)
   ) {
     return buildAssistantEvents(
       JSON.stringify({
@@ -1463,7 +1496,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (/thread memory check/i.test(prompt) || /thread memory check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
