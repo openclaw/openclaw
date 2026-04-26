@@ -40,6 +40,7 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
     normalizeTrimmedStringArray(payload.toolsAllow, { allowNull: true }) !== undefined ||
     hasTrimmedStringValue(payload.thinking) ||
     typeof payload.timeoutSeconds === "number" ||
+    typeof payload.runTimeoutSeconds === "number" ||
     typeof payload.lightContext === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
@@ -217,6 +218,14 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("runTimeoutSeconds" in next) {
+    const runTimeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.runTimeoutSeconds);
+    if (runTimeoutSeconds !== undefined) {
+      next.runTimeoutSeconds = runTimeoutSeconds;
+    } else {
+      delete next.runTimeoutSeconds;
+    }
+  }
   if ("fallbacks" in next) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -245,6 +254,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.fallbacks;
     delete next.thinking;
     delete next.timeoutSeconds;
+    delete next.runTimeoutSeconds;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
@@ -374,6 +384,9 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
 
   if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
     payload.timeoutSeconds = next.timeoutSeconds;
+  }
+  if (typeof payload.runTimeoutSeconds !== "number" && typeof next.runTimeoutSeconds === "number") {
+    payload.runTimeoutSeconds = next.runTimeoutSeconds;
   }
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);

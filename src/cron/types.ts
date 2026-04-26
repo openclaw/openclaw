@@ -121,6 +121,15 @@ type CronAgentTurnPayloadFields = {
   fallbacks?: string[];
   thinking?: string;
   timeoutSeconds?: number;
+  /**
+   * Hard wall-clock kill for the entire run, independent of
+   * {@link timeoutSeconds} (which governs the LLM turn budget).
+   *
+   * Defaults to `max(timeoutSeconds * 2, 1800s)` for cron-spawned sessions so a
+   * wedged child can't outlive its parent schedule even if the inner abort is
+   * ignored. See {@link executeJobCoreWithTimeout}.
+   */
+  runTimeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
   /** Immutable external hook provenance for async dispatch. */
   externalContentSource?: HookExternalContentSource;
