@@ -89,4 +89,52 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       modelPrefixes: ["installed-"],
     });
   });
+
+  it("reconstructs bundle candidates with their bundle manifest format", () => {
+    const rootDir = makeTempDir();
+    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Bundle",
+        commands: "commands",
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            pluginId: "claude-bundle",
+            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+            source: rootDir,
+            format: "bundle",
+            bundleFormat: "claude",
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toEqual([]);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({
+        id: "claude-bundle",
+        format: "bundle",
+        bundleFormat: "claude",
+        skills: ["commands"],
+      }),
+    ]);
+  });
 });

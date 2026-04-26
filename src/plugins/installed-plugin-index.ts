@@ -84,6 +84,8 @@ export type InstalledPluginIndexRecord = {
   packageInstall?: PluginInstallSourceInfo;
   manifestPath: string;
   manifestHash: string;
+  format?: PluginManifestRecord["format"];
+  bundleFormat?: PluginManifestRecord["bundleFormat"];
   source?: string;
   setupSource?: string;
   packageJson?: {
@@ -516,6 +518,12 @@ function buildInstalledPluginIndex(
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
+    if (record.format && record.format !== "openclaw") {
+      indexRecord.format = record.format;
+    }
+    if (record.bundleFormat) {
+      indexRecord.bundleFormat = record.bundleFormat;
+    }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }

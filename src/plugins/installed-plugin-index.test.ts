@@ -66,12 +66,16 @@ function createPluginCandidate(params: {
   packageVersion?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  format?: PluginCandidate["format"];
+  bundleFormat?: PluginCandidate["bundleFormat"];
 }): PluginCandidate {
   return {
     idHint: params.idHint ?? "demo",
-    source: path.join(params.rootDir, "index.ts"),
+    source: params.format === "bundle" ? params.rootDir : path.join(params.rootDir, "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin ?? "global",
+    format: params.format,
+    bundleFormat: params.bundleFormat,
     packageName: params.packageName,
     packageVersion: params.packageVersion,
     packageDir: params.packageDir ?? params.rootDir,
@@ -196,6 +200,39 @@ describe("installed plugin index", () => {
     });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
+  });
+
+  it("keeps bundle format metadata needed for manifest reconstruction", () => {
+    const rootDir = makeTempDir();
+    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Bundle",
+        commands: "commands",
+      }),
+      "utf8",
+    );
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "claude-bundle",
+          format: "bundle",
+          bundleFormat: "claude",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "claude-bundle",
+      format: "bundle",
+      bundleFormat: "claude",
+      source: rootDir,
+    });
   });
 
   it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {

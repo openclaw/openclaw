@@ -24,6 +24,8 @@ function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate 
     ...(record.setupSource ? { setupSource: record.setupSource } : {}),
     rootDir: record.rootDir,
     origin: record.origin,
+    ...(record.format ? { format: record.format } : {}),
+    ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
     ...(record.packageName ? { packageName: record.packageName } : {}),
     ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
     packageDir: record.rootDir,
