@@ -86,6 +86,8 @@ export function createCronPromptExecutor(params: {
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
+  deadlineAtMs?: number;
+  fallbackMinRemainingMs?: number;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -115,6 +117,28 @@ export function createCronPromptExecutor(params: {
       runId: params.cronSession.sessionEntry.sessionId,
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
+      beforeAttempt: ({ attempt }) => {
+        const deadlineAtMs = params.deadlineAtMs;
+        const fallbackMinRemainingMs = params.fallbackMinRemainingMs;
+        const hasFallbackTimeBudget =
+          attempt > 1 &&
+          typeof deadlineAtMs === "number" &&
+          Number.isFinite(deadlineAtMs) &&
+          typeof fallbackMinRemainingMs === "number" &&
+          fallbackMinRemainingMs > 0;
+        if (!hasFallbackTimeBudget) {
+          return undefined;
+        }
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs >= fallbackMinRemainingMs) {
+          return undefined;
+        }
+        return {
+          type: "stop" as const,
+          reason: "timeout" as const,
+          error: `Skipping fallback: only ${Math.max(0, remainingMs)}ms remain before cron timeout (need at least ${fallbackMinRemainingMs}ms).`,
+        };
+      },
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -273,6 +297,8 @@ export async function executeCronRun(params: {
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   suppressExecNotifyOnExit: boolean;
+  deadlineAtMs?: number;
+  fallbackMinRemainingMs?: number;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
@@ -305,6 +331,8 @@ export async function executeCronRun(params: {
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
+    deadlineAtMs: params.deadlineAtMs,
+    fallbackMinRemainingMs: params.fallbackMinRemainingMs,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
