@@ -202,8 +202,13 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  const apiKey =
+    !apiKeyInfo.apiKey?.trim() && apiKeyInfo.mode === "aws-sdk"
+      ? ""
+      : requireApiKey(apiKeyInfo, model.provider);
+  if (apiKey) {
+    authStorage.setRuntimeApiKey(model.provider, apiKey);
+  }
   return { apiKey, model };
 }
 
@@ -305,8 +310,10 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     preferredProfile: params.preferredProfile,
     agentDir: params.agentDir,
   });
+  const apiKey =
+    !auth.apiKey?.trim() && auth.mode === "aws-sdk" ? "" : requireApiKey(auth, params.provider);
   return {
-    apiKey: requireApiKey(auth, params.provider),
+    apiKey,
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }

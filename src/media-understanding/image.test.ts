@@ -615,4 +615,57 @@ describe("describeImageWithModel", () => {
     );
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
+
+  it("passes empty apiKey through for amazon-bedrock auth-mode aws-sdk", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "test",
+      mode: "aws-sdk",
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6",
+        api: "anthropic-messages",
+        input: ["text", "image"],
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "bedrock ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "bedrock ok",
+      model: "us.anthropic.claude-sonnet-4-6",
+    });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6",
+      }),
+      expect.anything(),
+      expect.objectContaining({ apiKey: "" }),
+    );
+  });
 });
