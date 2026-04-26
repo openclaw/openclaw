@@ -614,23 +614,24 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
-  const shouldReplayDeferredSessionMessageReload = Boolean(
+  const finalEventNeedsHistoryReload =
+    state === "final" && shouldReloadHistoryForFinalEvent(payload);
+  const shouldResolveDeferredSessionMessageReload = Boolean(
     deferredSessionKey &&
     payloadSessionKey &&
     deferredSessionKey === payloadSessionKey &&
     isTerminalChatState(state) &&
+    !terminalEventIsForDifferentActiveRun &&
     payloadSessionKey === host.sessionKey &&
     !host.chatRunId,
   );
-  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+  const shouldReplayDeferredSessionMessageReload =
+    shouldResolveDeferredSessionMessageReload &&
+    (state !== "final" || finalEventNeedsHistoryReload);
+  if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
-  if (
-    state === "final" &&
-    !historyReloaded &&
-    !terminalEventIsForDifferentActiveRun &&
-    shouldReloadHistoryForFinalEvent(payload)
-  ) {
+  if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

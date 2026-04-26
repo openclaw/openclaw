@@ -23,13 +23,35 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(true);
   });
 
-  it("returns true when final event includes assistant payload", () => {
+  it("returns false when final event includes renderable assistant payload", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
         runId: "run-1",
         sessionKey: "main",
         state: "final",
         message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when final event includes a legacy assistant text payload without role", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent({
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: { text: "done" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when final event includes a silent assistant payload", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent({
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
       }),
     ).toBe(true);
   });
