@@ -169,4 +169,29 @@ describe("resolvePreferredRunAuthProfile", () => {
       preferredProfileIdSource: "user",
     });
   });
+
+  it("lets hooks override a legacy auto auth profile marked by compaction count", () => {
+    expect(
+      resolvePreferredRunAuthProfile({
+        requestedAuthProfileId: "openai-codex:plus",
+        requestedAuthProfileCompactionCount: 2,
+        hookAuthProfileOverride: "openai-codex:pro",
+      }),
+    ).toEqual({
+      preferredProfileId: "openai-codex:pro",
+      preferredProfileIdSource: "auto",
+    });
+  });
+
+  it("preserves a legacy compaction-marked auth profile as automatic without hook input", () => {
+    expect(
+      resolvePreferredRunAuthProfile({
+        requestedAuthProfileId: "openai-codex:plus",
+        requestedAuthProfileCompactionCount: 2,
+      }),
+    ).toEqual({
+      preferredProfileId: "openai-codex:plus",
+      preferredProfileIdSource: "auto",
+    });
+  });
 });

@@ -420,6 +420,7 @@ export async function runEmbeddedPiAgent(
       const { preferredProfileId, preferredProfileIdSource } = resolvePreferredRunAuthProfile({
         requestedAuthProfileId: params.authProfileId,
         requestedAuthProfileIdSource: params.authProfileIdSource,
+        requestedAuthProfileCompactionCount: params.authProfileIdCompactionCount,
         hookAuthProfileOverride: hookSelection.authProfileOverride,
       });
       let lockedProfileId = preferredProfileIdSource === "user" ? preferredProfileId : undefined;

@@ -95,6 +95,8 @@ export type RunEmbeddedPiAgentParams = {
   agentHarnessId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  /** Legacy auto auth-profile marker used before authProfileIdSource was persisted. */
+  authProfileIdCompactionCount?: number;
   thinkLevel?: ThinkLevel;
   fastMode?: boolean;
   verboseLevel?: VerboseLevel;

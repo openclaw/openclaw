@@ -115,15 +115,19 @@ export async function resolveHookModelSelection(params: {
 export function resolvePreferredRunAuthProfile(params: {
   requestedAuthProfileId?: string;
   requestedAuthProfileIdSource?: "auto" | "user";
+  requestedAuthProfileCompactionCount?: number;
   hookAuthProfileOverride?: string;
 }): {
   preferredProfileId?: string;
   preferredProfileIdSource?: "auto" | "user";
 } {
   const requestedProfileId = params.requestedAuthProfileId?.trim() || undefined;
+  const requestedProfileIdSource =
+    params.requestedAuthProfileIdSource ??
+    (typeof params.requestedAuthProfileCompactionCount === "number" ? "auto" : undefined);
   const isUserRequestedProfile =
-    params.requestedAuthProfileIdSource === "user" ||
-    (Boolean(requestedProfileId) && params.requestedAuthProfileIdSource !== "auto");
+    requestedProfileIdSource === "user" ||
+    (Boolean(requestedProfileId) && requestedProfileIdSource !== "auto");
   if (isUserRequestedProfile) {
     return {
       preferredProfileId: requestedProfileId,
@@ -141,7 +145,7 @@ export function resolvePreferredRunAuthProfile(params: {
 
   return {
     preferredProfileId: requestedProfileId,
-    preferredProfileIdSource: requestedProfileId ? params.requestedAuthProfileIdSource : undefined,
+    preferredProfileIdSource: requestedProfileId ? requestedProfileIdSource : undefined,
   };
 }
 
