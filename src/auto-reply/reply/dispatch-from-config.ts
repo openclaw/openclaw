@@ -432,26 +432,38 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg,
-    sessionKey: acpDispatchSessionKey,
-    workspaceDir,
-    messageProvider: deliveryChannel,
-    accountId: replyRoute.accountId,
-    groupId,
-    groupChannel: ctx.GroupChannel,
-    groupSpace: ctx.GroupSpace,
-    requesterSenderId: ctx.SenderId,
-    requesterSenderName: ctx.SenderName,
-    requesterSenderUsername: ctx.SenderUsername,
-    requesterSenderE164: ctx.SenderE164,
-  });
+  let normalizeReplyMediaPaths:
+    | ReturnType<
+        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
+      >
+    | undefined;
+  const getNormalizeReplyMediaPaths = async () => {
+    if (normalizeReplyMediaPaths) {
+      return normalizeReplyMediaPaths;
+    }
+    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+      cfg,
+      sessionKey: acpDispatchSessionKey,
+      workspaceDir,
+      messageProvider: deliveryChannel,
+      accountId: replyRoute.accountId,
+      groupId,
+      groupChannel: ctx.GroupChannel,
+      groupSpace: ctx.GroupSpace,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+    });
+    return normalizeReplyMediaPaths;
+  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    return await normalizeReplyMediaPaths(payload);
+    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
+    return await normalizeReplyMediaPayloadPaths(payload);
   };
 
   const routeReplyToOriginating = async (
