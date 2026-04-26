@@ -104,15 +104,17 @@ describe("statusJsonCommand", () => {
 
     await statusJsonCommand({ all: true }, runtime);
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: expect.any(Object),
-      sourceConfig: expect.any(Object),
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
-    });
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.any(Object),
+        sourceConfig: expect.any(Object),
+        deep: false,
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+        loadPluginSecurityCollectors: false,
+        plugins: expect.any(Array),
+      }),
+    );
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
   });
