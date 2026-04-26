@@ -4,6 +4,7 @@ import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,6 +32,7 @@ import {
   resolveCatalogHookProviderPluginIds,
   resolveExternalAuthProfileCompatFallbackPluginIds,
   resolveExternalAuthProfileProviderPluginIds,
+  resolveOwningPluginIdsForProvider,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
@@ -83,9 +85,51 @@ import type {
 
 const log = createSubsystemLogger("plugins/provider-runtime");
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
+let catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+
+function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+  if (!normalized) {
+    return false;
+  }
+  if (normalizeProviderId(provider.id) === normalized) {
+    return true;
+  }
+  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+    (alias) => normalizeProviderId(alias) === normalized,
+  );
+}
+
+function hasExplicitProviderRuntimePluginActivation(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  if (!params.config) {
+    return true;
+  }
+  const ownerPluginIds =
+    resolveOwningPluginIdsForProvider({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }) ?? [];
+  if (ownerPluginIds.length === 0) {
+    return false;
+  }
+  const allow = new Set(params.config.plugins?.allow ?? []);
+  const entries = params.config.plugins?.entries ?? {};
+  return ownerPluginIds.some((pluginId) => allow.has(pluginId) || entries[pluginId] !== undefined);
+}
 
 function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
+}
+
+function resetCatalogHookProvidersCacheForTest(): void {
+  catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
 }
 
 export {
@@ -102,6 +146,7 @@ export {
 export const __testing = {
   ...providerHookRuntimeTesting,
   resetExternalAuthFallbackWarningCacheForTest,
+  resetCatalogHookProvidersCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -110,19 +155,37 @@ function resolveProviderPluginsForCatalogHooks(params: {
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  let envCache = catalogHookProvidersCache.get(env);
+  if (!envCache) {
+    envCache = new Map<string, ProviderPlugin[]>();
+    catalogHookProvidersCache.set(env, envCache);
+  }
+  const cacheKey = JSON.stringify({
+    workspaceDir: workspaceDir ?? "",
+    plugins: params.config?.plugins ?? null,
+  });
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
-    env: params.env,
+    env,
   });
   if (onlyPluginIds.length === 0) {
+    envCache.set(cacheKey, []);
     return [];
   }
-  return resolveProviderPluginsForHooks({
+  const providers = resolveProviderPluginsForHooks({
     ...params,
     workspaceDir,
+    env,
     onlyPluginIds,
   });
+  envCache.set(cacheKey, providers);
+  return providers;
 }
 
 export function runProviderDynamicModel(params: {
@@ -410,6 +473,7 @@ export function normalizeProviderConfigWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeConfigContext;
+  allowRuntimePluginLoad?: boolean;
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
@@ -418,23 +482,15 @@ export function normalizeProviderConfigWithPlugin(params: {
     const normalized = bundledSurface.normalizeConfig(params.context);
     return normalized && hasConfigChange(normalized) ? normalized : undefined;
   }
-  const matchedPlugin = resolveProviderHookPlugin(params);
+  if (!hasExplicitProviderRuntimePluginActivation(params)) {
+    return undefined;
+  }
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
+  const matchedPlugin = resolveProviderRuntimePlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
-  if (normalizedMatched && hasConfigChange(normalizedMatched)) {
-    return normalizedMatched;
-  }
-
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeConfig || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeConfig(params.context);
-    if (normalized && hasConfigChange(normalized)) {
-      return normalized;
-    }
-  }
-
-  return undefined;
+  return normalizedMatched && hasConfigChange(normalizedMatched) ? normalizedMatched : undefined;
 }
 
 export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
@@ -443,9 +499,13 @@ export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeConfigContext;
+  allowRuntimePluginLoad?: boolean;
 }): ModelProviderConfig | undefined {
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
   return (
-    resolveProviderHookPlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
+    resolveProviderRuntimePlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
     undefined
   );
 }
@@ -456,13 +516,17 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveConfigApiKeyContext;
+  allowRuntimePluginLoad?: boolean;
 }): string | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
   if (bundledSurface?.resolveConfigApiKey) {
     return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
   }
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
   return normalizeOptionalString(
-    resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context),
+    resolveProviderRuntimePlugin(params)?.resolveConfigApiKey?.(params.context),
   );
 }
 
@@ -775,9 +839,34 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(
-    params.context,
-  );
+  const discoveryPluginIds =
+    resolveOwningPluginIdsForProvider({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }) ?? [];
+  const discoveryProvider = (
+    discoveryPluginIds.length > 0
+      ? resolvePluginDiscoveryProvidersRuntime({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          onlyPluginIds: discoveryPluginIds,
+          discoveryEntriesOnly: true,
+        })
+      : []
+  ).find((provider) => matchesProviderPluginRef(provider, params.provider));
+  if (typeof discoveryProvider?.resolveSyntheticAuth === "function") {
+    return discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined;
+  }
+  const runtimeResolved = resolveProviderRuntimePlugin({
+    ...params,
+    applyAutoEnable: false,
+    bundledProviderAllowlistCompat: false,
+    bundledProviderVitestCompat: false,
+    installBundledRuntimeDeps: false,
+  })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
   }

@@ -195,7 +195,7 @@ function resolveRuntimeProviderPluginLoadState(
     env: base.env,
     workspaceDir: base.workspaceDir,
     onlyPluginIds: runtimeRequestedPluginIds,
-    applyAutoEnable: true,
+    applyAutoEnable: params.applyAutoEnable ?? true,
     compatMode: {
       allowlist: params.bundledProviderAllowlistCompat,
       enablement: "allowlist",
@@ -233,6 +233,7 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? true,
       activate: params.activate ?? false,
+      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     },
   );
   return { loadOptions };
@@ -264,6 +265,8 @@ export function resolvePluginProviders(params: {
   modelRefs?: readonly string[];
   activate?: boolean;
   cache?: boolean;
+  applyAutoEnable?: boolean;
+  installBundledRuntimeDeps?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;
