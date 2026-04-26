@@ -5,6 +5,7 @@ import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
+  getCliSessionBindingMock,
   getChannelPluginMock,
   isHeartbeatOnlyResponseMock,
   isCliProviderMock,
@@ -477,6 +478,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    getCliSessionBindingMock.mockReturnValue({
+      sessionId: "existing-cli-session",
+      authProfileId: "anthropic:work",
+      systemPromptHash: "system-hash",
+      mcpConfigHash: "mcp-hash",
+    });
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "sent" }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
@@ -534,6 +541,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    getCliSessionBindingMock.mockReturnValue({
+      sessionId: "existing-cli-session",
+      authProfileId: "anthropic:work",
+      systemPromptHash: "system-hash",
+      mcpConfigHash: "mcp-hash",
+    });
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "sent" }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
@@ -553,6 +566,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         model: "claude-sonnet-4-6",
       },
       cronSession: makeCronSession({
+        isNewSession: false,
         sessionEntry: {
           sessionId: "test-session-id",
           updatedAt: 0,
@@ -573,6 +587,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expect.objectContaining({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
+        cliSessionId: "existing-cli-session",
+        cliSessionBinding: expect.objectContaining({
+          sessionId: "existing-cli-session",
+          authProfileId: "anthropic:work",
+        }),
         senderIsOwner: false,
       }),
     );

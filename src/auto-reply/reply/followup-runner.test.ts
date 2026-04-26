@@ -1121,6 +1121,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
       expect.objectContaining({
         provider: "claude-cli",
         model: "opus",
+        trigger: "user",
         prompt: queued.prompt,
         transcriptPrompt: "visible transcript prompt",
         images,

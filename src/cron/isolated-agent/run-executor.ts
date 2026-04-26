@@ -11,6 +11,7 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
+  getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
@@ -141,9 +142,9 @@ export function createCronPromptExecutor(params: {
               params.cronSession.sessionEntry.agentRuntimeOverride?.trim() || undefined,
           }) ?? providerOverride;
         if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
+          const cliSessionBinding = params.cronSession.isNewSession
             ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, cliExecutionProvider);
+            : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -160,7 +161,8 @@ export function createCronPromptExecutor(params: {
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
-            cliSessionId,
+            cliSessionId: cliSessionBinding?.sessionId,
+            cliSessionBinding,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,

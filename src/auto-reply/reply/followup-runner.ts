@@ -322,6 +322,7 @@ export function createFollowupRunner(params: {
                   sessionId: run.sessionId,
                   sessionKey: run.sessionKey,
                   agentId: run.agentId,
+                  trigger: "user",
                   sessionFile: run.sessionFile,
                   workspaceDir: run.workspaceDir,
                   config: runtimeConfig,

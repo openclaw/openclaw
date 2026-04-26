@@ -25,6 +25,13 @@ export async function getCliSessionId(
   return runtime.getCliSessionId(...args);
 }
 
+export async function getCliSessionBinding(
+  ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionBinding>
+): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionBinding>> {
+  const runtime = await loadCronExecutionCliRuntime();
+  return runtime.getCliSessionBinding(...args);
+}
+
 export async function runCliAgent(
   ...args: Parameters<typeof import("../../agents/cli-runner.js").runCliAgent>
 ): ReturnType<typeof import("../../agents/cli-runner.js").runCliAgent> {

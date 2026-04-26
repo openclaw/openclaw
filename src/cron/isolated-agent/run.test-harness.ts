@@ -54,6 +54,7 @@ export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
+export const getCliSessionBindingMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
@@ -164,6 +165,14 @@ vi.mock("./run-model-selection.runtime.js", () => ({
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
+  getCliSessionBinding: (...args: unknown[]) => {
+    const binding = getCliSessionBindingMock(...args);
+    if (binding !== undefined) {
+      return binding;
+    }
+    const sessionId = getCliSessionIdMock(...args);
+    return sessionId ? { sessionId } : undefined;
+  },
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
@@ -359,6 +368,8 @@ function resetRunExecutionMocks(): void {
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
+  getCliSessionBindingMock.mockReset();
+  getCliSessionBindingMock.mockReturnValue(undefined);
   getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
