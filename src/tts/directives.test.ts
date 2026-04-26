@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { parseTtsDirectives } from "./directives.js";
+import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -165,5 +165,89 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.provider).toBeUndefined();
     expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
     expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+  });
+
+  it("accepts bare tts tags as a tagged-mode trigger", () => {
+    const result = parseTtsDirectives("[[tts]] read this aloud", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe(" read this aloud");
+    expect(result.ttsText).toBeUndefined();
+  });
+
+  it("accepts plain tts blocks as speak-and-show text", () => {
+    const result = parseTtsDirectives("[[tts]]hello world[[/tts]]", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("hello world");
+    expect(result.ttsText).toBe("hello world");
+  });
+
+  it("strips orphan closing tts tags", () => {
+    const result = parseTtsDirectives("spoken content[[/tts:text]]", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("spoken content");
+  });
+
+  it("does not parse tts examples inside markdown code", () => {
+    const input = [
+      "Use `[[tts:text]]` for hidden speech.",
+      "",
+      "```",
+      "[[tts:provider=elevenlabs voice=alloy]]",
+      "```",
+      "",
+      "Then continue normally.",
+    ].join("\n");
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result).toEqual({
+      cleanedText: input,
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    });
+  });
+});
+
+describe("createTtsDirectiveTextStreamCleaner", () => {
+  it("strips directive tags split across streamed chunks", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Hello [[tts:voice=al")).toBe("Hello ");
+    expect(cleaner.push("loy]]world[[/tt")).toBe("world");
+    expect(cleaner.push("s]]")).toBe("");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it("suppresses hidden tts text blocks while preserving normal text", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Shown [[tts:text]]hid")).toBe("Shown ");
+    expect(cleaner.push("den[[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it("keeps plain tts block contents visible", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("[[tts]]read")).toBe("read");
+    expect(cleaner.push(" this[[/tts]] now")).toBe(" this now");
+  });
+
+  it("preserves non-tts bracket markup and flushes incomplete literals", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("See [[note")).toBe("See ");
+    expect(cleaner.flush()).toBe("[[note");
   });
 });

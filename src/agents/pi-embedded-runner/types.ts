@@ -6,9 +6,15 @@ export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  contextTokens?: number;
   agentHarnessId?: string;
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
+  /**
+   * Prompt/context snapshot from the latest model request. Prefer this for
+   * context-window utilization because provider usage totals can include cached
+   * and completion tokens that are useful for billing but noisy as live context.
+   */
   promptTokens?: number;
   usage?: {
     input?: number;

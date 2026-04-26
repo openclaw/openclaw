@@ -11,6 +11,7 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
+import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -389,6 +390,158 @@ function createParallelToolCallsWrapper(
   };
 }
 
+function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  const capabilities = resolveProviderRequestPolicyConfig({
+    provider: typeof model.provider === "string" ? model.provider : undefined,
+    api: model.api,
+    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    compat,
+    capability: "llm",
+    transport: "stream",
+  }).capabilities;
+  return !capabilities.usesKnownNativeOpenAIRoute;
+}
+
+function createOpenAICompletionsStoreCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      delete payloadObj.store;
+    });
+  };
+}
+
+function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sanitizeExtraParamsRecord(value) ?? {}).filter(
+      ([, entry]) => entry !== undefined,
+    ),
+  );
+}
+
+function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> | undefined {
+  if (rawExtraBody === undefined || rawExtraBody === null) {
+    return undefined;
+  }
+  if (typeof rawExtraBody !== "object" || Array.isArray(rawExtraBody)) {
+    const summary = typeof rawExtraBody === "string" ? rawExtraBody : typeof rawExtraBody;
+    log.warn(`ignoring invalid extra_body param: ${summary}`);
+    return undefined;
+  }
+  const extraBody = sanitizeExtraBodyRecord(rawExtraBody as Record<string, unknown>);
+  return Object.keys(extraBody).length > 0 ? extraBody : undefined;
+}
+
+function resolveChatTemplateKwargsParam(
+  rawChatTemplateKwargs: unknown,
+): Record<string, unknown> | undefined {
+  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
+    return undefined;
+  }
+  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
+    const summary =
+      typeof rawChatTemplateKwargs === "string"
+        ? rawChatTemplateKwargs
+        : typeof rawChatTemplateKwargs;
+    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+    return undefined;
+  }
+  const chatTemplateKwargs = sanitizeExtraBodyRecord(
+    rawChatTemplateKwargs as Record<string, unknown>,
+  );
+  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
+}
+
+function isVllmNemotronModel(model: ProviderRuntimeModel): boolean {
+  return (
+    model.api === "openai-completions" &&
+    typeof model.provider === "string" &&
+    model.provider.toLowerCase() === "vllm" &&
+    typeof model.id === "string" &&
+    /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
+  );
+}
+
+function resolveOpenAICompletionsChatTemplateKwargs(params: {
+  model: ProviderRuntimeModel;
+  thinkingLevel?: ThinkLevel;
+  configured?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const defaults =
+    params.thinkingLevel === "off" && isVllmNemotronModel(params.model)
+      ? {
+          enable_thinking: false,
+          force_nonempty_content: true,
+        }
+      : undefined;
+  const merged = {
+    ...defaults,
+    ...params.configured,
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  configured?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+}): StreamFn {
+  const underlying = params.baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const chatTemplateKwargs = resolveOpenAICompletionsChatTemplateKwargs({
+      model: model as ProviderRuntimeModel,
+      thinkingLevel: params.thinkingLevel,
+      configured: params.configured,
+    });
+    if (!chatTemplateKwargs) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const existing = payloadObj.chat_template_kwargs;
+      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+        payloadObj.chat_template_kwargs = {
+          ...(existing as Record<string, unknown>),
+          ...chatTemplateKwargs,
+        };
+        return;
+      }
+      payloadObj.chat_template_kwargs = chatTemplateKwargs;
+    });
+  };
+}
+
+function createOpenAICompletionsExtraBodyWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraBody: Record<string, unknown>,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const collisions = Object.keys(extraBody).filter((key) => Object.hasOwn(payloadObj, key));
+      if (collisions.length > 0) {
+        log.warn(`extra_body overwriting request payload keys: ${collisions.join(", ")}`);
+      }
+      Object.assign(payloadObj, extraBody);
+    });
+  };
+}
+
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
   cfg: OpenClawConfig | undefined;
@@ -455,6 +608,31 @@ function applyPostPluginStreamWrappers(
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
 
+  const rawChatTemplateKwargs = resolveAliasedParamValue(
+    [ctx.effectiveExtraParams, ctx.override],
+    "chat_template_kwargs",
+    "chatTemplateKwargs",
+  );
+  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
+  if (configuredChatTemplateKwargs || ctx.thinkingLevel === "off") {
+    ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      configured: configuredChatTemplateKwargs,
+      thinkingLevel: ctx.thinkingLevel,
+    });
+  }
+
+  const rawExtraBody = resolveAliasedParamValue(
+    [ctx.effectiveExtraParams, ctx.override],
+    "extra_body",
+    "extraBody",
+  );
+  const extraBody = resolveExtraBodyParam(rawExtraBody);
+  if (extraBody) {
+    ctx.agent.streamFn = createOpenAICompletionsExtraBodyWrapper(ctx.agent.streamFn, extraBody);
+  }
+  ctx.agent.streamFn = createOpenAICompletionsStoreCompatWrapper(ctx.agent.streamFn);
+
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
     "parallel_tool_calls",
@@ -494,6 +672,7 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
+  options?: { preparedExtraParams?: Record<string, unknown> },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -507,19 +686,21 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const effectiveExtraParams = resolvePreparedExtraParams({
-    cfg,
-    provider,
-    modelId,
-    extraParamsOverride,
-    thinkingLevel,
-    agentId,
-    agentDir,
-    workspaceDir,
-    resolvedExtraParams,
-    model,
-    resolvedTransport,
-  });
+  const effectiveExtraParams =
+    options?.preparedExtraParams ??
+    resolvePreparedExtraParams({
+      cfg,
+      provider,
+      modelId,
+      extraParamsOverride,
+      thinkingLevel,
+      agentId,
+      agentDir,
+      workspaceDir,
+      resolvedExtraParams,
+      model,
+      resolvedTransport,
+    });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
     cfg,

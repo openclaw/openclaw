@@ -234,6 +234,9 @@ export type LoggingConfig = {
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
+  tracesEndpoint?: string;
+  metricsEndpoint?: string;
+  logsEndpoint?: string;
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;
@@ -244,6 +247,21 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /**
+   * Opt-in raw content capture for OTEL span attributes.
+   * Boolean `true` captures non-system message/tool content; the object form
+   * can enable each content class explicitly.
+   */
+  captureContent?:
+    | boolean
+    | {
+        enabled?: boolean;
+        inputMessages?: boolean;
+        outputMessages?: boolean;
+        toolInputs?: boolean;
+        toolOutputs?: boolean;
+        systemPrompt?: boolean;
+      };
 };
 
 export type DiagnosticsCacheTraceConfig = {

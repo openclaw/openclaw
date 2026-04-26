@@ -139,6 +139,7 @@ The Gateway writes a rolling log file (printed on startup as
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 - `bonjour: watchdog detected non-announced service ...`
+- `bonjour: disabling advertiser after ... failed restarts ...`
 
 ## Debugging on iOS node
 
@@ -155,6 +156,10 @@ The log includes browser state transitions and result‑set changes.
 
 - **Bonjour doesn’t cross networks**: use Tailnet or SSH.
 - **Multicast blocked**: some Wi‑Fi networks disable mDNS.
+- **Advertiser stuck in probing/announcing**: hosts with blocked multicast,
+  container bridges, WSL, or interface churn can leave the ciao advertiser in a
+  non-announced state. OpenClaw retries a few times and then disables Bonjour
+  for the current Gateway process instead of restarting the advertiser forever.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or
   punctuation), then restart the Gateway. The service instance name derives from

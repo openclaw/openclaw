@@ -7,6 +7,9 @@ import {
   isSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
 import { buildChatItems } from "../chat/build-chat-items.ts";
+import { renderChatQueue } from "../chat/chat-queue.ts";
+import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -33,7 +36,6 @@ import {
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
-import { buildSidebarContent } from "../chat/tool-cards.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -42,7 +44,6 @@ import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
-import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -100,6 +101,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -466,60 +468,6 @@ function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
 
-const WELCOME_SUGGESTIONS = [
-  "What can you do?",
-  "Summarize my recent sessions",
-  "Help me configure a channel",
-  "Check system health",
-];
-
-function renderWelcomeState(props: ChatProps): TemplateResult {
-  const name = props.assistantName || "Assistant";
-  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
-  const logoUrl = agentLogoUrl(props.basePath ?? "");
-
-  return html`
-    <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      <div class="agent-chat__welcome-glow"></div>
-      ${avatar
-        ? html`<img
-            src=${avatar}
-            alt=${name}
-            style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
-          />`
-        : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-            <img src=${logoUrl} alt="OpenClaw" />
-          </div>`}
-      <h2>${name}</h2>
-      <div class="agent-chat__badges">
-        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
-      </div>
-      <p class="agent-chat__hint">Type a message below &middot; <kbd>/</kbd> for commands</p>
-      <div class="agent-chat__suggestions">
-        ${WELCOME_SUGGESTIONS.map(
-          (text) => html`
-            <button
-              type="button"
-              class="agent-chat__suggestion"
-              @click=${() => {
-                props.onDraftChange(text);
-                props.onSend();
-              }}
-            >
-              ${text}
-            </button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
-}
-
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
   if (!vs.searchOpen) {
     return nothing;
@@ -750,18 +698,14 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const compactBusy =
+    props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar:
-      resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-        identity: {
-          avatar: props.assistantAvatar ?? undefined,
-          avatarUrl: props.assistantAvatarUrl ?? undefined,
-        },
-      }) ?? null,
+    avatar: resolveAssistantDisplayAvatar(props),
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
@@ -814,6 +758,7 @@ export function renderChat(props: ChatProps) {
     requestUpdate();
   };
   const isEmpty = chatItems.length === 0 && !props.loading;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0;
 
   const thread = html`
     <div
@@ -824,7 +769,7 @@ export function renderChat(props: ChatProps) {
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
-        ${props.loading
+        ${showLoadingSkeleton
           ? html`
               <div class="chat-loading-skeleton" aria-label="Loading chat">
                 <div class="chat-line assistant">
@@ -1110,19 +1055,12 @@ export function renderChat(props: ChatProps) {
                   allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
                   onViewRawText: () => {
-                    if (!props.sidebarContent || !props.onOpenSidebar) {
+                    if (!props.onOpenSidebar) {
                       return;
                     }
-                    if (props.sidebarContent.kind === "markdown") {
-                      props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``),
-                      );
-                      return;
-                    }
-                    if (props.sidebarContent.rawText?.trim()) {
-                      props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``),
-                      );
+                    const rawContent = buildRawSidebarContent(props.sidebarContent);
+                    if (rawContent) {
+                      props.onOpenSidebar(rawContent);
                     }
                   },
                 })}
@@ -1131,65 +1069,20 @@ export function renderChat(props: ChatProps) {
           : nothing}
       </div>
 
-      ${props.queue.length
-        ? html`
-            <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
-              <div class="chat-queue__list">
-                ${props.queue.map(
-                  (item) => html`
-                    <div
-                      class="chat-queue__item ${item.kind === "steered"
-                        ? "chat-queue__item--steered"
-                        : ""}"
-                    >
-                      <div class="chat-queue__main">
-                        ${item.kind === "steered"
-                          ? html`<span class="chat-queue__badge">Steered</span>`
-                          : nothing}
-                        <div class="chat-queue__text">
-                          ${item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
-                        </div>
-                      </div>
-                      <div class="chat-queue__actions">
-                        ${props.canAbort &&
-                        props.onQueueSteer &&
-                        item.kind !== "steered" &&
-                        !item.localCommandName
-                          ? html`
-                              <button
-                                class="btn chat-queue__steer"
-                                type="button"
-                                title="Steer now"
-                                aria-label="Steer queued message"
-                                @click=${() => props.onQueueSteer?.(item.id)}
-                              >
-                                ${icons.cornerDownRight}
-                                <span>Steer</span>
-                              </button>
-                            `
-                          : nothing}
-                        <button
-                          class="btn chat-queue__remove"
-                          type="button"
-                          aria-label="Remove queued message"
-                          @click=${() => props.onQueueRemove(item.id)}
-                        >
-                          ${icons.x}
-                        </button>
-                      </div>
-                    </div>
-                  `,
-                )}
-              </div>
-            </div>
-          `
-        : nothing}
+      ${renderChatQueue({
+        queue: props.queue,
+        canAbort: props.canAbort,
+        onQueueSteer: props.onQueueSteer,
+        onQueueRemove: props.onQueueRemove,
+      })}
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
+      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+        compactBusy,
+        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        onCompact: props.onCompact,
+      })}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

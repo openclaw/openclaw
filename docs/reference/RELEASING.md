@@ -49,6 +49,10 @@ OpenClaw has three public release lanes:
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
+- Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
+  QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
+  span names, bounded attributes, and content/identifier redaction without
+  requiring Opik, Langfuse, or another external collector.
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
@@ -199,6 +203,11 @@ requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
+
+If a maintainer must fall back to local npm authentication, run any 1Password
+CLI (`op`) commands only inside a dedicated tmux session. Do not call `op`
+directly from the main agent shell; keeping it inside tmux makes prompts,
+alerts, and OTP handling observable and prevents repeated host alerts.
 
 ## Public references
 

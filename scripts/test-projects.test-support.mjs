@@ -97,6 +97,7 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-c
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
+const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -215,22 +216,41 @@ const BROAD_CHANGED_RERUN_PATTERNS = [
   /^test\/vitest\/vitest\.(?:config|shared\.config|scoped-config|performance-config)\.ts$/u,
   /^test\/helpers\//u,
 ];
+const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  [
+    "test/helpers/plugins/tts-contract-suites.ts",
+    [
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ],
+  ],
+]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
   [
     "scripts/run-vitest.mjs",
-    ["test/scripts/test-projects.test.ts", "test/scripts/vitest-local-scheduling.test.ts"],
+    [
+      "test/scripts/run-vitest.test.ts",
+      "test/scripts/test-projects.test.ts",
+      "test/scripts/vitest-local-scheduling.test.ts",
+    ],
   ],
+  ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
+  ["scripts/lib/vitest-shard-timings.mjs", ["test/scripts/vitest-shard-timings.test.ts"]],
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
+  ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   [
@@ -239,7 +259,26 @@ const TOOLING_TEST_TARGETS = new Map([
   ],
 ]);
 const SOURCE_TEST_TARGETS = new Map([
+  ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
+  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
+  ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/plugins/provider-auth-choice.ts",
+    ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
+  ],
+  [
+    "src/secrets/provider-env-vars.ts",
+    ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
+  ],
+  [
+    "src/memory-host-sdk/host/embedding-defaults.ts",
+    ["src/memory-host-sdk/host/embeddings.test.ts"],
+  ],
+  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-from-config.ts",
     ["src/auto-reply/reply/dispatch-from-config.test.ts"],
@@ -250,6 +289,11 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/auto-reply/reply/effective-reply-route.test.ts",
       "src/auto-reply/reply/dispatch-from-config.test.ts",
     ],
+  ],
+  ["src/auto-reply/reply/commands-acp.ts", ["src/auto-reply/reply/commands-acp.test.ts"]],
+  [
+    "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+    ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
   ],
 ]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
@@ -487,21 +531,26 @@ function stripChangedArgs(args) {
 
 function shouldKeepBroadChangedRun(changedPaths) {
   return changedPaths.some((changedPath) =>
-    BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
+    PRECISE_SOURCE_TEST_TARGETS.has(changedPath)
+      ? false
+      : BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
   );
 }
 
 function resolveToolingChangedTestTargets(changedPaths) {
   const targets = [];
   for (const changedPath of changedPaths) {
-    const testTargets =
-      TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+    const testTargets = resolveToolingTestTargets(changedPath);
     if (!testTargets) {
       return null;
     }
     targets.push(...testTargets);
   }
   return [...new Set(targets)];
+}
+
+function resolveToolingTestTargets(changedPath) {
+  return TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
 }
 
 function isRoutableChangedTarget(changedPath) {
@@ -530,7 +579,8 @@ export function resolveChangedTestTargetPlan(changedPaths) {
     return { mode: "broad", targets: [] };
   }
   const targets = changedPaths.flatMap((changedPath) => {
-    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    const mappedTargets =
+      resolveToolingTestTargets(changedPath) ?? SOURCE_TEST_TARGETS.get(changedPath);
     if (mappedTargets) {
       return mappedTargets;
     }
@@ -747,7 +797,7 @@ function classifyTarget(arg, cwd) {
   if (relative.startsWith("src/plugins/")) {
     return "plugin";
   }
-  if (relative.startsWith("ui/src/ui/")) {
+  if (relative.startsWith("ui/src/")) {
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {
@@ -774,6 +824,17 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     return includePattern ? [includePattern] : null;
   }
   return null;
+}
+
+function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
+  if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
+    return true;
+  }
+  if (kind !== "ui") {
+    return false;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd);
+  return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
 }
 
 function createVitestArgs(params) {
@@ -956,7 +1017,7 @@ export function buildVitestRunPlans(
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>
-      isVitestConfigTargetForKind(kind, targetArg, cwd),
+      shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
     const includePatterns = useCliTargetArgs
       ? null
@@ -1001,7 +1062,10 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const expandShard =
+      expandToProjectConfigs ||
+      shard.config === FULL_AGENTIC_VITEST_CONFIG ||
+      shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.map((config) => ({
       config,
@@ -1184,6 +1248,10 @@ function filterPlansForContractIncludeFile(plans, env) {
 }
 
 export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
+  if (env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
+    return false;
+  }
+
   if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
     return true;
   }

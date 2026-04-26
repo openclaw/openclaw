@@ -365,6 +365,7 @@ const entry = process.env.OPENCLAW_ENTRY;
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const mode = process.argv[2];
+const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
 const message =
   mode === "reject"
     ? "FORCE_SCHEMA_REJECT"
@@ -403,33 +404,30 @@ function gatewayCall(method, params) {
   }
 }
 
-const sendRes = gatewayCall("chat.send", {
-  sessionKey: "agent:main:main",
+const sendRes = gatewayCall("agent", {
+  sessionKey,
   message,
   thinking: "minimal",
   deliver: false,
-  timeoutMs: 120000,
+  timeout: 180,
   idempotencyKey: id,
 });
 
+if (!sendRes.ok) throw sendRes.error;
+const runId =
+  sendRes.value && typeof sendRes.value === "object" && typeof sendRes.value.runId === "string"
+    ? sendRes.value.runId
+    : id;
+
+const wait = gatewayCall("agent.wait", { runId, timeoutMs: 180000 });
+if (!wait.ok) throw wait.error;
 if (mode === "reject") {
-  if (!sendRes.ok) {
-    console.error(sendRes.error.message);
-  }
+  console.error(JSON.stringify(wait.value));
   process.exit(0);
 }
-
-if (!sendRes.ok) throw sendRes.error;
-
-const deadline = Date.now() + 120000;
-while (Date.now() < deadline) {
-  const history = gatewayCall("chat.history", { sessionKey: "agent:main:main" });
-  if (history.ok && JSON.stringify(history.value).includes("OPENCLAW_SCHEMA_E2E_OK")) {
-    process.exit(0);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 250));
+if (wait.value?.status !== "ok") {
+  throw new Error(`agent run did not complete successfully: ${JSON.stringify(wait.value)}`);
 }
-throw new Error("timed out waiting for OPENCLAW_SCHEMA_E2E_OK in chat history");
 NODE
 
 OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1

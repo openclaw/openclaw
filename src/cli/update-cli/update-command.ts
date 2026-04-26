@@ -42,6 +42,11 @@ import {
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withoutPluginInstallRecords,
+  withPluginInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -57,6 +62,9 @@ import {
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
+import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -575,10 +583,14 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.heading("Updating plugins..."));
   }
 
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const syncResult = await syncPluginsForUpdateChannel({
-    config: params.configSnapshot.sourceConfig,
+    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: params.channel,
     workspaceDir: params.root,
+    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
+      workspaceDir: params.root,
+    }),
     logger: pluginLogger,
   });
   let pluginConfig = syncResult.config;
@@ -615,9 +627,20 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await replaceConfigFile({
-      nextConfig: pluginConfig,
+    const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
+    const nextConfig = withoutPluginInstallRecords(pluginConfig);
+    await commitPluginInstallRecordsWithConfig({
+      previousInstallRecords: pluginInstallRecords,
+      nextInstallRecords,
+      nextConfig,
       baseHash: params.configSnapshot.hash,
+    });
+    await refreshPluginRegistryAfterConfigMutation({
+      config: nextConfig,
+      reason: "source-changed",
+      workspaceDir: params.root,
+      installRecords: nextInstallRecords,
+      logger: pluginLogger,
     });
   }
 
@@ -1112,19 +1135,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
     } else if (packageAlreadyCurrent) {
-      actions.push(`Skip package update; current version already matches ${targetVersion}`);
+      actions.push(
+        `Refresh package install with spec ${packageInstallSpec ?? tag}; current version already matches ${targetVersion}`,
+      );
     } else {
       actions.push(`Run global package manager update with spec ${packageInstallSpec ?? tag}`);
     }
-    if (!packageAlreadyCurrent) {
-      actions.push("Run plugin update sync after core update");
-      actions.push("Refresh shell completion cache (if needed)");
-      actions.push(
-        shouldRestart
-          ? "Restart gateway service and run doctor checks"
-          : "Skip restart (because --no-restart is set)",
-      );
-    }
+    actions.push("Run plugin update sync after core update");
+    actions.push("Refresh shell completion cache (if needed)");
+    actions.push(
+      shouldRestart
+        ? "Restart gateway service and run doctor checks"
+        : "Skip restart (because --no-restart is set)",
+    );
 
     const notes: string[] = [];
     if (opts.tag && updateInstallKind === "git") {
@@ -1193,25 +1216,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
-  }
-
-  if (packageAlreadyCurrent) {
-    const mode = isPackageManagerUpdateMode(updateStatus.packageManager)
-      ? updateStatus.packageManager
-      : "unknown";
-    const result: UpdateRunResult = {
-      status: "skipped",
-      mode,
-      root,
-      reason: "already-current",
-      before: { version: currentVersion },
-      after: { version: currentVersion },
-      steps: [],
-      durationMs: 0,
-    };
-    printResult(result, opts);
-    defaultRuntime.exit(0);
-    return;
   }
 
   if (updateInstallKind === "package") {

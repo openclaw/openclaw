@@ -177,6 +177,10 @@ function clearPendingToolMedia(
   state.pendingToolTrustedLocalMedia = false;
 }
 
+function hasReplyMedia(payload: BlockReplyPayload): boolean {
+  return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
+}
+
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedPiSubscribeState,
@@ -192,6 +196,12 @@ export function consumePendingToolMediaIntoReply(
     !state.pendingToolAudioAsVoice &&
     !state.pendingToolTrustedLocalMedia
   ) {
+    return payload;
+  }
+  if (hasReplyMedia(payload)) {
+    // Pending tool media is a fallback delivery queue; explicit final media is
+    // the assistant's user-visible selection, while tool output remains in the transcript.
+    clearPendingToolMedia(state);
     return payload;
   }
   const mergedMediaUrls = Array.from(
@@ -213,6 +223,20 @@ export function consumePendingToolMediaReply(
     "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
   >,
 ): BlockReplyPayload | null {
+  const payload = readPendingToolMediaReply(state);
+  if (!payload) {
+    return null;
+  }
+  clearPendingToolMedia(state);
+  return payload;
+}
+
+export function readPendingToolMediaReply(
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+  >,
+): BlockReplyPayload | null {
   if (
     state.pendingToolMediaUrls.length === 0 &&
     !state.pendingToolAudioAsVoice &&
@@ -220,15 +244,13 @@ export function consumePendingToolMediaReply(
   ) {
     return null;
   }
-  const payload: BlockReplyPayload = {
+  return {
     mediaUrls: state.pendingToolMediaUrls.length
       ? Array.from(new Set(state.pendingToolMediaUrls))
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
   };
-  clearPendingToolMedia(state);
-  return payload;
 }
 
 function hasReplyDirectiveMetadata(parsed: ReplyDirectiveParseResult | null | undefined): boolean {

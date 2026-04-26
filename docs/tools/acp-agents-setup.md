@@ -8,8 +8,8 @@ title: "ACP agents — setup"
 ---
 
 For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-agents).
-This page covers acpx harness config, plugin setup for the MCP bridges, and
-permission configuration.
+
+The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
 ## acpx harness support (current)
 
@@ -34,6 +34,11 @@ When OpenClaw uses the acpx backend, prefer these values for `agentId` unless yo
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
 
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
+
+Model control is adapter-capability dependent. Codex ACP model refs are
+normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
+`session/set_model` support; if a harness exposes neither that ACP capability
+nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
 
 ## Required config
 
@@ -235,8 +240,9 @@ Restart the gateway after changing this value.
 ### Health probe agent configuration
 
 The bundled `acpx` plugin probes one harness agent while deciding whether the
-embedded runtime backend is ready. It defaults to `codex`. If your deployment
-uses a different default ACP agent, set the probe agent to the same id:
+embedded runtime backend is ready. If `acp.allowedAgents` is set, it defaults to
+the first allowed agent; otherwise it defaults to `codex`. If your deployment
+needs a different ACP agent for health checks, set the probe agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude

@@ -33,6 +33,8 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
+Agents can run the same readiness check with `browser({ action: "doctor" })`.
+
 ## Quick troubleshooting
 
 If `start` fails with `not reachable after start`, troubleshoot CDP readiness first. If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is healthy and the failure is usually navigation SSRF policy.
@@ -40,6 +42,7 @@ If `start` fails with `not reachable after start`, troubleshoot CDP readiness fi
 Minimal sequence:
 
 ```bash
+openclaw browser --browser-profile openclaw doctor
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile openclaw open https://example.com
@@ -51,7 +54,9 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 
 ```bash
 openclaw browser status
+openclaw browser doctor
 openclaw browser start
+openclaw browser start --headless
 openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
@@ -63,6 +68,14 @@ Notes:
   OpenClaw did not launch the browser process itself.
 - For local managed profiles, `openclaw browser stop` stops the spawned browser
   process.
+- `openclaw browser start --headless` applies only to that start request and
+  only when OpenClaw launches a local managed browser. It does not rewrite
+  `browser.headless` or profile config, and it is a no-op for an already-running
+  browser.
+- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
+  run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`,
+  `browser.headless=false`, or `browser.profiles.<name>.headless=false`
+  explicitly requests a visible browser.
 
 ## If the command is missing
 
@@ -111,13 +124,24 @@ openclaw browser --browser-profile work tabs
 
 ```bash
 openclaw browser tabs
-openclaw browser tab new
+openclaw browser tab new --label docs
+openclaw browser tab label t1 docs
 openclaw browser tab select 2
 openclaw browser tab close 2
-openclaw browser open https://docs.openclaw.ai
-openclaw browser focus <targetId>
-openclaw browser close <targetId>
+openclaw browser open https://docs.openclaw.ai --label docs
+openclaw browser focus docs
+openclaw browser close t1
 ```
+
+`tabs` returns `suggestedTargetId` first, then the stable `tabId` such as `t1`,
+the optional label, and the raw `targetId`. Agents should pass
+`suggestedTargetId` back into `focus`, `close`, snapshots, and actions. You can
+assign a label with `open --label`, `tab new --label`, or `tab label`; labels,
+tab ids, raw target ids, and unique target-id prefixes are all accepted.
+When Chromium replaces the underlying raw target during a navigation or form
+submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab
+when it can prove the match. Raw target ids remain volatile; prefer
+`suggestedTargetId`.
 
 ## Snapshot / screenshot / actions
 
@@ -125,6 +149,7 @@ Snapshot:
 
 ```bash
 openclaw browser snapshot
+openclaw browser snapshot --urls
 ```
 
 Screenshot:
@@ -133,6 +158,7 @@ Screenshot:
 openclaw browser screenshot
 openclaw browser screenshot --full-page
 openclaw browser screenshot --ref e12
+openclaw browser screenshot --labels
 ```
 
 Notes:
@@ -141,12 +167,17 @@ Notes:
   or `--element`.
 - `existing-session` / `user` profiles support page screenshots and `--ref`
   screenshots from snapshot output, but not CSS `--element` screenshots.
+- `--labels` overlays current snapshot refs on the screenshot.
+- `snapshot --urls` appends discovered link destinations to AI snapshots so
+  agents can choose direct navigation targets instead of guessing from link
+  text alone.
 
 Navigate/click/type (ref-based UI automation):
 
 ```bash
 openclaw browser navigate https://example.com
 openclaw browser click <ref>
+openclaw browser click-coords 120 340
 openclaw browser type <ref> "hello"
 openclaw browser press Enter
 openclaw browser hover <ref>
@@ -158,6 +189,10 @@ openclaw browser wait --text "Done"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
 ```
 
+Action responses return the current raw `targetId` after action-triggered page
+replacement when OpenClaw can prove the replacement tab. Scripts should still
+store and pass `suggestedTargetId`/labels for long-lived workflows.
+
 File + dialog helpers:
 
 ```bash
@@ -166,6 +201,11 @@ openclaw browser waitfordownload
 openclaw browser download <ref> report.pdf
 openclaw browser dialog --accept
 ```
+
+Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw
+downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp
+root). Use `waitfordownload` or `download` when the agent needs to wait for a
+specific file and return its path; those explicit waiters own the next download.
 
 ## State and storage
 
@@ -224,6 +264,8 @@ This path is host-only. For Docker, headless servers, Browserless, or other remo
 Current existing-session limits:
 
 - snapshot-driven actions use refs, not CSS selectors
+- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when
+  callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only
 - `type` does not support `slowly=true`
 - `press` does not support `delayMs`

@@ -180,6 +180,52 @@ function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return { ...record };
 }
 
+function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
+  // Detached runtimes can report lifecycle times captured before the registry
+  // inserted or restored the row; keep createdAt as the visible lifecycle floor.
+  let createdAt = task.createdAt;
+  for (const candidate of [task.startedAt, task.lastEventAt, task.endedAt]) {
+    if (typeof candidate === "number" && candidate < createdAt) {
+      createdAt = candidate;
+    }
+  }
+
+  const startedAt =
+    typeof task.startedAt === "number" ? Math.max(task.startedAt, createdAt) : task.startedAt;
+  const lastEventAt =
+    typeof task.lastEventAt === "number"
+      ? Math.max(task.lastEventAt, startedAt ?? createdAt)
+      : task.lastEventAt;
+  const endedAt =
+    typeof task.endedAt === "number"
+      ? Math.max(task.endedAt, startedAt ?? createdAt)
+      : task.endedAt;
+
+  if (
+    createdAt === task.createdAt &&
+    startedAt === task.startedAt &&
+    lastEventAt === task.lastEventAt &&
+    endedAt === task.endedAt
+  ) {
+    return task;
+  }
+
+  const normalized: TaskRecord = {
+    ...task,
+    createdAt,
+  };
+  if (typeof startedAt === "number") {
+    normalized.startedAt = startedAt;
+  }
+  if (typeof lastEventAt === "number") {
+    normalized.lastEventAt = lastEventAt;
+  }
+  if (typeof endedAt === "number") {
+    normalized.endedAt = endedAt;
+  }
+  return normalized;
+}
+
 function cloneTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   return {
     ...state,
@@ -861,7 +907,7 @@ function restoreTaskRegistryOnce() {
       return;
     }
     for (const [taskId, task] of restored.tasks.entries()) {
-      tasks.set(taskId, task);
+      tasks.set(taskId, normalizeTaskTimestamps(task));
     }
     for (const [taskId, state] of restored.deliveryStates.entries()) {
       taskDeliveryStates.set(taskId, state);
@@ -889,7 +935,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   if (!current) {
     return null;
   }
-  const next = { ...current, ...patch };
+  const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
     next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
@@ -1453,7 +1499,7 @@ export function createTaskRecord(params: {
     scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
-  const record: TaskRecord = {
+  const record: TaskRecord = normalizeTaskTimestamps({
     taskId,
     runtime: params.runtime,
     taskKind: normalizeOptionalString(params.taskKind),
@@ -1481,7 +1527,7 @@ export function createTaskRecord(params: {
       status,
       terminalOutcome: params.terminalOutcome,
     }),
-  };
+  });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter =
       (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;

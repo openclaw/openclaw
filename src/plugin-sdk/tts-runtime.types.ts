@@ -41,6 +41,8 @@ export type TtsStatusEntry = {
   error?: string;
 };
 
+export type TtsSpeechTarget = "audio-file" | "voice-note";
+
 export type SummarizeResult = {
   summary: string;
   latencyMs: number;
@@ -60,6 +62,7 @@ export type ResolveExplicitTtsOverridesParams = {
   provider?: string;
   modelId?: string;
   voiceId?: string;
+  agentId?: string;
 };
 
 export type TtsRequestParams = {
@@ -70,6 +73,7 @@ export type TtsRequestParams = {
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
   timeoutMs?: number;
+  agentId?: string;
 };
 
 export type TtsTelephonyRequestParams = {
@@ -93,12 +97,19 @@ export type MaybeApplyTtsToPayloadParams = {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentId?: string;
 };
 
 export type TtsTestFacade = {
   parseTtsDirectives: (...args: unknown[]) => TtsDirectiveParseResult;
   resolveModelOverridePolicy: (...args: unknown[]) => ResolvedTtsModelOverrides;
   supportsNativeVoiceNoteTts: (channel: string | undefined) => boolean;
+  supportsTranscodedVoiceNoteTts: (channel: string | undefined) => boolean;
+  shouldDeliverTtsAsVoice: (params: {
+    channel: string | undefined;
+    target: TtsSpeechTarget | undefined;
+    voiceCompatible: boolean | undefined;
+  }) => boolean;
   summarizeText: (...args: unknown[]) => Promise<SummarizeResult>;
   getResolvedSpeechProviderConfig: (
     config: ResolvedTtsConfig,
@@ -120,6 +131,8 @@ export type TtsResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   voiceCompatible?: boolean;
+  audioAsVoice?: boolean;
+  target?: TtsSpeechTarget;
 };
 
 export type TtsSynthesisResult = {
@@ -134,6 +147,7 @@ export type TtsSynthesisResult = {
   outputFormat?: string;
   voiceCompatible?: boolean;
   fileExtension?: string;
+  target?: TtsSpeechTarget;
 };
 
 export type TtsTelephonyResult = {
@@ -157,7 +171,7 @@ export type ListSpeechVoices = (params: ListSpeechVoicesParams) => Promise<Speec
 
 export type TtsRuntimeFacade = {
   _test: TtsTestFacade;
-  buildTtsSystemPromptHint: (cfg: OpenClawConfig) => string | undefined;
+  buildTtsSystemPromptHint: (cfg: OpenClawConfig, agentId?: string) => string | undefined;
   getLastTtsAttempt: () => TtsStatusEntry | undefined;
   getResolvedSpeechProviderConfig: (
     config: ResolvedTtsConfig,
@@ -177,7 +191,7 @@ export type TtsRuntimeFacade = {
   maybeApplyTtsToPayload: (params: MaybeApplyTtsToPayloadParams) => Promise<ReplyPayload>;
   resolveExplicitTtsOverrides: (params: ResolveExplicitTtsOverridesParams) => TtsDirectiveOverrides;
   resolveTtsAutoMode: (params: ResolveTtsAutoModeParams) => TtsAutoMode;
-  resolveTtsConfig: (cfg: OpenClawConfig) => ResolvedTtsConfig;
+  resolveTtsConfig: (cfg: OpenClawConfig, agentId?: string) => ResolvedTtsConfig;
   resolveTtsPrefsPath: (config: ResolvedTtsConfig) => string;
   resolveTtsProviderOrder: (primary: TtsProvider, cfg?: OpenClawConfig) => TtsProvider[];
   setLastTtsAttempt: (entry: TtsStatusEntry | undefined) => void;

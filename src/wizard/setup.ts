@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -47,6 +48,17 @@ function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
 function loadModelPickerModule(): Promise<ModelPickerModule> {
   modelPickerModulePromise ??= import("../commands/model-picker.js");
   return modelPickerModulePromise;
+}
+
+async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawConfig> {
+  const committed = await commitConfigWriteWithPendingPluginInstalls({
+    nextConfig: config,
+    commit: async (nextConfig, writeOptions) =>
+      writeOptions
+        ? await writeConfigFile(nextConfig, writeOptions)
+        : await writeConfigFile(nextConfig),
+  });
+  return committed.config;
 }
 
 async function resolveAuthChoiceModelSelectionPolicy(params: {
@@ -462,12 +474,16 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
+    if (opts.skipBootstrap) {
+      nextConfig = applySkipBootstrapConfig(nextConfig);
+    }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    await writeConfigFile(nextConfig);
+    nextConfig = await writeWizardConfigFile(nextConfig);
     logConfigUpdated(runtime);
     await prompter.outro("Remote gateway configured.");
     return;
@@ -484,8 +500,12 @@ export async function runSetupWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
-  const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
+  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
+    await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | undefined = opts.authChoice;
@@ -647,7 +667,7 @@ export async function runSetupWizard(
     });
   }
 
-  await writeConfigFile(nextConfig);
+  nextConfig = await writeWizardConfigFile(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
@@ -686,7 +706,7 @@ export async function runSetupWizard(
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  nextConfig = await writeWizardConfigFile(nextConfig);
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const { launchedTui } = await finalizeSetupWizard({
