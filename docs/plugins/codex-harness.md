@@ -34,6 +34,7 @@ These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 - `llm_input`, `llm_output`
 - `before_tool_call`, `after_tool_call`
 - `before_message_write` for mirrored transcript records
+- `before_agent_finalize` through Codex `Stop` relay
 - `agent_end`
 
 Plugins can also register runtime-neutral tool-result middleware to rewrite
@@ -583,10 +584,10 @@ The Codex harness has three hook layers:
 
 OpenClaw does not use project or global Codex `hooks.json` files to route
 OpenClaw plugin behavior. For the supported native tool and permission bridge,
-OpenClaw injects per-thread Codex config for `PreToolUse`, `PostToolUse`, and
-`PermissionRequest`. Other Codex hooks such as `SessionStart`,
-`UserPromptSubmit`, and `Stop` remain Codex-level controls; they are not exposed
-as OpenClaw plugin hooks in the v1 contract.
+OpenClaw injects per-thread Codex config for `PreToolUse`, `PostToolUse`,
+`PermissionRequest`, and `Stop`. Other Codex hooks such as `SessionStart` and
+`UserPromptSubmit` remain Codex-level controls; they are not exposed as
+OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for the
 call, so OpenClaw fires the plugin and middleware behavior it owns in the
@@ -622,6 +623,7 @@ Supported in Codex runtime v1:
 | Context engine lifecycle                      | Supported                               | Assemble, ingest or after-turn maintenance, and context-engine compaction coordination run for Codex turns.                                                                                           |
 | Dynamic tool hooks                            | Supported                               | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                            |
 | Lifecycle hooks                               | Supported as adapter observations       | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                             |
+| Final-answer revision gate                    | Supported through the native hook relay | Codex `Stop` is relayed to `before_agent_finalize`; `revise` asks Codex for one more model pass before finalization.                                                                                  |
 | Native shell, patch, and MCP block or observe | Supported through the native hook relay | Codex `PreToolUse` and `PostToolUse` are relayed for committed native tool surfaces, including MCP payloads on Codex app-server `0.125.0` or newer. Blocking is supported; argument rewriting is not. |
 | Native permission policy                      | Supported through the native hook relay | Codex `PermissionRequest` can be routed through OpenClaw policy where the runtime exposes it. If OpenClaw returns no decision, Codex continues through its normal guardian or user approval path.     |
 | App-server trajectory capture                 | Supported                               | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                                                                                      |
@@ -635,7 +637,6 @@ Not supported in Codex runtime v1:
 | `tool_result_persist` for Codex-native tool records | That hook transforms OpenClaw-owned transcript writes, not Codex-native tool records.                                                           | Could mirror transformed records, but canonical rewrite needs Codex support.              |
 | Rich native compaction metadata                     | OpenClaw observes compaction start and completion, but does not receive a stable kept/dropped list, token delta, or summary payload.            | Needs richer Codex compaction events.                                                     |
 | Compaction intervention                             | Current OpenClaw compaction hooks are notification-level in Codex mode.                                                                         | Add Codex pre/post compaction hooks if plugins need to veto or rewrite native compaction. |
-| Stop or final-answer gating                         | Codex has native stop hooks, but OpenClaw does not expose final-answer gating as a v1 plugin contract.                                          | Future opt-in primitive with loop and timeout safeguards.                                 |
 | Byte-for-byte model API request capture             | OpenClaw can capture app-server requests and notifications, but Codex core builds the final OpenAI API request internally.                      | Needs a Codex model-request tracing event or debug API.                                   |
 
 ## Tools, media, and compaction

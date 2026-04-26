@@ -64,6 +64,7 @@ observation-only.
 - `before_prompt_build` — add dynamic context or system-prompt text before the model call
 - `before_agent_start` — compatibility-only combined phase; prefer the two hooks above
 - **`before_agent_reply`** — short-circuit the model turn with a synthetic reply or silence
+- **`before_agent_finalize`** — inspect the natural final answer and request one more model pass
 - `agent_end` — observe final messages, success state, and run duration
 
 **Conversation observation**
@@ -185,7 +186,16 @@ bodies, or provider request IDs. These hooks include stable metadata such as
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
 bounded provider request-id hash.
 
-Non-bundled plugins that need `llm_input`, `llm_output`, or `agent_end` must set:
+`before_agent_finalize` runs only when a harness is about to accept a natural
+final assistant answer. It is not the `/stop` cancellation path and does not
+run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
+the harness for one more model pass before finalization, `{ action:
+"finalize", reason? }` to force finalization, or omit a result to continue.
+Codex native `Stop` hooks are relayed into this hook as OpenClaw
+`before_agent_finalize` decisions.
+
+Non-bundled plugins that need `llm_input`, `llm_output`,
+`before_agent_finalize`, or `agent_end` must set:
 
 ```json
 {
