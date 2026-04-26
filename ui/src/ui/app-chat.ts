@@ -59,6 +59,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
+  querySelector?: (selectors: string) => Element | null;
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId: string; sessionKey: string } | null;
   /** Callback for slash-command side effects that need app-level access. */

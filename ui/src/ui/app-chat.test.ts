@@ -72,6 +72,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Set<string>(),
     updateComplete: Promise.resolve(),
+    querySelector: vi.fn().mockReturnValue(null),
     ...overrides,
   };
 }
