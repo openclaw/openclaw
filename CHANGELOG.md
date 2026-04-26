@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 - Installer: load nvm before Node.js detection so `curl | bash` installs respect nvm-managed Node instead of stale system Node. Fixes #49556. Thanks @heavenlxj.
 - CLI/Volta: respawn raw `openclaw` CLI runs through the named `node` shim when the current Node executable resolves to `volta-shim`, avoiding direct shim execution failures in non-interactive shells. Fixes #68672. Thanks @sanchezm86.
 - Installer: warn when multiple npm global roots contain OpenClaw installs, showing active Node/npm/openclaw plus each install path and version so stale version-manager installs are visible. Fixes #40839. Thanks @zhixianio.
+- Cron/tasks: recover completed cron task ledger records from durable run logs and job state before marking them `lost`, reducing false `backing session missing` audit errors for isolated cron runs and keeping offline CLI audit from treating its empty local cron active-job set as authoritative. Fixes #71963.
 - Docker: copy patched dependency files into runtime images so downstream `pnpm install` layers keep working. Fixes #69224. Thanks @gucasbrg.
 - Agents/runtime: submit heartbeat, cron, and exec wakeups as transient runtime context instead of visible user prompts, keeping synthetic system work out of chat transcripts. Fixes #66496 and #66814. Thanks @jeades and @mandomaker.
 - Telegram: include native quote excerpts automatically for threaded replies and reply tags when the original Telegram text is available, without adding another config knob. Fixes #6975. Thanks @rex05ai.

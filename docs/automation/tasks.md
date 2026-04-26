@@ -25,8 +25,12 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
-- Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
-- Completion is push-driven: detached work can notify directly or wake the requester session/heartbeat when it finishes, so status polling loops are usually the wrong shape.
+- Cron tasks stay live while the cron runtime still owns the job; if the
+  in-memory runtime state is gone, task maintenance first checks durable cron
+  run history before marking a task lost.
+- Completion is push-driven: detached work can notify directly or wake the
+  requester session/heartbeat when it finishes, so status polling loops are
+  usually the wrong shape.
 - Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Isolated cron delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
@@ -143,8 +147,14 @@ Agent run completion is authoritative for active task records. A successful deta
 
 - ACP tasks: backing ACP child session metadata disappeared.
 - Subagent tasks: backing child session disappeared from the target agent store.
-- Cron tasks: the cron runtime no longer tracks the job as active.
-- CLI tasks: isolated child-session tasks use the child session; chat-backed CLI tasks use the live run context instead, so lingering channel/group/direct session rows do not keep them alive. Gateway-backed `openclaw agent` runs also finalize from their run result, so completed runs do not sit active until the sweeper marks them `lost`.
+- Cron tasks: the cron runtime no longer tracks the job as active and durable
+  cron run history does not show a terminal result for that run. Offline CLI
+  audit does not treat its own empty in-process cron runtime state as authority.
+- CLI tasks: isolated child-session tasks use the child session; chat-backed
+  CLI tasks use the live run context instead, so lingering
+  channel/group/direct session rows do not keep them alive. Gateway-backed
+  `openclaw agent` runs also finalize from their run result, so completed runs
+  do not sit active until the sweeper marks them `lost`.
 
 ## Delivery and notifications
 
@@ -236,7 +246,7 @@ openclaw tasks notify <lookup> state_changes
     Reconciliation is runtime-aware:
 
     - ACP/subagent tasks check their backing child session.
-    - Cron tasks check whether the cron runtime still owns the job.
+    - Cron tasks check whether the cron runtime still owns the job, then recover terminal status from persisted cron run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory cron active-job set; offline CLI audit uses durable history but does not mark a cron task lost solely because that local Set is empty.
     - Chat-backed CLI tasks check the owning live run context, not just the chat session row.
 
     Completion cleanup is also runtime-aware:
