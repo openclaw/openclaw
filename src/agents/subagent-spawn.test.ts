@@ -171,6 +171,40 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
+  it("sends the concrete task in the child message payload", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-1" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const task = "TRACE-72019 inspect duplicated subagent task payload";
+    const result = await spawnSubagentDirect(
+      {
+        task,
+        model: "openai-codex/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params?.message).toContain(`[Subagent Task]: ${task}`);
+    expect(agentCall?.params?.extraSystemPrompt).toBe("system-prompt");
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {

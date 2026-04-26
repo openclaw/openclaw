@@ -988,6 +988,20 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("instead of full-file `cat`");
   });
 
+  it("keeps the concrete task out of standing system instructions", () => {
+    const task = "TRACE-72019 investigate duplicated subagent task payload";
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task,
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("task provided in the first user message");
+    expect(prompt).not.toContain(task);
+    expect(prompt).not.toContain("TRACE-72019");
+  });
+
   it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
