@@ -159,6 +159,7 @@ openclaw infer image generate --prompt "cinematic product photo of headphones" -
 openclaw infer image generate --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "simple red circle sticker on a transparent background" --json
 openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 --json
 openclaw infer image edit --file ./logo.png --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "keep the logo, remove the background" --json
+openclaw infer image edit --file ./poster.png --prompt "make this a vertical story ad" --size 2160x3840 --aspect-ratio 9:16 --resolution 4K --json
 openclaw infer image describe --file ./photo.jpg --json
 openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-4.1-mini --json
 openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --json
@@ -167,6 +168,8 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --j
 Notes:
 
 - Use `image edit` when starting from existing input files.
+- Use `--size`, `--aspect-ratio`, or `--resolution` with `image edit` for
+  providers/models that support geometry hints on reference-image edits.
 - Use `--output-format png --background transparent` with
   `--model openai/gpt-image-1.5` for transparent-background OpenAI PNG output;
   `--openai-background` remains available as an OpenAI-specific alias. Providers
