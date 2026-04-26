@@ -25,7 +25,7 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
-import type { ProviderAuthMethod, ProviderAuthOptionBag } from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
 
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -172,6 +172,10 @@ function resolveManifestAuthChoiceScope(params: {
   });
 }
 
+function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
+  return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
+}
+
 export const __testing = {
   resetDepsForTest(): void {
     providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
@@ -274,8 +278,12 @@ export async function applyAuthChoiceLoadedPluginProvider(
     resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   let nextConfig = params.config;
   let enabledConfig = params.config;
-  const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
-    await loadPluginProviderRuntime();
+  const {
+    resolvePluginProviders,
+    resolvePluginSetupProvider,
+    resolveProviderPluginChoice,
+    runProviderModelSelectedHook,
+  } = await loadPluginProviderRuntime();
   const manifestAuthChoice = resolveManifestAuthChoiceScope({
     authChoice: params.authChoice,
     config: nextConfig,
@@ -301,22 +309,43 @@ export async function applyAuthChoiceLoadedPluginProvider(
     enabledConfig = enableResult.config;
   }
 
-  let providers = resolvePluginProviders({
-    config: enabledConfig,
-    workspaceDir,
-    env: params.env,
-    mode: "setup",
-    ...(manifestAuthChoice
-      ? {
-          onlyPluginIds: [manifestAuthChoice.pluginId],
-          providerRefs: [manifestAuthChoice.providerId],
-        }
-      : {}),
-  });
+  const resolveScopedRuntimeProviders = (config: OpenClawConfig): ProviderPlugin[] =>
+    resolvePluginProviders({
+      config,
+      workspaceDir,
+      env: params.env,
+      mode: "setup",
+      ...(manifestAuthChoice
+        ? {
+            onlyPluginIds: [manifestAuthChoice.pluginId],
+            providerRefs: [manifestAuthChoice.providerId],
+          }
+        : {}),
+    });
+
+  const setupProvider = manifestAuthChoice
+    ? resolvePluginSetupProvider({
+        provider: manifestAuthChoice.providerId,
+        config: enabledConfig,
+        workspaceDir,
+        env: params.env,
+        pluginIds: [manifestAuthChoice.pluginId],
+      })
+    : undefined;
+  let providers = setupProvider
+    ? [withProviderPluginId(setupProvider, manifestAuthChoice!.pluginId)]
+    : resolveScopedRuntimeProviders(enabledConfig);
   let resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
   });
+  if (!resolved && setupProvider) {
+    providers = resolveScopedRuntimeProviders(enabledConfig);
+    resolved = resolveProviderPluginChoice({
+      providers,
+      choice: params.authChoice,
+    });
+  }
   if (!resolved && installCatalogEntry) {
     const [{ ensureOnboardingPluginInstalled }, { clearPluginDiscoveryCache }] = await Promise.all([
       import("../commands/onboarding-plugin-install.js"),
@@ -338,18 +367,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     }
     nextConfig = installResult.cfg;
     clearPluginDiscoveryCache();
-    providers = resolvePluginProviders({
-      config: nextConfig,
-      workspaceDir,
-      env: params.env,
-      mode: "setup",
-      ...(manifestAuthChoice
-        ? {
-            onlyPluginIds: [manifestAuthChoice.pluginId],
-            providerRefs: [manifestAuthChoice.providerId],
-          }
-        : {}),
-    });
+    providers = resolveScopedRuntimeProviders(nextConfig);
     resolved = resolveProviderPluginChoice({
       providers,
       choice: params.authChoice,

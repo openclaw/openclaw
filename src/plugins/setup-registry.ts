@@ -153,6 +153,7 @@ function setCachedSetupValue<T>(cache: Map<string, T>, key: string, value: T): v
 }
 
 function buildSetupRegistryCacheKey(params: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -160,18 +161,22 @@ function buildSetupRegistryCacheKey(params: {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
     env: params.env,
+    loadPaths: params.config?.plugins?.load?.paths,
   });
   return JSON.stringify({
     roots,
     loadPaths,
+    hasConfig: Boolean(params.config),
     pluginIds: params.pluginIds ? [...new Set(params.pluginIds)].toSorted() : null,
   });
 }
 
 function buildSetupProviderCacheKey(params: {
   provider: string;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
 }): string {
   return JSON.stringify({
     provider: normalizeProviderId(params.provider),
@@ -181,6 +186,7 @@ function buildSetupProviderCacheKey(params: {
 
 function buildSetupCliBackendCacheKey(params: {
   backend: string;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
@@ -493,12 +499,14 @@ function pushSetupDescriptorDriftDiagnostics(params: {
 }
 
 export function resolvePluginSetupRegistry(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
   const cacheKey = buildSetupRegistryCacheKey({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     pluginIds: params?.pluginIds,
@@ -532,6 +540,7 @@ export function resolvePluginSetupRegistry(params?: {
   const cliBackendKeys = new Set<string>();
 
   const manifestRegistry = loadSetupManifestRegistry({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     pluginIds: params?.pluginIds,
@@ -628,8 +637,10 @@ export function resolvePluginSetupRegistry(params?: {
 
 export function resolvePluginSetupProvider(params: {
   provider: string;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
 }): ProviderPlugin | undefined {
   const cacheKey = buildSetupProviderCacheKey(params);
   const cached = getCachedSetupValue(setupProviderCache, cacheKey);
@@ -640,8 +651,10 @@ export function resolvePluginSetupProvider(params: {
   const env = params.env ?? process.env;
   const normalizedProvider = normalizeProviderId(params.provider);
   const manifestRegistry = loadSetupManifestRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    pluginIds: params.pluginIds,
   });
   const record = findUniqueSetupManifestOwner({
     registry: manifestRegistry,
@@ -697,6 +710,7 @@ export function resolvePluginSetupProvider(params: {
 
 export function resolvePluginSetupCliBackend(params: {
   backend: string;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): SetupCliBackendEntry | undefined {
@@ -713,6 +727,7 @@ export function resolvePluginSetupCliBackend(params: {
   // plugin setup module. This avoids booting every setup-api just to find one
   // backend owner.
   const manifestRegistry = loadSetupManifestRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env,
   });
@@ -786,6 +801,7 @@ export function runPluginSetupConfigMigrations(params: {
   }
 
   for (const entry of resolvePluginSetupRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     pluginIds,
@@ -812,6 +828,7 @@ export function resolvePluginSetupAutoEnableReasons(params: {
   const seen = new Set<string>();
 
   for (const entry of resolvePluginSetupRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env,
     pluginIds: params.pluginIds,
