@@ -3,6 +3,7 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripDowngradedToolCallText,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
@@ -501,6 +502,39 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+});
+
+describe("stripDowngradedToolCallText", () => {
+  it("strips bare OpenAI-style tool_calls JSON while preserving the visible lead-in", () => {
+    const input = [
+      "Aku submit issue-nya sekarang.",
+      '{"tool_calls":[{"function":{"arguments":"{}","name":"process"},"id":"call_1","type":"function"}]}',
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("Aku submit issue-nya sekarang.");
+  });
+
+  it("strips incomplete bare tool_calls JSON fragments to the end of the chunk", () => {
+    expect(
+      stripDowngradedToolCallText(
+        'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}',
+      ),
+    ).toBe("Before");
+  });
+
+  it("preserves bare tool_calls JSON inside fenced and inline code examples", () => {
+    const input = [
+      "Example:",
+      "",
+      "```json",
+      '{"tool_calls":[{"function":{"arguments":"{}","name":"process"},"id":"call_1","type":"function"}]}',
+      "```",
+      "",
+      'Inline `{"tool_calls":[{"function":{"name":"process"}}]}` stays visible.',
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
   });
 });
 
