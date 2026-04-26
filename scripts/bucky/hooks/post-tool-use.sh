@@ -10,87 +10,77 @@ STATE_FILE="/tmp/bucky-tool-state.json"
 
 INPUT=$(cat)
 
-# Extract fields
-TOOL_NAME=$(echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('tool_name', ''))
-" 2>/dev/null)
-
-TOOL_OUTPUT=$(echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-resp = d.get('tool_response', {})
-if isinstance(resp, dict):
-    print(resp.get('output', ''))
-elif isinstance(resp, str):
-    print(resp[:500])
-" 2>/dev/null)
-
-TOOL_INPUT_CMD=$(echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-cmd = d.get('tool_input', {}).get('command', '')
-print(cmd[:100])
-" 2>/dev/null)
-
-# Write state file (bucky-bridge reads this on next tick)
-echo "$INPUT" | python3 -c "
+# Single Python invocation: extract all fields, write state file atomically,
+# and build curl payload (only on detected Bash error). All JSON built in Python
+# so no user-controlled content is interpolated in shell strings.
+CURL_PAYLOAD=$(echo "$INPUT" | python3 -c "
 import sys, json, time, os
-d = json.load(sys.stdin)
-state = {
-  'tool_name': d.get('tool_name', ''),
-  'tool_input': d.get('tool_input', {}),
-  'ts': time.time(),
+
+state_file = sys.argv[1]
+wa_to      = sys.argv[2]
+
+raw = sys.stdin.read(4 * 1024 * 1024)  # cap at 4 MB
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+
+tool_name  = d.get('tool_name', '')
+tool_input = d.get('tool_input', {})
+resp       = d.get('tool_response', {})
+if isinstance(resp, dict):
+    output = resp.get('output', '')[:4096]
+elif isinstance(resp, str):
+    output = resp[:4096]
+else:
+    output = ''
+
+# Atomic state file write
+state = {'tool_name': tool_name, 'tool_input': tool_input, 'ts': time.time()}
+try:
+    tmp = state_file + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(state, f)
+    os.replace(tmp, state_file)
+except Exception:
+    pass
+
+# Only alert on Bash errors
+if tool_name != 'Bash':
+    sys.exit(0)
+
+error_signals = [
+    'error:', 'exit code', 'command not found', 'enoent',
+    'permission denied', 'failed', 'traceback', 'exception',
+    'npm err!', 'syntax error', 'typeerror', 'referenceerror',
+]
+lower = output.lower()
+if not any(sig in lower for sig in error_signals):
+    sys.exit(0)
+
+cmd = tool_input.get('command', '')[:100]
+lines = output.strip().split('\n')
+error_line = next(
+    (l for l in lines if any(x in l.lower() for x in ['error', 'failed', 'exception', 'traceback'])),
+    lines[-1] if lines else 'unknown error',
+)[:150]
+
+msg = f'[Claude Code error]\nCommand: {cmd}\n{error_line}'
+payload = {
+    'tool': 'message',
+    'action': 'send',
+    'args': {'action': 'send', 'target': wa_to, 'message': msg},
 }
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f)
-" 2>/dev/null
+print(json.dumps(payload))
+" "$STATE_FILE" "$WHATSAPP_TO" 2>/dev/null)
 
-# Only alert for Bash errors — check for error patterns in output
-if [ "$TOOL_NAME" = "Bash" ]; then
-  IS_ERROR=$(echo "$TOOL_OUTPUT" | python3 -c "
-import sys
-output = sys.stdin.read().lower()
-error_signals = ['error:', 'exit code', 'command not found', 'enoent',
-                 'permission denied', 'failed', 'traceback', 'exception',
-                 'npm err!', 'syntax error', 'typeerror', 'referenceerror']
-for sig in error_signals:
-    if sig in output:
-        print('yes')
-        break
-else:
-    print('no')
-" 2>/dev/null)
-
-  if [ "$IS_ERROR" = "yes" ]; then
-    ERROR_SUMMARY=$(echo "$TOOL_OUTPUT" | python3 -c "
-import sys
-lines = sys.stdin.read().strip().split('\n')
-# Find first error line
-for line in lines:
-    if any(x in line.lower() for x in ['error', 'failed', 'exception', 'traceback']):
-        print(line[:150])
-        break
-else:
-    print(lines[-1][:150] if lines else 'unknown error')
-" 2>/dev/null)
-
-    MSG="[Claude Code error]
-Command: ${TOOL_INPUT_CMD}
-${ERROR_SUMMARY}"
-
-    MSG_ESCAPED=$(echo "$MSG" | python3 -c "
-import sys, json
-print(json.dumps(sys.stdin.read())[1:-1])
-" 2>/dev/null)
-
-    curl -s -X POST "$BUCKY_URL" \
-      -H "Authorization: Bearer $BUCKY_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"tool\":\"message\",\"action\":\"send\",\"args\":{\"action\":\"send\",\"target\":\"$WHATSAPP_TO\",\"message\":\"$MSG_ESCAPED\"}}" \
-      --connect-timeout 5 --silent &
-  fi
+# Fire curl only when Python produced a payload (detected error)
+if [ -n "$CURL_PAYLOAD" ]; then
+  curl -s -X POST "$BUCKY_URL" \
+    -H "Authorization: Bearer $BUCKY_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$CURL_PAYLOAD" \
+    --connect-timeout 5 --silent &
 fi
 
 exit 0
