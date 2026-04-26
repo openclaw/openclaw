@@ -5,6 +5,7 @@ import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
+import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -113,6 +114,7 @@ export function resolveChannelSetupEntries(params: {
       (entry) =>
         !installedPluginIds.has(entry.id) &&
         !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+        !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
         shouldShowChannelInSetup(entry.meta),
     )
     .map((entry) =>

@@ -56,6 +56,9 @@ Docs: https://docs.openclaw.ai
 - Providers/LiteLLM: register `litellm` as an image-generation provider so `image_generate model=litellm/...` calls and `agents.defaults.imageGenerationModel.fallbacks` entries resolve through the LiteLLM proxy. Thanks @zqchris.
 - Codex harness: require Codex app-server `0.125.0` or newer and cover native MCP `PreToolUse`, `PostToolUse`, and `PermissionRequest` payloads through the OpenClaw hook relay.
 - Agents/Codex: teach prompts and `agents_list` to surface native Codex app-server availability so agents prefer `/codex ...` over Codex ACP unless ACP/acpx is explicit. Thanks @vincentkoc.
+- ACPX/Droid: add Factory Droid to the live ACP bind Docker matrix, including
+  `.factory` settings staging, `FACTORY_API_KEY` forwarding, and the single-agent
+  `test:docker:live-acp-bind:droid` recipe.
 
 ### Fixes
 
@@ -64,6 +67,9 @@ Docs: https://docs.openclaw.ai
   itself for the current Gateway process after repeated failed restarts while
   the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux,
   @FiredMosquito831, and @spikefcz.
+- Gateway/Fly.io: seed Control UI allowed origins from the actual runtime
+  bind and port so CLI-driven non-loopback starts do not crash before config
+  exists. Fixes #71823.
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
@@ -73,6 +79,10 @@ Docs: https://docs.openclaw.ai
 - Plugins/QQ Bot: prefer an installed QQ Bot plugin that declares it replaces
   the bundled `qqbot` channel, preventing duplicate `qqbot_channel_api` and
   `qqbot_remind` tool registration noise. Fixes #63102.
+- Browser automation: keep stable tab ids and labels attached when Chromium
+  replaces the raw target after form submissions or other action-triggered
+  navigations, and return the replacement `targetId` from `/act` when the match
+  is provable. Fixes #46137.
 - QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
   directly for owner-authorized senders instead of returning `cronParams` and
   relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)
@@ -88,6 +98,7 @@ Docs: https://docs.openclaw.ai
   image models keep their `input: ["text", "image"]` capability. Fixes #33185.
   Thanks @Kobe9312 and @vincentkoc.
 - Plugins/install: restore the previous plugin index records if a concurrent config write conflict interrupts install, update, or uninstall metadata commits. Thanks @shakkernerd.
+- Plugins/update: restore previous plugin index records if core update or channel setup hits a concurrent config write conflict after plugin metadata changes. Thanks @shakkernerd.
 - Sessions: keep embedded runtime context out of the visible user prompt by
   sending it as a hidden next-turn custom message, and teach doctor to repair
   affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.

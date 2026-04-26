@@ -103,7 +103,7 @@ Tool params:
 - `task` (required)
 - `label?` (optional)
 - `agentId?` (optional; spawn under another agent id if allowed)
-- `runtime?` (`subagent|acp`, default `subagent`; `acp` is only for external ACP harnesses such as `claude`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx, or for `agents.list[]` entries whose `runtime.type` is `acp`)
+- `runtime?` (`subagent|acp`, default `subagent`; `acp` is only for external ACP harnesses such as `claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx, or for `agents.list[]` entries whose `runtime.type` is `acp`)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, the sub-agent run is aborted after N seconds)

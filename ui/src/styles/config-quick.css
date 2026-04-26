@@ -404,12 +404,6 @@
   fill: currentColor;
 }
 
-.qs-personal-actions {
-  display: flex;
-  gap: 8px;
-  padding: 10px 16px 16px;
-}
-
 .qs-row__chevron svg {
   width: 12px;
   height: 12px;
