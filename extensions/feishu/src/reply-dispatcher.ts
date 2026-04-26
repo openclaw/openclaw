@@ -229,6 +229,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
+  let streamingCloseErroredForReply = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -360,7 +361,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -379,7 +380,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // the streaming card.
         if (streamText) {
           deliveredFinalTexts.add(streamText);
-          streamingClosedForReply = true;
+          if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
+            streamingClosedForReply = true;
+          }
         }
       }
     } finally {
@@ -454,6 +457,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onReplyStart: async () => {
         deliveredFinalTexts.clear();
         streamingClosedForReply = false;
+        streamingCloseErroredForReply = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -472,6 +476,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           info?.kind === "final" &&
           hasText &&
           streamingClosedForReply &&
+          !streamingCloseErroredForReply &&
           streamingEnabled &&
           useCard;
         const shouldDeliverText =
@@ -566,10 +571,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       },
       onError: async (error, info) => {
+        streamingCloseErroredForReply = true;
+        streamingClosedForReply = false;
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await closeStreaming();
+        await closeStreaming({ markClosedForReply: false });
         typingCallbacks?.onIdle?.();
       },
       onIdle: async () => {
