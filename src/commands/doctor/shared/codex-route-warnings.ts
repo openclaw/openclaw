@@ -1,6 +1,6 @@
 import type {
-  AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentRuntimePolicyConfig,
 } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
@@ -44,13 +44,13 @@ function isCodexPluginEnabled(cfg: OpenClawConfig): boolean {
 
 function resolveRuntime(params: {
   env?: NodeJS.ProcessEnv;
-  agentHarness?: AgentEmbeddedHarnessConfig;
-  defaultsHarness?: AgentEmbeddedHarnessConfig;
+  agentRuntime?: AgentRuntimePolicyConfig;
+  defaultsRuntime?: AgentRuntimePolicyConfig;
 }): string {
   return (
     normalizeString(params.env?.OPENCLAW_AGENT_RUNTIME) ??
-    normalizeString(params.agentHarness?.runtime) ??
-    normalizeString(params.defaultsHarness?.runtime) ??
+    normalizeString(params.agentRuntime?.id) ??
+    normalizeString(params.defaultsRuntime?.id) ??
     "pi"
   );
 }
@@ -60,10 +60,10 @@ function collectOpenAICodexPiRouteHits(
   env?: NodeJS.ProcessEnv,
 ): CodexPiRouteHit[] {
   const defaults = cfg.agents?.defaults;
-  const defaultsHarness = defaults?.embeddedHarness;
+  const defaultsRuntime = defaults?.agentRuntime;
   const hits: CodexPiRouteHit[] = [];
   const defaultModel = normalizeModelRef(defaults?.model);
-  const defaultRuntime = resolveRuntime({ env, defaultsHarness });
+  const defaultRuntime = resolveRuntime({ env, defaultsRuntime });
   if (isOpenAICodexModelRef(defaultModel) && defaultRuntime !== "codex") {
     hits.push({ path: "agents.defaults.model", model: defaultModel, runtime: defaultRuntime });
   }
@@ -75,8 +75,8 @@ function collectOpenAICodexPiRouteHits(
     }
     const runtime = resolveRuntime({
       env,
-      agentHarness: agent.embeddedHarness,
-      defaultsHarness,
+      agentRuntime: agent.agentRuntime,
+      defaultsRuntime,
     });
     if (runtime === "codex") {
       continue;
@@ -101,11 +101,11 @@ export function collectCodexRouteWarnings(params: {
   }
   return [
     [
-      "- Codex plugin is enabled, but `openai-codex/*` model refs still use the OpenClaw PI runner unless `embeddedHarness.runtime` is `codex`.",
+      "- Codex plugin is enabled, but `openai-codex/*` model refs still use the OpenClaw PI runner unless `agentRuntime.id` is `codex`.",
       ...hits.map(
         (hit) => `- ${hit.path}: ${hit.model} currently resolves with runtime "${hit.runtime}".`,
       ),
-      '- To use native Codex app-server, set the model to `openai/<model>` and set `agents.defaults.embeddedHarness.runtime: "codex"` (or the agent-level equivalent).',
+      '- To use native Codex app-server, set the model to `openai/<model>` and set `agents.defaults.agentRuntime.id: "codex"` (or the agent-level equivalent).',
       "- Leave this unchanged if you intentionally want Codex OAuth/subscription auth through PI.",
     ].join("\n"),
   ];

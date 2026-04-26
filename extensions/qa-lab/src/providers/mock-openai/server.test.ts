@@ -68,6 +68,7 @@ function makeUserInput(text: string) {
 }
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
+const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const THREAD_SUBAGENT_CHILD_ERROR_TOKEN = "QA_SUBAGENT_CHILD_ERROR";
 const THREAD_SUBAGENT_TOOL_ERROR =
   "thread=true requested but thread delivery is unavailable in this test harness.";
@@ -705,6 +706,75 @@ describe("qa mock openai server", () => {
         mode: "run",
       },
     });
+  });
+
+  it("drives yielded-parent subagent fallback QA through sessions_spawn and sessions_yield", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_spawn",
+      plannedToolArgs: {
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+      },
+    });
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_sessions_spawn_1",
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:qa:subagent:child",
+            runId: "run-child-1",
+          }),
+        },
+      ],
+    });
+
+    expect(body).toContain('"name":"sessions_yield"');
+    expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_yield",
+    });
+  });
+
+  it("returns no visible announce output for the direct fallback QA marker", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "Task: qa-direct-fallback-worker",
+            "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(body.output?.[0]?.content?.[0]?.text).toBe("");
   });
 
   it("surfaces sessions_spawn tool errors instead of echoing child-task tokens", async () => {

@@ -81,6 +81,10 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type HarnessRunLifecycleDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "harness.run.completed" | "harness.run.error" }
+>;
 type TelemetryExporterDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "telemetry.exporter" }
@@ -719,6 +723,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const durationHistogram = meter.createHistogram("openclaw.run.duration_ms", {
         unit: "ms",
         description: "Agent run duration",
+      });
+      const harnessDurationHistogram = meter.createHistogram("openclaw.harness.duration_ms", {
+        unit: "ms",
+        description: "Agent harness lifecycle duration",
       });
       const contextHistogram = meter.createHistogram("openclaw.context.tokens", {
         unit: "1",
@@ -1426,6 +1434,82 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const harnessRunMetricAttrs = (evt: HarnessRunLifecycleDiagnosticEvent) => ({
+        "openclaw.harness.id": lowCardinalityAttr(evt.harnessId, "unknown"),
+        "openclaw.harness.plugin": lowCardinalityAttr(evt.pluginId),
+        "openclaw.outcome": evt.type === "harness.run.error" ? "error" : evt.outcome,
+        "openclaw.provider": lowCardinalityAttr(evt.provider, "unknown"),
+        "openclaw.model": lowCardinalityAttr(evt.model, "unknown"),
+        ...(evt.channel ? { "openclaw.channel": lowCardinalityAttr(evt.channel) } : {}),
+      });
+
+      const recordHarnessRunCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "harness.run.completed" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        harnessDurationHistogram.record(evt.durationMs, harnessRunMetricAttrs(evt));
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...harnessRunMetricAttrs(evt),
+        };
+        if (evt.resultClassification) {
+          spanAttrs["openclaw.harness.result_classification"] = lowCardinalityAttr(
+            evt.resultClassification,
+          );
+        }
+        if (typeof evt.yieldDetected === "boolean") {
+          spanAttrs["openclaw.harness.yield_detected"] = evt.yieldDetected;
+        }
+        if (evt.itemLifecycle) {
+          spanAttrs["openclaw.harness.items.started"] = evt.itemLifecycle.startedCount;
+          spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
+          spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
+        }
+        const span = spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        if (evt.outcome === "error") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: "error",
+          });
+        }
+        span.end(evt.ts);
+      };
+
+      const recordHarnessRunError = (
+        evt: Extract<DiagnosticEventPayload, { type: "harness.run.error" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const errorType = lowCardinalityAttr(evt.errorCategory, "other");
+        const attrs = {
+          ...harnessRunMetricAttrs(evt),
+          "openclaw.harness.phase": evt.phase,
+          "openclaw.errorCategory": errorType,
+        };
+        harnessDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...attrs,
+          "error.type": errorType,
+          ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
+        };
+        const span = spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: errorType,
+        });
+        span.end(evt.ts);
+      };
+
       const recordContextAssembled = (
         evt: Extract<DiagnosticEventPayload, { type: "context.assembled" }>,
         metadata: DiagnosticEventMetadata,
@@ -1746,6 +1830,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "run.completed":
               recordRunCompleted(evt, metadata);
               return;
+            case "harness.run.completed":
+              recordHarnessRunCompleted(evt, metadata);
+              return;
+            case "harness.run.error":
+              recordHarnessRunError(evt, metadata);
+              return;
             case "context.assembled":
               recordContextAssembled(evt, metadata);
               return;
@@ -1781,6 +1871,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.started":
             case "run.started":
+            case "harness.run.started":
             case "model.call.started":
             case "payload.large":
               return;

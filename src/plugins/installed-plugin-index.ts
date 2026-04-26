@@ -69,7 +69,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
 
 export type InstalledPluginPackageChannelInfo = Pick<
   PluginPackageChannel,
-  "id" | "label" | "blurb" | "preferOver"
+  "id" | "label" | "blurb" | "preferOver" | "commands"
 >;
 
 export type InstalledPluginIndexRecord = {
@@ -205,7 +205,10 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: sortUnique(record.activation?.onAgentHarnesses ?? []),
+    agentHarnesses: sortUnique([
+      ...(record.activation?.onAgentHarnesses ?? []),
+      ...(record.cliBackends ?? []),
+    ]),
   };
 }
 
@@ -219,6 +222,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   }
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
+  }
+  if (record.activation?.onAgentHarnesses?.length) {
+    codes.push("activation-agent-harness-hint");
   }
   if (record.activation?.onChannels?.length) {
     codes.push("activation-channel-hint");
@@ -317,11 +323,27 @@ function normalizePackageChannel(
   const label = normalizeStringField(channel?.label);
   const blurb = normalizeStringField(channel?.blurb);
   const preferOver = normalizeStringListField(channel?.preferOver);
+  const commands =
+    channel?.commands &&
+    typeof channel.commands === "object" &&
+    !Array.isArray(channel.commands) &&
+    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
+      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
+      ? {
+          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
+            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
+            : {}),
+          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
+            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
+            : {}),
+        }
+      : undefined;
   return {
     id,
     ...(label ? { label } : {}),
     ...(blurb ? { blurb } : {}),
     ...(preferOver ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
   };
 }
 

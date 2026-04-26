@@ -6,10 +6,12 @@ import type {
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "../tts/provider-types.js";
+import type { TtsConfigResolutionContext } from "../tts/tts-config.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
+export type { TtsConfigResolutionContext };
 export type { TtsDirectiveOverrides, TtsDirectiveParseResult };
 
 export type TtsAttemptReasonCode =
@@ -66,6 +68,8 @@ export type ResolveExplicitTtsOverridesParams = {
   modelId?: string;
   voiceId?: string;
   agentId?: string;
+  channelId?: string;
+  accountId?: string;
 };
 
 export type TtsRequestParams = {
@@ -77,6 +81,7 @@ export type TtsRequestParams = {
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;
+  accountId?: string;
 };
 
 export type TtsTelephonyRequestParams = {
@@ -101,6 +106,7 @@ export type MaybeApplyTtsToPayloadParams = {
   inboundAudio?: boolean;
   ttsAuto?: string;
   agentId?: string;
+  accountId?: string;
 };
 
 export type TtsTestFacade = {
@@ -112,6 +118,8 @@ export type TtsTestFacade = {
     channel: string | undefined;
     target: TtsSpeechTarget | undefined;
     voiceCompatible: boolean | undefined;
+    fileExtension?: string;
+    outputFormat?: string;
   }) => boolean;
   summarizeText: (...args: unknown[]) => Promise<SummarizeResult>;
   getResolvedSpeechProviderConfig: (
@@ -199,7 +207,10 @@ export type TtsRuntimeFacade = {
   maybeApplyTtsToPayload: (params: MaybeApplyTtsToPayloadParams) => Promise<ReplyPayload>;
   resolveExplicitTtsOverrides: (params: ResolveExplicitTtsOverridesParams) => TtsDirectiveOverrides;
   resolveTtsAutoMode: (params: ResolveTtsAutoModeParams) => TtsAutoMode;
-  resolveTtsConfig: (cfg: OpenClawConfig, agentId?: string) => ResolvedTtsConfig;
+  resolveTtsConfig: (
+    cfg: OpenClawConfig,
+    contextOrAgentId?: string | TtsConfigResolutionContext,
+  ) => ResolvedTtsConfig;
   resolveTtsPrefsPath: (config: ResolvedTtsConfig) => string;
   resolveTtsProviderOrder: (primary: TtsProvider, cfg?: OpenClawConfig) => TtsProvider[];
   setLastTtsAttempt: (entry: TtsStatusEntry | undefined) => void;

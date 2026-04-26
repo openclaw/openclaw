@@ -162,10 +162,13 @@ vi.mock("../agents/memory-search.js", () => ({
     mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
-vi.mock("../commands/models.js", () => ({
+vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
+}));
+
+vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -364,7 +367,7 @@ describe("capability cli", () => {
     );
   });
 
-  it("cleans up bundled MCP runtimes for local model runs", async () => {
+  it("runs local model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
@@ -373,13 +376,15 @@ describe("capability cli", () => {
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         cleanupBundleMcpOnRunEnd: true,
+        modelRun: true,
+        promptMode: "none",
       }),
       expect.anything(),
       expect.anything(),
     );
   });
 
-  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
@@ -390,6 +395,8 @@ describe("capability cli", () => {
         method: "agent",
         params: expect.objectContaining({
           cleanupBundleMcpOnRunEnd: true,
+          modelRun: true,
+          promptMode: "none",
         }),
       }),
     );

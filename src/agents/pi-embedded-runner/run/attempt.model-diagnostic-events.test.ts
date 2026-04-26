@@ -105,6 +105,60 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     });
   });
 
+  it("propagates the trusted model-call traceparent without mutating caller headers", async () => {
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const capturedOptions: Array<Parameters<StreamFn>[2]> = [];
+    const callerOptions = {
+      headers: {
+        "X-Custom": "kept",
+        TraceParent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+      },
+      sessionId: "provider-session",
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        _model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        capturedOptions.push(options);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext({
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          spanId: "00f067aa0ba902b7",
+          traceFlags: "01",
+        }),
+        nextCallId: () => "call-traceparent",
+      },
+    );
+
+    await drain(
+      wrapped({} as never, {} as never, callerOptions) as unknown as AsyncIterable<unknown>,
+    );
+
+    expect(capturedOptions).toHaveLength(1);
+    expect(capturedOptions[0]).not.toBe(callerOptions);
+    expect(capturedOptions[0]).toMatchObject({
+      sessionId: "provider-session",
+      headers: {
+        "X-Custom": "kept",
+        traceparent: expect.stringMatching(/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/),
+      },
+    });
+    expect(capturedOptions[0]?.headers).not.toHaveProperty("TraceParent");
+    expect(callerOptions.headers).toEqual({
+      "X-Custom": "kept",
+      TraceParent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+    });
+  });
+
   it("emits error events when stream iteration fails", async () => {
     const requestId = "req_provider_123";
     const stream = {

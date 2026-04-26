@@ -11,16 +11,20 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-import type { loadOpenClawPlugins as loadOpenClawPluginsType } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
+import {
+  isSafeManifestChannelId,
+  normalizeChannelCommandDefaults,
+  readOwnRecordValue,
+  resolveReadOnlyChannelCommandDefaults,
+} from "./read-only-command-defaults.js";
 import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const LOADER_MODULE_CANDIDATES = [
   new URL("../../plugins/loader.js", import.meta.url),
   new URL("../../plugins/loader.ts", import.meta.url),
@@ -28,7 +32,23 @@ const LOADER_MODULE_CANDIDATES = [
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 type PluginLoaderModule = {
-  loadOpenClawPlugins: typeof loadOpenClawPluginsType;
+  loadOpenClawPlugins: (params: {
+    config: OpenClawConfig;
+    activationSourceConfig?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    workspaceDir?: string;
+    cache?: boolean;
+    activate?: boolean;
+    includeSetupOnlyChannelPlugins?: boolean;
+    forceSetupOnlyChannelPlugins?: boolean;
+    requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
+    onlyPluginIds?: readonly string[];
+  }) => {
+    channelSetups: Iterable<{
+      pluginId: string;
+      plugin: ChannelPlugin;
+    }>;
+  };
 };
 
 let pluginLoaderModule: PluginLoaderModule | undefined;
@@ -58,6 +78,7 @@ function loadPluginLoaderModule(): PluginLoaderModule {
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   workspaceDir?: string;
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
@@ -107,17 +128,6 @@ function rebindChannelScopedString(
     return `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`;
   }
   return value;
-}
-
-function isSafeManifestChannelId(channelId: string): boolean {
-  return SAFE_MANIFEST_CHANNEL_ID_PATTERN.test(channelId) && !isBlockedObjectKey(channelId);
-}
-
-function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
-  if (isBlockedObjectKey(key) || !Object.prototype.hasOwnProperty.call(record, key)) {
-    return undefined;
-  }
-  return record[key];
 }
 
 function normalizeManifestText(value: string | undefined, fallback: string): string {
@@ -257,6 +267,9 @@ function buildManifestChannelPlugin(params: {
     channelConfig?.description ?? catalogMeta?.blurb,
     params.record.description || "",
   );
+  const commands = normalizeChannelCommandDefaults(
+    channelConfig?.commands ?? catalogMeta?.commands,
+  );
   return {
     id: params.channelId,
     meta: {
@@ -272,6 +285,7 @@ function buildManifestChannelPlugin(params: {
           : {}),
     },
     capabilities: { chatTypes: ["direct"] },
+    ...(commands ? { commands } : {}),
     ...(channelConfig
       ? {
           configSchema: {
@@ -316,6 +330,8 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
   }
   return record.channelCatalogMeta?.id === channelId;
 }
+
+export { resolveReadOnlyChannelCommandDefaults };
 
 function rebindChannelPluginConfig(
   config: ChannelPlugin["config"],
@@ -607,6 +623,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
   const manifestRecords = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
+    stateDir: options.stateDir,
     workspaceDir,
     env,
     cache: options.cache,

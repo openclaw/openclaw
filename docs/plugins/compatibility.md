@@ -71,7 +71,10 @@ The migration sequence is:
 7. Remove only with explicit breaking-release approval.
 
 Deprecated records must include a warning start date, replacement, docs link,
-and target removal date when known.
+and final removal date no more than three months after the warning starts. Do
+not add a deprecated compatibility path with an open-ended removal window unless
+maintainers explicitly decide it is permanent compatibility and mark it `active`
+instead.
 
 ## Current compatibility areas
 
@@ -79,15 +82,36 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `activate(api)` plugin entrypoints while plugins migrate to
+  `register(api)`
+- legacy SDK aliases such as `openclaw/extension-api`,
+  `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
+  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig`
+  type alias
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
+- legacy provider plugin hooks and type aliases while providers move to
+  explicit catalog, auth, thinking, replay, and transport hooks
+- legacy runtime aliases such as `api.runtime.taskFlow`,
+  `api.runtime.subagent.getSession`, and `api.runtime.stt`
+- legacy memory-plugin split registration while memory plugins move to
+  `registerMemoryCapability`
+- legacy channel SDK helpers for native message schemas, mention gating,
+  inbound envelope formatting, and approval capability nesting
 - activation hints that are being replaced by manifest contribution ownership
-- `embeddedHarness` and `agent-harness` naming aliases while public naming moves
-  toward `agentRuntime`
+- `setup-api` runtime fallback while setup descriptors move to cold
+  `setup.requiresRuntime: false` metadata
+- provider `discovery` hooks while provider catalog hooks move to
+  `catalog.run(...)`
+- channel `showConfigured` / `showInSetup` metadata while channel packages move
+  to `openclaw.channel.exposure`
+- legacy runtime-policy config keys while doctor migrates operators to
+  `agentRuntime`
 - generated bundled channel config metadata fallback while registry-first
   `channelConfigs` metadata lands
-- the persisted plugin registry disable env while repair flows migrate operators
-  to `openclaw plugins registry --refresh` and `openclaw doctor --fix`
+- persisted plugin registry disable and install-migration env flags while
+  repair flows migrate operators to `openclaw plugins registry --refresh` and
+  `openclaw doctor --fix`
 
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path

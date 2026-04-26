@@ -285,11 +285,27 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      BodyForAgent?: string;
+      CommandBody?: string;
+      MediaTranscribedIndexes?: number[];
+      MessageThreadId?: string | number;
+      SessionKey?: string;
+      Transcript?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          BodyForAgent?: string;
+          CommandBody?: string;
+          MediaTranscribedIndexes?: number[];
+          MessageThreadId?: string | number;
+          SessionKey?: string;
+          Transcript?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -656,6 +672,45 @@ describe("processDiscordMessage ack reactions", () => {
 });
 
 describe("processDiscordMessage session routing", () => {
+  it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: { "content-type": "audio/ogg" },
+        }),
+    );
+    const ctx = await createBaseContext({
+      message: {
+        id: "m-audio-preflight",
+        channelId: "c1",
+        content: "",
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-audio-preflight",
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            content_type: "audio/ogg",
+            filename: "voice.ogg",
+          },
+        ],
+      },
+      baseText: "<media:audio>",
+      messageText: "<media:audio>",
+      preflightAudioTranscript: "hello from discord voice",
+      discordRestFetch: fetchImpl,
+      mediaMaxBytes: 1024 * 1024,
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      BodyForAgent: "hello from discord voice",
+      CommandBody: "hello from discord voice",
+      Transcript: "hello from discord voice",
+      MediaTranscribedIndexes: [0],
+    });
+  });
+
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
       ...createDirectMessageContextOverrides(),

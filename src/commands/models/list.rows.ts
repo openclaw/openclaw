@@ -225,19 +225,19 @@ export function appendConfiguredProviderRows(params: {
   }
 }
 
-export function appendManifestCatalogRows(params: {
+export function appendModelCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
   seenKeys: Set<string>;
-  manifestRows: readonly NormalizedModelCatalogRow[];
+  catalogRows: readonly NormalizedModelCatalogRow[];
 }): number {
   let appended = 0;
-  for (const manifestRow of params.manifestRows) {
-    const key = modelKey(manifestRow.provider, manifestRow.id);
+  for (const catalogRow of params.catalogRows) {
+    const key = modelKey(catalogRow.provider, catalogRow.id);
     if (
       appendVisibleRow({
         rows: params.rows,
-        model: toManifestCatalogListModel(manifestRow),
+        model: toManifestCatalogListModel(catalogRow),
         key,
         context: params.context,
         seenKeys: params.seenKeys,
@@ -248,6 +248,18 @@ export function appendManifestCatalogRows(params: {
     }
   }
   return appended;
+}
+
+export function appendManifestCatalogRows(params: {
+  rows: ModelRow[];
+  context: RowBuilderContext;
+  seenKeys: Set<string>;
+  manifestRows: readonly NormalizedModelCatalogRow[];
+}): number {
+  return appendModelCatalogRows({
+    ...params,
+    catalogRows: params.manifestRows,
+  });
 }
 
 export async function appendCatalogSupplementRows(params: {

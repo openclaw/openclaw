@@ -312,7 +312,11 @@ export const ModelDefinitionSchema = z
     api: ModelApiSchema.optional(),
     baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z
+      .array(
+        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
+      )
+      .optional(),
     cost: z
       .object({
         input: z.number().optional(),
