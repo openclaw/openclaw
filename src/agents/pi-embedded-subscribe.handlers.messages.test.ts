@@ -536,6 +536,35 @@ describe("handleMessageUpdate", () => {
     expect(ctx.state.blockBuffer).toBe("");
   });
 
+  it("withholds bare tool_calls JSON from partial replies before preview delivery", () => {
+    const onPartialReply = vi.fn();
+    const ctx = createMessageUpdateContext({ onPartialReply });
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: 'Aku submit issue-nya sekarang.\n{"tool_calls":[{"function":{"arguments":"{}","name":"process"}',
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Aku submit issue-nya sekarang.",
+      delta: "Aku submit issue-nya sekarang.",
+    });
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: ',"id":"call_1","type":"function"}]}',
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses commentary partials even when they contain visible text", () => {
     const onAgentEvent = vi.fn();
     const ctx = createMessageUpdateContext({

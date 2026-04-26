@@ -16,6 +16,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeStreamingBareToolCallJsonText } from "../shared/text/assistant-visible-text.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -554,7 +555,9 @@ export function handleMessageUpdate(
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
     const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
-    const cleanedText = parsedFull.text;
+    const cleanedText = sanitizeStreamingBareToolCallJsonText(parsedFull.text, {
+      final: evtType === "text_end",
+    });
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";

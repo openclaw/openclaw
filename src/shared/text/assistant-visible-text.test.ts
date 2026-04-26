@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
+  sanitizeStreamingBareToolCallJsonText,
   stripAssistantInternalScaffolding,
   stripDowngradedToolCallText,
 } from "./assistant-visible-text.js";
@@ -515,10 +516,10 @@ describe("stripDowngradedToolCallText", () => {
     expect(stripDowngradedToolCallText(input)).toBe("Aku submit issue-nya sekarang.");
   });
 
-  it("preserves incomplete bare tool_calls JSON fragments", () => {
+  it("strips incomplete bare tool_calls JSON fragments as defense in depth", () => {
     const input = 'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}';
 
-    expect(stripDowngradedToolCallText(input)).toBe(input);
+    expect(stripDowngradedToolCallText(input)).toBe("Before");
   });
 
   it("preserves no-op bare JSON scans without trimming history whitespace", () => {
@@ -550,6 +551,36 @@ describe("stripDowngradedToolCallText", () => {
     ].join("\n");
 
     expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves inline tool_calls-shaped JSON that is not a standalone payload", () => {
+    const input =
+      'Example: {"tool_calls":[{"function":{"arguments":"{}","name":"process"},"id":"call_1","type":"function"}]}';
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+});
+
+describe("sanitizeStreamingBareToolCallJsonText", () => {
+  it("withholds incomplete standalone JSON during partial preview streaming", () => {
+    const input = 'Before\n{"tool_calls":[{"function":{"name":"process","arguments":"{}"}';
+
+    expect(sanitizeStreamingBareToolCallJsonText(input)).toBe("Before");
+  });
+
+  it("drops complete standalone tool_calls JSON during partial preview streaming", () => {
+    const input = [
+      "Before",
+      '{"tool_calls":[{"function":{"arguments":"{}","name":"process"},"id":"call_1","type":"function"}]}',
+    ].join("\n");
+
+    expect(sanitizeStreamingBareToolCallJsonText(input)).toBe("Before");
+  });
+
+  it("releases ordinary standalone JSON once it is complete", () => {
+    const input = ["Before", '{"tool":"not a tool call","value":1}'].join("\n");
+
+    expect(sanitizeStreamingBareToolCallJsonText(input)).toBe(input);
   });
 });
 
