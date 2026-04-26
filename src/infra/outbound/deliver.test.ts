@@ -1008,6 +1008,119 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
   });
 
+  it("ignores configured fs roots for sandboxed outbound media delivery", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const sandboxStateDir = path.join("/tmp", "openclaw-sandbox-deliver-media-roots");
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "whatsapp",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, mediaReadFile }) =>
+                await sendWhatsApp(to, text, {
+                  mediaUrl,
+                  mediaLocalRoots,
+                  mediaReadFile,
+                }),
+            },
+          }),
+        },
+      ]),
+    );
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", sandboxStateDir);
+
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: { whatsapp: {} },
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+            },
+          },
+        },
+      },
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [
+        {
+          text: "hi",
+          mediaUrl: path.join(sandboxStateDir, "sandboxes", "main", "image.png"),
+        },
+      ],
+      deps: { whatsapp: sendWhatsApp },
+      session: { key: "agent:main:main", agentId: "main" },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([path.join(sandboxStateDir, "sandboxes")]),
+      }),
+    );
+    const sendOpts = sendWhatsApp.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendOpts?.mediaLocalRoots).not.toContain(path.resolve("/packs/shared"));
+  });
+
+  it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "imessage",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "imessage",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, mediaReadFile }) =>
+                await sendIMessage(to, text, {
+                  mediaUrl,
+                  mediaLocalRoots,
+                  mediaReadFile,
+                }),
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "imessage:+15551234567",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { imessage: sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "imessage:+15551234567",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
+      }),
+    );
+  });
+
   it("respects newline chunk mode for plugin text", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const cfg: OpenClawConfig = {

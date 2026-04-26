@@ -166,7 +166,7 @@ function buildTelegramSendOptions(params: {
     verbose: false,
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaLocalRoots == null ? {} : { mediaLocalRoots: params.mediaLocalRoots }),
     messageThreadId: parseTelegramThreadId(params.threadId),
     replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
     accountId: params.accountId ?? undefined,

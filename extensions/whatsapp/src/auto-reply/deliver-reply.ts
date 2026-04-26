@@ -26,6 +26,7 @@ export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxMediaBytes: number;
   textLimit: number;
   chunkMode?: ChunkMode;
@@ -124,6 +125,7 @@ export async function deliverWebReply(params: {
         await loadWebMedia(mediaUrl, {
           maxBytes: maxMediaBytes,
           localRoots: params.mediaLocalRoots,
+          readFile: params.mediaReadFile,
         }),
         mediaUrl,
       );

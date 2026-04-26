@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
   withBundleHomeEnv,
 } from "../plugins/bundle-mcp.test-support.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) =>
+  importOriginal<typeof import("../plugins/plugin-registry.js")>(),
+);
 
 const tempHarness = createBundleMcpTempHarness();
 

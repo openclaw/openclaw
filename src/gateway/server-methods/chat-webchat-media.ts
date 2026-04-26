@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
-import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
+import {
+  assertLocalMediaAllowed,
+  LocalMediaAccessError,
+  type LocalMediaRoot,
+} from "../../media/local-media-access.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -35,7 +39,7 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 type WebchatAudioEmbeddingOptions = {
-  localRoots?: readonly string[];
+  localRoots?: readonly LocalMediaRoot[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 

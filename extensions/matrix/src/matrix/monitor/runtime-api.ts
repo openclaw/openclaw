@@ -20,7 +20,10 @@ export {
   createTypingCallbacks,
 } from "openclaw/plugin-sdk/channel-reply-options-runtime";
 export { formatLocationText, toLocationContext } from "openclaw/plugin-sdk/channel-location";
-export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
+export {
+  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
 export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export {

@@ -198,9 +198,13 @@ describe("discord native /status", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(runtimeModuleMocks.loadWebMedia).toHaveBeenCalledWith("https://example.com/status.png", {
-      localRoots: expect.any(Array),
-    });
+    expect(runtimeModuleMocks.loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/status.png",
+      expect.objectContaining({
+        localRoots: expect.any(Array),
+        readFile: expect.any(Function),
+      }),
+    );
     expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
     expect(interaction.followUp.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({

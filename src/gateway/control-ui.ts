@@ -14,8 +14,15 @@ import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
-import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import {
+  assertLocalMediaAllowed,
+  getDefaultLocalRoots,
+  type LocalMediaRoot,
+} from "../media/local-media-access.js";
+import {
+  getAgentScopedMediaLocalRootEntries,
+  getAgentScopedMediaLocalRoots,
+} from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
@@ -425,7 +432,7 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
 
 async function resolveAssistantMediaAvailability(
   source: string,
-  localRoots: readonly string[],
+  localRoots: readonly LocalMediaRoot[],
 ): Promise<AssistantMediaAvailability> {
   try {
     const localPath = await resolveMediaReferenceLocalPath(source);
@@ -478,7 +485,7 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   const localRoots = opts?.config
-    ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
+    ? getAgentScopedMediaLocalRootEntries(opts.config, opts.agentId)
     : getDefaultLocalRoots();
 
   if (url.searchParams.get("meta") === "1") {

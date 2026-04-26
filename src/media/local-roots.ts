@@ -2,18 +2,30 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
-  resolveEffectiveToolFsWorkspaceOnly,
+  resolveToolFsConfig,
 } from "../agents/tool-fs-policy.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { type LocalMediaRoot, resolveLocalMediaRootPath } from "./local-media-root.js";
 import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
+};
+
+type AgentScopedMediaRootsOptions = {
+  ignoreConfiguredRoots?: boolean;
+};
+
+type AgentScopedMediaRootsForSourcesParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  mediaSources?: readonly string[];
+  ignoreConfiguredRoots?: boolean;
 };
 
 let cachedPreferredTmpDir: string | undefined;
@@ -51,10 +63,19 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
-export function getAgentScopedMediaLocalRoots(
+function getAgentScopedMediaLocalRootsInternal(
   cfg: OpenClawConfig,
   agentId?: string,
-): readonly string[] {
+  options?: AgentScopedMediaRootsOptions,
+): readonly LocalMediaRoot[] {
+  const fsConfig = resolveToolFsConfig({ cfg, agentId });
+  if (!options?.ignoreConfiguredRoots && fsConfig.roots !== undefined) {
+    return fsConfig.roots.map((root) => ({
+      path: path.resolve(root.path),
+      kind: root.kind,
+      access: root.access,
+    }));
+  }
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
@@ -69,6 +90,20 @@ export function getAgentScopedMediaLocalRoots(
     roots.push(normalizedWorkspaceDir);
   }
   return roots;
+}
+
+export function getAgentScopedMediaLocalRootEntries(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): readonly LocalMediaRoot[] {
+  return getAgentScopedMediaLocalRootsInternal(cfg, agentId);
+}
+
+export function getAgentScopedMediaLocalRoots(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): readonly string[] {
+  return getAgentScopedMediaLocalRootsInternal(cfg, agentId).map(resolveLocalMediaRootPath);
 }
 
 function resolveLocalMediaPath(source: string): string | undefined {
@@ -86,7 +121,10 @@ function resolveLocalMediaPath(source: string): string | undefined {
   if (trimmed.startsWith("~")) {
     return resolveUserPath(trimmed);
   }
-  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
+  if (
+    path.isAbsolute(trimmed) ||
+    (process.platform === "win32" && WINDOWS_DRIVE_RE.test(trimmed))
+  ) {
     return path.resolve(trimmed);
   }
   return undefined;
@@ -96,7 +134,31 @@ export function appendLocalMediaParentRoots(
   roots: readonly string[],
   mediaSources?: readonly string[],
 ): string[] {
-  const appended = Array.from(new Set(roots.map((root) => path.resolve(root))));
+  return appendLocalMediaParentRootEntries(roots, mediaSources).map(resolveLocalMediaRootPath);
+}
+
+function normalizeLocalMediaRoot(root: LocalMediaRoot): LocalMediaRoot {
+  if (typeof root === "string") {
+    return path.resolve(root);
+  }
+  return { ...root, path: path.resolve(root.path) };
+}
+
+export function appendLocalMediaParentRootEntries(
+  roots: readonly LocalMediaRoot[],
+  mediaSources?: readonly string[],
+): LocalMediaRoot[] {
+  const appended = Array.from(
+    new Map(
+      roots.map((root) => {
+        const normalized = normalizeLocalMediaRoot(root);
+        return [resolveLocalMediaRootPath(normalized), normalized] as const;
+      }),
+    ).values(),
+  );
+  const appendedPaths = new Set(
+    appended.map((root) => path.resolve(resolveLocalMediaRootPath(root))),
+  );
   for (const source of mediaSources ?? []) {
     const localPath = resolveLocalMediaPath(source);
     if (!localPath) {
@@ -107,24 +169,36 @@ export function appendLocalMediaParentRoots(
       continue;
     }
     const normalizedParent = path.resolve(parentDir);
-    if (!appended.includes(normalizedParent)) {
+    if (!appendedPaths.has(normalizedParent)) {
       appended.push(normalizedParent);
+      appendedPaths.add(normalizedParent);
     }
   }
   return appended;
 }
 
-export function getAgentScopedMediaLocalRootsForSources(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  mediaSources?: readonly string[];
-}): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
+export function getAgentScopedMediaLocalRootEntriesForSources(
+  params: AgentScopedMediaRootsForSourcesParams,
+): readonly LocalMediaRoot[] {
+  const fsConfig = resolveToolFsConfig({ cfg: params.cfg, agentId: params.agentId });
+  const roots = getAgentScopedMediaLocalRootsInternal(params.cfg, params.agentId, {
+    ignoreConfiguredRoots: params.ignoreConfiguredRoots,
+  });
+  if (fsConfig.roots !== undefined && !params.ignoreConfiguredRoots) {
     return roots;
+  }
+  const fallbackRoots = [...roots];
+  if (fsConfig.workspaceOnly) {
+    return fallbackRoots;
   }
   if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
+    return fallbackRoots;
   }
-  return appendLocalMediaParentRoots(roots, params.mediaSources);
+  return appendLocalMediaParentRootEntries(fallbackRoots, params.mediaSources);
+}
+
+export function getAgentScopedMediaLocalRootsForSources(
+  params: AgentScopedMediaRootsForSourcesParams,
+): readonly string[] {
+  return getAgentScopedMediaLocalRootEntriesForSources(params).map(resolveLocalMediaRootPath);
 }

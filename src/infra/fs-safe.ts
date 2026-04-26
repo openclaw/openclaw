@@ -10,7 +10,7 @@ import { logWarn } from "../logger.js";
 import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { isPinnedPathHelperSpawnError, runPinnedPathHelper } from "./fs-pinned-path-helper.js";
-import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
+import { runPinnedUnlinkHelper, runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "./path-alias-guards.js";
 import {
@@ -93,6 +93,31 @@ const OPEN_APPEND_CREATE_FLAGS =
   (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
+
+async function resolveRootDirStrict(rootDir: string): Promise<string> {
+  try {
+    return path.resolve(await fs.realpath(rootDir));
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      throw new SafeOpenError("not-found", "root dir not found");
+    }
+    throw err;
+  }
+}
+
+async function resolveRootDirForWrite(rootDir: string): Promise<string> {
+  try {
+    return path.resolve(await fs.realpath(rootDir));
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      // For writes with mkdir, the root may not exist yet.
+      // Use the lexical path rather than falling back to an existing ancestor,
+      // which would broaden the boundary.
+      return path.resolve(rootDir);
+    }
+    throw err;
+  }
+}
 
 async function expandRelativePathWithHome(relativePath: string): Promise<string> {
   let home = process.env.HOME || process.env.USERPROFILE || os.homedir();
@@ -207,16 +232,12 @@ async function openVerifiedLocalFile(
 async function resolvePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  mode?: "read" | "write";
 }): Promise<{ rootReal: string; rootWithSep: string; resolved: string }> {
-  let rootReal: string;
-  try {
-    rootReal = await fs.realpath(params.rootDir);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "root dir not found");
-    }
-    throw err;
-  }
+  const rootReal =
+    params.mode === "write"
+      ? await resolveRootDirForWrite(params.rootDir)
+      : await resolveRootDirStrict(params.rootDir);
   const rootWithSep = ensureTrailingSep(rootReal);
   const expanded = await expandRelativePathWithHome(params.relativePath);
   const resolved = path.resolve(rootWithSep, expanded);
@@ -503,7 +524,10 @@ export async function openWritableFileWithinRoot(params: {
   truncateExisting?: boolean;
   append?: boolean;
 }): Promise<SafeWritableOpenResult> {
-  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot({
+    ...params,
+    mode: "write",
+  });
   try {
     await assertNoPathAliasEscape({
       absolutePath: resolved,
@@ -727,6 +751,10 @@ export async function writeFileWithinRoot(params: {
     rootDir: params.rootDir,
     relativePath: params.relativePath,
   });
+  await ensurePinnedWriteRootDir({
+    rootReal: pinned.rootReal,
+    mkdir: params.mkdir !== false,
+  });
 
   const identity = await runPinnedWriteHelper({
     rootPath: pinned.rootReal,
@@ -784,6 +812,10 @@ export async function copyFileWithinRoot(params: {
       rootDir: params.rootDir,
       relativePath: params.relativePath,
     });
+    await ensurePinnedWriteRootDir({
+      rootReal: pinned.rootReal,
+      mkdir: params.mkdir !== false,
+    });
     const sourceStream = source.handle.createReadStream();
     const identity = await runPinnedWriteHelper({
       rootPath: pinned.rootReal,
@@ -828,6 +860,37 @@ export async function writeFileFromPathWithinRoot(params: {
   });
 }
 
+export async function removeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    await removeFileWithinRootLegacy(params);
+    return;
+  }
+
+  const pinned = await resolvePinnedDeleteTargetWithinRoot(params);
+  try {
+    await runPinnedUnlinkHelper({
+      rootPath: pinned.rootReal,
+      relativeParentPath: pinned.relativeParentPath,
+      basename: pinned.basename,
+    });
+  } catch (error) {
+    throw normalizePinnedUnlinkError(error);
+  }
+
+  try {
+    await fs.lstat(pinned.targetPath);
+    throw new SafeOpenError("path-mismatch", "path still exists after unlink");
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
 async function resolvePinnedWriteTargetWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -838,7 +901,11 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
   basename: string;
   mode: number;
 }> {
-  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mode: "write",
+  });
   try {
     await assertNoPathAliasEscape({
       absolutePath: resolved,
@@ -982,9 +1049,77 @@ async function resolvePinnedBoundaryPathWithinRoot(params: {
   };
 }
 
+async function ensurePinnedWriteRootDir(params: {
+  rootReal: string;
+  mkdir: boolean;
+}): Promise<void> {
+  try {
+    const stat = await fs.stat(params.rootReal);
+    if (!stat.isDirectory()) {
+      throw new SafeOpenError("invalid-path", "root path is not a directory");
+    }
+    return;
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+  }
+
+  if (!params.mkdir) {
+    throw new SafeOpenError("not-found", "root dir not found");
+  }
+
+  await fs.mkdir(params.rootReal, { recursive: true });
+}
+
+async function resolvePinnedDeleteTargetWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{
+  rootReal: string;
+  targetPath: string;
+  relativeParentPath: string;
+  basename: string;
+}> {
+  const { rootReal, resolved } = await resolvePathWithinRoot(params);
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: resolved,
+      rootPath: rootReal,
+      boundaryLabel: "root",
+      policy: PATH_ALIAS_POLICIES.unlinkTarget,
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+
+  const relativeResolved = path.relative(rootReal, resolved);
+  if (relativeResolved.startsWith("..") || path.isAbsolute(relativeResolved)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const relativePosix = relativeResolved
+    ? relativeResolved.split(path.sep).join(path.posix.sep)
+    : "";
+  const basename = path.posix.basename(relativePosix);
+  if (!basename || basename === "." || basename === "/") {
+    throw new SafeOpenError("invalid-path", "invalid target path");
+  }
+
+  return {
+    rootReal,
+    targetPath: resolved,
+    relativeParentPath:
+      path.posix.dirname(relativePosix) === "." ? "" : path.posix.dirname(relativePosix),
+    basename,
+  };
+}
+
 function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
+  }
+  if (error instanceof Error && /^Pinned write helper failed to start:/i.test(error.message)) {
+    return new SafeOpenError("invalid-path", error.message, { cause: error });
   }
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
@@ -1023,6 +1158,25 @@ async function removePathWithinRootLegacy(resolved: { resolved: string }): Promi
 
 async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
   await fs.mkdir(resolved.resolved, { recursive: true });
+}
+
+function normalizePinnedUnlinkError(error: unknown): Error {
+  if (error instanceof SafeOpenError) {
+    return error;
+  }
+  if (
+    error instanceof Error &&
+    !/^Pinned unlink helper failed to start:/i.test(error.message) &&
+    /no such file or directory|enoent/i.test(error.message)
+  ) {
+    return new SafeOpenError("not-found", "file not found", { cause: error });
+  }
+  if (error instanceof Error && /^Pinned unlink helper failed to start:/i.test(error.message)) {
+    return new SafeOpenError("invalid-path", error.message, { cause: error });
+  }
+  return new SafeOpenError("invalid-path", "path is not a regular file under root", {
+    cause: error instanceof Error ? error : undefined,
+  });
 }
 
 async function writeFileWithinRootLegacy(params: {
@@ -1145,5 +1299,20 @@ async function copyFileWithinRootLegacy(
     if (target && !targetClosedByUs) {
       await target.handle.close().catch(() => {});
     }
+  }
+}
+
+async function removeFileWithinRootLegacy(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const target = await resolvePinnedDeleteTargetWithinRoot(params);
+  try {
+    await fs.rm(target.targetPath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      throw new SafeOpenError("not-found", "file not found");
+    }
+    throw err;
   }
 }

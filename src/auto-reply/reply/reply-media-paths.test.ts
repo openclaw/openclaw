@@ -486,4 +486,33 @@ describe("createReplyMediaPathNormalizer", () => {
       groupSpace: undefined,
     });
   });
+
+  it("keeps sandbox media strict when workspaceOnly and roots are both enabled", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {
+        tools: {
+          fs: {
+            workspaceOnly: true,
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+      },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
 });

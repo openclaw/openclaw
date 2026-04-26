@@ -23,6 +23,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+import { createOpenClawCodingTools } from "./pi-tools.js";
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -238,4 +239,141 @@ describe("FS tools with workspaceOnly=false", () => {
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
+
+  it("blocks memory flush writes when the flush file is outside configured fs roots", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    const allowedRootDir = path.join(tmpDir, "outside-root");
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.mkdir(allowedRootDir, { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        tools: {
+          exec: {
+            applyPatch: {},
+          },
+          fs: {
+            roots: [{ path: allowedRootDir, kind: "dir", access: "rw" }],
+          },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5",
+    });
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.execute("test-call-memory-roots-deny", {
+        path: allowedRelativePath,
+        content: "new note",
+      }),
+    ).rejects.toThrow(/outside allowed filesystem roots/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed");
+  });
+
+  it("allows memory flush writes when an exact file root permits the flush file", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        tools: {
+          exec: {
+            applyPatch: {},
+          },
+          fs: {
+            roots: [{ path: allowedAbsolutePath, kind: "file", access: "rw" }],
+          },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5",
+    });
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-call-memory-roots-allow", {
+      path: allowedRelativePath,
+      content: "new note",
+    });
+    expect(hasToolError(result)).toBe(false);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("allows reads outside the workspace when fs roots permit them", async () => {
+    const allowedDir = path.join(tmpDir, "outside-read-root");
+    const allowedFile = path.join(allowedDir, "note.txt");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.writeFile(allowedFile, "hello from roots");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: {
+        tools: {
+          fs: {
+            roots: [{ path: allowedDir, kind: "dir", access: "rw" }],
+          },
+        },
+      },
+    });
+
+    const readTool = tools.find((tool) => tool.name === "read");
+    expect(readTool).toBeDefined();
+
+    const result = await readTool!.execute("test-call-roots-read-allow", {
+      path: allowedFile,
+    });
+    expect(hasToolError(result)).toBe(false);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "hello from roots",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "blocks read symlink aliases that escape configured fs roots",
+    async () => {
+      const allowedDir = path.join(tmpDir, "outside-read-root");
+      const outsideDir = path.join(tmpDir, "outside-secret-root");
+      const aliasFile = path.join(allowedDir, "alias.txt");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "secret");
+      await fs.symlink(outsideFile, aliasFile);
+
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        config: {
+          tools: {
+            fs: {
+              roots: [{ path: allowedDir, kind: "dir", access: "rw" }],
+            },
+          },
+        },
+      });
+
+      const readTool = tools.find((tool) => tool.name === "read");
+      expect(readTool).toBeDefined();
+
+      await expect(
+        readTool!.execute("test-call-roots-read-deny", {
+          path: aliasFile,
+        }),
+      ).rejects.toThrow(/symlink escapes fs root|outside workspace root|regular file under root/i);
+    },
+  );
 });

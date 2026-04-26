@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
+import { SafeOpenError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -142,6 +143,22 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   return enhanced;
 }
 
+function shouldPropagatePreEditReadError(error: unknown): boolean {
+  if (error instanceof SafeOpenError) {
+    return (
+      error.code === "outside-workspace" ||
+      error.code === "invalid-path" ||
+      error.code === "path-mismatch"
+    );
+  }
+  return (
+    error instanceof Error &&
+    /outside (workspace root|allowed filesystem roots)|path escapes workspace root/i.test(
+      error.message,
+    )
+  );
+}
+
 /**
  * Recover from two edit-tool failure classes without changing edit semantics:
  * - exact-match mismatch errors become actionable by including current file contents
@@ -167,7 +184,10 @@ export function wrapEditToolWithRecovery(
       if (absolutePath && edits.length > 0) {
         try {
           originalContent = await options.readFile(absolutePath);
-        } catch {
+        } catch (err) {
+          if (shouldPropagatePreEditReadError(err)) {
+            throw err;
+          }
           // Best-effort snapshot only; recovery should still proceed without it.
         }
       }

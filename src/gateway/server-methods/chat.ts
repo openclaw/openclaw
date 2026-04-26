@@ -16,10 +16,8 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import {
-  appendLocalMediaParentRoots,
-  getAgentScopedMediaLocalRoots,
-} from "../../media/local-roots.js";
+import type { LocalMediaRoot } from "../../media/local-media-root.js";
+import { getAgentScopedMediaLocalRootEntriesForSources } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -146,7 +144,7 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
 async function buildWebchatAssistantMediaMessage(
   payloads: ReplyPayload[],
   options?: {
-    localRoots?: readonly string[];
+    localRoots?: readonly LocalMediaRoot[];
     onLocalAudioAccessDenied?: (message: string) => void;
   },
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
@@ -2016,10 +2014,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
-        const mediaLocalRoots = appendLocalMediaParentRoots(
-          getAgentScopedMediaLocalRoots(cfg, agentId),
-          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-        );
+        const mediaLocalRoots = getAgentScopedMediaLocalRootEntriesForSources({
+          cfg,
+          ...(agentId ? { agentId } : {}),
+          ...(resolvedTranscriptPath ? { mediaSources: [resolvedTranscriptPath] } : {}),
+        });
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
           payloads: [payload],
@@ -2188,10 +2187,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                 agentId,
               });
-              const mediaLocalRoots = appendLocalMediaParentRoots(
-                getAgentScopedMediaLocalRoots(cfg, agentId),
-                resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-              );
+              const mediaLocalRoots = getAgentScopedMediaLocalRootEntriesForSources({
+                cfg,
+                ...(agentId ? { agentId } : {}),
+                ...(resolvedTranscriptPath ? { mediaSources: [resolvedTranscriptPath] } : {}),
+              });
               const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                 sessionKey,
                 payloads: finalPayloads,

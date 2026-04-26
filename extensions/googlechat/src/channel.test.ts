@@ -262,6 +262,39 @@ describe("googlechatPlugin outbound sendMedia", () => {
     });
   });
 
+  it("preserves explicit empty mediaLocalRoots for outbound local sends", async () => {
+    const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
+      loadFileName: "image.png",
+      loadBytes: "image-bytes",
+    });
+
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-empty",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-empty",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "",
+      mediaUrl: "/tmp/workspace/image.png",
+      mediaLocalRoots: [],
+      accountId: "default",
+    });
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/tmp/workspace/image.png",
+      expect.objectContaining({
+        mediaLocalRoots: [],
+      }),
+    );
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
   it("keeps remote URL media fetch on fetchRemoteMedia with maxBytes cap", async () => {
     const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
       loadFileName: "unused.png",

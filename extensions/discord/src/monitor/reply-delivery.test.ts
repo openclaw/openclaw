@@ -145,6 +145,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
     const replies = [
       {
         text: "explicit reply",
@@ -162,6 +163,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
+      mediaReadFile,
     });
 
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
@@ -169,7 +171,7 @@ describe("deliverDiscordReply", () => {
         payloads: replies,
         replyToId: undefined,
         replyToMode: "off",
-        mediaAccess: { localRoots: ["/tmp/openclaw-media"] },
+        mediaAccess: { localRoots: ["/tmp/openclaw-media"], readFile: mediaReadFile },
       }),
     );
   });

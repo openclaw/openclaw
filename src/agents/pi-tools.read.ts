@@ -17,6 +17,7 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
+import { resolveRootScopedPath, type FsRootResolved } from "./pi-tools.fs-roots.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -431,19 +432,21 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  if (isWindowsDrivePath(candidate)) {
-    return path.win32.normalize(candidate);
+  const expanded = candidate.startsWith("~") ? expandHomePrefix(candidate) : candidate;
+  if (isWindowsDrivePath(expanded)) {
+    return path.win32.normalize(expanded);
   }
-  if (path.isAbsolute(candidate)) {
-    return path.resolve(candidate);
+  if (path.isAbsolute(expanded)) {
+    return path.resolve(expanded);
   }
-  return path.resolve(params.root, candidate || ".");
+  return path.resolve(params.root, expanded || ".");
 }
 
 type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
   containerWorkdir?: string;
+  targetValidator?: (resolvedPath: string) => Promise<void> | void;
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
@@ -560,6 +563,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
         );
       }
+      await options.targetValidator?.(resolvedPath);
 
       await appendMemoryFlushContent({
         absolutePath: allowedAbsolutePath,
@@ -653,22 +657,177 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceReadTool(
+  root: string,
+  options: {
+    roots: FsRootResolved[];
+    modelContextWindowTokens?: number;
+    imageSanitization?: ImageSanitizationLimits;
+  },
+) {
+  const base = createReadTool(root, {
+    operations: createHostRootReadOperations(options.roots),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: options.modelContextWindowTokens,
+    imageSanitization: options.imageSanitization,
+  });
+}
+
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; roots?: FsRootResolved[] },
+) {
+  const operations = createHostEditOperations(root, options);
+  const base = createEditTool(root, {
+    operations,
+  }) as unknown as AnyAgentTool;
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root,
+    readFile: async (absolutePath: string) =>
+      (await operations.readFile(absolutePath)).toString("utf8"),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+}
+
+function createHostRootReadOperations(roots: FsRootResolved[]) {
+  return {
+    readFile: async (absolutePath: string) => {
+      const target = resolveRootScopedPath(absolutePath, "read", roots);
+      const safeRead = await readFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        rejectHardlinks: true,
+      });
+      return safeRead.buffer;
+    },
+    access: async (absolutePath: string) => {
+      let target: ReturnType<typeof resolveRootScopedPath>;
+      try {
+        target = resolveRootScopedPath(absolutePath, "read", roots);
+      } catch {
+        // Keep parity with the workspace-only access wrapper: let the later
+        // readFile/detectImageMimeType call surface the real roots error.
+        return;
+      }
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          rejectHardlinks: true,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (
+          error instanceof SafeOpenError &&
+          (error.code === "outside-workspace" ||
+            error.code === "invalid-path" ||
+            error.code === "path-mismatch")
+        ) {
+          return;
+        }
+        throw error;
+      }
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const target = resolveRootScopedPath(absolutePath, "read", roots);
+      const safeRead = await readFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        rejectHardlinks: true,
+      });
+      const mime = await detectMime({ buffer: safeRead.buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
+}
+
+function createHostRootWriteOperations(roots: FsRootResolved[]) {
+  return {
+    // The final write helper creates parent directories after re-resolving the
+    // root-relative target, so a separate pathname-based mkdir would only widen
+    // the race window that tools.fs.roots is supposed to close.
+    mkdir: async () => {},
+    writeFile: async (absolutePath: string, content: string) => {
+      const target = resolveRootScopedPath(absolutePath, "write", roots);
+      await writeFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        data: content,
+        encoding: "utf8",
+        mkdir: true,
+      });
+    },
+  } as const;
+}
+
+function createHostRootEditOperations(roots: FsRootResolved[]) {
+  return {
+    readFile: async (absolutePath: string) => {
+      const target = resolveRootScopedPath(absolutePath, "read", roots);
+      const safeRead = await readFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        rejectHardlinks: true,
+      });
+      return safeRead.buffer;
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      const target = resolveRootScopedPath(absolutePath, "write", roots);
+      await writeFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        data: content,
+        encoding: "utf8",
+        mkdir: true,
+      });
+    },
+    access: async (absolutePath: string) => {
+      let target: ReturnType<typeof resolveRootScopedPath>;
+      try {
+        target = resolveRootScopedPath(absolutePath, "read", roots);
+      } catch {
+        // Keep parity with the workspace-only access wrapper: let the later
+        // readFile call surface the real roots error instead of collapsing it
+        // into the upstream tool's generic "File not found" message.
+        return;
+      }
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          rejectHardlinks: true,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (
+          error instanceof SafeOpenError &&
+          (error.code === "outside-workspace" ||
+            error.code === "invalid-path" ||
+            error.code === "path-mismatch")
+        ) {
+          return;
+        }
+        throw error;
+      }
+    },
+  } as const;
+}
+
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; roots?: FsRootResolved[] },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
-}
-
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createEditTool(root, {
-    operations: createHostEditOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  const withRecovery = wrapEditToolWithRecovery(base, {
-    root,
-    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
@@ -754,7 +913,13 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; roots?: FsRootResolved[] },
+) {
+  if (options?.roots) {
+    return createHostRootWriteOperations(options.roots);
+  }
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -788,7 +953,13 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; roots?: FsRootResolved[] },
+) {
+  if (options?.roots) {
+    return createHostRootEditOperations(options.roots);
+  }
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {

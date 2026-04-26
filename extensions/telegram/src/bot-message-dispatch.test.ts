@@ -67,6 +67,11 @@ const resolveDefaultModelForAgent = vi.hoisted(() =>
 const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
+const resolveAgentScopedOutboundMediaAccess = vi.hoisted(() =>
+  vi.fn((_params: { agentId?: string }) => ({
+    localRoots: [`/tmp/.openclaw/workspace-${_params.agentId ?? "main"}`],
+  })),
+);
 const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
 const resolveSessionStoreEntry = vi.hoisted(() =>
@@ -103,6 +108,7 @@ vi.mock("./send.js", () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
   loadSessionStore,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,

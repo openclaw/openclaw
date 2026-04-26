@@ -10,6 +10,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
@@ -56,17 +57,23 @@ async function loadGoogleChatActionMedia(params: {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const runtime = getGoogleChatRuntime();
-  return /^https?:\/\//i.test(params.mediaUrl)
-    ? await runtime.channel.media.fetchRemoteMedia({
-        url: params.mediaUrl,
-        maxBytes: params.maxBytes,
-      })
-    : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes: params.maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      });
+  if (/^https?:\/\//i.test(params.mediaUrl)) {
+    return await runtime.channel.media.fetchRemoteMedia({
+      url: params.mediaUrl,
+      maxBytes: params.maxBytes,
+    });
+  }
+  const mediaLoadParams = {
+    maxBytes: params.maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  };
+  const loadWebMedia = runtime.media?.loadWebMedia;
+  if (loadWebMedia) {
+    return await loadWebMedia(params.mediaUrl, buildOutboundMediaLoadOptions(mediaLoadParams));
+  }
+  return await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadParams);
 }
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {

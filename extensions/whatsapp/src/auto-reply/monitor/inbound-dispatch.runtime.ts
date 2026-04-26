@@ -3,6 +3,7 @@ export {
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,
   getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
   jidToE164,
   logVerbose,
   resolveChunkMode,

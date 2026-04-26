@@ -35,6 +35,7 @@ export {
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 export {
   getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";

@@ -683,6 +683,7 @@ export const registerTelegramNativeCommands = ({
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
     mediaLocalRoots: readonly string[] | undefined;
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
   } | null> => {
@@ -727,10 +728,10 @@ export const registerTelegramNativeCommands = ({
         return null;
       }
     }
-    const mediaLocalRoots = nativeCommandRuntime.getAgentScopedMediaLocalRoots(
-      runtimeCfg,
-      route.agentId,
-    );
+    const mediaAccess = nativeCommandRuntime.resolveAgentScopedOutboundMediaAccess({
+      cfg: runtimeCfg,
+      agentId: route.agentId,
+    });
     const tableMode = resolveMarkdownTableMode({
       cfg: runtimeCfg,
       channel: "telegram",
@@ -741,7 +742,15 @@ export const registerTelegramNativeCommands = ({
       "telegram",
       route.accountId,
     );
-    return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
+    return {
+      chatId,
+      threadSpec,
+      route,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: mediaAccess.readFile,
+      tableMode,
+      chunkMode,
+    };
   };
   const buildCommandDeliveryBaseOptions = (params: {
     cfg: OpenClawConfig;
@@ -752,6 +761,7 @@ export const registerTelegramNativeCommands = ({
     mirrorIsGroup?: boolean;
     mirrorGroupId?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
@@ -768,6 +778,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     replyToMode,
     textLimit,
     thread: params.threadSpec,
@@ -829,7 +840,8 @@ export const registerTelegramNativeCommands = ({
         if (!runtimeContext) {
           return;
         }
-        const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+        const { threadSpec, route, mediaLocalRoots, mediaReadFile, tableMode, chunkMode } =
+          runtimeContext;
         const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
         const originatingTo = buildTelegramRoutingTarget(chatId, threadSpec);
         const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
@@ -951,6 +963,7 @@ export const registerTelegramNativeCommands = ({
           mirrorIsGroup: isGroup,
           mirrorGroupId: isGroup ? String(chatId) : undefined,
           mediaLocalRoots,
+          mediaReadFile,
           threadSpec,
           tableMode,
           chunkMode,
@@ -1129,7 +1142,8 @@ export const registerTelegramNativeCommands = ({
         if (!runtimeContext) {
           return;
         }
-        const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+        const { threadSpec, route, mediaLocalRoots, mediaReadFile, tableMode, chunkMode } =
+          runtimeContext;
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: runtimeCfg,
           chatId,
@@ -1139,6 +1153,7 @@ export const registerTelegramNativeCommands = ({
           mirrorIsGroup: isGroup,
           mirrorGroupId: isGroup ? String(chatId) : undefined,
           mediaLocalRoots,
+          mediaReadFile,
           threadSpec,
           tableMode,
           chunkMode,

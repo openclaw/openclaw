@@ -43,7 +43,9 @@ describe("resolveMediaToolLocalRoots", () => {
       "/top-level-file.png",
     ]);
 
-    const normalizedRoots = roots.map(normalizeHostPath);
+    const normalizedRoots = roots.map((root) =>
+      normalizeHostPath(typeof root === "string" ? root : root.path),
+    );
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));

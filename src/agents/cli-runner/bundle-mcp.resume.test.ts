@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   prepareBundleProbeCliConfig,
   setupCliBundleMcpTestHarness,
 } from "./bundle-mcp.test-support.js";
+
+vi.mock("../../plugins/plugin-registry.js", async (importOriginal) =>
+  importOriginal<typeof import("../../plugins/plugin-registry.js")>(),
+);
 
 setupCliBundleMcpTestHarness();
 

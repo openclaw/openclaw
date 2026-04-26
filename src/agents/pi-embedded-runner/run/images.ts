@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { FsRoot } from "../../../config/types.tools.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -348,6 +349,7 @@ export async function loadImageFromRef(
   options?: {
     maxBytes?: number;
     workspaceOnly?: boolean;
+    roots?: FsRoot[];
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
@@ -377,18 +379,22 @@ export async function loadImageFromRef(
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)
+    const effectiveLocalRoots = options?.roots
+      ? options.roots
+      : options?.workspaceOnly
+        ? [workspaceDir]
+        : undefined;
+
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
-      : await loadWebMedia(
-          targetPath,
-          options?.workspaceOnly
-            ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
-            : options?.maxBytes,
-        );
+      : await loadWebMedia(targetPath, {
+          maxBytes: options?.maxBytes,
+          ...(effectiveLocalRoots ? { localRoots: effectiveLocalRoots } : {}),
+        });
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -437,6 +443,7 @@ export async function detectAndLoadPromptImages(params: {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
+  roots?: FsRoot[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
@@ -483,6 +490,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      roots: params.roots,
       sandbox: params.sandbox,
     });
     if (image) {

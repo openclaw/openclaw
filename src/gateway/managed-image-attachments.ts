@@ -12,6 +12,7 @@ import {
   resizeToPng,
 } from "../media/image-ops.js";
 import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+import type { LocalMediaRoot } from "../media/local-media-root.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { resolveUserPath } from "../utils.js";
@@ -796,7 +797,7 @@ export async function createManagedOutgoingImageBlocks(params: {
   stateDir?: string;
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
-  localRoots?: readonly string[] | "any";
+  localRoots?: readonly LocalMediaRoot[] | "any";
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
 }): Promise<ManagedImageBlock[]> {

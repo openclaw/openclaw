@@ -72,6 +72,9 @@ const replyPipelineMocks = vi.hoisted(() => {
       ok: true,
     })) as unknown as EnsureConfiguredBindingRouteReadyFn),
     getAgentScopedMediaLocalRoots: vi.fn<GetAgentScopedMediaLocalRootsFn>(() => []),
+    resolveAgentScopedOutboundMediaAccess: vi.fn(({ agentId }: { agentId?: string }) => ({
+      localRoots: agentId ? [`/tmp/.openclaw/workspace-${agentId}`] : [],
+    })),
   };
 });
 export const dispatchReplyWithBufferedBlockDispatcher =
@@ -91,6 +94,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   resolveChunkMode: replyPipelineMocks.resolveChunkMode,
   ensureConfiguredBindingRouteReady: replyPipelineMocks.ensureConfiguredBindingRouteReady,
   getAgentScopedMediaLocalRoots: replyPipelineMocks.getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess: replyPipelineMocks.resolveAgentScopedOutboundMediaAccess,
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({
   createChannelReplyPipeline: replyPipelineMocks.createChannelReplyPipeline,

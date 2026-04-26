@@ -27,6 +27,12 @@ import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
+  resolveRoots,
+  wrapToolMultiRootGuard,
+  validatePathAgainstRoots,
+  assertAliasSafe,
+} from "./pi-tools.multi-root-guard.js";
+import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -35,6 +41,7 @@ import {
 import {
   assertRequiredParams,
   createHostWorkspaceEditTool,
+  createHostWorkspaceReadTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
   createSandboxedEditTool,
@@ -429,8 +436,15 @@ export function createOpenClawCodingTools(options?: {
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    roots: fsConfig.roots,
   });
+  const resolvedRoots = fsPolicy.roots ? resolveRoots(fsPolicy.roots) : undefined;
   const sandboxRoot = sandbox?.workspaceDir;
+  if (resolvedRoots && sandboxRoot) {
+    console.warn(
+      `[tools.fs.roots] Agent has roots configured but is running in sandbox mode. Roots are ignored for sandbox-mode tools — sandbox provides isolation via Docker.`,
+    );
+  }
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
@@ -438,7 +452,13 @@ export function createOpenClawCodingTools(options?: {
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  // When roots are configured in HOST mode, rootsValidator handles containment — disable
+  // workspace guard so it doesn't reject paths inside allowed roots outside the workspace.
+  // In SANDBOX mode, roots are ignored, so workspace guard must remain active.
+  const applyPatchWorkspaceOnly =
+    resolvedRoots && !sandboxRoot
+      ? false
+      : workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
@@ -462,6 +482,9 @@ export function createOpenClawCodingTools(options?: {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
+        // Roots are NOT applied in sandbox mode — Docker provides isolation.
+        // Wrapping sandboxed tools with host-path roots would cause false denials
+        // because tool args use container-namespace paths, not host paths.
         return [
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
@@ -469,6 +492,14 @@ export function createOpenClawCodingTools(options?: {
               })
             : sandboxed,
         ];
+      }
+      if (resolvedRoots) {
+        const rooted = createHostWorkspaceReadTool(workspaceRoot, {
+          roots: resolvedRoots,
+          modelContextWindowTokens: options?.modelContextWindowTokens,
+          imageSanitization,
+        });
+        return [wrapToolMultiRootGuard(rooted, workspaceRoot, resolvedRoots)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       const wrapped = createOpenClawReadTool(freshReadTool, {
@@ -484,12 +515,29 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
+      if (resolvedRoots) {
+        // When roots are active, create the tool WITHOUT workspaceOnly — the
+        // multi-root guard handles containment. The internal workspaceOnly guard
+        // would reject writes to allowed roots outside the workspace.
+        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+          workspaceOnly: false,
+          roots: resolvedRoots,
+        });
+        return [wrapToolMultiRootGuard(wrapped, workspaceRoot, resolvedRoots)];
+      }
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
+      }
+      if (resolvedRoots) {
+        const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+          workspaceOnly: false,
+          roots: resolvedRoots,
+        });
+        return [wrapToolMultiRootGuard(wrapped, workspaceRoot, resolvedRoots)];
       }
       const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
@@ -540,6 +588,26 @@ export function createOpenClawCodingTools(options?: {
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
   });
+  // Roots validator only for host-mode apply_patch — skip in sandbox mode
+  const patchRootsValidator =
+    resolvedRoots && !sandboxRoot
+      ? async (resolvedPath: string, options?: { isUnlink?: boolean }) => {
+          const resolvedRootsNonNull = resolvedRoots;
+          validatePathAgainstRoots(resolvedPath, "write", resolvedRootsNonNull);
+          await assertAliasSafe(resolvedPath, resolvedRootsNonNull, {
+            operation: "write",
+            allowFinalSymlinkForUnlink: options?.isUnlink,
+            allowFinalHardlinkForUnlink: options?.isUnlink,
+          });
+        }
+      : undefined;
+  const memoryFlushRootsValidator =
+    resolvedRoots && !sandboxRoot
+      ? async (resolvedPath: string) => {
+          validatePathAgainstRoots(resolvedPath, "write", resolvedRoots);
+          await assertAliasSafe(resolvedPath, resolvedRoots, { operation: "write" });
+        }
+      : undefined;
   const applyPatchTool =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
@@ -550,90 +618,95 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          roots: resolvedRoots && !sandboxRoot ? resolvedRoots : undefined,
+          rootsValidator: patchRootsValidator,
         });
-  const tools: AnyAgentTool[] = [
-    ...base,
-    ...(sandboxRoot
-      ? allowWorkspaceWrites
-        ? [
-            workspaceOnly
-              ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-                  sandboxRoot,
-                  {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  },
-                )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-            workspaceOnly
-              ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-                  sandboxRoot,
-                  {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  },
-                )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-          ]
-        : []
-      : []),
-    ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
-    execTool as unknown as AnyAgentTool,
-    processTool as unknown as AnyAgentTool,
-    // Channel docking: include channel-defined agent tools (login, etc.).
-    ...listChannelAgentTools({ cfg: options?.config }),
-    ...createOpenClawTools({
-      sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
-      allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-      agentSessionKey: options?.sessionKey,
-      agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.messageTo,
-      agentThreadId: options?.messageThreadId,
-      agentGroupId: options?.groupId ?? null,
-      agentGroupChannel: options?.groupChannel ?? null,
-      agentGroupSpace: options?.groupSpace ?? null,
-      agentMemberRoleIds: options?.memberRoleIds,
-      agentDir: options?.agentDir,
-      sandboxRoot,
-      sandboxContainerWorkdir: sandbox?.containerWorkdir,
-      sandboxFsBridge,
-      fsPolicy,
-      workspaceDir: workspaceRoot,
-      spawnWorkspaceDir: options?.spawnWorkspaceDir
-        ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
-        : undefined,
-      sandboxed: !!sandbox,
-      config: options?.config,
-      pluginToolAllowlist: collectExplicitAllowlist([
-        profilePolicy,
-        providerProfilePolicy,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        sandboxToolPolicy,
-        subagentPolicy,
-      ]),
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      currentMessageId: options?.currentMessageId,
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      replyToMode: options?.replyToMode,
-      hasRepliedRef: options?.hasRepliedRef,
-      modelHasVision: options?.modelHasVision,
-      requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-      disableMessageTool: options?.disableMessageTool,
-      requesterAgentIdOverride: agentId,
-      requesterSenderId: options?.senderId,
-      senderIsOwner: options?.senderIsOwner,
-      sessionId: options?.sessionId,
-      onYield: options?.onYield,
-      allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
-    }),
-  ];
+  const sandboxWriteTools: AnyAgentTool[] =
+    sandboxRoot && allowWorkspaceWrites
+      ? [
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                sandboxRoot,
+                {
+                  containerWorkdir: sandbox.containerWorkdir,
+                },
+              )
+            : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                sandboxRoot,
+                {
+                  containerWorkdir: sandbox.containerWorkdir,
+                },
+              )
+            : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+        ]
+      : [];
+  const fsTools = [...base, ...sandboxWriteTools];
+  const tools: AnyAgentTool[] =
+    isMemoryFlushRun && memoryFlushWritePath
+      ? fsTools
+      : [
+          ...fsTools,
+          ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
+          execTool as unknown as AnyAgentTool,
+          processTool as unknown as AnyAgentTool,
+          // Channel docking: include channel-defined agent tools (login, etc.).
+          ...listChannelAgentTools({ cfg: options?.config }),
+          ...createOpenClawTools({
+            sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+            allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+            agentSessionKey: options?.sessionKey,
+            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentAccountId: options?.agentAccountId,
+            agentTo: options?.messageTo,
+            agentThreadId: options?.messageThreadId,
+            agentGroupId: options?.groupId ?? null,
+            agentGroupChannel: options?.groupChannel ?? null,
+            agentGroupSpace: options?.groupSpace ?? null,
+            agentMemberRoleIds: options?.memberRoleIds,
+            agentDir: options?.agentDir,
+            sandboxRoot,
+            sandboxContainerWorkdir: sandbox?.containerWorkdir,
+            sandboxFsBridge,
+            fsPolicy,
+            workspaceDir: workspaceRoot,
+            spawnWorkspaceDir: options?.spawnWorkspaceDir
+              ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
+              : undefined,
+            sandboxed: !!sandbox,
+            config: options?.config,
+            pluginToolAllowlist: collectExplicitAllowlist([
+              profilePolicy,
+              providerProfilePolicy,
+              globalPolicy,
+              globalProviderPolicy,
+              agentPolicy,
+              agentProviderPolicy,
+              groupPolicy,
+              sandboxToolPolicy,
+              subagentPolicy,
+            ]),
+            currentChannelId: options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
+            modelProvider: options?.modelProvider,
+            modelId: options?.modelId,
+            replyToMode: options?.replyToMode,
+            hasRepliedRef: options?.hasRepliedRef,
+            modelHasVision: options?.modelHasVision,
+            requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+            disableMessageTool: options?.disableMessageTool,
+            requesterAgentIdOverride: agentId,
+            requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
+            sessionId: options?.sessionId,
+            onYield: options?.onYield,
+            allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+          }),
+        ];
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {
@@ -645,6 +718,7 @@ export function createOpenClawCodingTools(options?: {
               wrapToolMemoryFlushAppendOnlyWrite(tool, {
                 root: sandboxRoot ?? workspaceRoot,
                 relativePath: memoryFlushWritePath,
+                targetValidator: memoryFlushRootsValidator,
                 containerWorkdir: sandbox?.containerWorkdir,
                 sandbox:
                   sandboxRoot && sandboxFsBridge
