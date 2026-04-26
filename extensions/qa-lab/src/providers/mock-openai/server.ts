@@ -248,7 +248,9 @@ function buildDeterministicEmbedding(text: string, dimensions = 16) {
 }
 
 function isRuntimeGeneratedUserText(text: string) {
-  return /^OpenClaw runtime context for the immediately preceding user message\./.test(text.trim());
+  return text
+    .trim()
+    .startsWith("OpenClaw runtime context for the immediately preceding user message.");
 }
 
 function extractLastUserText(input: ResponsesInputItem[]) {
