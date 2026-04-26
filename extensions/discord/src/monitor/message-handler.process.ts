@@ -645,7 +645,13 @@ export async function processDiscordMessage(
       return;
     }
     const previous = previewToolProgressLines.at(-1);
-    if (previous === normalized) {
+    const bareNormalized = normalized.replace(/^tool:\s*/, "");
+    if (
+      previous === normalized ||
+      previewToolProgressLines.some(
+        (entry) => entry === normalized || entry.replace(/^tool:\s*/, "") === bareNormalized,
+      )
+    ) {
       return;
     }
     previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);

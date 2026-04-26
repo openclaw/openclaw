@@ -1054,4 +1054,26 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.update).not.toHaveBeenCalled();
   });
+
+  it("deduplicates tool progress entries with matching bare names in block mode", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "session_status" });
+      await params?.replyOptions?.onItemEvent?.({ name: "session_status" });
+      await params?.replyOptions?.onToolStart?.({ name: "session_status" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBlockModeContext();
+
+    await processDiscordMessage(ctx as any);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    for (const text of updates) {
+      const lines = text.split("\n").filter((line: string) => line.startsWith("•"));
+      const uniqueLines = new Set(lines);
+      expect(lines.length).toBe(uniqueLines.size);
+    }
+  });
 });
