@@ -642,3 +642,171 @@ export class GatewayBrowserClient {
     }
   }
 }
+
+/**
+ * SSE-based gateway client for Control UI.
+ *
+ * Uses EventSource (GET /sse) for receiving server events and
+ * fetch() POST (/sse-rpc) for sending RPC requests.
+ *
+ * Drop-in replacement for GatewayBrowserClient when the gateway URL
+ * uses http:// or https:// protocol instead of ws:// or wss://.
+ */
+export class GatewaySseBrowserClient {
+  private sse: EventSource | null = null;
+  private closed = false;
+  private backoffMs = 800;
+  private reconnectTimer: number | null = null;
+  private httpBaseUrl: string;
+
+  constructor(private opts: GatewayBrowserClientOptions) {
+    // Derive HTTP base URL: if ws:// → http://, if wss:// → https://
+    // If already http/https, use as-is
+    this.httpBaseUrl = opts.url.replace(/^ws:\/\//, "http://").replace(/^wss:\/\//, "https://");
+    // Strip trailing slash
+    this.httpBaseUrl = this.httpBaseUrl.replace(/\/+$/, "");
+  }
+
+  start() {
+    this.closed = false;
+    this.connect();
+  }
+
+  stop() {
+    this.closed = true;
+    this.clearReconnectTimer();
+    this.sse?.close();
+    this.sse = null;
+  }
+
+  get connected() {
+    return this.sse?.readyState === EventSource.OPEN;
+  }
+
+  private connect() {
+    if (this.closed) {
+      return;
+    }
+    const token = this.opts.token?.trim() ?? "";
+    const sseUrl = `${this.httpBaseUrl}/sse${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    this.sse = new EventSource(sseUrl);
+
+    this.sse.addEventListener("message", (ev) => {
+      this.handleMessage(String(ev.data ?? ""));
+    });
+
+    this.sse.addEventListener("error", () => {
+      // EventSource auto-reconnects for network errors, but if the
+      // connection was rejected (401) it enters CLOSED state.
+      if (this.sse?.readyState === EventSource.CLOSED) {
+        this.sse.close();
+        this.sse = null;
+        this.opts.onClose?.({
+          code: 4001,
+          reason: "SSE connection closed",
+        });
+        this.scheduleReconnect();
+      }
+    });
+  }
+
+  private scheduleReconnect() {
+    if (this.closed) {
+      return;
+    }
+    const delay = this.backoffMs;
+    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    this.clearReconnectTimer();
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private handleMessage(raw: string) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    const frame = parsed as { type?: unknown };
+    if (frame.type === "event") {
+      const evt = parsed as GatewayEventFrame;
+      // SSE skips connect.challenge — hello-ok comes directly
+      if (evt.event === "hello-ok") {
+        const hello = evt.payload as GatewayHelloOk;
+        this.backoffMs = 800;
+        this.opts.onHello?.(hello);
+        return;
+      }
+      const seq = typeof evt.seq === "number" ? evt.seq : null;
+      if (seq !== null) {
+        // Gap detection not critical for SSE but kept for parity
+      }
+      try {
+        this.opts.onEvent?.(evt);
+      } catch (err) {
+        console.error("[gateway-sse] event handler error:", err);
+      }
+      return;
+    }
+
+    // SSE transport doesn't receive "res" frames — RPC responses come via fetch()
+  }
+
+  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+    const token = this.opts.token?.trim() ?? "";
+    const rpcUrl = `${this.httpBaseUrl}/sse-rpc`;
+    const id = generateUUID();
+
+    return fetch(rpcUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ id, method, params }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new GatewayRequestError({
+            code: "HTTP_ERROR",
+            message: `HTTP ${res.status}`,
+          });
+        }
+        const json = (await res.json()) as {
+          ok: boolean;
+          payload?: unknown;
+          error?: GatewayErrorInfo;
+        };
+        if (!json.ok) {
+          throw new GatewayRequestError({
+            code: json.error?.code ?? "UNAVAILABLE",
+            message: json.error?.message ?? "request failed",
+            details: json.error?.details,
+            retryable: json.error?.retryable,
+            retryAfterMs: json.error?.retryAfterMs,
+          });
+        }
+        return json.payload as T;
+      })
+      .catch((err: unknown) => {
+        if (err instanceof GatewayRequestError) {
+          throw err;
+        }
+        throw new GatewayRequestError({
+          code: "NETWORK_ERROR",
+          message: String(err),
+        });
+      });
+  }
+}

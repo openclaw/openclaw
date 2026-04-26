@@ -48,7 +48,11 @@ import {
   type GatewayEventFrame,
   type GatewayHelloOk,
 } from "./gateway.ts";
-import { GatewayBrowserClient } from "./gateway.ts";
+import {
+  GatewayBrowserClient,
+  GatewaySseBrowserClient,
+  type GatewayBrowserClientOptions,
+} from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
@@ -67,7 +71,7 @@ type GatewayHost = {
   settings: UiSettings;
   password: string;
   clientInstanceId: string;
-  client: GatewayBrowserClient | null;
+  client: GatewayBrowserClient | GatewaySseBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
@@ -274,15 +278,19 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
     gatewayUrl: host.settings.gatewayUrl,
     serverVersion: host.serverVersion,
   });
-  const client = new GatewayBrowserClient({
+  // Select SSE transport when gatewayUrl uses http:// or https:// protocol
+  const useSse =
+    host.settings.gatewayUrl.startsWith("http://") ||
+    host.settings.gatewayUrl.startsWith("https://");
+  const clientOpts: GatewayBrowserClientOptions = {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "openclaw-control-ui",
+    clientName: "openclaw-control-ui" as const,
     clientVersion,
-    mode: "webchat",
+    mode: "webchat" as const,
     instanceId: host.clientInstanceId,
-    onHello: (hello) => {
+    onHello: (hello: GatewayHelloOk) => {
       if (host.client !== client) {
         return;
       }
@@ -359,7 +367,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       connectGateway(host, { reason: "seq-gap" });
     },
-  });
+  };
+  const client = useSse
+    ? new GatewaySseBrowserClient(clientOpts)
+    : new GatewayBrowserClient(clientOpts);
   host.client = client;
   previousClient?.stop();
   client.start();

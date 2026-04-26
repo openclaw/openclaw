@@ -61,6 +61,7 @@ import {
 } from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { handleSseRpcRequest, handleSseStreamRequest, isSsePath } from "./server-sse.js";
 import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-runtime-scopes.js";
 import {
@@ -922,6 +923,32 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
+      // SSE transport endpoints (GET /sse for event stream, POST /sse-rpc for RPC)
+      if (isSsePath(requestPath)) {
+        requestStages.push(
+          {
+            name: "sse-stream",
+            run: () =>
+              requestPath === "/sse"
+                ? handleSseStreamRequest(req, res, {
+                    clients,
+                    resolvedAuth,
+                    getResolvedAuth,
+                  })
+                : false,
+          },
+          {
+            name: "sse-rpc",
+            run: () =>
+              requestPath === "/sse-rpc"
+                ? handleSseRpcRequest(req, res, {
+                    resolvedAuth,
+                    getResolvedAuth,
+                  })
+                : false,
+          },
+        );
+      }
       if (openAiCompatEnabled && isOpenAiModelsPath(requestPath)) {
         requestStages.push({
           name: "models",

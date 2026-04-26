@@ -69,6 +69,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import { setSseRpcContext } from "./server-sse.js";
 import {
   createRuntimeSecretsActivator,
   loadGatewayStartupConfigSnapshot,
@@ -799,6 +800,11 @@ export async function startGatewayServer(
       extraHandlers: { ...pluginRegistry.gatewayHandlers, ...extraHandlers },
       broadcast,
       context: gatewayRequestContext,
+    });
+    // Wire up SSE RPC context so POST /sse-rpc can dispatch into handleGatewayRequest
+    setSseRpcContext(() => gatewayRequestContext, {
+      ...pluginRegistry.gatewayHandlers,
+      ...extraHandlers,
     });
     await startListening();
     startupTrace.mark("http.bound");

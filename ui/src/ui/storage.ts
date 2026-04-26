@@ -73,7 +73,17 @@ function formatHostWithPort(hostname: string, port: string): string {
 }
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const isSse =
+    typeof location !== "undefined" &&
+    typeof location.search === "string" &&
+    location.search.includes("sse=1");
+  const proto = isSse
+    ? location.protocol === "https:"
+      ? "https"
+      : "http"
+    : location.protocol === "https:"
+      ? "wss"
+      : "ws";
   const configured =
     typeof window !== "undefined" &&
     normalizeOptionalString(window.__OPENCLAW_CONTROL_UI_BASE_PATH__);
