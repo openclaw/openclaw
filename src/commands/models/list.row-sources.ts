@@ -6,6 +6,7 @@ import {
   appendConfiguredRows,
   appendDiscoveredRows,
   appendManifestCatalogRows,
+  appendModelCatalogRows,
   appendProviderCatalogRows,
   type RowBuilderContext,
 } from "./list.rows.js";
@@ -16,8 +17,10 @@ type AllModelRowSources = {
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
   manifestCatalogRows?: readonly NormalizedModelCatalogRow[];
+  providerIndexCatalogRows?: readonly NormalizedModelCatalogRow[];
   useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
+  useProviderIndexCatalogFastPath: boolean;
 };
 
 type AppendAllModelRowSourcesResult = {
@@ -29,13 +32,16 @@ export function modelRowSourcesRequireRegistry(params: {
   providerFilter?: string;
   useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
+  useProviderIndexCatalogFastPath: boolean;
 }): boolean {
   if (!params.all) {
     return false;
   }
   if (
     params.providerFilter &&
-    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+    (params.useManifestCatalogFastPath ||
+      params.useProviderCatalogFastPath ||
+      params.useProviderIndexCatalogFastPath)
   ) {
     return false;
   }
@@ -47,7 +53,9 @@ export async function appendAllModelRowSources(
 ): Promise<AppendAllModelRowSourcesResult> {
   if (
     params.context.filter.provider &&
-    (params.useManifestCatalogFastPath || params.useProviderCatalogFastPath)
+    (params.useManifestCatalogFastPath ||
+      params.useProviderCatalogFastPath ||
+      params.useProviderIndexCatalogFastPath)
   ) {
     let seenKeys = new Set<string>();
     appendConfiguredProviderRows({
@@ -70,6 +78,14 @@ export async function appendAllModelRowSources(
         context: params.context,
         seenKeys,
         staticOnly: true,
+      });
+    }
+    if (catalogRows === 0 && params.useProviderIndexCatalogFastPath) {
+      catalogRows = appendModelCatalogRows({
+        rows: params.rows,
+        context: params.context,
+        seenKeys,
+        catalogRows: params.providerIndexCatalogRows ?? [],
       });
     }
     if (catalogRows === 0) {

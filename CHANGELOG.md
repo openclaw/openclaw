@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/registry: keep installed plugin index records focused on install/state/load paths and resolve plugin capabilities from manifests scoped to indexed plugins. Thanks @shakkernerd.
 - Plugins/registry: route cold manifest and capability lookups through the installed plugin index so setup, channels, config, secrets, doctor, and provider metadata paths avoid broad plugin-root scans before runtime execution. Thanks @shakkernerd.
 - CLI/models: speed up `models list --all --provider <id>` for static manifest-backed providers by loading catalog rows through the installed plugin index instead of broad manifest scans or runtime suppression hooks. Thanks @shakkernerd.
+- CLI/models: use OpenClaw Provider Index preview rows as the final cold fallback for installable providers, while keeping user config, installed manifests, and refreshed cache rows above provider-index metadata. Thanks @vincentkoc.
 - Plugins/chat commands: refresh the persisted plugin registry after `/plugins enable` and `/plugins disable`, matching the CLI mutation path. Thanks @vincentkoc.
 - Plugins/compat: mark `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY` as a deprecated break-glass switch and point operators at registry repair instead. Thanks @vincentkoc.
 - Plugins/registry: ignore stale persisted registry reads when plugin policy no longer matches current config, and stamp generated registry files with a do-not-edit warning. Thanks @vincentkoc.

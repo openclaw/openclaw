@@ -63,6 +63,7 @@ export async function modelsListCommand(
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   let manifestCatalogRows: readonly NormalizedModelCatalogRow[] = [];
+  let providerIndexCatalogRows: readonly NormalizedModelCatalogRow[] = [];
   if (opts.all && providerFilter) {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     manifestCatalogRows = loadStaticManifestCatalogRowsForList({ cfg, providerFilter });
@@ -72,11 +73,18 @@ export async function modelsListCommand(
     !useManifestCatalogFastPath && opts.all && providerFilter
       ? await hasProviderStaticCatalogForFilter({ cfg, providerFilter })
       : false;
+  if (!useManifestCatalogFastPath && !useProviderCatalogFastPath && opts.all && providerFilter) {
+    const { loadProviderIndexCatalogRowsForList } =
+      await import("./list.provider-index-catalog.js");
+    providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({ providerFilter });
+  }
+  const useProviderIndexCatalogFastPath = providerIndexCatalogRows.length > 0;
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
     all: opts.all,
     providerFilter,
     useManifestCatalogFastPath,
     useProviderCatalogFastPath,
+    useProviderIndexCatalogFastPath,
   });
   const loadRegistryState = async () => {
     const loaded = await loadListModelRegistry(cfg, { providerFilter });
@@ -115,14 +123,18 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
-    let rowContext = buildRowContext(useManifestCatalogFastPath || useProviderCatalogFastPath);
+    let rowContext = buildRowContext(
+      useManifestCatalogFastPath || useProviderCatalogFastPath || useProviderIndexCatalogFastPath,
+    );
     const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
       modelRegistry,
       manifestCatalogRows,
+      providerIndexCatalogRows,
       useManifestCatalogFastPath,
       useProviderCatalogFastPath,
+      useProviderIndexCatalogFastPath,
     });
     if (initialAppend.requiresRegistryFallback) {
       try {
@@ -139,8 +151,10 @@ export async function modelsListCommand(
         context: rowContext,
         modelRegistry,
         manifestCatalogRows: [],
+        providerIndexCatalogRows: [],
         useManifestCatalogFastPath: false,
         useProviderCatalogFastPath: false,
+        useProviderIndexCatalogFastPath: false,
       });
     }
   } else {
