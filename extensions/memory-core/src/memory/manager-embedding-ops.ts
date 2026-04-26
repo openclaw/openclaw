@@ -44,10 +44,10 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
-const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+export const DEFAULT_EMBEDDING_INDEX_CONCURRENCY = 4;
+export const DEFAULT_EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
+export const DEFAULT_EMBEDDING_RETRY_BASE_DELAY_MS = 500;
+export const DEFAULT_EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -88,6 +88,22 @@ export function resolveEmbeddingTimeoutMs(params: {
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  /** Embedding indexing concurrency. Override to read from config. */
+  protected get embeddingIndexConcurrency(): number {
+    return DEFAULT_EMBEDDING_INDEX_CONCURRENCY;
+  }
+  /** Max retry attempts for embedding API calls. Override to read from config. */
+  protected get embeddingRetryMaxAttempts(): number {
+    return DEFAULT_EMBEDDING_RETRY_MAX_ATTEMPTS;
+  }
+  /** Base delay (ms) between embedding retries. Override to read from config. */
+  protected get embeddingRetryBaseDelayMs(): number {
+    return DEFAULT_EMBEDDING_RETRY_BASE_DELAY_MS;
+  }
+  /** Max delay (ms) for embedding retry backoff. Override to read from config. */
+  protected get embeddingRetryMaxDelayMs(): number {
+    return DEFAULT_EMBEDDING_RETRY_MAX_DELAY_MS;
+  }
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
@@ -290,8 +306,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying");
       },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      maxAttempts: this.embeddingRetryMaxAttempts,
+      baseDelayMs: this.embeddingRetryBaseDelayMs,
     });
   }
 
@@ -322,8 +338,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
       },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      maxAttempts: this.embeddingRetryMaxAttempts,
+      baseDelayMs: this.embeddingRetryBaseDelayMs,
     });
   }
 
@@ -331,7 +347,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const waitMs = resolveMemoryEmbeddingRetryDelay(
       delayMs,
       Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
+      this.embeddingRetryMaxDelayMs,
     );
     log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -498,7 +514,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    return this.batch.enabled ? this.batch.concurrency : this.embeddingIndexConcurrency;
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {

@@ -36,7 +36,7 @@ import {
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { MemoryManagerEmbeddingOps, DEFAULT_EMBEDDING_INDEX_CONCURRENCY, DEFAULT_EMBEDDING_RETRY_MAX_ATTEMPTS, DEFAULT_EMBEDDING_RETRY_BASE_DELAY_MS, DEFAULT_EMBEDDING_RETRY_MAX_DELAY_MS } from "./manager-embedding-ops.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
@@ -98,6 +98,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   };
   protected batchFailureCount = 0;
   protected batchFailureLastError?: string;
+
+  /** Allow users to tune embedding indexing concurrency via config. */
+  protected get embeddingIndexConcurrency(): number {
+    return (this.cfg as any).memorySearch?.embedding?.indexConcurrency ?? DEFAULT_EMBEDDING_INDEX_CONCURRENCY;
+  }
+  protected get embeddingRetryMaxAttempts(): number {
+    return (this.cfg as any).memorySearch?.embedding?.retryMaxAttempts ?? DEFAULT_EMBEDDING_RETRY_MAX_ATTEMPTS;
+  }
+  protected get embeddingRetryBaseDelayMs(): number {
+    return (this.cfg as any).memorySearch?.embedding?.retryBaseDelayMs ?? DEFAULT_EMBEDDING_RETRY_BASE_DELAY_MS;
+  }
+  protected get embeddingRetryMaxDelayMs(): number {
+    return (this.cfg as any).memorySearch?.embedding?.retryMaxDelayMs ?? DEFAULT_EMBEDDING_RETRY_MAX_DELAY_MS;
+  }
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
