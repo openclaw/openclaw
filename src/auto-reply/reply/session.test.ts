@@ -1470,6 +1470,58 @@ describe("initSessionState reset policy", () => {
     expect(event.context.workspaceDir).toBe(agentWorkspaceDir);
   });
 
+  it("fires the command:reset internal hook on automatic idle rollover so session-memory persists", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-hook-");
+    const storePath = path.join(root, "sessions.json");
+    const agentWorkspaceDir = path.join(root, "agent-workspace");
+    const sessionKey = "agent:main:whatsapp:dm:auto-idle-rollover";
+    const existingSessionId = "auto-idle-rollover-session-id";
+
+    // updatedAt sits after today's 4am daily boundary (so NOT stale by daily)
+    // but is 45 minutes old against a 30-minute idle window (so stale by idle).
+    // resolveStaleSessionEndReason checks idle before daily, so reason="idle".
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+      agents: { list: [{ id: "main", workspace: agentWorkspaceDir }] },
+    } as OpenClawConfig;
+    await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(triggerInternalHookSpy).toHaveBeenCalledTimes(1);
+    const event = triggerInternalHookSpy.mock.calls[0]?.[0] as {
+      type: string;
+      action: string;
+      sessionKey: string;
+      context: {
+        commandSource: string;
+        previousSessionEntry?: { sessionId?: string };
+        workspaceDir?: string;
+      };
+    };
+    expect(event.type).toBe("command");
+    expect(event.action).toBe("reset");
+    expect(event.sessionKey).toBe(sessionKey);
+    expect(event.context.commandSource).toBe("auto:idle");
+    expect(event.context.previousSessionEntry?.sessionId).toBe(existingSessionId);
+    expect(event.context.workspaceDir).toBe(agentWorkspaceDir);
+  });
+
   it("does not fire the auto-reset hook for fresh sessions", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-fresh-no-hook-");
