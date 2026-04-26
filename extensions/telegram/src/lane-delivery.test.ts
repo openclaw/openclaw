@@ -424,6 +424,38 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(222);
   });
 
+  it("falls back to editing a stale archived preview when fresh final send returns false", async () => {
+    const visibleSinceMs = 10_000;
+    const harness = createHarness({
+      answerMessageId: 1001,
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 222,
+      textSnapshot: "Working...",
+      visibleSinceMs,
+      deleteIfUnused: true,
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: HELLO_FINAL,
+      messageId: 222,
+    });
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 222,
+        text: HELLO_FINAL,
+      }),
+    );
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("materializes DM draft streaming final even when text is unchanged", async () => {
     const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 321 });
     answerStream.materialize.mockResolvedValue(321);

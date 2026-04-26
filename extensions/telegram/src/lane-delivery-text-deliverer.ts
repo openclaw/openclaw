@@ -463,7 +463,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     if (canEditViaPreview && shouldUseFreshFinalForPreview(lane, archivedPreview.visibleSinceMs)) {
       const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-      if (delivered || archivedPreview.deleteIfUnused !== false) {
+      if (delivered) {
         try {
           await params.deletePreviewMessage(archivedPreview.messageId);
         } catch (err) {
@@ -471,8 +471,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
           );
         }
+        return result("sent");
       }
-      return delivered ? result("sent") : result("skipped");
     }
     if (canEditViaPreview) {
       const finalized = await tryUpdatePreviewForLane({
