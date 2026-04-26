@@ -14,6 +14,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import { applyOutboundFooterHook } from "./footer-hook.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -237,9 +238,18 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
+  // Server-rendered footer + context-warning hook. Strips any model-written
+  // footer regardless of config; appends/prepends server-authored content
+  // only when explicitly enabled. Failures fall through to the original text.
+  const processedContent = await applyOutboundFooterHook({
+    cfg,
+    text: params.content,
+    sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+    agentId: params.agentId ?? params.mirror?.agentId,
+  });
   const outboundPlan = createOutboundPayloadPlan([
     {
-      text: params.content,
+      text: processedContent,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
     },
