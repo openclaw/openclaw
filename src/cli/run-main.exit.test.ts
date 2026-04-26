@@ -3,6 +3,13 @@ import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
+type ConfigSnapshotStub = {
+  exists: boolean;
+  valid: boolean;
+  sourceConfig?: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
@@ -22,6 +29,15 @@ const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotMock = vi.hoisted(() =>
+  vi.fn<() => Promise<ConfigSnapshotStub>>(async () => ({
+    exists: true,
+    valid: true,
+    sourceConfig: { gateway: { mode: "local" } },
+    config: {},
+  })),
+);
+const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runCrestodianMock = vi.hoisted(() => vi.fn(async () => {}));
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
@@ -163,6 +179,14 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
 }));
 
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+}));
+
+vi.mock("../commands/onboard.js", () => ({
+  setupWizardCommand: setupWizardCommandMock,
+}));
+
 vi.mock("../crestodian/crestodian.js", () => ({
   runCrestodian: runCrestodianMock,
 }));
@@ -202,9 +226,36 @@ function makeProxyHandle() {
   };
 }
 
+async function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+  try {
+    await fn();
+  } finally {
+    if (stdinDescriptor) {
+      Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+    } else {
+      Reflect.deleteProperty(process.stdin, "isTTY");
+    }
+    if (stdoutDescriptor) {
+      Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+  }
+}
+
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: { mode: "local" } },
+      config: {},
+    });
     hasMemoryRuntimeMock.mockReturnValue(false);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -570,6 +621,54 @@ describe("runCli exit behavior", () => {
 
     expect(process.exitCode).toBe(7);
     process.exitCode = exitCode;
+  });
+
+  it("starts onboarding for bare root invocations before config exists", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: false,
+      valid: true,
+      sourceConfig: {},
+      config: {},
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+  });
+
+  it("starts onboarding for bare root invocations when config is empty", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {},
+      config: {},
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps bare root invocations on Crestodian when config already exists", async () => {
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runCrestodianMock).toHaveBeenCalledWith({ onReady: expect.any(Function) });
   });
 
   it("swallows Commander parse exits after recording the exit code", async () => {

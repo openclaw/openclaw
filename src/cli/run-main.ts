@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -203,6 +203,26 @@ async function closeCliMemoryManagers(): Promise<void> {
   }
 }
 
+function isUnconfiguredConfigSnapshot(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
+): boolean {
+  if (!snapshot.exists) {
+    return true;
+  }
+  if (!snapshot.valid) {
+    return false;
+  }
+  return Object.keys(snapshot.sourceConfig).length === 0;
+}
+
+export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return false;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  return isUnconfiguredConfigSnapshot(snapshot);
+}
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -396,6 +416,18 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRootCrestodian) {
+      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { setupWizardCommand } = await import("../commands/onboard.js");
+        await setupWizardCommand({});
+        return;
+      }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',

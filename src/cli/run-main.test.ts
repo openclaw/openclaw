@@ -215,9 +215,7 @@ describe("resolveMissingPluginCommandMessage", () => {
     const message = resolveMissingPluginCommandMessage(
       "dreaming",
       {},
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
+      { registry: memoryCoreCommandAliasRegistry },
     );
     expect(message).toContain("runtime slash command");
     expect(message).toContain("/dreaming");
@@ -233,9 +231,7 @@ describe("resolveMissingPluginCommandMessage", () => {
           allow: ["memory-core"],
         },
       },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
+      { registry: memoryCoreCommandAliasRegistry },
     );
     expect(message).toContain("runtime slash command");
     expect(message).not.toContain("plugins.allow");
@@ -249,9 +245,7 @@ describe("resolveMissingPluginCommandMessage", () => {
           allow: ["dreaming"],
         },
       },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
+      { registry: memoryCoreCommandAliasRegistry },
     );
     expect(message).toContain('"dreaming" is not a plugin');
     expect(message).toContain('"memory-core"');
@@ -270,9 +264,7 @@ describe("resolveMissingPluginCommandMessage", () => {
           },
         },
       },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
+      { registry: memoryCoreCommandAliasRegistry },
     );
     expect(message).toContain("plugins.entries.memory-core.enabled=false");
     expect(message).not.toContain("runtime slash command");
