@@ -317,13 +317,23 @@ describe("channel-health-monitor", () => {
   it("restarts busy channels when run activity is stale", async () => {
     const now = Date.now();
     const manager = createBusyDisconnectedManager(now - 26 * 60_000);
-    await expectRestartedChannel(manager, "discord");
+    const monitor = await startAndRunCheck(manager);
+    // activeRuns stays 1, so drain window times out (30s).
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
   });
 
   it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
     const now = Date.now();
     const manager = createBusyDisconnectedManager(now - 301_000);
-    await expectRestartedChannel(manager, "discord");
+    const monitor = await startAndRunCheck(manager);
+    // activeRuns stays 1, so drain window times out (30s).
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
   });
 
   it("skips recently-started channels while they are still connecting", async () => {
@@ -402,7 +412,7 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("applies cooldown — skips recently restarted channels for 2 cycles", async () => {
+  it("applies cooldown — enforces minimum 60s floor between restarts", async () => {
     const manager = createSnapshotManager({
       discord: {
         default: managedStoppedAccount("crashed"),
@@ -410,11 +420,12 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    // With checkIntervalMs=5_000, cooldownCycles=2, computed cooldown = max(10_000, 60_000) = 60s.
+    // Advance 55s (11 intervals) — still in cooldown.
+    await vi.advanceTimersByTimeAsync(55_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
-    expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    // Advance another 10s — past 60s cooldown, next check triggers restart.
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();
   });
@@ -425,14 +436,17 @@ describe("channel-health-monitor", () => {
         default: managedStoppedAccount("keeps crashing"),
       },
     });
+    // Use 61s interval so cooldown (max(61_000, 60_000)) doesn't dominate.
     const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 1_000,
+      checkIntervalMs: 61_000,
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(5_001);
+    // Restart #1 at ~61s, #2 at ~183s, #3 at ~305s (every other interval due to <= cooldown).
+    await vi.advanceTimersByTimeAsync(310_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_001);
+    // One more full cycle pair — capped.
+    await vi.advanceTimersByTimeAsync(130_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
@@ -491,6 +505,331 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
+  });
+
+  describe("drain window", () => {
+    it("waits for active runs to drain before stopping a channel", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      const manager = createSnapshotManager(
+        {
+          discord: {
+            default: {
+              running: true,
+              connected: false,
+              enabled: true,
+              configured: true,
+              lastStartAt: now - 300_000,
+              activeRuns: 2,
+            },
+          },
+        },
+        {
+          // After 3 snapshot reads (initial + 2 drain polls), simulate runs finishing.
+          getRuntimeSnapshot: vi.fn(() => {
+            callCount++;
+            return snapshotWith({
+              discord: {
+                default: {
+                  running: true,
+                  connected: false,
+                  enabled: true,
+                  configured: true,
+                  lastStartAt: now - 300_000,
+                  activeRuns: callCount >= 4 ? 0 : 2,
+                },
+              },
+            });
+          }),
+        },
+      );
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      // First interval fires the check.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Drain polls every 1s. Advance enough for drain to see activeRuns=0.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+      monitor.stop();
+    });
+
+    it("proceeds with stop after drain window timeout even if runs remain", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+            // activeRuns stays > 0 forever.
+            activeRuns: 1,
+          },
+        },
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      // First interval fires the check.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Advance past the full 30s drain window.
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+      monitor.stop();
+    });
+
+    it("does not restart if monitor is stopped during drain", async () => {
+      const now = Date.now();
+      let monitorRef: ReturnType<typeof startDefaultMonitor> | undefined;
+      let callCount = 0;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          // Stop the monitor partway through the drain window.
+          if (callCount === 2) {
+            monitorRef?.stop();
+          }
+          return snapshotWith({
+            discord: {
+              default: {
+                running: true,
+                connected: false,
+                enabled: true,
+                configured: true,
+                lastStartAt: now - 300_000,
+                activeRuns: 1,
+                busy: true,
+                lastRunActivityAt: now - 5_000,
+              },
+            },
+          });
+        }),
+      });
+      monitorRef = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Advance enough for drain to be polled (which triggers stop).
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+    });
+
+    it("does not restart if channel recovers (becomes healthy) during drain", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          const recovered = callCount >= 4;
+          return snapshotWith({
+            discord: {
+              default: {
+                running: true,
+                // Channel reconnects on the 4th snapshot call (post-drain re-check).
+                connected: recovered,
+                enabled: true,
+                configured: true,
+                lastStartAt: now - 300_000,
+                activeRuns: recovered ? 0 : 1,
+                busy: !recovered,
+                lastRunActivityAt: recovered ? now : now - 5_000,
+              },
+            },
+          });
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Advance enough for drain to finish and post-drain re-check to see healthy.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips drain immediately for stale inherited activeRuns (lastRunActivityAt predates lastStartAt)", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+            activeRuns: 1,
+            busy: true,
+            // Activity predates lastStartAt — inherited from prior lifecycle.
+            lastRunActivityAt: now - 400_000,
+          },
+        },
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Should NOT need 30s drain window — restarts immediately.
+      expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+      monitor.stop();
+    });
+
+    it("skips restart when account is removed during drain", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          // After the initial health check + first drain poll, simulate account removal.
+          const removed = callCount >= 3;
+          return snapshotWith(
+            removed
+              ? {}
+              : {
+                  discord: {
+                    default: {
+                      running: true,
+                      connected: false,
+                      enabled: true,
+                      configured: true,
+                      lastStartAt: now - 300_000,
+                      activeRuns: callCount >= 3 ? 0 : 1,
+                      busy: true,
+                      lastRunActivityAt: now - 5_000,
+                    },
+                  },
+                },
+          );
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Drain polls until activeRuns=0 / account removed.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips restart when health monitor is disabled during drain", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      let monitorEnabled = true;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          const drained = callCount >= 4;
+          return snapshotWith({
+            discord: {
+              default: {
+                running: true,
+                connected: false,
+                enabled: true,
+                configured: true,
+                lastStartAt: now - 300_000,
+                activeRuns: drained ? 0 : 1,
+                busy: !drained,
+                lastRunActivityAt: now - 5_000,
+              },
+            },
+          });
+        }),
+        isHealthMonitorEnabled: vi.fn(() => {
+          // Disable after drain starts (simulating operator hot-reload).
+          if (!monitorEnabled) {
+            return false;
+          }
+          return true;
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Disable health monitor while drain is in progress.
+      monitorEnabled = false;
+      // Drain finishes after a few polls.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips drain when channel has no active runs", async () => {
+      const now = Date.now();
+      const snapshotFn = vi.fn(() =>
+        snapshotWith({
+          discord: {
+            default: {
+              running: true,
+              connected: false,
+              enabled: true,
+              configured: true,
+              lastStartAt: now - 300_000,
+              activeRuns: 0,
+            },
+          },
+        }),
+      );
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: snapshotFn,
+      });
+      const monitor = await startAndRunCheck(manager);
+      // stopChannel should be called without any drain delay.
+      expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+      // 3 snapshot calls: main health check, drain check (activeRuns=0 → returns), post-drain re-check.
+      expect(snapshotFn).toHaveBeenCalledTimes(3);
+      monitor.stop();
+    });
+  });
+
+  describe("cooldown floor", () => {
+    it("enforces 60s minimum even with short check intervals", async () => {
+      const manager = createSnapshotManager({
+        discord: {
+          default: managedStoppedAccount("crashed"),
+        },
+      });
+      // checkIntervalMs=1_000, cooldownCycles=1 → computed cooldown = max(1_000, 60_000) = 60s.
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: 1_000,
+        cooldownCycles: 1,
+      });
+      // First restart at ~1s.
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      // 30s later — still in 60s cooldown.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      // Past 60s cooldown floor.
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(manager.startChannel).toHaveBeenCalledTimes(2);
+      monitor.stop();
+    });
+  });
+
+  describe("fresh timing", () => {
+    it("uses resolveFreshTiming callback each cycle", async () => {
+      const now = Date.now();
+      // Start with a very long stale threshold so the channel appears healthy.
+      let freshStaleMs = 999_999_999;
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - 120_000,
+          lastEventAt: now - 100_000,
+        }),
+      );
+      const resolveFreshTiming = vi.fn(() => ({ staleEventThresholdMs: freshStaleMs }));
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
+        resolveFreshTiming,
+      });
+      // First check — stale threshold is huge, so no restart.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(resolveFreshTiming).toHaveBeenCalled();
+      // Lower the threshold so the channel is now considered stale.
+      freshStaleMs = 60_000;
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      monitor.stop();
+    });
   });
 
   describe("stale socket detection", () => {
