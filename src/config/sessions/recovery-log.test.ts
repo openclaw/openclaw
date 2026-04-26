@@ -57,7 +57,8 @@ describe("session recovery log", () => {
     const logPath = resolveSessionRecoveryLogPath(storePath);
     const raw = await fs.readFile(logPath, "utf-8");
     expect(raw.trim().split(/\r?\n/)).toHaveLength(1);
-    await expect(fs.stat(logPath)).resolves.toMatchObject({ mode: expect.any(Number) });
+    const stat = await fs.stat(logPath);
+    expect(stat.mode & 0o077).toBe(0);
 
     const events = await readSessionRecoveryEventsForTest(storePath);
     expect(events).toEqual([
@@ -72,6 +73,27 @@ describe("session recovery log", () => {
         details: { messageSid: "msg-1" },
       },
     ]);
+  });
+
+  it("tightens permissions when appending to an existing recovery log", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const storePath = await createStorePath();
+    const logPath = resolveSessionRecoveryLogPath(storePath);
+    await fs.writeFile(logPath, "", { encoding: "utf-8", mode: 0o666 });
+    await fs.chmod(logPath, 0o666);
+
+    await appendSessionRecoveryEvent({
+      storePath,
+      eventId: "event-existing-file",
+      eventType: "session.bound",
+      timestamp: 123,
+      sessionKey: "agent:main:discord:dm:user-1",
+    });
+
+    const stat = await fs.stat(logPath);
+    expect(stat.mode & 0o077).toBe(0);
   });
 
   it("sanitizes recovery details before events are serialized", () => {

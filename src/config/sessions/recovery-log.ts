@@ -73,6 +73,13 @@ export function resolveSessionRecoveryLogPath(storePath: string): string {
   return path.join(path.dirname(path.resolve(trimmed)), SESSION_RECOVERY_LOG_FILE);
 }
 
+async function tightenSessionRecoveryLogMode(logPath: string): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fs.chmod(logPath, 0o600);
+}
+
 function isSensitiveRecoveryKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
   if (
@@ -180,6 +187,7 @@ export async function appendSessionRecoveryEvent(
   const event = buildSessionRecoveryEvent(params);
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, { encoding: "utf-8", mode: 0o600 });
+  await tightenSessionRecoveryLogMode(logPath);
   return event;
 }
 

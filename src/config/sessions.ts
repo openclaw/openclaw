@@ -7,7 +7,20 @@ export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
-export * from "./sessions/recovery-log.js";
+export {
+  SESSION_RECOVERY_LOG_FILE,
+  SESSION_RECOVERY_MAX_STRING_LENGTH,
+  SESSION_RECOVERY_REDACTED_VALUE,
+  appendSessionRecoveryEvent,
+  buildSessionRecoveryEvent,
+  resolveSessionRecoveryLogPath,
+} from "./sessions/recovery-log.js";
+export type {
+  AppendSessionRecoveryEventParams,
+  SessionRecoveryEvent,
+  SessionRecoveryEventSource,
+  SessionRecoveryEventType,
+} from "./sessions/recovery-log.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";
 export * from "./sessions/types.js";
