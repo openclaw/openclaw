@@ -109,6 +109,50 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Per-agent voice overrides
+
+Use `agents.list[].tts` when one agent should speak with a different provider,
+voice, model, style, or auto-TTS mode. The agent block deep-merges over
+`messages.tts`, so provider credentials can stay in the global provider config.
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          apiKey: "${ELEVENLABS_API_KEY}",
+          model: "eleven_multilingual_v2",
+        },
+      },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "reader",
+        tts: {
+          providers: {
+            elevenlabs: {
+              voiceId: "EXAVITQu4vr4xnSDxMaL",
+            },
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+Precedence for automatic replies is:
+
+1. `messages.tts`
+2. active `agents.list[].tts`
+3. local `/tts` preferences for this host
+4. inline `[[tts:...]]` directives when model overrides are enabled
+
 ### OpenAI primary with ElevenLabs fallback
 
 ```json5
@@ -702,7 +746,8 @@ Stored fields:
 - `maxLength` (summary threshold; default 1500 chars)
 - `summarize` (default `true`)
 
-These override `messages.tts.*` for that host.
+These override the effective config from `messages.tts` plus the active
+`agents.list[].tts` block for that host.
 
 ## Output formats (fixed)
 

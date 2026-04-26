@@ -9,6 +9,9 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Plugins/tokenjuice: bump the bundled tokenjuice runtime to 0.6.3. Thanks @vincentkoc.
+- TTS/agents: allow `agents.list[].tts` to override global
+  `messages.tts` for per-agent voices while keeping shared provider
+  credentials and preferences in the existing TTS config surface.
 - Providers/Azure Speech: add Azure Speech as a bundled TTS provider with
   Speech-resource auth, voice listing, SSML escaping, native Ogg/Opus
   voice-note output, and telephony output. (#51776) Thanks @leonchui.

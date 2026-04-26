@@ -8,6 +8,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+import { resolveEffectiveTtsConfig } from "./tts-config.js";
 
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
@@ -80,8 +81,9 @@ function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefin
 export function resolveStatusTtsSnapshot(params: {
   cfg: OpenClawConfig;
   sessionAuto?: string;
+  agentId?: string;
 }): TtsStatusSnapshot | null {
-  const raw: TtsConfig = params.cfg.messages?.tts ?? {};
+  const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
   const prefs = readPrefs(prefsPath);
   const autoMode =

@@ -62,6 +62,7 @@ export type ResolveExplicitTtsOverridesParams = {
   provider?: string;
   modelId?: string;
   voiceId?: string;
+  agentId?: string;
 };
 
 export type TtsRequestParams = {
@@ -72,6 +73,7 @@ export type TtsRequestParams = {
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
   timeoutMs?: number;
+  agentId?: string;
 };
 
 export type TtsTelephonyRequestParams = {
@@ -95,6 +97,7 @@ export type MaybeApplyTtsToPayloadParams = {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentId?: string;
 };
 
 export type TtsTestFacade = {
@@ -168,7 +171,7 @@ export type ListSpeechVoices = (params: ListSpeechVoicesParams) => Promise<Speec
 
 export type TtsRuntimeFacade = {
   _test: TtsTestFacade;
-  buildTtsSystemPromptHint: (cfg: OpenClawConfig) => string | undefined;
+  buildTtsSystemPromptHint: (cfg: OpenClawConfig, agentId?: string) => string | undefined;
   getLastTtsAttempt: () => TtsStatusEntry | undefined;
   getResolvedSpeechProviderConfig: (
     config: ResolvedTtsConfig,
@@ -188,7 +191,7 @@ export type TtsRuntimeFacade = {
   maybeApplyTtsToPayload: (params: MaybeApplyTtsToPayloadParams) => Promise<ReplyPayload>;
   resolveExplicitTtsOverrides: (params: ResolveExplicitTtsOverridesParams) => TtsDirectiveOverrides;
   resolveTtsAutoMode: (params: ResolveTtsAutoModeParams) => TtsAutoMode;
-  resolveTtsConfig: (cfg: OpenClawConfig) => ResolvedTtsConfig;
+  resolveTtsConfig: (cfg: OpenClawConfig, agentId?: string) => ResolvedTtsConfig;
   resolveTtsPrefsPath: (config: ResolvedTtsConfig) => string;
   resolveTtsProviderOrder: (primary: TtsProvider, cfg?: OpenClawConfig) => TtsProvider[];
   setLastTtsAttempt: (entry: TtsStatusEntry | undefined) => void;
