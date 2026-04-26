@@ -70,6 +70,44 @@ export type AgentHarnessV2 = {
   dispose?(): Promise<void> | void;
 };
 
+/**
+ * Internal-only seam. A native AgentHarnessV2 implementation can register here
+ * so selected harnesses run as a real V2 lifecycle instead of going through
+ * `adaptAgentHarnessToV2`. This is not exposed via `harness/index.ts` or the
+ * plugin SDK; widening it is tracked as optional future work, not RFC 72072 scope.
+ */
+export type NativeAgentHarnessV2Factory = (harness: AgentHarness) => AgentHarnessV2;
+
+const nativeAgentHarnessV2Factories = new Map<string, NativeAgentHarnessV2Factory>();
+
+export function registerNativeAgentHarnessV2Factory(
+  harnessId: string,
+  factory: NativeAgentHarnessV2Factory,
+): void {
+  nativeAgentHarnessV2Factories.set(harnessId, factory);
+}
+
+export function clearNativeAgentHarnessV2Factories(): void {
+  nativeAgentHarnessV2Factories.clear();
+}
+
+export function getNativeAgentHarnessV2Factory(
+  harnessId: string,
+): NativeAgentHarnessV2Factory | undefined {
+  return nativeAgentHarnessV2Factories.get(harnessId);
+}
+
+/**
+ * Prefer a registered native AgentHarnessV2 implementation when available, and
+ * fall back to wrapping the V1 harness with `adaptAgentHarnessToV2`. This is
+ * the single resolution point used by harness selection so the lifecycle
+ * boundary always runs against an `AgentHarnessV2` instance.
+ */
+export function resolveAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
+  const factory = nativeAgentHarnessV2Factories.get(harness.id);
+  return factory ? factory(harness) : adaptAgentHarnessToV2(harness);
+}
+
 export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
   return {
     id: harness.id,

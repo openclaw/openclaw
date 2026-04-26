@@ -7,9 +7,15 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
+import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
-import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
+import {
+  adaptAgentHarnessToV2,
+  registerNativeAgentHarnessV2Factory,
+  resolveAgentHarnessV2,
+  runAgentHarnessV2LifecycleAttempt,
+} from "./v2.js";
 
 function createAttemptParams(): AgentHarnessAttemptParams {
   return {
@@ -540,5 +546,119 @@ describe("AgentHarness V2 compatibility adapter", () => {
     await v2.cleanup({ session, result: createAttemptResult() });
 
     expect(dispose).not.toHaveBeenCalled();
+  });
+});
+
+describe("AgentHarness V2 native factory registry", () => {
+  // Tests in this describe block use unique harness ids so they do not collide
+  // with the module-level "pi" registration in builtin-pi.ts. Vitest isolates
+  // modules per test file, so our registrations stay scoped to this file.
+
+  it("falls back to the V1 adapter when no native factory is registered", async () => {
+    const params = createAttemptParams();
+    const result = createAttemptResult();
+    const runAttempt = vi.fn(async () => result);
+    const harness: AgentHarness = {
+      id: "no-native-factory-test",
+      label: "No native factory",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    };
+
+    const resolved = resolveAgentHarnessV2(harness);
+    const prepared = await resolved.prepare(params);
+    const session = await resolved.start(prepared);
+
+    expect(await resolved.send(session)).toBe(result);
+    expect(runAttempt).toHaveBeenCalledWith(params);
+  });
+
+  it("prefers a registered native factory over the V1 adapter", async () => {
+    const params = createAttemptParams();
+    const adapterResult = createAttemptResult();
+    const nativeResult = { ...createAttemptResult(), assistantTexts: ["native path"] };
+    const runAttempt = vi.fn(async () => adapterResult);
+    const harness: AgentHarness = {
+      id: "native-factory-preference-test",
+      label: "Native factory preference",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    };
+    registerNativeAgentHarnessV2Factory(harness.id, (h) => ({
+      id: h.id,
+      label: h.label,
+      pluginId: h.pluginId,
+      supports: (ctx) => h.supports(ctx),
+      prepare: async (p) => ({
+        harnessId: h.id,
+        label: h.label,
+        params: p,
+        lifecycleState: "prepared",
+      }),
+      start: async (p) => ({ ...p, lifecycleState: "started" }),
+      send: async () => nativeResult,
+      resolveOutcome: async (_session, r) => r,
+      cleanup: async () => {},
+    }));
+
+    const result = await runAgentHarnessV2LifecycleAttempt(resolveAgentHarnessV2(harness), params);
+
+    expect(result).toBe(nativeResult);
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
+  it("native AgentHarnessV2 produces the same final attempt result as the V1 adapter for the same V1 harness", async () => {
+    const params = createAttemptParams();
+    const baseResult = createAttemptResult();
+    const adapterRun = vi.fn(async () => baseResult);
+    const nativeRun = vi.fn(async () => baseResult);
+    const adapterV1: AgentHarness = {
+      id: "parity-adapter",
+      label: "Parity",
+      supports: () => ({ supported: true }),
+      runAttempt: adapterRun,
+    };
+    const nativeV1: AgentHarness = {
+      id: "parity-native",
+      label: "Parity",
+      supports: () => ({ supported: true }),
+      runAttempt: nativeRun,
+    };
+
+    // Native factory body mirrors createPiAgentHarnessV2 in builtin-pi.ts so
+    // PR 4 regressions in cleanup ordering surface here as parity drift.
+    const native: AgentHarnessV2 = {
+      id: nativeV1.id,
+      label: nativeV1.label,
+      pluginId: nativeV1.pluginId,
+      supports: (ctx) => nativeV1.supports(ctx),
+      prepare: async (p) => ({
+        harnessId: nativeV1.id,
+        label: nativeV1.label,
+        pluginId: nativeV1.pluginId,
+        params: p,
+        lifecycleState: "prepared",
+      }),
+      start: async (p) => ({
+        harnessId: p.harnessId,
+        label: p.label,
+        pluginId: p.pluginId,
+        params: p.params,
+        lifecycleState: "started",
+      }),
+      send: async (s) => nativeV1.runAttempt(s.params),
+      resolveOutcome: async (s, r) => applyAgentHarnessResultClassification(nativeV1, r, s.params),
+      cleanup: async () => {},
+    };
+
+    const adaptedFinal = await runAgentHarnessV2LifecycleAttempt(
+      adaptAgentHarnessToV2(adapterV1),
+      params,
+    );
+    const nativeFinal = await runAgentHarnessV2LifecycleAttempt(native, params);
+
+    expect(nativeFinal).toEqual({ ...adaptedFinal, agentHarnessId: nativeV1.id });
+    expect(adapterRun).toHaveBeenCalledWith(params);
+    expect(nativeRun).toHaveBeenCalledWith(params);
   });
 });
