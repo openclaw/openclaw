@@ -17,9 +17,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
+import {
+  actionSinkTargetFromParams,
+  enforceActionSinkPolicy,
+} from "../security/action-sink-runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { isMutatingToolCall } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -181,6 +186,27 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  if (isMutatingToolCall(toolName, params)) {
+    await enforceActionSinkPolicy({
+      policyVersion: "v1",
+      actionType:
+        toolName === "message" || toolName.startsWith("message_") ? "message_send" : "file_write",
+      toolName,
+      targetResource: actionSinkTargetFromParams(params),
+      payloadSummary: params,
+      correlationId: args.toolCallId,
+      actor: {
+        id: args.ctx?.agentId,
+        sessionKey: args.ctx?.sessionKey,
+        sessionId: args.ctx?.sessionId,
+      },
+      context: {
+        runId: args.ctx?.runId,
+        toolCallId: args.toolCallId,
+      },
+    });
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =

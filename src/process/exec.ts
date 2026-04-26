@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
+import { enforceActionSinkPolicy } from "../security/action-sink-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
@@ -143,6 +144,15 @@ export async function runExec(
           encoding: "utf8" as const,
         };
   try {
+    const commandText = [command, ...args].join(" ");
+    await enforceActionSinkPolicy({
+      policyVersion: "v1",
+      actionType: "shell_exec",
+      toolName: "process.execFile",
+      targetResource: typeof opts === "number" ? undefined : opts.cwd,
+      payloadSummary: commandText,
+      context: { command: commandText, cwd: typeof opts === "number" ? undefined : opts.cwd },
+    });
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
     const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
       ...options,
@@ -254,6 +264,15 @@ export async function runCommandWithTimeout(
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const commandText = argv.join(" ");
+  await enforceActionSinkPolicy({
+    policyVersion: "v1",
+    actionType: "shell_exec",
+    toolName: "process.exec",
+    targetResource: cwd,
+    payloadSummary: commandText,
+    context: { command: commandText, cwd },
+  });
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });

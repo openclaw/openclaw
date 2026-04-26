@@ -13,6 +13,7 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { enforceActionSinkPolicy } from "../security/action-sink-runtime.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -555,6 +556,21 @@ export async function runExecProcess(opts: {
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
+  await enforceActionSinkPolicy({
+    policyVersion: "v1",
+    actionType: "shell_exec",
+    toolName: "exec",
+    targetResource: opts.workdir,
+    payloadSummary: opts.command,
+    actor: { sessionKey: opts.sessionKey },
+    context: {
+      command: opts.command,
+      execCommand: opts.execCommand,
+      cwd: opts.workdir,
+      sandbox: Boolean(opts.sandbox),
+    },
+  });
+
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
