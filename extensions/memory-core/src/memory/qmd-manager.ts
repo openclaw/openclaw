@@ -643,6 +643,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return null;
   }
 
+  private parseConflictingCollectionNameFromAddError(message: string): string | null {
+    if (
+      !normalizeLowercaseStringOrEmpty(message).includes(
+        "a collection already exists for this path and pattern",
+      )
+    ) {
+      return null;
+    }
+    const match = /^\s*Name:\s*([a-z0-9._-]+)\s*\(qmd:\/\/[^)\s]+\/?\)\s*$/im.exec(message);
+    return match?.[1] ?? null;
+  }
+
   private async tryRebindConflictingCollection(params: {
     collection: ManagedCollection;
     existing: Map<string, ListedCollection>;
@@ -658,6 +670,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       conflictName = this.findCollectionByPathPattern(collection, existing);
     }
+
+    conflictName ??= this.parseConflictingCollectionNameFromAddError(addErrorMessage);
 
     if (!conflictName) {
       return false;

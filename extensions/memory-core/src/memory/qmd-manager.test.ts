@@ -1049,6 +1049,76 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("rebinds a path-pattern conflict when qmd add reports the stale collection name", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let staleCollectionExists = true;
+    const removeCalls: string[] = [];
+    const addCalls: string[] = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // Older qmd output may expose only names, so path/pattern matching cannot find this.
+        emitAndClose(child, "stdout", JSON.stringify(["workspace-legacy"]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        if (name === "workspace-legacy") {
+          staleCollectionExists = false;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        addCalls.push(name);
+        if (staleCollectionExists && name === "workspace-main") {
+          emitAndClose(
+            child,
+            "stderr",
+            [
+              "A collection already exists for this path and pattern:",
+              "  Name: workspace-legacy (qmd://workspace-legacy/)",
+              "  Pattern: **/*.md",
+              "",
+              "Use 'qmd update' to re-index it, or remove it first with 'qmd collection remove workspace-legacy'",
+            ].join("\n"),
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removeCalls).toEqual(["workspace-legacy"]);
+    expect(addCalls).toEqual(["workspace-main", "workspace-main"]);
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection add skipped for workspace-main"),
+    );
+  });
+
   it("recreates a managed collection when list fails but add reports the same name exists", async () => {
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# canonical root");
     cfg = {
