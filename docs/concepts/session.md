@@ -71,7 +71,10 @@ Sessions are reused until they expire:
 
 When both daily and idle resets are configured, whichever expires first wins.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
-but those writes do not extend daily or idle reset freshness.
+but those writes do not extend daily or idle reset freshness. When a reset
+rolls the session, queued system-event notices for the old session are
+discarded so stale background updates are not prepended to the first prompt in
+the new session.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those
