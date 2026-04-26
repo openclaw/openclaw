@@ -1,0 +1,52 @@
+{
+  "id": "creel-context",
+  "name": "Creel Context",
+  "description": "Classifies inbound senders against the Creel control plane (owner / contact / stranger / public visitor) and threads the resulting envelope through the prompt and chat-history scope filter so a single agent feels coherent across messaging channels.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "daemonBaseUrl": {
+        "type": "string",
+        "description": "Override the auto-detected http://127.0.0.1:DAEMON_PORT base URL the plugin uses to call the local daemon."
+      },
+      "envelopeSummaryPath": {
+        "type": "string",
+        "description": "Override the workspace-relative envelope summary JSON path. Defaults to <workspace>/state/envelope-summary.json so the chat-history scope filter can read it."
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 30000,
+        "description": "Per-request timeout in ms when calling the daemon's /sender/whoami and /verify-channel-token endpoints."
+      },
+      "logging": {
+        "type": "boolean",
+        "description": "Emit per-turn classification timing + outcome logs."
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Creel Context Classifier",
+      "help": "Globally enable or pause Creel sender classification + envelope injection."
+    },
+    "daemonBaseUrl": {
+      "label": "Daemon Base URL",
+      "help": "Advanced: override the local daemon URL the plugin calls. Defaults to http://127.0.0.1:${DAEMON_PORT} from the daemon-injected env var."
+    },
+    "envelopeSummaryPath": {
+      "label": "Envelope Summary Path",
+      "help": "Advanced: override where the per-turn envelope summary is written. Must match what chat-history's search_context.py reads."
+    },
+    "requestTimeoutMs": {
+      "label": "Request Timeout (ms)",
+      "help": "How long the plugin waits for the local daemon before falling back to a stranger classification."
+    },
+    "logging": {
+      "label": "Enable Logging",
+      "help": "Log per-turn classification decisions for debugging."
+    }
+  }
+}
