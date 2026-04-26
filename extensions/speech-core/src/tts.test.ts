@@ -713,6 +713,66 @@ describe("speech-core native voice-note routing", () => {
       }
     }
   });
+  it("uses persona-merged provider config for initial expressive routing", async () => {
+    const elevenSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: {
+        sourceTextHandling: "preserve_expressive_tags",
+        expressiveTagsModels: ["eleven_v3"],
+      },
+      synthesize: elevenSynthesize,
+      resolveConfig: ({ rawConfig }) => {
+        const providers = (rawConfig?.providers as Record<string, unknown>) ?? {};
+        const elevenCfg = (providers.elevenlabs as Record<string, unknown>) ?? {};
+        return { modelId: elevenCfg.modelId ?? "eleven_multilingual_v2" };
+      },
+    });
+    installSpeechProviders([eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          providers: { elevenlabs: { modelId: "eleven_multilingual_v2" } },
+          persona: "alfred",
+          personas: {
+            alfred: {
+              provider: "elevenlabs",
+              providers: { elevenlabs: { modelId: "eleven_v3" } },
+            },
+          },
+          prefsPath: `/tmp/openclaw-tts-pra-persona-initial-routing.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "hi" } satisfies ReplyPayload, {
+      ttsSourceText: "[warmly] hi",
+      ttsPlainText: "hi",
+    });
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      expect(elevenSynthesize).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          text: "[warmly] hi",
+          providerConfig: expect.objectContaining({ modelId: "eleven_v3" }),
+        }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("skips plain fallback providers when an explicit plain variant is empty", async () => {
     const elevenSynthesize = vi.fn(async () => {
       throw new Error("elevenlabs unavailable");
