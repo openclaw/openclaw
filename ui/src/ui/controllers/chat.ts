@@ -1,4 +1,3 @@
-import { isHeartbeatOkResponse } from "../../../../src/auto-reply/heartbeat-filter.js";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -12,6 +11,8 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -50,6 +51,96 @@ function isPartialSilentReply(text: string): boolean {
   const t = text.trim();
   return t.length > 0 && "NO_REPLY".startsWith(t);
 }
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripHeartbeatTokenForDisplay(
+  raw: string,
+  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+): { shouldSkip: boolean } {
+  let text = raw.trim();
+  if (!text) {
+    return { shouldSkip: true };
+  }
+  const strippedMarkup = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "");
+  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false };
+  }
+
+  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
+  let changed = true;
+  let didStrip = false;
+  text = strippedMarkup.trim();
+  while (changed) {
+    changed = false;
+    const next = text.trim();
+    if (next.startsWith(HEARTBEAT_TOKEN)) {
+      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
+      didStrip = true;
+      changed = true;
+      continue;
+    }
+    if (tokenAtEnd.test(next)) {
+      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
+      const before = next.slice(0, index).trimEnd();
+      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
+      text = before ? `${before}${after}`.trimEnd() : "";
+      didStrip = true;
+      changed = true;
+    }
+  }
+
+  if (!didStrip) {
+    return { shouldSkip: false };
+  }
+  return { shouldSkip: !text || text.length <= maxAckChars };
+}
+
+function isHeartbeatOkResponse(message: { role: string; content?: unknown }): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  if (hasNonTextContent) {
+    return false;
+  }
+  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+}
+
+function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
+  if (typeof content === "string") {
+    return { text: content, hasNonTextContent: false };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", hasNonTextContent: content != null };
+  }
+  let hasNonTextContent = false;
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => {
+      if (!block || typeof block !== "object" || !("type" in block)) {
+        hasNonTextContent = true;
+        return false;
+      }
+      if ((block as { type?: unknown }).type !== "text") {
+        hasNonTextContent = true;
+        return false;
+      }
+      if (typeof (block as { text?: unknown }).text !== "string") {
+        hasNonTextContent = true;
+        return false;
+      }
+      return true;
+    })
+    .map((block) => block.text)
+    .join("");
+  return { text, hasNonTextContent };
+}
+
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -185,8 +276,16 @@ function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
-  if (historyMessages.length === 0 || previousMessages.length === 0) {
+  if (previousMessages.length === 0) {
     return historyMessages;
+  }
+  if (historyMessages.length === 0) {
+    const optimisticMessages = previousMessages.filter(
+      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
+    );
+    return optimisticMessages.length === previousMessages.length
+      ? previousMessages
+      : historyMessages;
   }
   const historySignatures = new Set(
     historyMessages

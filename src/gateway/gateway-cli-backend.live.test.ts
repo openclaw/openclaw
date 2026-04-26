@@ -55,7 +55,7 @@ const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
+const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
 const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
 const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
@@ -295,7 +295,7 @@ describeLive("gateway live (cli backend)", () => {
               [modelKey]: {},
               ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
-            embeddedHarness: { runtime: "pi", fallback: "pi" },
+            agentRuntime: { id: "pi", fallback: "pi" },
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -537,7 +537,7 @@ describeLive("gateway live (cli backend)", () => {
         clearRuntimeConfigSnapshot();
         await client.stopAndWait();
         await server.close();
-        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         restoreCliBackendLiveEnv(previousEnv);
         logCliBackendLiveStep("cleanup:done");
       }

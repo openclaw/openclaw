@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -130,6 +130,7 @@ export function buildEmbeddedRunPayloads(params: {
   model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
@@ -223,7 +224,7 @@ export function buildEmbeddedRunPayloads(params: {
 
   const reasoningText = suppressAssistantArtifacts
     ? ""
-    : params.lastAssistant && params.reasoningLevel === "on"
+    : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
@@ -293,20 +294,22 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const normalizedAssistantTexts = normalizeTextForComparison(params.assistantTexts.join("\n\n"));
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
     rawAnswerHasMedia &&
-    (!params.assistantTexts.length ||
+    (!nonEmptyAssistantTexts.length ||
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
     : (shouldPreferRawAnswerText && fallbackRawAnswerText
         ? [fallbackRawAnswerText]
-        : params.assistantTexts.length
-          ? params.assistantTexts
+        : hasAssistantTextPayload
+          ? nonEmptyAssistantTexts
           : fallbackAnswerText
             ? [fallbackAnswerText]
             : []

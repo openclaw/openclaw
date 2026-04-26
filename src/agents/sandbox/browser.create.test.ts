@@ -51,6 +51,32 @@ vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
 
+vi.mock("../../plugin-sdk/browser-profiles.js", () => ({
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS: 60_000,
+  DEFAULT_BROWSER_EVALUATE_ENABLED: true,
+  DEFAULT_OPENCLAW_BROWSER_COLOR: "#FF4500",
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "openclaw",
+  resolveProfile: (
+    resolved: { cdpHost: string; cdpIsLoopback: boolean; profiles?: Record<string, unknown> },
+    profileName: string,
+  ) => {
+    const profile = resolved.profiles?.[profileName] as { cdpPort?: number; color?: string };
+    if (typeof profile?.cdpPort !== "number") {
+      return null;
+    }
+    return {
+      name: profileName,
+      cdpPort: profile.cdpPort,
+      cdpUrl: `http://${resolved.cdpHost}:${profile.cdpPort}`,
+      cdpHost: resolved.cdpHost,
+      cdpIsLoopback: resolved.cdpIsLoopback,
+      color: profile.color ?? "#FF4500",
+      driver: "openclaw",
+      attachOnly: true,
+    };
+  },
+}));
+
 async function loadFreshBrowserModulesForTest() {
   vi.resetModules();
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
@@ -245,6 +271,8 @@ describe("ensureSandboxBrowser create args", () => {
           cdpPortRangeEnd: 18899,
           remoteCdpTimeoutMs: 1500,
           remoteCdpHandshakeTimeoutMs: 3000,
+          localLaunchTimeoutMs: 15_000,
+          localCdpReadyTimeoutMs: 8_000,
           color: "#FF4500",
           headless: false,
           noSandbox: false,

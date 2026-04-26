@@ -202,12 +202,22 @@ as `memory_get`, live tool results, and post-compaction AGENTS.md refreshes.
 
 ## Documentation
 
-When available, the system prompt includes a **Documentation** section that points to the
-local OpenClaw docs directory (either `docs/` in the repo workspace or the bundled npm
-package docs) and also notes the public mirror, source repo, community Discord, and
-ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
-for OpenClaw behavior, commands, configuration, or architecture, and to run
-`openclaw status` itself when possible (asking the user only when it lacks access).
+The system prompt includes a **Documentation** section. When local docs are available, it
+points to the local OpenClaw docs directory (`docs/` in a Git checkout or the bundled npm
+package docs). If local docs are unavailable, it falls back to
+[https://docs.openclaw.ai](https://docs.openclaw.ai).
+
+The same section also includes the OpenClaw source location. Git checkouts expose the local
+source root so the agent can inspect code directly. Package installs include the GitHub
+source URL and tell the agent to review source there whenever the docs are incomplete or
+stale. The prompt also notes the public docs mirror, community Discord, and ClawHub
+([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
+consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
+run `openclaw status` itself when possible (asking the user only when it lacks access).
+For configuration specifically, it points agents to the `gateway` tool action
+`config.schema.lookup` for exact field-level docs and constraints, then to
+`docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`
+for broader guidance.
 
 ## Related
 

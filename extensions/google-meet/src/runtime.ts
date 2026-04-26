@@ -8,8 +8,10 @@ import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
 import {
+  assertBlackHole2chAvailable,
   launchChromeMeet,
   launchChromeMeetOnNode,
+  recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
@@ -53,6 +55,21 @@ function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig
   return input ?? config.defaultMode;
 }
 
+function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
+  const commands = config.chrome.audioBridgeCommand
+    ? [config.chrome.audioBridgeCommand[0]]
+    : [config.chrome.audioInputCommand?.[0], config.chrome.audioOutputCommand?.[0]];
+  return [...new Set(commands.filter((value): value is string => Boolean(value?.trim())))];
+}
+
+async function commandExists(runtime: PluginRuntime, command: string): Promise<boolean> {
+  const result = await runtime.system.runCommandWithTimeout(
+    ["/bin/sh", "-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command],
+    { timeoutMs: 5_000 },
+  );
+  return result.code === 0;
+}
+
 export class GoogleMeetRuntime {
   readonly #sessions = new Map<string, GoogleMeetSession>();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
@@ -86,14 +103,15 @@ export class GoogleMeetRuntime {
     return session ? { found: true, session } : { found: false };
   }
 
-  async setupStatus() {
+  async setupStatus(options: { transport?: GoogleMeetTransport } = {}) {
+    const transport = resolveTransport(options.transport, this.params.config);
+    const shouldCheckChromeNode =
+      transport === "chrome-node" ||
+      (!options.transport && Boolean(this.params.config.chromeNode.node));
     let status = getGoogleMeetSetupStatus(this.params.config, {
       fullConfig: this.params.fullConfig,
     });
-    if (
-      this.params.config.defaultTransport === "chrome-node" ||
-      Boolean(this.params.config.chromeNode.node)
-    ) {
+    if (shouldCheckChromeNode) {
       try {
         const node = await resolveChromeNodeInfo({
           runtime: this.params.runtime,
@@ -113,6 +131,47 @@ export class GoogleMeetRuntime {
         });
       }
     }
+    if (transport === "chrome") {
+      try {
+        await assertBlackHole2chAvailable({
+          runtime: this.params.runtime,
+          timeoutMs: Math.min(this.params.config.chrome.joinTimeoutMs, 10_000),
+        });
+        status = addGoogleMeetSetupCheck(status, {
+          id: "chrome-local-audio-device",
+          ok: true,
+          message: "BlackHole 2ch audio device found",
+        });
+      } catch (error) {
+        status = addGoogleMeetSetupCheck(status, {
+          id: "chrome-local-audio-device",
+          ok: false,
+          message: formatErrorMessage(error),
+        });
+      }
+
+      const commands = collectChromeAudioCommands(this.params.config);
+      const missingCommands: string[] = [];
+      for (const command of commands) {
+        try {
+          if (!(await commandExists(this.params.runtime, command))) {
+            missingCommands.push(command);
+          }
+        } catch {
+          missingCommands.push(command);
+        }
+      }
+      status = addGoogleMeetSetupCheck(status, {
+        id: "chrome-local-audio-commands",
+        ok: commands.length > 0 && missingCommands.length === 0,
+        message:
+          commands.length === 0
+            ? "Chrome realtime audio commands are not configured"
+            : missingCommands.length === 0
+              ? `Chrome audio command${commands.length === 1 ? "" : "s"} available: ${commands.join(", ")}`
+              : `Chrome audio command${missingCommands.length === 1 ? "" : "s"} missing: ${missingCommands.join(", ")}`,
+      });
+    }
     return status;
   }
 
@@ -123,11 +182,22 @@ export class GoogleMeetRuntime {
     });
   }
 
-  async recoverCurrentTab(request: { url?: string } = {}) {
-    return recoverCurrentMeetTabOnNode({
-      runtime: this.params.runtime,
+  async recoverCurrentTab(request: { url?: string; transport?: GoogleMeetTransport } = {}) {
+    const transport = resolveTransport(request.transport, this.params.config);
+    if (transport === "twilio") {
+      throw new Error("recover_current_tab only supports chrome or chrome-node transports");
+    }
+    const url = request.url ? normalizeMeetUrl(request.url) : undefined;
+    if (transport === "chrome-node") {
+      return recoverCurrentMeetTabOnNode({
+        runtime: this.params.runtime,
+        config: this.params.config,
+        url,
+      });
+    }
+    return recoverCurrentMeetTab({
       config: this.params.config,
-      url: request.url ? normalizeMeetUrl(request.url) : undefined,
+      url,
     });
   }
 

@@ -45,6 +45,8 @@ type CreateSessionMcpRuntime = (
 const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
+const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 
 type Ajv2020Like = {
   compile: (schema: JsonSchemaType) => ValidateFunction;
@@ -168,6 +170,14 @@ function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
 
+function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
+  const raw = cfg?.mcp?.sessionIdleTtlMs;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+}
+
 export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
@@ -181,6 +191,7 @@ export function createSessionMcpRuntime(params: {
   });
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
+  let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
@@ -318,6 +329,21 @@ export function createSessionMcpRuntime(params: {
     get lastUsedAt() {
       return lastUsedAt;
     },
+    get activeLeases() {
+      return activeLeases;
+    },
+    acquireLease() {
+      activeLeases += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        activeLeases = Math.max(0, activeLeases - 1);
+        lastUsedAt = Date.now();
+      };
+    },
     getCatalog,
     markUsed() {
       lastUsedAt = Date.now();
@@ -349,11 +375,18 @@ export function createSessionMcpRuntime(params: {
 }
 
 function createSessionMcpRuntimeManager(
-  opts: { createRuntime?: CreateSessionMcpRuntime } = {},
+  opts: {
+    createRuntime?: CreateSessionMcpRuntime;
+    now?: () => number;
+    enableIdleSweepTimer?: boolean;
+    idleSweepIntervalMs?: number;
+  } = {},
 ): SessionMcpRuntimeManager {
   const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
   const sessionIdBySessionKey = new Map<string, string>();
+  const idleTtlMsBySessionId = new Map<string, number>();
   const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
+  const now = opts.now ?? Date.now;
   const createInFlight = new Map<
     string,
     {
@@ -362,9 +395,79 @@ function createSessionMcpRuntimeManager(
       configFingerprint: string;
     }
   >();
+  const idleSweepIntervalMs = opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS;
+  let idleSweepTimer: ReturnType<typeof setInterval> | undefined;
+  let idleSweepInFlight: Promise<void> | undefined;
+
+  const forgetSessionKeysForSessionId = (sessionId: string) => {
+    for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
+      if (mappedSessionId === sessionId) {
+        sessionIdBySessionKey.delete(sessionKey);
+      }
+    }
+  };
+
+  const sweepIdleRuntimes = async (): Promise<number> => {
+    const nowMs = now();
+    const expired: SessionMcpRuntime[] = [];
+    for (const [sessionId, runtime] of runtimesBySessionId.entries()) {
+      const idleTtlMs =
+        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+      if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
+        continue;
+      }
+      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
+        continue;
+      }
+      runtimesBySessionId.delete(sessionId);
+      idleTtlMsBySessionId.delete(sessionId);
+      forgetSessionKeysForSessionId(sessionId);
+      expired.push(runtime);
+    }
+    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+    return expired.length;
+  };
+
+  const queueIdleSweep = () => {
+    if (idleSweepInFlight) {
+      return;
+    }
+    idleSweepInFlight = sweepIdleRuntimes()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
+      })
+      .finally(() => {
+        idleSweepInFlight = undefined;
+      });
+  };
+
+  const ensureIdleSweepTimer = () => {
+    if (opts.enableIdleSweepTimer === false || idleSweepIntervalMs <= 0 || idleSweepTimer) {
+      return;
+    }
+    idleSweepTimer = setInterval(queueIdleSweep, idleSweepIntervalMs);
+    idleSweepTimer.unref?.();
+  };
+
+  const clearIdleSweepTimer = () => {
+    if (!idleSweepTimer) {
+      return;
+    }
+    clearInterval(idleSweepTimer);
+    idleSweepTimer = undefined;
+  };
 
   return {
     async getOrCreate(params) {
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+      if (runtimesBySessionId.has(params.sessionId)) {
+        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
+      }
+      await sweepIdleRuntimes();
+      if (idleTtlMs > 0) {
+        ensureIdleSweepTimer();
+      }
       if (params.sessionKey) {
         sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -383,6 +486,7 @@ function createSessionMcpRuntimeManager(
           await existing.dispose();
         } else {
           existing.markUsed();
+          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
           return existing;
         }
       }
@@ -397,6 +501,7 @@ function createSessionMcpRuntimeManager(
         createInFlight.delete(params.sessionId);
         const staleRuntime = await inFlight.promise.catch(() => undefined);
         runtimesBySessionId.delete(params.sessionId);
+        idleTtlMsBySessionId.delete(params.sessionId);
         await staleRuntime?.dispose();
       }
       const created = Promise.resolve(
@@ -410,6 +515,7 @@ function createSessionMcpRuntimeManager(
       ).then((runtime) => {
         runtime.markUsed();
         runtimesBySessionId.set(params.sessionId, runtime);
+        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
         return runtime;
       });
       createInFlight.set(params.sessionId, {
@@ -437,27 +543,22 @@ function createSessionMcpRuntimeManager(
         runtime = await inFlight.promise.catch(() => undefined);
       }
       runtimesBySessionId.delete(sessionId);
+      idleTtlMsBySessionId.delete(sessionId);
       if (!runtime) {
-        for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
-          if (mappedSessionId === sessionId) {
-            sessionIdBySessionKey.delete(sessionKey);
-          }
-        }
+        forgetSessionKeysForSessionId(sessionId);
         return;
       }
-      for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
-        if (mappedSessionId === sessionId) {
-          sessionIdBySessionKey.delete(sessionKey);
-        }
-      }
+      forgetSessionKeysForSessionId(sessionId);
       await runtime.dispose();
     },
     async disposeAll() {
+      clearIdleSweepTimer();
       const inFlightRuntimes = Array.from(createInFlight.values());
       createInFlight.clear();
       const runtimes = Array.from(runtimesBySessionId.values());
       runtimesBySessionId.clear();
       sessionIdBySessionKey.clear();
+      idleTtlMsBySessionId.clear();
       const lateRuntimes = await Promise.all(
         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
       );
@@ -469,6 +570,7 @@ function createSessionMcpRuntimeManager(
       }
       await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
     },
+    sweepIdleRuntimes,
     listSessionIds() {
       return Array.from(runtimesBySessionId.keys());
     },
@@ -539,4 +641,5 @@ export const __testing = {
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
+  resolveSessionMcpRuntimeIdleTtlMs,
 };

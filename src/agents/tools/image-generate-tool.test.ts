@@ -8,12 +8,28 @@ let webMedia: typeof import("../../media/web-media.js");
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
+function hasStubbedImageProviderAuth(providerId: string): boolean {
+  if (providerId === "openai") {
+    return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEYS?.trim());
+  }
+  if (providerId === "google") {
+    return Boolean(
+      process.env.GEMINI_API_KEY?.trim() ||
+      process.env.GEMINI_API_KEYS?.trim() ||
+      process.env.GOOGLE_API_KEY?.trim() ||
+      process.env.GOOGLE_API_KEYS?.trim(),
+    );
+  }
+  return false;
+}
+
 function stubImageGenerationProviders() {
   vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
     {
       id: "google",
       defaultModel: "gemini-3.1-flash-image-preview",
       models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+      isConfigured: () => hasStubbedImageProviderAuth("google"),
       capabilities: {
         generate: {
           maxCount: 4,
@@ -39,6 +55,7 @@ function stubImageGenerationProviders() {
       id: "openai",
       defaultModel: "gpt-image-1",
       models: ["gpt-image-1"],
+      isConfigured: () => hasStubbedImageProviderAuth("openai"),
       capabilities: {
         generate: {
           maxCount: 4,
@@ -216,6 +233,19 @@ describe("createImageGenerateTool", () => {
   it("returns null when no image-generation model can be inferred", () => {
     stubImageGenerationProviders();
     expect(createImageGenerateTool({ config: {} })).toBeNull();
+  });
+
+  it("tells agents how to request transparent OpenAI backgrounds", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-key");
+    stubImageGenerationProviders();
+
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
+
+    expect(tool.description).toContain('outputFormat="png" or "webp"');
+    expect(tool.description).toContain('background="transparent"');
+    expect(tool.description).toContain("openai.background");
+    expect(tool.description).toContain("gpt-image-1.5");
+    expect(JSON.stringify(tool.parameters)).toContain("openai/gpt-image-1.5");
   });
 
   it("matches image-generation providers across canonical provider aliases", () => {
@@ -478,6 +508,67 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
 
+  it("uses configured timeoutMs for image generation and lets calls override it", async () => {
+    stubImageGenerationProviders();
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "A cat wearing sunglasses",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "A cat wearing sunglasses",
+      timeoutMs: 12_345,
+    });
+
+    expect(generateImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
+    expect(generateImage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        timeoutMs: 12_345,
+      }),
+    );
+    expect(defaultResult.details).toMatchObject({ timeoutMs: 180_000 });
+    expect(overrideResult.details).toMatchObject({ timeoutMs: 12_345 });
+  });
+
   it("forwards output hints and OpenAI provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -530,6 +621,62 @@ describe("createImageGenerateTool", () => {
       details: {
         quality: "low",
         outputFormat: "jpeg",
+      },
+    });
+  });
+
+  it("forwards transparent OpenAI background requests with a PNG output format", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/transparent.png",
+      id: "transparent.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1.5");
+    const result = await tool.execute("call-openai-transparent", {
+      prompt: "A transparent badge",
+      outputFormat: "png",
+      openai: {
+        background: "transparent",
+      },
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              imageGenerationModel: { primary: "openai/gpt-image-1.5" },
+            }),
+          }),
+        }),
+        outputFormat: "png",
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        provider: "openai",
+        model: "gpt-image-1.5",
+        outputFormat: "png",
       },
     });
   });

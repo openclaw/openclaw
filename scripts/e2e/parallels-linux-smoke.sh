@@ -13,6 +13,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
@@ -38,7 +39,7 @@ TIMEOUT_BOOTSTRAP_S=600
 TIMEOUT_INSTALL_S=420
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
-TIMEOUT_AGENT_S=180
+TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S:-300}"
 TIMEOUT_GATEWAY_S=240
 PHASE_STALE_WARN_S=60
 
@@ -103,6 +104,8 @@ Options:
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for the agent-turn smoke.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -140,6 +143,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -200,19 +208,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -750,13 +758,52 @@ show_gateway_status_compat() {
   guest_exec openclaw gateway status --deep
 }
 
+verify_gateway_status() {
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if guest_exec openclaw gateway status --deep --require-rpc --timeout 15000; then
+      return 0
+    fi
+    if (( attempt < 8 )); then
+      printf 'gateway-status retry %s\n' "$attempt" >&2
+      sleep 5
+    fi
+  done
+  return 1
+}
+
+prepare_agent_workspace() {
+  guest_exec /bin/sh -lc 'set -eu
+workspace="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+mkdir -p "$workspace/.openclaw"
+cat > "$workspace/IDENTITY.md" <<'"'"'IDENTITY_EOF'"'"'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels Linux smoke test assistant.
+IDENTITY_EOF
+cat > "$workspace/.openclaw/workspace-state.json" <<'"'"'STATE_EOF'"'"'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "$workspace/BOOTSTRAP.md"'
+}
+
 verify_local_turn() {
   guest_exec openclaw models set "$MODEL_ID"
-  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
-    --local \
-    --agent main \
-    --message ping \
-    --json
+  guest_exec openclaw config set agents.defaults.skipBootstrap true --strict-json
+  prepare_agent_workspace
+  guest_exec /bin/sh -lc "$(cat <<EOF
+exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") openclaw agent \
+  --local \
+  --agent main \
+  --session-id parallels-linux-smoke \
+  --message $(shell_quote "Reply with exact ASCII text OK only.") \
+  --json
+EOF
+)"
 }
 
 phase_log_path() {
@@ -889,7 +936,7 @@ run_fresh_main_lane() {
   phase_run "fresh.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
   phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
   phase_run "fresh.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
-  phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_status
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
@@ -910,7 +957,7 @@ run_upgrade_lane() {
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
   phase_run "upgrade.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
-  phase_run "upgrade.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_status
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"

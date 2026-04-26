@@ -6,10 +6,21 @@ import {
 } from "./list.provider-catalog.js";
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+  resolvePluginContributionOwners: vi.fn(),
+  resolveProviderOwners: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
   resolvePluginDiscoveryProviders: vi.fn(),
   resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
+}));
+
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
+  loadPluginRegistrySnapshotWithMetadata:
+    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata,
+  resolvePluginContributionOwners: providerDiscoveryMocks.resolvePluginContributionOwners,
+  resolveProviderOwners: providerDiscoveryMocks.resolveProviderOwners,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -105,6 +116,20 @@ const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: {
+        plugins: [],
+      },
+      diagnostics: [],
+    });
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) =>
+        defaultProviders
+          .filter((provider) => provider.id === providerId)
+          .map((provider) => provider.pluginId),
+    );
+    providerDiscoveryMocks.resolvePluginContributionOwners.mockReturnValue([]);
     providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
       "chutes",
       "moonshot",
@@ -167,6 +192,40 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("resolves provider owners from the installed plugin index before manifest fallback", async () => {
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+      }),
+    ).resolves.toEqual(["moonshot"]);
+
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config: baseParams.cfg,
+      env: baseParams.env,
+      cache: true,
+    });
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to legacy manifest ownership for disabled persisted plugin owners", async () => {
+    providerDiscoveryMocks.resolveProviderOwners
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(["moonshot"]);
+    providerDiscoveryMocks.resolvePluginContributionOwners.mockReturnValue([]);
+
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+      }),
+    ).resolves.toEqual([]);
+
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
   it("returns an empty catalog when a static provider catalog throws", async () => {
     providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValueOnce([
       {
@@ -224,6 +283,7 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("does not skip registry for non-bundled static catalog owners", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce([
       "workspace-static-provider",
     ]);
@@ -241,6 +301,8 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
+
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
         cfg: baseParams.cfg,
@@ -291,6 +353,8 @@ describe("loadProviderCatalogModelsForList", () => {
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
+
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
         cfg: baseParams.cfg,

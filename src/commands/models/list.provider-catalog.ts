@@ -5,6 +5,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  loadPluginRegistrySnapshotWithMetadata,
+  resolvePluginContributionOwners,
+  resolveProviderOwners,
+  type PluginRegistrySnapshot,
+} from "../../plugins/plugin-registry.js";
+import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
@@ -31,6 +37,66 @@ function providerMatchesFilter(params: {
   ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
+function collectMatchingContributionOwners(
+  index: PluginRegistrySnapshot,
+  contribution: "providers" | "cliBackends",
+  providerFilter: string,
+  cfg: OpenClawConfig,
+  options: { includeDisabled?: boolean } = {},
+): string[] {
+  if (contribution === "providers") {
+    return [
+      ...resolveProviderOwners({
+        index,
+        providerId: providerFilter,
+        includeDisabled: options.includeDisabled,
+        config: cfg,
+      }),
+    ];
+  }
+  return [
+    ...resolvePluginContributionOwners({
+      index,
+      contribution: "cliBackends",
+      matches: (contributionId) => normalizeProviderId(contributionId) === providerFilter,
+      includeDisabled: options.includeDisabled,
+      config: cfg,
+    }),
+  ];
+}
+
+function resolveInstalledIndexPluginIdsForProviderFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): string[] | undefined {
+  const snapshot = loadPluginRegistrySnapshotWithMetadata({
+    config: params.cfg,
+    env: params.env,
+    cache: true,
+  });
+  if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
+    return [];
+  }
+  const index = snapshot.snapshot;
+  const pluginIds = [
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg),
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg),
+  ];
+  if (pluginIds.length > 0) {
+    return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  }
+  const disabledPluginIds = [
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg, {
+      includeDisabled: true,
+    }),
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg, {
+      includeDisabled: true,
+    }),
+  ];
+  return disabledPluginIds.length > 0 ? [] : undefined;
+}
+
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -39,6 +105,14 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
     return undefined;
+  }
+  const installedIndexPluginIds = resolveInstalledIndexPluginIdsForProviderFilter({
+    cfg: params.cfg,
+    env: params.env,
+    providerFilter,
+  });
+  if (installedIndexPluginIds) {
+    return installedIndexPluginIds;
   }
   const manifestPluginIds = resolveOwningPluginIdsForProvider({
     provider: providerFilter,

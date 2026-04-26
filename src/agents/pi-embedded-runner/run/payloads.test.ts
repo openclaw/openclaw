@@ -65,6 +65,29 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["   "],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Fixed.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Fixed.");
+  });
+
   it("suppresses exec tool errors when verbose mode is off", () => {
     expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
@@ -267,5 +290,26 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       mediaUrl: "/tmp/reply-image.png",
       mediaUrls: ["/tmp/reply-image.png"],
     });
+  });
+
+  it("suppresses native reasoning payloads when thinking is disabled", () => {
+    const payloads = buildPayloads({
+      reasoningLevel: "on",
+      thinkingLevel: "off",
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+          },
+          { type: "text", text: "THINKING-OFF-OK" },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "THINKING-OFF-OK");
   });
 });

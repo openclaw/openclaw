@@ -80,6 +80,10 @@ async function refreshSessionOptions(state: AppViewState) {
   });
 }
 
+async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
+  return refreshVisibleToolsEffectiveForCurrentSession(state);
+}
+
 function renderChatModelSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
   const busy =
@@ -278,7 +282,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       key: targetSessionKey,
       model: nextModel || null,
     });
-    void refreshVisibleToolsEffectiveForCurrentSession(state);
+    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
