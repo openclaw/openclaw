@@ -243,6 +243,7 @@ export class WhatsAppConnectionController {
   private readonly heartbeatSeconds: number;
   private readonly keepAlive: boolean;
   private readonly messageTimeoutMs: number;
+  private readonly appSilenceTimeoutMs: number;
   private readonly watchdogCheckMs: number;
   private readonly verbose: boolean;
   private readonly abortSignal?: AbortSignal;
@@ -273,6 +274,7 @@ export class WhatsAppConnectionController {
     this.keepAlive = params.keepAlive;
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.messageTimeoutMs = params.messageTimeoutMs;
+    this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
     this.watchdogCheckMs = params.watchdogCheckMs;
     this.reconnectPolicy = params.reconnectPolicy;
     this.abortSignal = params.abortSignal;
@@ -404,6 +406,7 @@ export class WhatsAppConnectionController {
       if (connection?.unregisterUnhandled) {
         connection.unregisterUnhandled();
       }
+      connection?.unregisterTransportActivity?.();
       throw err;
     }
   }
@@ -585,9 +588,14 @@ export class WhatsAppConnectionController {
     }, this.heartbeatSeconds * 1000);
 
     connection.watchdogTimer = setInterval(() => {
-      const baselineAt = connection.lastTransportActivityAt;
-      const staleForMs = Date.now() - baselineAt;
-      if (staleForMs <= this.messageTimeoutMs) {
+      const now = Date.now();
+      const transportStaleForMs = now - connection.lastTransportActivityAt;
+      const appBaselineAt = connection.lastInboundAt ?? connection.startedAt;
+      const appSilentForMs = now - appBaselineAt;
+      if (
+        transportStaleForMs <= this.messageTimeoutMs &&
+        appSilentForMs <= this.appSilenceTimeoutMs
+      ) {
         return;
       }
       const snapshot = this.getCurrentSnapshot(connection);
