@@ -14,6 +14,7 @@ import {
   isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
+  scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -39,6 +40,30 @@ function writeInstalledPackage(rootDir: string, packageName: string, version: st
     JSON.stringify({ name: packageName, version }),
     "utf8",
   );
+}
+
+function writeBundledPluginPackage(params: {
+  packageRoot: string;
+  pluginId: string;
+  deps: Record<string, string>;
+  enabledByDefault?: boolean;
+  channels?: string[];
+}): string {
+  const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify({ dependencies: params.deps }),
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      enabledByDefault: params.enabledByDefault === true,
+      ...(params.channels ? { channels: params.channels } : {}),
+    }),
+  );
+  return pluginRoot;
 }
 
 function statfsFixture(params: {
@@ -584,6 +609,116 @@ describe("installBundledRuntimeDeps", () => {
         env: {},
       }),
     ).toThrow("spawn npm ENOENT");
+  });
+});
+
+describe("scanBundledPluginRuntimeDeps config policy", () => {
+  function setupPolicyPackageRoot(): string {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "telegram",
+      deps: { "telegram-runtime": "2.0.0" },
+      channels: ["telegram"],
+    });
+    return packageRoot;
+  }
+
+  it.each([
+    {
+      name: "includes default-enabled bundled plugins",
+      config: {},
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "keeps default-enabled bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "does not let explicit plugin entries bypass restrictive allowlists",
+      config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets deny override default-enabled bundled plugins",
+      config: { plugins: { deny: ["alpha"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets disabled entries override default-enabled bundled plugins",
+      config: { plugins: { entries: { alpha: { enabled: false } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["telegram-runtime@2.0.0"],
+    },
+    {
+      name: "keeps channel recovery behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { botToken: "123:abc" } },
+      },
+      includeConfiguredChannels: true,
+      expectedDeps: [],
+    },
+    {
+      name: "includes configured channels during recovery without restrictive allowlists",
+      config: { channels: { telegram: { botToken: "123:abc" } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0", "telegram-runtime@2.0.0"],
+    },
+    {
+      name: "lets explicit channel disable override recovery",
+      config: { channels: { telegram: { botToken: "123:abc", enabled: false } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+  ])("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: setupPolicyPackageRoot(),
+      config,
+      includeConfiguredChannels,
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reads each bundled plugin manifest once per runtime-deps scan", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+      channels: ["alpha"],
+    });
+    const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    scanBundledPluginRuntimeDeps({ packageRoot, config: {} });
+
+    expect(
+      readFileSyncSpy.mock.calls.filter((call) => path.resolve(String(call[0])) === manifestPath),
+    ).toHaveLength(1);
   });
 });
 
