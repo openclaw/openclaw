@@ -30,6 +30,7 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
     cfg: params.fullConfig,
     agentRuntime: params.runtime.agent,
     logger: params.logger,
+    agentId: params.config.realtime.agentId,
     sessionKey: `google-meet:${params.meetingSessionId}`,
     messageProvider: "google-meet",
     lane: "google-meet",

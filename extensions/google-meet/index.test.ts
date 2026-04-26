@@ -287,6 +287,16 @@ describe("google-meet plugin", () => {
     expect(resolveGoogleMeetConfig({}).realtime.instructions).toContain("openclaw_agent_consult");
   });
 
+  it("resolves the realtime consult agent id", () => {
+    expect(
+      resolveGoogleMeetConfig({
+        realtime: {
+          agentId: " jay ",
+        },
+      }).realtime.agentId,
+    ).toBe("jay");
+  });
+
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
     expect(
       resolveGoogleMeetConfigWithEnv(
@@ -1976,7 +1986,7 @@ describe("google-meet plugin", () => {
 
     const handle = await startCommandRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime" },
+        realtime: { provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
       fullConfig: {} as never,
       runtime: runtime as never,
@@ -2041,6 +2051,7 @@ describe("google-meet plugin", () => {
     expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         messageProvider: "google-meet",
+        agentId: "jay",
         thinkLevel: "high",
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       }),
