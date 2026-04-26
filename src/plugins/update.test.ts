@@ -21,7 +21,8 @@ const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
-  resolvePluginInstallDir: (pluginId: string) => `/tmp/${pluginId}`,
+  resolvePluginInstallDir: (pluginId: string, extensionsDir = "/tmp") =>
+    `${extensionsDir}/${pluginId}`,
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   },
@@ -918,6 +919,82 @@ describe("updateNpmInstalledPlugins", () => {
         dangerouslyForceUnsafeInstall: true,
         expectedPluginId: "openclaw-codex-app-server",
       }),
+    );
+  });
+
+  it("reuses the recorded managed extensions root when updating external plugins", async () => {
+    const installPath = "/var/openclaw/extensions/demo";
+    const extensionsDir = "/var/openclaw/extensions";
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "demo",
+        targetDir: installPath,
+        version: "1.2.0",
+      }),
+    );
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      version: "1.2.0",
+      extensions: ["index.ts"],
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-next",
+        resolvedAt: "2026-03-22T00:00:00.000Z",
+      },
+    });
+    installPluginFromMarketplaceMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      version: "1.2.0",
+      extensions: ["index.ts"],
+      marketplaceSource: "acme/plugins",
+      marketplacePlugin: "demo",
+    });
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+    });
+    await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+    });
+    await updateNpmInstalledPlugins({
+      config: createMarketplaceInstallConfig({
+        pluginId: "demo",
+        installPath,
+        marketplaceSource: "acme/plugins",
+        marketplacePlugin: "demo",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionsDir }),
+    );
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionsDir }),
+    );
+    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionsDir }),
     );
   });
 });
