@@ -145,6 +145,9 @@ Docs: https://docs.openclaw.ai
   and `media://inbound/...` markers from pruned model replay context so stale
   media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks
   @jmeadlock.
+- Docker/Bonjour: disable Bonjour/mDNS advertising by default for bundled
+  Compose gateways on bridge networking, while keeping host/macvlan opt-in with
+  `OPENCLAW_DISABLE_BONJOUR=0`. Fixes #71879. Thanks @gbballpack.
 - CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure` and show daemon state separately when available, so `gateway.tailscale.mode: "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790. Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables itself for the current Gateway process after repeated failed restarts while the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux, @FiredMosquito831, and @spikefcz.
 - Gateway/Fly.io: seed Control UI allowed origins from the actual runtime bind and port so CLI-driven non-loopback starts do not crash before config exists. Fixes #71823.
