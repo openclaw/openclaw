@@ -570,7 +570,8 @@ export async function applyMediaUnderstanding(params: {
     // audio capability slot (before video) instead of appending at the end.
     if (syntheticSkippedAudioOutputs.length > 0) {
       const audioDecision = decisions.find((decision) => decision.capability === "audio");
-      const audioAttachmentOrder = audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
+      const audioAttachmentOrder =
+        audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
       const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
       for (const output of outputs) {
         if (output.kind === "audio.transcription") {
