@@ -197,6 +197,41 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
+  it("treats already_reacted as a no-op success", async () => {
+    reactSlackMessage.mockImplementationOnce(async () => {
+      throw new Error("An API error occurred: already_reacted");
+    });
+    const result = await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C1",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      slackConfig(),
+    );
+    expect(reactSlackMessage).toHaveBeenCalled();
+    const payload = JSON.parse((result.content?.[0] as { type: "text"; text: string }).text);
+    expect(payload).toEqual({ ok: true, added: "✅" });
+  });
+
+  it("rethrows non-already_reacted Slack errors from the react tool", async () => {
+    reactSlackMessage.mockImplementationOnce(async () => {
+      throw new Error("An API error occurred: invalid_emoji");
+    });
+    await expect(
+      handleSlackAction(
+        {
+          action: "react",
+          channelId: "C1",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        slackConfig(),
+      ),
+    ).rejects.toThrow(/invalid_emoji/);
+  });
+
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
     await handleSlackAction(
       {

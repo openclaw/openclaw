@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
@@ -210,10 +211,18 @@ export async function handleSlackAction(
           : await slackActionRuntime.removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
-      if (writeOpts) {
-        await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts);
-      } else {
-        await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji);
+      const addPromise = writeOpts
+        ? slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts)
+        : slackActionRuntime.reactSlackMessage(channelId, messageId, emoji);
+      try {
+        await addPromise;
+      } catch (err) {
+        // already_reacted is a no-op: the reaction is already in the desired
+        // state. Mirrors the suppression at
+        // monitor/message-handler/dispatch.ts in the status-reaction adapter.
+        if (!formatErrorMessage(err).includes("already_reacted")) {
+          throw err;
+        }
       }
       return jsonResult({ ok: true, added: emoji });
     }
