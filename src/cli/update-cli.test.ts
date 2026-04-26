@@ -667,7 +667,7 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain("Plugin update aborted");
   });
 
-  it("includes plugin integrity drift details in update json output", async () => {
+  it("fails json update output when post-core plugin updates fail", async () => {
     updateNpmInstalledPlugins.mockImplementationOnce(
       async (params: {
         config: OpenClawConfig;
@@ -713,6 +713,9 @@ describe("update-cli", () => {
     const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
       | UpdateRunResult
       | undefined;
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(jsonOutput?.status).toBe("error");
+    expect(jsonOutput?.reason).toBe("post-update-plugins");
     expect(jsonOutput?.postUpdate?.plugins?.integrityDrifts).toEqual([
       {
         pluginId: "demo",
@@ -726,6 +729,88 @@ describe("update-cli", () => {
     ]);
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
     expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.status).toBe("error");
+  });
+
+  it("fails before restart when post-core plugin updates fail", async () => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: false,
+      config: baseConfig,
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "error",
+          message: "Failed to update demo: registry timeout",
+        },
+      ],
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({ yes: true });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain("Update failed during plugin post-update sync.");
+  });
+
+  it("preserves fresh-process plugin failure details in parent json output", async () => {
+    setupUpdatedRootRefresh();
+    spawn.mockImplementationOnce((_node, _argv, options) => {
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      const env = (options as { env?: NodeJS.ProcessEnv }).env;
+      queueMicrotask(async () => {
+        const resultPath = env?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+        if (resultPath) {
+          await fs.writeFile(
+            resultPath,
+            JSON.stringify({
+              status: "error",
+              changed: false,
+              sync: {
+                changed: false,
+                switchedToBundled: [],
+                switchedToNpm: [],
+                warnings: [],
+                errors: [],
+              },
+              npm: {
+                changed: false,
+                outcomes: [
+                  {
+                    pluginId: "demo",
+                    status: "error",
+                    message: "Failed to update demo: registry timeout",
+                  },
+                ],
+              },
+              integrityDrifts: [],
+            }),
+            "utf-8",
+          );
+        }
+        child.emit("exit", 1, null);
+      });
+      return child;
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ yes: true, json: true, restart: false });
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(jsonOutput?.status).toBe("error");
+    expect(jsonOutput?.reason).toBe("post-update-plugins");
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.message).toContain("registry timeout");
   });
 
   it.each([

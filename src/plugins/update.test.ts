@@ -71,8 +71,10 @@ function createNpmInstallConfig(params: {
   spec: string;
   installPath: string;
   integrity?: string;
+  shasum?: string;
   resolvedName?: string;
   resolvedSpec?: string;
+  resolvedVersion?: string;
 }) {
   return {
     plugins: {
@@ -82,8 +84,10 @@ function createNpmInstallConfig(params: {
           spec: params.spec,
           installPath: params.installPath,
           ...(params.integrity ? { integrity: params.integrity } : {}),
+          ...(params.shasum ? { shasum: params.shasum } : {}),
           ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
           ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+          ...(params.resolvedVersion ? { resolvedVersion: params.resolvedVersion } : {}),
         },
       },
     },
@@ -412,6 +416,55 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("refreshes legacy npm install records before skipping unchanged artifacts", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+      }),
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "lossless-claw",
+      status: "unchanged",
+      currentVersion: "0.9.0",
+      nextVersion: "0.9.0",
+    });
+    expect(result.config.plugins?.installs?.["lossless-claw"]).toMatchObject({
+      source: "npm",
+      resolvedName: "@martian-engineering/lossless-claw",
+      resolvedVersion: "0.9.0",
+      resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+    });
+  });
+
   it("expands home-relative install paths before checking installed npm versions", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-home-"));
     tempDirs.push(home);
@@ -436,8 +489,10 @@ describe("updateNpmInstalledPlugins", () => {
         spec: "@martian-engineering/lossless-claw",
         installPath: "~/.openclaw/extensions/lossless-claw",
         resolvedName: "@martian-engineering/lossless-claw",
+        resolvedVersion: "0.9.0",
         resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
         integrity: "sha512-same",
+        shasum: "same",
       }),
       pluginIds: ["lossless-claw"],
     });

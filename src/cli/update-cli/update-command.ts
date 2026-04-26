@@ -1006,13 +1006,16 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       });
     });
 
-    if (exitCode !== 0) {
-      defaultRuntime.exit(exitCode);
-      throw new Error(`post-update process exited with code ${exitCode}`);
-    }
     const pluginUpdate = resultPath
       ? await readPostCorePluginUpdateResultFile(resultPath)
       : undefined;
+    if (exitCode !== 0) {
+      if (pluginUpdate) {
+        return { resumed: true, pluginUpdate };
+      }
+      defaultRuntime.exit(exitCode);
+      throw new Error(`post-update process exited with code ${exitCode}`);
+    }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
   } finally {
     if (resultDir) {
@@ -1074,6 +1077,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         };
         defaultRuntime.writeJson(result);
       }
+    }
+    if (pluginUpdate.status === "error") {
+      defaultRuntime.exit(1);
+      return;
     }
     return;
   }
@@ -1434,6 +1441,28 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     });
   }
 
+  const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+    ? {
+        ...result,
+        status: postCorePluginUpdate.status === "error" ? "error" : result.status,
+        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+        postUpdate: {
+          ...result.postUpdate,
+          plugins: postCorePluginUpdate,
+        },
+      }
+    : result;
+
+  if (postCorePluginUpdate?.status === "error") {
+    if (opts.json) {
+      defaultRuntime.writeJson(resultWithPostUpdate);
+    } else {
+      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   const gatewayPort = resolveGatewayPort(
@@ -1469,7 +1498,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     const restartOk = await maybeRestartService({
       shouldRestart,
-      result,
+      result: resultWithPostUpdate,
       opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
       gatewayPort,
@@ -1485,9 +1514,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
   } else {
-    defaultRuntime.writeJson({
-      ...result,
-      ...(postCorePluginUpdate ? { postUpdate: { plugins: postCorePluginUpdate } } : {}),
-    });
+    defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }
