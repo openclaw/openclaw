@@ -45,6 +45,8 @@ export type {
 } from "./types.js";
 export type {
   OpenClawProviderIndex,
+  OpenClawProviderIndexPluginInstall,
   OpenClawProviderIndexPlugin,
+  OpenClawProviderIndexProviderAuthChoice,
   OpenClawProviderIndexProvider,
 } from "./provider-index/index.js";
