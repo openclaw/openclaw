@@ -289,6 +289,10 @@ by Peter Steinberger and the community.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 AI/vibe-coded PRs welcome! 🤖
 
+### Community ecosystem
+
+- [agchk](https://github.com/huangrichao2020/agchk) — optional community architecture audit tooling for AI agent systems. See [#71947](https://github.com/openclaw/openclaw/issues/71947) for an example OpenClaw scan result.
+
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono).
 Special thanks to Adam Doppelt for the lobster.bot domain.
