@@ -234,6 +234,13 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
+vi.mock("../../../plugins/provider-runtime.js", () => ({
+  resolveProviderReasoningOutputModeWithPlugin: () => undefined,
+  resolveProviderSystemPromptContribution: () => undefined,
+  resolveProviderTextTransforms: () => undefined,
+  transformProviderSystemPrompt: ({ systemPrompt }: { systemPrompt: string }) => systemPrompt,
+}));
+
 vi.mock("../../../infra/machine-name.js", () => ({
   getMachineDisplayName: async () => "test-host",
 }));
@@ -244,6 +251,10 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
+}));
+
+vi.mock("../../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
