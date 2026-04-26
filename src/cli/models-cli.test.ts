@@ -108,9 +108,10 @@ describe("models cli", () => {
     const login = auth?.commands.find((cmd) => cmd.name() === "login-github-copilot");
     expect(login).toBeTruthy();
 
-    await program.parseAsync(["models", "auth", "login-github-copilot", "--yes"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],
+      { from: "user" },
+    );
 
     expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
     expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
@@ -118,6 +119,7 @@ describe("models cli", () => {
         provider: "github-copilot",
         method: "device",
         yes: true,
+        agent: "poe",
       }),
       expect.any(Object),
     );

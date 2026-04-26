@@ -116,6 +116,7 @@ async function resolveModelsAuthContext(params?: {
     config,
     workspaceDir,
     mode: "setup",
+    includeUntrustedWorkspacePlugins: false,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
     ...(params?.requestedProvider?.trim()

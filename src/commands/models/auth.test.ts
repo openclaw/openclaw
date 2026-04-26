@@ -467,6 +467,7 @@ describe("modelsAuthLoginCommand", () => {
         workspaceDir: "/tmp/openclaw/workspace",
         bundledProviderAllowlistCompat: true,
         bundledProviderVitestCompat: true,
+        includeUntrustedWorkspacePlugins: false,
         providerRefs: ["anthropic"],
         activate: true,
       }),
