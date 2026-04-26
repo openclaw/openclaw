@@ -156,12 +156,12 @@ export async function resolveCommandsSystemPromptBundle(
     
     if (content.length > 8192) {
       console.warn("PERSONALITY.md is too large, truncating to 8KB");
-      rootPersonality = content.substring(0, 8192);
+      rootPersonality = content.slice(0, 8192);
     } else {
       rootPersonality = content;
     }
     console.log("Root personality loaded from PERSONALITY.md");
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err.code !== "ENOENT") {
       console.error("Failed to read root personality file:", err);
     }
