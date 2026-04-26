@@ -151,6 +151,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
+- When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
 ## Plugin hooks and privacy
 
@@ -243,6 +244,7 @@ content and identifiers.
 
     - explicit WhatsApp mentions of the bot identity
     - configured mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
 
     Security note:
@@ -294,6 +296,11 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:audio>`
     - `<media:document>`
     - `<media:sticker>`
+
+    Authorized group voice notes are transcribed before mention gating when the
+    body is only `<media:audio>`, so saying the bot mention in the voice note can
+    trigger the reply. If the transcript still does not mention the bot, the
+    transcript is kept in pending group history instead of the raw placeholder.
 
     Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 

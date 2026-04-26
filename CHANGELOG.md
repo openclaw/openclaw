@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/registry: keep installed plugin index records focused on install/state/load paths and resolve plugin capabilities from manifests scoped to indexed plugins. Thanks @shakkernerd.
 - Plugins/registry: route cold manifest and capability lookups through the installed plugin index so setup, channels, config, secrets, doctor, and provider metadata paths avoid broad plugin-root scans before runtime execution. Thanks @shakkernerd.
 - CLI/models: speed up `models list --all --provider <id>` for static manifest-backed providers by loading catalog rows through the installed plugin index instead of broad manifest scans or runtime suppression hooks. Thanks @shakkernerd.
+- CLI/models: use OpenClaw Provider Index preview rows as the final cold fallback for installable providers, while keeping user config, installed manifests, and refreshed cache rows above provider-index metadata. Thanks @vincentkoc.
 - Plugins/chat commands: refresh the persisted plugin registry after `/plugins enable` and `/plugins disable`, matching the CLI mutation path. Thanks @vincentkoc.
 - Plugins/compat: mark `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY` as a deprecated break-glass switch and point operators at registry repair instead. Thanks @vincentkoc.
 - Plugins/registry: ignore stale persisted registry reads when plugin policy no longer matches current config, and stamp generated registry files with a do-not-edit warning. Thanks @vincentkoc.
@@ -66,16 +67,50 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: teach prompts and `agents_list` to surface native Codex app-server availability so agents prefer `/codex ...` over Codex ACP unless ACP/acpx is explicit. Thanks @vincentkoc.
 - ACPX/Droid: add Factory Droid to the live ACP bind Docker matrix, including `.factory` settings staging, `FACTORY_API_KEY` forwarding, and the single-agent `test:docker:live-acp-bind:droid` recipe.
 - TTS/personas: add provider-aware TTS personas with deterministic provider binding merges, `/tts persona` controls, gateway/CLI persona state, Google Gemini `audio-profile-v1` prompt wrapping, and OpenAI instruction mapping. (#70748) Thanks @barronlroth.
+- Voice Wake: add trigger-based routing so macOS voice wake phrases can select a configured agent or session target, with Gateway routing APIs and node update events. (#30354) Thanks @longbiaochen.
 
 ### Fixes
 
+- Docker: copy patched dependency files into runtime images so downstream `pnpm install` layers keep working. Fixes #69224. Thanks @gucasbrg.
+- Agents/runtime: submit heartbeat, cron, and exec wakeups as transient runtime context instead of visible user prompts, keeping synthetic system work out of chat transcripts. Fixes #66496 and #66814. Thanks @jeades and @mandomaker.
+- Telegram: include native quote excerpts automatically for threaded replies and reply tags when the original Telegram text is available, without adding another config knob. Fixes #6975. Thanks @rex05ai.
+- Node/Linux: make `openclaw node install` enable and restart the `openclaw-node` systemd unit instead of the gateway unit on node-only VMs. Fixes #68287. Thanks @dlebee-agent.
+- Browser/CDP: retry transient raw-CDP WebSocket handshake failures before any
+  browser command is sent, and reconnect stale persistent Playwright CDP
+  sessions for safe tab-list reads without replaying mutating browser actions.
+  Fixes #67728.
+- Telegram: preserve exact selected quote text when sending native quote replies, and retry with legacy replies if Telegram rejects quote parameters. (#71952) Thanks @rubencu.
+- Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
+- Security/audit: read channel exposure and plugin allowlist ownership from read-only plugin index metadata so cold audits do not depend on loaded channel runtime. Thanks @shakkernerd.
+- Plugins/chat: keep `/plugins list`, `/plugins enable`, and `/plugins disable` on the persisted plugin index path so chat plugin management does not load diagnostic/runtime plugin registries before execution. Thanks @shakkernerd.
+- Plugins/doctor: read workspace plugin status and legacy web-search ownership through installed-index manifest metadata instead of broad manifest registry scans. Thanks @shakkernerd.
+- Logging: redact configured secret patterns at console and file-log sink exits
+  so credentials that reach the logger are masked before terminal display or
+  JSONL persistence. Fixes #67953. Thanks @Ziy1-Tan.
+- Gateway/services: refuse process and service mutations from an older OpenClaw
+  binary when the config was last written by a newer version, preventing
+  split-brain installs from stopping or rewriting newer gateway services. Fixes
+  #57079.
+- Gateway: reserve `/healthz` and `/readyz` ahead of plugin, canvas, and Control UI HTTP stages so liveness/readiness probes still answer when a later route handler stalls. Fixes #69674. Thanks @Xike-Creek.
+- Logging: load `logging.file` and redaction settings directly from the active
+  OpenClaw config path in bundled runtimes, so packaged gateways stop falling
+  back to `/tmp/openclaw`. Fixes #59370, #67168, and #61295. Thanks @KeaneYan,
+  @Pan9hu, and @zsjlovelike.
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
 - macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
   start browser-capable CLI node services through the restored
   `openclaw node start` command, and show an actionable browser-control error
   when the local control service is missing. Fixes #66637.
+- Gateway/update: fail package updates when the restarted managed gateway reports the wrong version, avoiding false-success mixed-version restarts after macOS LaunchAgent updates. Fixes #71835. Thanks @abhinas90 and @jsompis.
+- Plugins/runtime deps: surface activated plugin load failures in health and fail package-update restart verification or doctor repair when bundled runtime deps still cannot load, avoiding false-success repairs. (#71883) Thanks @Solvely-Colin.
+- Gateway/Linux: include fnm `aliases/default/bin` in generated service PATHs and let doctor accept either modern fnm aliases or the legacy `current/bin` symlink, avoiding false PATH repair prompts. Fixes #68169. Thanks @richard-scott.
+- Installer/Linux: run apt installs with noninteractive dpkg and needrestart settings so fresh Ubuntu 24.04 `curl | bash` installs do not hang while installing Node.js, Git, or build tools. Fixes #41146. Thanks @iht76, @alexcarv318, @cs3gallery, @firofame, and @cgdusek.
+- Providers/Bedrock: defer the AWS SDK import until Bedrock discovery actually runs so plugin registration and setup stay lightweight on cold start. Fixes #71690. Thanks @jarvis-ai-gregmoser.
+- Installer/macOS: stop immediately when Homebrew `node@24` installation fails and avoid printing PATH advice for missing Homebrew Node installs. Fixes #70411. Thanks @1fanwang.
+- WhatsApp: remove ack reactions after a visible reply when `messages.removeAckAfterReply` is enabled, matching other reaction-capable channels. Fixes #26183. Thanks @MrUnforsaken.
 - Providers/Z.AI: map OpenClaw thinking controls to Z.AI's `thinking` payload and add opt-in preserved thinking replay via `params.preserveThinking`, so GLM 5.x can keep prior `reasoning_content` when requested. Fixes #58680. Thanks @xuanmingguo.
 - Channels/status: keep read-only channel lists on manifest and package metadata by default, loading setup runtime only for explicit fallback callers. Thanks @shakkernerd.
+- Plugins: scope setup and web-provider metadata manifest reads to explicit plugin ids when callers already know the owning plugin set. Thanks @vincentkoc.
 - Plugins/onboarding: defer onboarding install-record index writes until the guarded config commit so setup failures cannot leave the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Plugins/registry: resolve web provider ownership from the installed plugin index instead of broad manifest scans on secret, tool, and pricing paths. Thanks @shakkernerd.
 - Config/providers: accept `video` and `audio` in configured model `input` values and
@@ -94,6 +129,14 @@ Docs: https://docs.openclaw.ai
   before agent dispatch and keep raw Feishu `file_key` payloads out of message
   text. Fixes #67120 and #61876.
 - Tasks: terminalize async Gateway agent task records from the Gateway run result while preserving aborted, failed, and cancelled outcomes instead of leaving completed runs stuck as active or lost. (#71905) Thanks @likewen-tech.
+- WhatsApp: let authorized group voice-note transcripts satisfy mention gating
+  before reply dispatch, while keeping unmentioned transcripts in pending group
+  history. Fixes #44908.
+- Media understanding: carry channel voice-note preflight state into attachment
+  selection so WhatsApp, Feishu, Telegram, and Discord do not transcribe the
+  same inbound audio twice. Fixes #70580.
+- TTS/BlueBubbles: deliver compatible auto-TTS audio as iMessage voice memo
+  bubbles instead of plain MP3/CAF file attachments. Fixes #16848.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
@@ -129,6 +172,9 @@ Docs: https://docs.openclaw.ai
   and `media://inbound/...` markers from pruned model replay context so stale
   media refs are not rehydrated as fresh prompt images. Fixes #71868. Thanks
   @jmeadlock.
+- Docker/Bonjour: disable Bonjour/mDNS advertising by default for bundled
+  Compose gateways on bridge networking, while keeping host/macvlan opt-in with
+  `OPENCLAW_DISABLE_BONJOUR=0`. Fixes #71879. Thanks @gbballpack.
 - CLI/status: label the OpenClaw Serve/Funnel setting as `Tailscale exposure` and show daemon state separately when available, so `gateway.tailscale.mode: "off"` no longer reads like the Tailscale daemon is stopped. Fixes #71790. Thanks @pesvobodak.
 - Plugins/Bonjour: stop ciao mDNS watchdog failures from looping forever when the advertiser stays stuck in `probing` or `announcing`; Bonjour now disables itself for the current Gateway process after repeated failed restarts while the Gateway keeps running. Fixes #69011. Thanks @siddharthaagarwalofficial-ux, @FiredMosquito831, and @spikefcz.
 - Gateway/Fly.io: seed Control UI allowed origins from the actual runtime bind and port so CLI-driven non-loopback starts do not crash before config exists. Fixes #71823.

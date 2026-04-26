@@ -507,6 +507,23 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("uses provider index preview rows when an installable provider is not installed", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "moonshot/kimi-k2.6",
+          available: false,
+        }),
+      ]);
+    });
+
     it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);

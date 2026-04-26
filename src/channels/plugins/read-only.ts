@@ -58,6 +58,7 @@ function loadPluginLoaderModule(): PluginLoaderModule {
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   workspaceDir?: string;
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
@@ -607,6 +608,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
   const manifestRecords = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
+    stateDir: options.stateDir,
     workspaceDir,
     env,
     cache: options.cache,

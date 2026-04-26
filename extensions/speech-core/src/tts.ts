@@ -738,8 +738,17 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
+const VOICE_DELIVERY_CHANNELS = new Set([
+  "bluebubbles",
+  "telegram",
+  "feishu",
+  "whatsapp",
+  "matrix",
+  "discord",
+]);
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu", "whatsapp"]);
+const AUDIO_FILE_VOICE_MEMO_CHANNELS = new Set(["bluebubbles"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -747,7 +756,7 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
 
 function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
   const channelId = resolveChannelId(channel);
-  return channelId !== null && OPUS_CHANNELS.has(channelId);
+  return channelId !== null && VOICE_DELIVERY_CHANNELS.has(channelId);
 }
 
 function supportsTranscodedVoiceNoteTts(channel: string | undefined): boolean {
@@ -755,12 +764,43 @@ function supportsTranscodedVoiceNoteTts(channel: string | undefined): boolean {
   return channelId !== null && TRANSCODED_VOICE_NOTE_CHANNELS.has(channelId);
 }
 
+function resolveTtsSynthesisTarget(channel: string | undefined): "audio-file" | "voice-note" {
+  const channelId = resolveChannelId(channel);
+  return channelId !== null && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+}
+
+function supportsAudioFileVoiceMemoOutput(params: {
+  fileExtension?: string;
+  outputFormat?: string;
+}): boolean {
+  const extension = params.fileExtension?.trim().toLowerCase();
+  if (extension === ".mp3" || extension === ".caf") {
+    return true;
+  }
+  const outputFormat = params.outputFormat?.trim().toLowerCase();
+  return (
+    outputFormat === "mp3" ||
+    outputFormat === "caf" ||
+    outputFormat === "audio/mpeg" ||
+    outputFormat === "audio/x-caf"
+  );
+}
+
 function shouldDeliverTtsAsVoice(params: {
   channel: string | undefined;
   target: "audio-file" | "voice-note" | undefined;
   voiceCompatible: boolean | undefined;
+  fileExtension?: string;
+  outputFormat?: string;
 }): boolean {
-  if (!supportsNativeVoiceNoteTts(params.channel) || params.target !== "voice-note") {
+  const channelId = resolveChannelId(params.channel);
+  if (channelId === null || !supportsNativeVoiceNoteTts(channelId)) {
+    return false;
+  }
+  if (AUDIO_FILE_VOICE_MEMO_CHANNELS.has(channelId)) {
+    return params.target === "audio-file" && supportsAudioFileVoiceMemoOutput(params);
+  }
+  if (params.target !== "voice-note") {
     return false;
   }
   return params.voiceCompatible === true || supportsTranscodedVoiceNoteTts(params.channel);
@@ -1032,6 +1072,8 @@ export async function textToSpeech(params: {
       channel: params.channel,
       target: synthesis.target,
       voiceCompatible: synthesis.voiceCompatible,
+      fileExtension: synthesis.fileExtension,
+      outputFormat: synthesis.outputFormat,
     }),
     target: synthesis.target,
   };
@@ -1061,7 +1103,7 @@ export async function synthesizeSpeech(params: {
 
   const { config, persona, providers } = setup;
   const timeoutMs = params.timeoutMs ?? config.timeoutMs;
-  const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
+  const target = resolveTtsSynthesisTarget(params.channel);
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -1499,6 +1541,7 @@ export const _test = {
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,
   supportsTranscodedVoiceNoteTts,
+  resolveTtsSynthesisTarget,
   shouldDeliverTtsAsVoice,
   summarizeText,
   getResolvedSpeechProviderConfig,

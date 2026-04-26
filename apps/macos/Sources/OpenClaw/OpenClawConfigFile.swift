@@ -192,12 +192,12 @@ enum OpenClawConfigFile {
     }
 
     static func remoteGatewayPort(matchingHost sshHost: String) -> Int? {
-        guard let normalizedSshHost = Self.canonicalHostForComparison(sshHost),
+        guard let normalizedSshHost = canonicalHostForComparison(sshHost),
               let url = self.remoteGatewayUrl(),
               let port = url.port,
               port > 0,
               let urlHost = url.host,
-              let normalizedUrlHost = Self.canonicalHostForComparison(urlHost)
+              let normalizedUrlHost = canonicalHostForComparison(urlHost)
         else {
             return nil
         }

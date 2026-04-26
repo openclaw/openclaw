@@ -1,7 +1,4 @@
-import {
-  resolvePluginConfigObject,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";

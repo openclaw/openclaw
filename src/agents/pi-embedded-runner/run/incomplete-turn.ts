@@ -329,6 +329,37 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
+function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
+  payloadCount: number;
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+  >;
+}): boolean {
+  if (isEmptyResponseAssistantTurn(params)) {
+    return true;
+  }
+  if (params.payloadCount !== 0) {
+    return false;
+  }
+  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant || assistant.stopReason === "error") {
+    return false;
+  }
+  if (
+    isIncompleteTerminalAssistantTurn({
+      hasAssistantVisibleText: false,
+      lastAssistant: assistant,
+    })
+  ) {
+    return false;
+  }
+  return isReasoningOnlyAssistantTurn(assistant);
+}
+
 function shouldSkipPlanningOnlyRetry(params: {
   aborted: boolean;
   timedOut: boolean;
@@ -358,7 +389,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
     return false;
   }
-  return isEmptyResponseAssistantTurn({
+  return isNonVisibleAssistantTurnEligibleForSilentReply({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
   });

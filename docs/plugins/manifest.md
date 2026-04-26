@@ -708,7 +708,7 @@ Model fields:
 | `api`           | `ModelApi`                                                     | Optional per-model API override.                                            |
 | `baseUrl`       | `string`                                                       | Optional per-model base URL override.                                       |
 | `headers`       | `Record<string, string>`                                       | Optional per-model static headers.                                          |
-| `input`         | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts.                                               |
+| `input`         | `Array<"text" \| "image" \| "document" \| "audio" \| "video">` | Modalities the model accepts.                                               |
 | `reasoning`     | `boolean`                                                      | Whether the model exposes reasoning behavior.                               |
 | `contextWindow` | `number`                                                       | Native provider context window.                                             |
 | `contextTokens` | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`. |
