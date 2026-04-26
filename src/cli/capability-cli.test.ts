@@ -162,10 +162,13 @@ vi.mock("../agents/memory-search.js", () => ({
     mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
-vi.mock("../commands/models.js", () => ({
+vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
+}));
+
+vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
