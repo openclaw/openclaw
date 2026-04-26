@@ -287,6 +287,15 @@ export function createSessionActions(context: SessionActionContext) {
 
   const loadHistory = async () => {
     try {
+      if (opts.historyLimit === 0) {
+        chatLog.clearAll();
+        btw.clear();
+        chatLog.addSystem(`session ${state.currentSessionKey}`);
+        state.historyLoaded = true;
+        await refreshSessionInfo();
+        tui.requestRender();
+        return;
+      }
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
         limit: opts.historyLimit ?? 200,

@@ -244,6 +244,45 @@ describe("tui session actions", () => {
     expect(btw.clear).toHaveBeenCalled();
   });
 
+  it("skips gateway history loading when history limit is zero", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const loadHistory = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const btw = createBtwPresenter();
+    const requestRender = vi.fn();
+    const state = createBaseState();
+
+    const { loadHistory: loadTuiHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      chatLog,
+      btw,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: { historyLimit: 0 },
+      state,
+    });
+
+    await loadTuiHistory();
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(chatLog.clearAll).toHaveBeenCalled();
+    expect(btw.clear).toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledWith("session agent:main:main");
+    expect(state.historyLoaded).toBe(true);
+    expect(requestRender).toHaveBeenCalled();
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
