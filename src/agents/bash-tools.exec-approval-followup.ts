@@ -3,6 +3,7 @@ import {
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { logWarn } from "../logger.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -116,8 +117,17 @@ function formatDirectExecApprovalFollowupText(
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
 }
 
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
+function logSessionResumeFallback(params: { approvalId: string; sessionError: unknown }): void {
+  // Internal-only diagnostic. Previously this prefix was prepended to the
+  // user-facing message ("Automatic session resume failed, so sending the
+  // status directly.") which leaked operator-level state into Telegram/DM
+  // surfaces and was confusing because the underlying command often
+  // succeeded — only the session handoff failed. The prefix is now dropped
+  // from the user message and the failure is logged for ops debugging
+  // instead. (#72143)
+  logWarn(
+    `exec-approval-followup: session resume failed; falling back to direct delivery (approvalId=${params.approvalId}, error=${formatUnknownError(params.sessionError)})`,
+  );
 }
 
 function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
@@ -173,13 +183,18 @@ async function sendDirectFollowupFallback(params: {
     return false;
   }
 
-  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  if (params.sessionError) {
+    logSessionResumeFallback({
+      approvalId: params.approvalId,
+      sessionError: params.sessionError,
+    });
+  }
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
     threadId: params.deliveryTarget.threadId,
-    content: `${prefix}${directText}`,
+    content: directText,
     agentId: undefined,
     idempotencyKey: `exec-approval-followup:${params.approvalId}`,
   });

@@ -146,9 +146,13 @@ describe("exec approval followup", () => {
         "Exec finished (gateway id=req-session-resume-failed, session=sess_1, code 0)\nall good",
     });
 
+    // Reverted to exclude the user-facing "Automatic session resume failed,
+    // so sending the status directly." prefix per #72143 — that string leaked
+    // operator-level state into Telegram/DM surfaces. The session-resume
+    // failure is now logged internally instead.
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        content: "all good",
         idempotencyKey: "exec-approval-followup:req-session-resume-failed",
       }),
     );
@@ -185,10 +189,10 @@ describe("exec approval followup", () => {
       resultText: "Exec denied (gateway id=req-denied-resume-failed, approval-timeout): uname -a",
     });
 
+    // Same prefix-removal as above per #72143.
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content:
-          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
+        content: "Command did not run: approval timed out.",
         idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
       }),
     );
