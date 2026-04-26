@@ -337,8 +337,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, {
     sessionKey,
+    contextKey: `exec:${session.id}`,
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
+    origin: "local-exec",
   });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),

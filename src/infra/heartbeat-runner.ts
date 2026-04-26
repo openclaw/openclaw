@@ -682,12 +682,24 @@ function resolveHeartbeatRunPrompt(params: {
         .filter((event) => isExecCompletionEvent(event.text))
         .map((event) => event.text)
     : [];
-  const internalOnlyExecEvents = params.preflight.shouldInspectPendingEvents
-    ? pendingEventEntries
-        .filter((event) => event.trusted !== false && isExecCompletionEvent(event.text))
-        .map((event) => event.text)
-        .filter((event) => shouldKeepExecCompletionInternal([event]))
-    : [];
+  const internalOnlyExecEventIndexes: number[] = [];
+  const internalOnlyExecEvents: string[] = [];
+  if (params.preflight.shouldInspectPendingEvents) {
+    let execEventIndex = 0;
+    for (const event of pendingEventEntries) {
+      if (!isExecCompletionEvent(event.text)) {
+        continue;
+      }
+      const isLocalExecSource =
+        event.origin === "local-exec" &&
+        (event.contextKey === "exec" || event.contextKey?.startsWith("exec:"));
+      if (isLocalExecSource && shouldKeepExecCompletionInternal([event.text])) {
+        internalOnlyExecEventIndexes.push(execEventIndex);
+        internalOnlyExecEvents.push(event.text);
+      }
+      execEventIndex += 1;
+    }
+  }
   const hasExecCompletion = execEvents.length > 0;
   const execCompletionInternalOnly =
     execEvents.length > 0 &&
@@ -739,7 +751,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
         deliverToUser: params.canRelayToUser,
-        internalOnlyEvents: internalOnlyExecEvents,
+        internalOnlyIndexes: internalOnlyExecEventIndexes,
       })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })

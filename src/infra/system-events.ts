@@ -19,6 +19,7 @@ export type SystemEvent = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  origin?: "local-exec";
 };
 
 const MAX_EVENTS = 20;
@@ -38,6 +39,7 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  origin?: "local-exec";
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -107,6 +109,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
+    ...(options.origin ? { origin: options.origin } : {}),
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -148,6 +151,7 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     (left.trusted ?? true) === (right.trusted ?? true) &&
+    (left.origin ?? null) === (right.origin ?? null) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }
