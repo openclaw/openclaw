@@ -139,7 +139,7 @@ export type AgentRuntimeReplyPayload = {
   btw?: {
     question: string;
   };
-  replyToId?: string;
+  replyToId?: string | null;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;

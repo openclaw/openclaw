@@ -1573,11 +1573,29 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValueOnce({ messageId: "sl1", channelId: "C123" })
       .mockResolvedValueOnce({ messageId: "sl2", channelId: "C123" });
+    type SendSlackForTest = (
+      to: string,
+      text: string,
+      options?: { threadTs?: string },
+    ) => Promise<{ messageId: string; channelId?: string }>;
+    const slackThreadOutbound: ChannelOutboundAdapter = {
+      deliveryMode: "direct",
+      sendPayload: async (ctx) => {
+        const send = ctx.deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(ctx.to, ctx.text, {
+          threadTs: typeof ctx.replyToId === "string" ? ctx.replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
+    };
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "slack",
-          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackThreadOutbound }),
           source: "test",
         },
       ]),

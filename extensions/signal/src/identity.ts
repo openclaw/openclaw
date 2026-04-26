@@ -1,6 +1,6 @@
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { normalizeE164, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { looksLikeUuid } from "./uuid.js";
+import { isStrictUuid as isStrictUuidValue, looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string }
@@ -15,7 +15,7 @@ export { looksLikeUuid } from "./uuid.js";
 
 /** Strict UUID check: only accepts canonical 8-4-4-4-12 or compact 32-hex formats. */
 export function isStrictUuid(value: string): boolean {
-  return UUID_HYPHENATED_RE.test(value) || UUID_COMPACT_RE.test(value);
+  return isStrictUuidValue(value);
 }
 
 function stripSignalPrefix(value: string): string {

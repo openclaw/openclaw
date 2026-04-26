@@ -756,9 +756,11 @@ export async function deliverReplies(params: {
 
     const rawContent = reply.text || "";
     const hookReplyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      params.replyToMode === "off"
+        ? undefined
+        : resolveTelegramReplyId(reply.replyToId ?? undefined);
     const replyQuote = resolveReplyQuoteForSend({
-      replyToId,
+      replyToId: hookReplyToId,
       replyQuoteByMessageId: params.replyQuoteByMessageId,
       replyQuoteMessageId: params.replyQuoteMessageId,
       replyQuoteText: params.replyQuoteText,

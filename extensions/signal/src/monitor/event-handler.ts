@@ -670,21 +670,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         sender,
       });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      decision: quoteVisibility,
+      quoteSenderAllowed,
+      visibleQuoteText,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
+    const visibleQuoteTarget = quoteVisibility.include ? quoteTarget : undefined;
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
       );
     }
     const hasBodyContent =
-      Boolean(messageText || visibleQuoteText) ||
+      Boolean(messageText || visibleQuoteTarget?.body) ||
       Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (
@@ -834,7 +839,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
-      const pendingBodyText = messageText || pendingPlaceholder || quoteTarget?.body || "";
+      const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteTarget?.body || "";
       const historyKey = groupId ?? "unknown";
       recordPendingHistoryEntryIfEnabled({
         historyMap: deps.groupHistories,
@@ -946,10 +951,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     // Build body text - don't use quote text as fallback, preserve it for context
-    const bodyText = messageText || placeholder || "";
+    const bodyText =
+      messageText ||
+      placeholder ||
+      (isGroup && contextVisibilityMode === "allowlist_quote"
+        ? (visibleQuoteTarget?.body ?? "")
+        : "");
 
     // Continue if we have either body text OR quote context (quote-only messages are valid)
-    if (!bodyText && !quoteTarget) {
+    if (!bodyText && !visibleQuoteTarget) {
       return;
     }
     const receiptTimestamp =
@@ -1010,7 +1020,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
-      quoteTarget,
+      quoteTarget: visibleQuoteTarget,
     });
   };
 }

@@ -244,7 +244,7 @@ export function resolveMattermostReplyRootId(params: {
 export function canFinalizeMattermostPreviewInPlace(params: {
   previewRootId?: string;
   threadRootId?: string;
-  replyToId?: string;
+  replyToId?: string | null;
 }): boolean {
   return (
     resolveMattermostReplyRootId({
