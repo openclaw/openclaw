@@ -103,6 +103,7 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
 };
@@ -591,6 +592,9 @@ function buildInstalledPluginIndex(
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
     }

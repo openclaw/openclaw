@@ -69,6 +69,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   origin: z.string(),
   enabled: z.boolean(),
   enabledByDefault: z.boolean().optional(),
+  syntheticAuthRefs: StringArraySchema.optional(),
   startup: InstalledPluginIndexStartupSchema,
   compat: z.array(z.string()),
 });

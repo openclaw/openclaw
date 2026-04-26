@@ -39,6 +39,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         rootDir: "/plugins/demo",
         origin: "global",
         enabled: true,
+        syntheticAuthRefs: ["demo"],
         startup: {
           sidecar: false,
           memory: false,
