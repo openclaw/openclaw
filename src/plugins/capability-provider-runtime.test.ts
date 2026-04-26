@@ -552,10 +552,8 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["google"]);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
-      index: expect.anything(),
       config: undefined,
       env: process.env,
-      includeDisabled: true,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: compatConfig,
