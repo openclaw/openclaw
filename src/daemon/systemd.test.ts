@@ -816,6 +816,52 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
+  it("retries enable after reloading again when systemd cannot see the written unit yet", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("enable failed"),
+            "",
+            "Unit file openclaw-node.service does not exist.",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(6);
+    });
+  });
+
   it("disables the OPENCLAW_SYSTEMD_UNIT override during uninstall", async () => {
     await withNodeSystemdFixture(async ({ env, unitPath }) => {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });

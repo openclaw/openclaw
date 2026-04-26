@@ -82,6 +82,7 @@ Docs: https://docs.openclaw.ai
   browser command is sent, and reconnect stale persistent Playwright CDP
   sessions for safe tab-list reads without replaying mutating browser actions.
   Fixes #67728.
+- Gateway/Linux: retry `systemctl --user enable` after a second daemon reload when the freshly written gateway unit is not visible yet on migrated systemd installs. Fixes #65184. Thanks @liushuaiiu.
 - Telegram: preserve exact selected quote text when sending native quote replies, and retry with legacy replies if Telegram rejects quote parameters. (#71952) Thanks @rubencu.
 - Plugins/CLI: preserve manifest name, description, format, and source metadata in cold `openclaw plugins list` output without importing plugin runtime. Thanks @shakkernerd.
 - Security/audit: read channel exposure and plugin allowlist ownership from read-only plugin index metadata so cold audits do not depend on loaded channel runtime. Thanks @shakkernerd.
