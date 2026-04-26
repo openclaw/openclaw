@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
 - Plugins/startup: load the default `memory-core` slot during Gateway startup when permitted so active-memory recall can call `memory_search` and `memory_get` without requiring an explicit `plugins.slots.memory` entry, while preserving `plugins.slots.memory: "none"`. Thanks @codex.
 - Plugins/CLI: prefer native require for compiled bundled plugin JavaScript before jiti so read-only config, status, device, and node commands avoid unnecessary transform overhead on slow hosts. Fixes #62842. Thanks @Effet.
 - Plugins/compat: inventory doctor-side deprecation migrations separately from runtime plugin compatibility so release sweeps preserve needed repairs while enforcing dated removal windows. Thanks @vincentkoc.
@@ -15,11 +16,13 @@ Docs: https://docs.openclaw.ai
 - Plugins: fail `plugins update` when tracked plugin or hook updates error, keep bundled runtime-dependency repair behind restrictive allowlists, and reject package installs with unloadable extension entries. Thanks @codex.
 - Gateway/chat: keep duplicate attachment-backed `chat.send` retries with the same idempotency key on the documented in-flight path so aborts still target the real active run. Fixes #70139. Thanks @Feelw00.
 - Plugins: share package entrypoint resolution between install and discovery, reject mismatched `runtimeExtensions`, and cache bundled runtime-dependency manifest reads during scans. Thanks @codex.
+- WhatsApp/Web: keep quiet but healthy linked-device sessions connected by basing the watchdog on WhatsApp Web transport activity, while retaining a longer app-silence cap so frame activity cannot mask a stuck session forever. Fixes #70678; carries forward the focused #71466 approach and keeps #63939 as related configurable-timeout follow-up. Thanks @vincentkoc and @oromeis.
 
 ## 2026.4.26
 
 ### Fixes
 
+- Plugins/CLI: let flag-driven `openclaw channels add` install the selected channel plugin from its default source without opening an interactive prompt, fixing published npm Telegram setup in stdin-closed automation. Thanks @codex.
 - Onboarding/setup: keep first-run config reads, plugin compatibility notices, and post-model sanity checks on cold metadata paths unless the user chooses to browse all models, avoiding full plugin/runtime catalog work between prompts. Thanks @shakkernerd.
 - Onboarding/auth: run manifest-owned provider auth choices through scoped setup providers so selecting OpenAI Codex browser/device auth no longer loads every provider runtime before OAuth starts. Thanks @shakkernerd.
 - Onboarding/auth: keep the post-auth default-model policy lookup on manifest/setup metadata so the next prompt appears without loading broad provider runtime. Thanks @shakkernerd.

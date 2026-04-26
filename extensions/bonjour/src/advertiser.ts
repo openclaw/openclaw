@@ -50,8 +50,6 @@ type CiaoModule = {
 type BonjourCycle = {
   responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
-  cleanupUncaughtException?: () => void;
-  cleanupUnhandledRejection?: () => void;
 };
 
 type ServiceStateTracker = {
@@ -179,6 +177,18 @@ export async function startGatewayBonjourAdvertiser(
   const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
+  let cleanupUnhandledRejection: (() => void) | undefined;
+  let cleanupUncaughtException: (() => void) | undefined;
+  let processHandlersCleaned = false;
+
+  function cleanupProcessHandlers() {
+    if (processHandlersCleaned) {
+      return;
+    }
+    processHandlersCleaned = true;
+    cleanupUncaughtException?.();
+    cleanupUnhandledRejection?.();
+  }
 
   const handleCiaoProcessError = (reason: unknown): boolean => {
     const classification = classifyCiaoProcessError(reason);
@@ -196,6 +206,8 @@ export async function startGatewayBonjourAdvertiser(
     }
     return true;
   };
+  cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
+  cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
   try {
     const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
@@ -259,16 +271,7 @@ export async function startGatewayBonjourAdvertiser(
         svc: gateway as unknown as BonjourService,
       });
 
-      const cleanupUnhandledRejection =
-        services.length > 0 && deps.registerUnhandledRejectionHandler
-          ? deps.registerUnhandledRejectionHandler(handleCiaoProcessError)
-          : undefined;
-      const cleanupUncaughtException =
-        services.length > 0 && deps.registerUncaughtExceptionHandler
-          ? deps.registerUncaughtExceptionHandler(handleCiaoProcessError)
-          : undefined;
-
-      return { responder, services, cleanupUncaughtException, cleanupUnhandledRejection };
+      return { responder, services };
     }
 
     async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
@@ -288,9 +291,6 @@ export async function startGatewayBonjourAdvertiser(
         }
       } catch {
         /* ignore */
-      } finally {
-        cycle.cleanupUncaughtException?.();
-        cycle.cleanupUnhandledRejection?.();
       }
     }
 
@@ -483,10 +483,12 @@ export async function startGatewayBonjourAdvertiser(
         }
         await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
+        cleanupProcessHandlers();
       },
     };
   } catch (err) {
     restoreConsoleLog();
+    cleanupProcessHandlers();
     throw err;
   }
 }

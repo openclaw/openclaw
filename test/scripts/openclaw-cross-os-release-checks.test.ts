@@ -12,6 +12,8 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
+  CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -39,6 +41,11 @@ import {
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
+    expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
+    expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
   it("accepts OK agent output from the captured log when stdout is empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
     try {
