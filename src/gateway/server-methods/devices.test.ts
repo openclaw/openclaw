@@ -181,7 +181,13 @@ describe("deviceHandlers", () => {
   });
 
   it("disconnects active clients after revoking a device token", async () => {
-    getPairedDeviceMock.mockResolvedValue(null);
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: [],
+      tokens: {},
+    });
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions("device.token.revoke", {
       deviceId: " device-1 ",
@@ -206,7 +212,13 @@ describe("deviceHandlers", () => {
   });
 
   it("allows admin-scoped callers to revoke another device's token", async () => {
-    getPairedDeviceMock.mockResolvedValue(null);
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-2",
+      role: "operator",
+      roles: ["operator"],
+      scopes: [],
+      tokens: {},
+    });
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions(
       "device.token.revoke",
@@ -228,7 +240,13 @@ describe("deviceHandlers", () => {
   });
 
   it("treats normalized device ids as self-owned for token revocation", async () => {
-    getPairedDeviceMock.mockResolvedValue(null);
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: [],
+      tokens: {},
+    });
     revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
     const opts = createOptions(
       "device.token.revoke",
@@ -367,7 +385,29 @@ describe("deviceHandlers", () => {
     expect(opts.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "unknown deviceId/role" }),
+      expect.objectContaining({ message: "device token revocation denied" }),
+    );
+  });
+
+  it("hard-denies when device is not found in pairing store", async () => {
+    getPairedDeviceMock.mockResolvedValue(null);
+    revokeDeviceTokenMock.mockResolvedValue(null);
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).not.toHaveBeenCalled();
+    expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=unknown-device"),
+    );
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "device token revocation denied" }),
     );
   });
 
