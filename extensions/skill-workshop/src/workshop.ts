@@ -1,7 +1,12 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveDefaultAgentId } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
-import { applyProposalToWorkspace, prepareProposalWrite } from "./skills.js";
+import {
+  applyProposalToWorkspace,
+  enforceSkillsPromptBudgetIfConfigured,
+  prepareProposalWrite,
+} from "./skills.js";
 import { SkillWorkshopStore } from "./store.js";
 import type { SkillProposal } from "./types.js";
 
@@ -37,6 +42,7 @@ export async function applyOrStoreProposal(params: {
   store: SkillWorkshopStore;
   config: SkillWorkshopConfig;
   workspaceDir: string;
+  openClawConfig?: OpenClawConfig;
 }): Promise<{
   status: "pending" | "applied" | "quarantined";
   skillPath?: string;
@@ -45,6 +51,12 @@ export async function applyOrStoreProposal(params: {
   const prepared = await prepareProposalWrite({
     proposal: params.proposal,
     maxSkillBytes: params.config.maxSkillBytes,
+  });
+  enforceSkillsPromptBudgetIfConfigured({
+    proposal: params.proposal,
+    preparedMarkdown: prepared.content,
+    created: prepared.created,
+    openClawConfig: params.openClawConfig,
   });
   const critical = prepared.findings.find((finding) => finding.severity === "critical");
   if (critical) {
@@ -64,6 +76,7 @@ export async function applyOrStoreProposal(params: {
     const applied = await applyProposalToWorkspace({
       proposal: params.proposal,
       maxSkillBytes: params.config.maxSkillBytes,
+      openClawConfig: params.openClawConfig,
     });
     const stored = await params.store.add(
       {

@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isPathInside, isPathInsideWithRealpath } from "openclaw/plugin-sdk/security-runtime";
+import {
+  buildSyntheticWorkspaceSkillEntryForPreview,
+  previewSkillsPromptImpact,
+} from "openclaw/plugin-sdk/skills-runtime";
 import { bumpSkillsSnapshotVersion } from "../api.js";
 import { assertSkillContentSafe, scanSkillContent } from "./scanner.js";
 import type { SkillProposal, SkillScanFinding } from "./types.js";
@@ -37,21 +44,43 @@ function assertValidSection(section: string): string {
 
 function skillDir(workspaceDir: string, skillName: string): string {
   const safeName = assertValidSkillName(skillName);
-  const root = path.resolve(workspaceDir, "skills");
+  const ws = path.resolve(workspaceDir);
+  const root = path.resolve(ws, "skills");
   const dir = path.resolve(root, safeName);
-  if (!dir.startsWith(`${root}${path.sep}`)) {
+  if (!isPathInside(ws, root)) {
+    throw new Error("workspace skills root escapes workspace");
+  }
+  if (!isPathInside(root, dir)) {
     throw new Error("skill path escapes workspace skills directory");
+  }
+  if (fs.existsSync(ws) && fs.existsSync(root)) {
+    if (!isPathInsideWithRealpath(ws, root, { requireRealpath: true })) {
+      throw new Error("workspace skills root resolves outside workspace");
+    }
+    if (fs.existsSync(dir) && !isPathInsideWithRealpath(root, dir, { requireRealpath: true })) {
+      throw new Error("skill path escapes workspace skills directory after symlink resolution");
+    }
   }
   return dir;
 }
 
 function skillPath(workspaceDir: string, skillName: string): string {
-  return path.join(skillDir(workspaceDir, skillName), "SKILL.md");
+  const dir = skillDir(workspaceDir, skillName);
+  const file = path.resolve(dir, "SKILL.md");
+  if (!isPathInside(dir, file)) {
+    throw new Error("SKILL.md path escapes skill directory");
+  }
+  if (fs.existsSync(dir)) {
+    if (!isPathInsideWithRealpath(dir, file, { requireRealpath: true })) {
+      throw new Error("SKILL.md path escapes skill directory after symlink resolution");
+    }
+  }
+  return file;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
-    await fs.access(filePath);
+    await fsPromises.access(filePath);
     return true;
   } catch {
     return false;
@@ -59,10 +88,10 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
-  await fs.writeFile(tempPath, content, "utf8");
-  await fs.rename(tempPath, filePath);
+  await fsPromises.writeFile(tempPath, content, "utf8");
+  await fsPromises.rename(tempPath, filePath);
 }
 
 function formatSkillMarkdown(params: { name: string; description: string; body: string }): string {
@@ -96,6 +125,36 @@ function appendSection(markdown: string, section: string, body: string): string 
   return markdown.replace(new RegExp(`(${escaped}\\n)`), `$1\n${trimmedBody}\n`);
 }
 
+/**
+ * Enforces the same workspace skills prompt budget semantics as core (`previewSkillsPromptImpact`).
+ * Skips when `openClawConfig` is omitted (callers should pass `api.config` when available).
+ */
+export function enforceSkillsPromptBudgetIfConfigured(params: {
+  proposal: SkillProposal;
+  preparedMarkdown: string;
+  created: boolean;
+  openClawConfig?: OpenClawConfig;
+}): void {
+  if (params.openClawConfig === undefined) {
+    return;
+  }
+  const synthetic = buildSyntheticWorkspaceSkillEntryForPreview({
+    workspaceDir: params.proposal.workspaceDir,
+    skillName: params.proposal.skillName,
+    markdownContent: params.preparedMarkdown,
+  });
+  const preview = previewSkillsPromptImpact({
+    workspaceDir: params.proposal.workspaceDir,
+    config: params.openClawConfig,
+    agentId: params.proposal.agentId,
+    simulationMode: params.created ? "propose" : "replace",
+    syntheticEntry: synthetic,
+  });
+  if (!preview.withinLimits) {
+    throw new Error("skill would exceed workspace skills prompt budget");
+  }
+}
+
 export async function prepareProposalWrite(params: {
   proposal: SkillProposal;
   maxSkillBytes: number;
@@ -112,11 +171,11 @@ export async function prepareProposalWrite(params: {
   const change = params.proposal.change;
   if (change.kind === "create") {
     next = exists
-      ? appendSection(await fs.readFile(target, "utf8"), "Workflow", change.body)
+      ? appendSection(await fsPromises.readFile(target, "utf8"), "Workflow", change.body)
       : formatSkillMarkdown({ name, description: change.description, body: change.body });
   } else if (change.kind === "append") {
     const current = exists
-      ? await fs.readFile(target, "utf8")
+      ? await fsPromises.readFile(target, "utf8")
       : formatSkillMarkdown({
           name,
           description: change.description ?? params.proposal.title,
@@ -127,7 +186,7 @@ export async function prepareProposalWrite(params: {
     if (!exists) {
       throw new Error(`skill does not exist: ${name}`);
     }
-    const current = await fs.readFile(target, "utf8");
+    const current = await fsPromises.readFile(target, "utf8");
     if (!current.includes(change.oldText)) {
       throw new Error("oldText not found");
     }
@@ -141,16 +200,27 @@ export async function prepareProposalWrite(params: {
 export async function applyProposalToWorkspace(params: {
   proposal: SkillProposal;
   maxSkillBytes: number;
+  openClawConfig?: OpenClawConfig;
 }): Promise<{ skillPath: string; created: boolean; findings: SkillScanFinding[] }> {
   const prepared = await prepareProposalWrite(params);
+  enforceSkillsPromptBudgetIfConfigured({
+    proposal: params.proposal,
+    preparedMarkdown: prepared.content,
+    created: prepared.created,
+    openClawConfig: params.openClawConfig,
+  });
   assertSkillContentSafe(prepared.content);
-  await atomicWrite(prepared.skillPath, prepared.content);
+  const verified = await prepareProposalWrite(params);
+  if (verified.skillPath !== prepared.skillPath || verified.content !== prepared.content) {
+    throw new Error("skill proposal stale: workspace changed before write");
+  }
+  await atomicWrite(verified.skillPath, verified.content);
   bumpSkillsSnapshotVersion({
     workspaceDir: params.proposal.workspaceDir,
     reason: "manual",
-    changedPath: prepared.skillPath,
+    changedPath: verified.skillPath,
   });
-  return { skillPath: prepared.skillPath, created: prepared.created, findings: prepared.findings };
+  return { skillPath: verified.skillPath, created: verified.created, findings: verified.findings };
 }
 
 export async function writeSupportFile(params: {
@@ -174,8 +244,13 @@ export async function writeSupportFile(params: {
   assertSkillContentSafe(params.content);
   const root = skillDir(params.workspaceDir, name);
   const target = path.resolve(root, ...parts);
-  if (!target.startsWith(`${root}${path.sep}`)) {
+  if (!isPathInside(root, target)) {
     throw new Error("support file path escapes skill directory");
+  }
+  if (fs.existsSync(root)) {
+    if (!isPathInsideWithRealpath(root, target, { requireRealpath: true })) {
+      throw new Error("support file path escapes skill directory after symlink resolution");
+    }
   }
   await atomicWrite(target, `${params.content.trimEnd()}\n`);
   return target;

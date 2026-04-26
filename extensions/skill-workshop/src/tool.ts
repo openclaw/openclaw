@@ -4,6 +4,7 @@ import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import {
   applyProposalToWorkspace,
+  enforceSkillsPromptBudgetIfConfigured,
   normalizeSkillName,
   prepareProposalWrite,
   writeSupportFile,
@@ -157,6 +158,12 @@ export function createSkillWorkshopTool(params: {
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
           });
+          enforceSkillsPromptBudgetIfConfigured({
+            proposal,
+            preparedMarkdown: prepared.content,
+            created: prepared.created,
+            openClawConfig: params.api.config,
+          });
           const critical = prepared.findings.find((finding) => finding.severity === "critical");
           if (critical) {
             const stored = await store.add(
@@ -174,6 +181,7 @@ export function createSkillWorkshopTool(params: {
           const applied = await applyProposalToWorkspace({
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
+            openClawConfig: params.api.config,
           });
           const stored = await store.add(
             {
@@ -189,6 +197,12 @@ export function createSkillWorkshopTool(params: {
         const prepared = await prepareProposalWrite({
           proposal,
           maxSkillBytes: params.config.maxSkillBytes,
+        });
+        enforceSkillsPromptBudgetIfConfigured({
+          proposal,
+          preparedMarkdown: prepared.content,
+          created: prepared.created,
+          openClawConfig: params.api.config,
         });
         const critical = prepared.findings.find((finding) => finding.severity === "critical");
         if (critical) {
@@ -224,6 +238,7 @@ export function createSkillWorkshopTool(params: {
         const applied = await applyProposalToWorkspace({
           proposal,
           maxSkillBytes: params.config.maxSkillBytes,
+          openClawConfig: params.api.config,
         });
         const updated = await store.updateStatus(raw.id, "applied");
         return jsonResult({ status: "applied", skillPath: applied.skillPath, proposal: updated });
