@@ -180,6 +180,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
+  const systemUnits = service.runtime?.systemUnits ?? [];
+  if (service.runtime?.scope === "system" && systemUnits.length > 0) {
+    defaultRuntime.log(`${label("Systemd scope:")} ${infoText("system")}`);
+    for (const unit of systemUnits) {
+      const parts = [
+        unit.activeState ? `active=${unit.activeState}` : null,
+        unit.subState ? `sub=${unit.subState}` : null,
+        unit.mainPid != null ? `pid=${unit.mainPid}` : null,
+        unit.cgroup ? `cgroup=${unit.cgroup}` : null,
+      ].filter(Boolean);
+      const suffix = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+      defaultRuntime.log(`${label("Systemd unit:")} ${infoText(unit.unitName)}${suffix}`);
+    }
+  }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
     defaultRuntime.log(
@@ -231,7 +245,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   const systemdUnavailable =
     process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
-  if (systemdUnavailable) {
+  // If the system-bus fallback has already surfaced healthy OpenClaw units,
+  // the user-bus-unavailable detail is informational, not actionable: the
+  // runtime is fine under system-level systemd.
+  const systemServicesDetected =
+    service.runtime?.scope === "system" && (service.runtime?.systemUnits ?? []).length > 0;
+  if (systemdUnavailable && !systemServicesDetected) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),
     );
@@ -240,6 +259,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       wsl: isWSLEnv(),
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
+      systemServicesDetected,
     })) {
       defaultRuntime.error(errorText(hint));
     }

@@ -32,6 +32,11 @@ import {
   type SystemdUserLingerStatus,
 } from "./systemd-linger.js";
 import {
+  pickPrimaryGatewayUnit,
+  probeSystemdSystemServices,
+  type SystemdSystemProbeOutcome,
+} from "./systemd-system-probe.js";
+import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
@@ -694,15 +699,61 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
+function systemUnitToRuntime(
+  outcome: SystemdSystemProbeOutcome,
+  env: GatewayServiceEnv,
+): GatewayServiceRuntime | null {
+  const unit = pickPrimaryGatewayUnit(env, outcome.units);
+  if (!unit) {
+    return null;
+  }
+  const activeState = normalizeLowercaseStringOrEmpty(unit.activeState);
+  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  return {
+    status,
+    state: unit.activeState,
+    subState: unit.subState,
+    pid: unit.mainPid,
+    scope: "system",
+    unitName: unit.unitName,
+    ...(unit.cgroup ? { cgroup: unit.cgroup } : {}),
+    systemUnits: outcome.units,
+  };
+}
+
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
   try {
     await assertSystemdAvailable(env);
   } catch (err) {
+    const detail = formatErrorMessage(err);
+    // When the user bus is unavailable, check the system bus before falling
+    // back to the "unknown" status. On headless Linux hosts OpenClaw is
+    // frequently installed as system-level units (no login session, no
+    // XDG_RUNTIME_DIR), and the system bus does not require sudo for read-
+    // only probing.
+    try {
+      const outcome = await probeSystemdSystemServices(env);
+      const systemRuntime = systemUnitToRuntime(outcome, env);
+      if (systemRuntime) {
+        return systemRuntime;
+      }
+      if (outcome.systemBusAvailable) {
+        // System bus is reachable but no OpenClaw units are present.
+        return {
+          status: "stopped",
+          scope: "system",
+          missingUnit: true,
+          systemUnits: outcome.units,
+        };
+      }
+    } catch {
+      // best-effort; fall through to the original unknown response
+    }
     return {
       status: "unknown",
-      detail: formatErrorMessage(err),
+      detail,
     };
   }
   const serviceName = resolveSystemdServiceName(env);
@@ -731,6 +782,8 @@ export async function readSystemdServiceRuntime(
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,
+    scope: "user",
+    unitName,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
   };

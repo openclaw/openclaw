@@ -162,6 +162,71 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([9000]);
   });
 
+  it("does not flag sibling service pids as stale when their systemd cgroups differ", async () => {
+    // Gateway runtime pid lives in openclaw-host-gateway.service, candidate
+    // listener pid lives in openclaw-node-host.service. The two must never
+    // be reported as a duplicate/stale supervisor on headless system-systemd
+    // hosts.
+    const service = makeGatewayService({ status: "running", pid: 1131058 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 1131042, ppid: 1, commandLine: "openclaw node" }],
+      hints: [],
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      readProcessServiceCgroup: (pid: number) =>
+        pid === 1131058
+          ? "openclaw-host-gateway.service"
+          : pid === 1131042
+            ? "openclaw-node-host.service"
+            : null,
+    });
+
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
+  it("still flags stale pids when both processes share the same service cgroup", async () => {
+    const service = makeGatewayService({ status: "running", pid: 1131058 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 1131059, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      readProcessServiceCgroup: () => "openclaw-host-gateway.service",
+    });
+
+    expect(snapshot.staleGatewayPids).toEqual([1131059]);
+  });
+
+  it("keeps flagging stale pids when cgroup attribution is unavailable", async () => {
+    // Back-compat: if we can't read /proc/<pid>/cgroup for either pid, fall
+    // back to the historical listener-based heuristic.
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 9000, ppid: 8999, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      readProcessServiceCgroup: () => null,
+    });
+
+    expect(snapshot.staleGatewayPids).toEqual([9000]);
+  });
+
   it("treats unknown listeners as stale on Windows when enabled", async () => {
     const snapshot = await inspectUnknownListenerFallback({
       runtime: { status: "stopped" },

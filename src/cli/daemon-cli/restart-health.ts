@@ -8,6 +8,7 @@ import {
   inspectPortUsage,
   type PortUsage,
 } from "../../infra/ports.js";
+import { readProcessServiceCgroup as defaultReadProcessServiceCgroup } from "../../infra/proc-cgroup.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -206,12 +207,42 @@ async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealth
   return { portUsage, healthy };
 }
 
+/**
+ * Decide whether two pids can be safely treated as distinct supervisors /
+ * listeners based on their systemd service cgroups. If both pids live in
+ * `*.service` cgroups but the cgroups differ, they belong to independent
+ * system services (e.g. `openclaw-host-gateway.service` vs
+ * `openclaw-node-host.service`) and must not be flagged as duplicates.
+ *
+ * Returns:
+ *   - "distinct" when both have service cgroups and they differ (definitely
+ *     not duplicates of each other)
+ *   - "same-or-unknown" otherwise (same cgroup, or at least one pid has no
+ *     service cgroup so we can't rule out duplication)
+ */
+export function classifyCgroupRelationship(
+  pidA: number,
+  pidB: number,
+  readServiceCgroup: (pid: number) => string | null = defaultReadProcessServiceCgroup,
+): "distinct" | "same-or-unknown" {
+  if (!Number.isFinite(pidA) || !Number.isFinite(pidB)) {
+    return "same-or-unknown";
+  }
+  const a = readServiceCgroup(pidA);
+  const b = readServiceCgroup(pidB);
+  if (a && b && a !== b) {
+    return "distinct";
+  }
+  return "same-or-unknown";
+}
+
 export async function inspectGatewayRestart(params: {
   service: GatewayService;
   port: number;
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
+  readProcessServiceCgroup?: (pid: number) => string | null;
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
@@ -320,7 +351,8 @@ export async function inspectGatewayRestart(params: {
       // best-effort probe
     }
   }
-  const staleGatewayPids = Array.from(
+  const readServiceCgroup = params.readProcessServiceCgroup ?? defaultReadProcessServiceCgroup;
+  const staleCandidates = Array.from(
     new Set([
       ...gatewayListeners
         .filter((listener) => Number.isFinite(listener.pid))
@@ -339,6 +371,20 @@ export async function inspectGatewayRestart(params: {
       ),
     ]),
   );
+  // Cgroup-aware dedup: if a candidate listener pid lives inside a different
+  // systemd `*.service` cgroup than the gateway runtime pid, it is part of a
+  // sibling OpenClaw service (e.g. openclaw-node-host.service) and is *not*
+  // a duplicate/stale gateway. This removes the historical false-positive
+  // on headless hosts where both services run under system-level systemd.
+  const staleGatewayPids =
+    runtimePid != null
+      ? staleCandidates.filter((pid) => {
+          if (!running) {
+            return true;
+          }
+          return classifyCgroupRelationship(runtimePid, pid, readServiceCgroup) !== "distinct";
+        })
+      : staleCandidates;
 
   return applyActivatedPluginErrors(
     applyExpectedVersion(

@@ -23,6 +23,7 @@ import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
+  readSystemdServiceRuntime,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stageSystemdService,
@@ -1031,5 +1032,81 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("readSystemdServiceRuntime system-bus fallback", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+  });
+
+  it("falls back to a system-bus probe when the user bus is unavailable", async () => {
+    // Sequence: 1) user-bus status fails with no-medium;
+    //           2) system-bus show for each candidate unit.
+    execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+      // user-bus assertSystemdAvailable
+      if (args[0] === "--user") {
+        const err = createExecFileError("Failed to connect to bus: No medium found", {
+          stderr: "Failed to connect to bus: No medium found",
+        });
+        cb(err, "", "");
+        return;
+      }
+      // system-bus `systemctl show <unit> --no-page --property ...`
+      expect(args[0]).toBe("show");
+      const unit = args[1] as string;
+      if (unit === "openclaw-host-gateway.service") {
+        cb(
+          null,
+          [
+            "ActiveState=active",
+            "SubState=running",
+            "MainPID=1131058",
+            "LoadState=loaded",
+            "ControlGroup=/system.slice/openclaw-host-gateway.service",
+          ].join("\n"),
+          "",
+        );
+        return;
+      }
+      cb(
+        null,
+        [
+          "ActiveState=inactive",
+          "SubState=dead",
+          "MainPID=0",
+          "LoadState=not-found",
+          "ControlGroup=",
+        ].join("\n"),
+        "",
+      );
+    });
+
+    const runtime = await readSystemdServiceRuntime({
+      // No USER / XDG_RUNTIME_DIR to simulate a headless system-only host.
+      HOME: "/root",
+    });
+    expect(runtime.scope).toBe("system");
+    expect(runtime.status).toBe("running");
+    expect(runtime.unitName).toBe("openclaw-host-gateway.service");
+    expect(runtime.pid).toBe(1131058);
+    expect(runtime.cgroup).toBe("/system.slice/openclaw-host-gateway.service");
+    expect((runtime.systemUnits ?? []).map((u) => u.unitName)).toContain(
+      "openclaw-host-gateway.service",
+    );
+  });
+
+  it("returns the original unknown detail when neither bus is reachable", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = createExecFileError("Failed to connect to bus: No medium found", {
+        stderr: "Failed to connect to bus: No medium found",
+      });
+      cb(err, "", "");
+    });
+
+    const runtime = await readSystemdServiceRuntime({ HOME: "/root" });
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.detail).toContain("systemctl --user unavailable");
+    expect(runtime.scope).toBeUndefined();
   });
 });
