@@ -311,7 +311,7 @@ function dispatchAgentRunFromGateway(params: {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       if (shouldTrackTask) {
-        const aborted = result.meta.aborted === true;
+        const aborted = result?.meta?.aborted === true;
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
