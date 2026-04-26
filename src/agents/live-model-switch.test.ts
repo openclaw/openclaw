@@ -509,7 +509,7 @@ describe("live model switch", () => {
     ).toBe(true);
   });
 
-  it("treats the same effective auth profile as matching even when sources differ", async () => {
+  it("treats auth-profile source changes as different when an auth profile is selected", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
     expect(
@@ -519,6 +519,26 @@ describe("live model switch", () => {
           model: "gpt-5.4",
           authProfileId: "openai-codex:pro",
           authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
+          authProfileIdSource: "user",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("treats source-less legacy current auth profiles as matching user-pinned selections", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai-codex:pro",
         },
         {
           provider: "openai",
@@ -623,6 +643,37 @@ describe("live model switch", () => {
       await new Promise((r) => setTimeout(r, 10));
       expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1);
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
+    it("returns the persisted selection when only auth-profile source differs", async () => {
+      state.loadSessionStoreMock.mockReturnValue({
+        main: {
+          liveModelSwitchPending: true,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+          authProfileOverride: "openai-codex:pro",
+          authProfileOverrideSource: "user",
+        },
+      });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: "gpt-5.4",
+          currentAuthProfileId: "openai-codex:pro",
+          currentAuthProfileIdSource: "auto",
+        }),
+      );
+
+      expect(result).toEqual({
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai-codex:pro",
+        authProfileIdSource: "user",
+      });
+      expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
     });
 
     it("returns undefined when sessionKey is missing", async () => {

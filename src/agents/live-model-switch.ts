@@ -109,11 +109,22 @@ export function hasDifferentLiveSessionModelSelection(
     nextAuthProfileId || current.authProfileIdSource !== "auto"
       ? normalizeOptionalString(current.authProfileId)
       : undefined;
+  const currentAuthProfileIdSource = currentAuthProfileId
+    ? normalizeAuthProfileIdSource(current.authProfileIdSource)
+    : undefined;
+  const nextAuthProfileIdSource = nextAuthProfileId
+    ? normalizeAuthProfileIdSource(next.authProfileIdSource)
+    : undefined;
   return (
     current.provider !== next.provider ||
     current.model !== next.model ||
-    currentAuthProfileId !== nextAuthProfileId
+    currentAuthProfileId !== nextAuthProfileId ||
+    currentAuthProfileIdSource !== nextAuthProfileIdSource
   );
+}
+
+function normalizeAuthProfileIdSource(source: string | undefined): "auto" | "user" {
+  return source === "auto" ? "auto" : "user";
 }
 
 export function shouldTrackPersistedLiveSessionModelSelection(
