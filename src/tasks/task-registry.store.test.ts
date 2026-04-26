@@ -17,6 +17,7 @@ import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
+import { upsertTaskRegistryRecordToSqlite } from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 function createStoredTask(): TaskRecord {
@@ -82,6 +83,41 @@ describe("task-registry store runtime", () => {
     };
     expect(latestSnapshot.tasks.size).toBe(2);
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
+  });
+
+  it("stringifies structured task values before binding them to sqlite", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-object-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const structuredTask = { kind: "plan", steps: ["scan", "fix"] };
+    const record = {
+      taskId: "task-object",
+      runtime: "acp",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:object",
+      runId: "run-object",
+      task: structuredTask as never,
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+      createdAt: 123,
+    } as TaskRecord;
+
+    expect(() => upsertTaskRegistryRecordToSqlite(record)).not.toThrow();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(resolveTaskRegistrySqlitePath(process.env));
+    const row = db.prepare("SELECT task FROM task_runs WHERE task_id = ?").get(record.taskId) as
+      | { task?: string }
+      | undefined;
+
+    expect(row?.task).toBe(JSON.stringify(structuredTask));
+
+    db.close();
+    resetTaskRegistryForTests({ persist: false });
+    rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("emits incremental observer events for restore, mutation, and delete", () => {
