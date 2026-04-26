@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Discord: keep raw `Agent failed before reply` runner failures out of Discord group/channel chats and show detailed runner errors in direct chats only when `/verbose` is enabled. Thanks @codex.
 - UI/Windows: quote resolved pnpm `.cmd` launcher paths before spawning UI install/build/test commands so Node installs under `C:\Program Files` no longer fail as `C:\Program`. Fixes #45275. Thanks @Kobevictor, @stoppieboy, and @iubns.
 - Codex/agent: translate `--thinking minimal` to `low` for modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) at request build time so the first turn is accepted instead of paying a wasted call + retry-with-low fallback. Older Codex models still receive `minimal` directly. Fixes #71946. Thanks @hclsys.
 - Plugins/uninstall: remove tracked plugin files from their recorded managed extensions root even when the current state directory points somewhere else, so `openclaw plugins uninstall --force` does not leave the plugin discoverable. Thanks @shakkernerd.
