@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 
 export type PluginConfigContractMatch = {
   path: string;
@@ -114,11 +115,18 @@ export function resolvePluginConfigContractsById(params: {
   }
 
   const resolvedPluginIds = new Set<string>();
-  const registry = loadPluginManifestRegistry({
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     cache: params.cache,
+  });
+  const registry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeDisabled: true,
   });
   for (const plugin of registry.plugins) {
     if (!pluginIds.includes(plugin.id)) {

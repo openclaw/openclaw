@@ -52,9 +52,9 @@ type ClaudeLiveRunResult = {
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS = 256 * 1024;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
+const CLAUDE_LIVE_MAX_PENDING_LINE_CHARS = CLAUDE_LIVE_MAX_TURN_RAW_CHARS;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
@@ -415,7 +415,7 @@ function parseClaudeLiveJsonLine(
   session: ClaudeLiveSession,
   trimmed: string,
 ): Record<string, unknown> | null {
-  if (trimmed.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (trimmed.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
@@ -513,11 +513,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
-  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
-      createOutputLimitError(session, "Claude CLI stdout buffer exceeded limit."),
+      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
     );
     return;
   }
