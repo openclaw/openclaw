@@ -20,10 +20,14 @@ class MainActivity : ComponentActivity() {
   private lateinit var permissionRequester: PermissionRequester
   private var didAttachRuntimeUi = false
   private var didStartNodeService = false
+  private var restoredAssistantLaunchFingerprint: String? = null
+  private var handledAssistantLaunchFingerprint: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    restoredAssistantLaunchFingerprint = savedInstanceState?.getString(assistantLaunchFingerprintStateKey)
     handleAssistantIntent(intent)
+    restoredAssistantLaunchFingerprint = null
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
 
@@ -78,8 +82,24 @@ class MainActivity : ComponentActivity() {
     handleAssistantIntent(intent)
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    super.onSaveInstanceState(outState)
+    handledAssistantLaunchFingerprint?.let {
+      outState.putString(assistantLaunchFingerprintStateKey, it)
+    }
+  }
+
   private fun handleAssistantIntent(intent: android.content.Intent?) {
     val request = parseAssistantLaunchIntent(intent) ?: return
+    if (isRestoredAssistantLaunch(intent, restoredAssistantLaunchFingerprint)) {
+      handledAssistantLaunchFingerprint = restoredAssistantLaunchFingerprint
+      return
+    }
     viewModel.handleAssistantLaunch(request)
+    handledAssistantLaunchFingerprint = assistantLaunchFingerprint(request)
+  }
+
+  private companion object {
+    const val assistantLaunchFingerprintStateKey = "assistantLaunchFingerprint"
   }
 }
