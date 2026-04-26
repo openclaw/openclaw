@@ -1,4 +1,4 @@
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -213,12 +213,19 @@ export async function noteAuthProfileHealth(params: {
 }): Promise<void> {
   const configuredAuthProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
   const agentIds = listAgentIds(params.cfg);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const directTargets = agentIds
+    .filter((agentId) => agentId !== defaultAgentId)
     .map((agentId) => ({ agentId, agentDir: resolveAgentDir(params.cfg, agentId) }))
     .filter((target) => hasDirectAuthProfileStoreSource(target.agentDir));
   const targets =
     agentIds.length > 1 && directTargets.length > 0
-      ? directTargets
+      ? [
+          ...(configuredAuthProfiles || hasDirectAuthProfileStoreSource(undefined)
+            ? [{ agentId: defaultAgentId, agentDir: undefined }]
+            : []),
+          ...directTargets,
+        ]
       : [{ agentId: undefined, agentDir: undefined }];
 
   for (const target of targets) {
@@ -297,10 +304,12 @@ async function noteAuthProfileHealthForStore(params: {
     return;
   }
 
-  const shouldRefresh = await params.prompter.confirmAutoFix({
-    message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
-    initialValue: true,
-  });
+  const shouldRefresh = params.agentId
+    ? false
+    : await params.prompter.confirmAutoFix({
+        message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
+        initialValue: true,
+      });
 
   if (shouldRefresh) {
     const refreshTargets = issues.filter(
