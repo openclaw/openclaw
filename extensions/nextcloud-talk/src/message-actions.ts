@@ -53,7 +53,7 @@ export const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
 
       const messageIdRaw = resolveReactionMessageId({ args: params, toolContext });
       if (messageIdRaw == null) {
-        readStringParam(params, "messageId", { required: true });
+        throw new Error("messageId required");
       }
       const messageId = String(messageIdRaw);
 

@@ -72,8 +72,8 @@ describe("nextcloudTalkMessageActions", () => {
       expect(result).toBeNull();
     });
 
-    it("returns null when account is disabled", () => {
-      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([]);
+    it("returns null when the only listed account is disabled", () => {
+      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([disabledAccount]);
 
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
         cfg: {} as OpenClawConfig,
