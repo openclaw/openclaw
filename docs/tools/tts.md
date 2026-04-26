@@ -754,15 +754,17 @@ These override the effective config from `messages.tts` plus the active
 
 - **Feishu / Matrix / Telegram / WhatsApp**: voice-note replies prefer Opus (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
   - 48kHz / 64kbps is a good voice message tradeoff.
-- **Feishu / WhatsApp**: when a voice-note reply is produced as MP3/WAV/M4A or
-  another likely audio file, the channel plugin transcodes it to 48kHz Ogg/Opus
-  with `ffmpeg` before sending the native voice message. If conversion fails,
-  Feishu receives the original file as an attachment; WhatsApp send fails rather
-  than posting an incompatible PTT payload.
+- **Feishu / WhatsApp**: when a voice-note reply is produced as MP3/WebM/WAV/M4A
+  or another likely audio file, the channel plugin transcodes it to 48kHz
+  Ogg/Opus with `ffmpeg` before sending the native voice message. WhatsApp sends
+  the result through the Baileys `audio` payload with `ptt: true` and
+  `audio/ogg; codecs=opus`. If conversion fails, Feishu receives the original
+  file as an attachment; WhatsApp send fails rather than posting an incompatible
+  PTT payload.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
-- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
-- **Xiaomi MiMo**: MP3 by default, or WAV when configured. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery.
+- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu, Telegram, and WhatsApp, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
+- **Xiaomi MiMo**: MP3 by default, or WAV when configured. For voice-note targets such as Feishu, Telegram, and WhatsApp, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery.
 - **Local CLI**: uses the configured `outputFormat`. Voice-note targets are
   converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM
   with `ffmpeg`.
@@ -847,7 +849,8 @@ reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
 the audio is delivered as a voice message rather than a file attachment.
 Feishu and WhatsApp can transcode non-Opus TTS output on this path when
 `ffmpeg` is available.
-WhatsApp sends visible text separately from PTT voice-note audio because clients
+WhatsApp sends audio through Baileys as a PTT voice note (`audio` with
+`ptt: true`), and sends visible text separately from PTT audio because clients
 do not consistently render captions on voice notes.
 It accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
 per-call provider request timeout in milliseconds.
