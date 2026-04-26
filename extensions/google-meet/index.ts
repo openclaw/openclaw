@@ -557,7 +557,13 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, await rt.recoverCurrentTab({ url: normalizeOptionalString(params?.url) }));
+          respond(
+            true,
+            await rt.recoverCurrentTab({
+              url: normalizeOptionalString(params?.url),
+              transport: normalizeTransport(params?.transport),
+            }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -793,7 +799,12 @@ export default definePluginEntry({
             }
             case "recover_current_tab": {
               const rt = await ensureRuntime();
-              return json(await rt.recoverCurrentTab({ url: normalizeOptionalString(raw.url) }));
+              return json(
+                await rt.recoverCurrentTab({
+                  url: normalizeOptionalString(raw.url),
+                  transport: normalizeTransport(raw.transport),
+                }),
+              );
             }
             case "setup_status": {
               const rt = await ensureRuntime();
