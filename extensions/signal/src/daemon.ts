@@ -20,6 +20,8 @@ export type SignalDaemonHandle = {
   isExited: () => boolean;
 };
 
+export const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1500;
+
 export type SignalDaemonExitEvent = {
   source: "process" | "spawn-error";
   code: number | null;
@@ -158,7 +160,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
           } finally {
             void exitedPromise.finally(() => resolve());
           }
-        }, 1500);
+        }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
         void exitedPromise.finally(() => {
           clearTimeout(timeout);
           resolve();

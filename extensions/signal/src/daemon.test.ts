@@ -81,7 +81,7 @@ describe("spawnSignalDaemon stop", () => {
     vi.useFakeTimers();
     const fake = createFakeDaemonChild();
     spawnMock.mockReturnValue(fake.child);
-    const { spawnSignalDaemon } = await import("./daemon.js");
+    const { SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS, spawnSignalDaemon } = await import("./daemon.js");
 
     const handle = spawnSignalDaemon({
       cliPath: "signal-cli",
@@ -90,7 +90,7 @@ describe("spawnSignalDaemon stop", () => {
     });
 
     const stopPromise = handle.stop();
-    await vi.advanceTimersByTimeAsync(1_501);
+    await vi.advanceTimersByTimeAsync(SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS + 1);
 
     expect(fake.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(fake.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
