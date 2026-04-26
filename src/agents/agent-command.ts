@@ -247,7 +247,6 @@ async function prepareAgentCommandExecution(
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
-  const body = prependInternalEventContext(message, opts.internalEvents);
   const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
@@ -366,6 +365,9 @@ async function prepareAgentCommandExecution(
         sessionKey,
       })
     : null;
+  const body = prependInternalEventContext(message, opts.internalEvents, {
+    targetIsAcpHarness: acpResolution?.kind === "ready",
+  });
 
   return {
     body,

@@ -1,6 +1,9 @@
 import { updateSessionStore } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
-import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
+import {
+  formatAgentInternalEventsForAcpPrompt,
+  formatAgentInternalEventsForPrompt,
+} from "../internal-events.js";
 import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -29,11 +32,14 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
 export function prependInternalEventContext(
   body: string,
   events: AgentCommandOpts["internalEvents"],
+  options?: { targetIsAcpHarness?: boolean },
 ): string {
   if (hasInternalRuntimeContext(body)) {
     return body;
   }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
+  const renderedEvents = options?.targetIsAcpHarness
+    ? formatAgentInternalEventsForAcpPrompt(events)
+    : formatAgentInternalEventsForPrompt(events);
   if (!renderedEvents) {
     return body;
   }

@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/subagents: send completion announces to ACP harness sessions as plain completion context instead of OpenClaw internal-runtime envelopes, avoiding harness prompt-injection refusals. Fixes #71811. Thanks @jordiagi.
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed model call instead of exporting a misleading `StreamAbandoned` error span. Thanks @vincentkoc.
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from being treated as empty state, preserving `paired.json` for repair instead of overwriting approved pairings. Fixes #71873. Thanks @iret77.
 - ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`, on the Gateway path inside ACP-bound threads so they are not consumed as ACP prompt text. Fixes #66298. Thanks @kindomLee.

@@ -363,6 +363,45 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("uses ACP-safe completion context for internal events", async () => {
+    await withAcpSessionEnv(async () => {
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand(
+        {
+          message: "Process the completion update now.",
+          sessionKey: "agent:codex:acp:test",
+          internalEvents: [
+            {
+              type: "task_completion",
+              source: "subagent",
+              childSessionKey: "agent:child:main",
+              childSessionId: "child-session-1",
+              announceType: "subagent task",
+              taskLabel: "estimate-plan",
+              status: "ok",
+              statusLabel: "succeeded",
+              result: "plan result",
+              replyInstruction: "Summarize the result for the user.",
+            },
+          ],
+        },
+        runtime,
+      );
+
+      const text = (runTurn.mock.calls[0]?.[0] as { text?: string }).text ?? "";
+      expect(text).toContain('A subagent task "estimate-plan" completed with status: succeeded.');
+      expect(text).toContain("<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>");
+      expect(text).toContain("plan result");
+      expect(text).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+      expect(text).not.toContain("OpenClaw runtime context (internal):");
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("streams ACP visible text deltas", async () => {
     await withAcpSessionEnv(async () => {
       const repeated = await runAcpTurnWithAssistantEvents(["bo", "ok"]);
