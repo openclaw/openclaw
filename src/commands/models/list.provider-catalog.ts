@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   resolvePluginContributionOwners,
   resolveProviderOwners,
   type PluginRegistrySnapshot,
@@ -70,10 +70,15 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
 }): string[] | undefined {
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     env: params.env,
+    cache: true,
   });
+  if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
+    return [];
+  }
+  const index = snapshot.snapshot;
   const pluginIds = [
     ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg),
     ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg),

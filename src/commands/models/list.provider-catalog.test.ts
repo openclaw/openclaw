@@ -6,7 +6,7 @@ import {
 } from "./list.provider-catalog.js";
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(),
+  loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
   resolveProviderOwners: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
@@ -17,7 +17,8 @@ const providerDiscoveryMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshot: providerDiscoveryMocks.loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata:
+    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata,
   resolvePluginContributionOwners: providerDiscoveryMocks.resolvePluginContributionOwners,
   resolveProviderOwners: providerDiscoveryMocks.resolveProviderOwners,
 }));
@@ -115,8 +116,11 @@ const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    providerDiscoveryMocks.loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [],
+    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: {
+        plugins: [],
+      },
       diagnostics: [],
     });
     providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
@@ -197,9 +201,10 @@ describe("loadProviderCatalogModelsForList", () => {
       }),
     ).resolves.toEqual(["moonshot"]);
 
-    expect(providerDiscoveryMocks.loadPluginRegistrySnapshot).toHaveBeenCalledWith({
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
+      cache: true,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
