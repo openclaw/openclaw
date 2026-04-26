@@ -516,7 +516,9 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
+  return params.toolsAllow.some(
+    (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
+  );
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -2080,6 +2082,7 @@ export async function runEmbeddedAttempt(
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
+          thinkingLevel: params.thinkLevel,
           toolResultFormat: params.toolResultFormat,
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,

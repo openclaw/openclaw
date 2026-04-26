@@ -309,7 +309,7 @@ export async function runCli(argv: string[] = process.argv) {
       const [
         { buildProgram },
         { runFatalErrorHooks },
-        { installUnhandledRejectionHandler },
+        { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
@@ -324,6 +324,9 @@ export async function runCli(argv: string[] = process.argv) {
       installUnhandledRejectionHandler();
 
       process.on("uncaughtException", (error) => {
+        if (isUncaughtExceptionHandled(error)) {
+          return;
+        }
         console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);

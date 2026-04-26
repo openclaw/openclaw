@@ -233,6 +233,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: diagnostics-prometheus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-prometheus/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:

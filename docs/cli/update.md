@@ -39,7 +39,7 @@ openclaw --update
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is
   detected during post-update plugin sync.
-- `--timeout <seconds>`: per-step timeout (default is 1200s).
+- `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation)
 
 Note: downgrades require confirmation because older versions can break configuration.
@@ -67,7 +67,7 @@ offers to create one.
 
 Options:
 
-- `--timeout <seconds>`: timeout for each update step (default `1200`)
+- `--timeout <seconds>`: timeout for each update step (default `1800`)
 
 ## What it does
 

@@ -326,6 +326,18 @@ function recordFailedCandidateAttempt(params: {
   });
 }
 
+function findLaterLiveSessionModelSwitchCandidateIndex(params: {
+  error: LiveSessionModelSwitchError;
+  candidates: ModelCandidate[];
+  currentIndex: number;
+}): number | null {
+  const targetKey = modelKey(params.error.provider, params.error.model);
+  const targetIndex = params.candidates.findIndex(
+    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
+  );
+  return targetIndex > params.currentIndex ? targetIndex : null;
+}
+
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -924,6 +936,16 @@ export async function runWithModelFallback<T>(params: {
       // instead of re-throwing and triggering infinite retry loops in the
       // outer runner.  (#58466)
       if (err instanceof LiveSessionModelSwitchError) {
+        const liveSwitchTargetIndex = findLaterLiveSessionModelSwitchCandidateIndex({
+          error: err,
+          candidates,
+          currentIndex: i,
+        });
+        if (liveSwitchTargetIndex !== null) {
+          i = liveSwitchTargetIndex - 1;
+          continue;
+        }
+
         const switchMsg = err.message;
         const switchNormalized = new FailoverError(switchMsg, {
           reason: "overloaded",

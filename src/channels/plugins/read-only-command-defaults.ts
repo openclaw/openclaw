@@ -1,6 +1,10 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
+import {
+  isPluginEnabled,
+  loadPluginManifestRegistryForPluginRegistry,
+} from "../../plugins/plugin-registry.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -36,12 +40,17 @@ export function normalizeChannelCommandDefaults(
       : undefined;
   const nativeSkillsAutoEnabled =
     typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
+  if (nativeCommandsAutoEnabled === undefined && nativeSkillsAutoEnabled === undefined) {
+    return undefined;
+  }
+  const defaults: ChannelCommandDefaults = {};
+  if (nativeCommandsAutoEnabled !== undefined) {
+    defaults.nativeCommandsAutoEnabled = nativeCommandsAutoEnabled;
+  }
+  if (nativeSkillsAutoEnabled !== undefined) {
+    defaults.nativeSkillsAutoEnabled = nativeSkillsAutoEnabled;
+  }
+  return defaults;
 }
 
 export function resolveReadOnlyChannelCommandDefaults(
@@ -50,13 +59,15 @@ export function resolveReadOnlyChannelCommandDefaults(
     env?: NodeJS.ProcessEnv;
     stateDir?: string;
     workspaceDir?: string;
-  } = {},
+    config: OpenClawConfig;
+  },
 ): ChannelCommandDefaults | undefined {
   const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
     return undefined;
   }
   const registry = loadPluginManifestRegistryForPluginRegistry({
+    config: options.config,
     stateDir: options.stateDir,
     workspaceDir: options.workspaceDir,
     env: options.env ?? process.env,
@@ -64,6 +75,23 @@ export function resolveReadOnlyChannelCommandDefaults(
   });
   for (const record of registry.plugins) {
     if (!record.channels.includes(normalizedChannelId)) {
+      continue;
+    }
+    if (
+      record.id !== normalizedChannelId &&
+      record.channelCatalogMeta?.id !== normalizedChannelId
+    ) {
+      continue;
+    }
+    if (
+      !isPluginEnabled({
+        pluginId: record.id,
+        config: options.config,
+        stateDir: options.stateDir,
+        workspaceDir: options.workspaceDir,
+        env: options.env ?? process.env,
+      })
+    ) {
       continue;
     }
     const channelConfigValue = record.channelConfigs

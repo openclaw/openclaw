@@ -58,6 +58,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Triage: list first, hydrate few. Use bounded `gh --json --jq`; avoid repeated full comment scans.
 - Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without Peter asking.
+- PR scan/triage: no unsolicited PR comments/reviews. Report in chat only unless explicitly asked, or a close/duplicate action needs a reason comment.
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
 - GitHub search boolean text is fussy. If `OR` queries return empty, split exact terms and search title/body/comments separately before concluding no hits.
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
@@ -85,7 +86,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   - extension tests: extension test typecheck/tests
   - public SDK/plugin contract: extension prod/test too
   - unknown root/config: all lanes
-- Before handoff/push: `pnpm check:changed`. Tests-only: `pnpm test:changed`. Full prod sweep: `pnpm check`.
+- Before handoff/push for code/test/runtime/config changes: `pnpm check:changed`. Tests-only: `pnpm test:changed`. Full prod sweep: `pnpm check`.
+- Docs/changelog-only and CI/workflow metadata-only changes are not changed-gate work by default. Use `git diff --check` plus the relevant formatter/docs/workflow sanity check; escalate to `pnpm check:changed` only when scripts, test config, generated docs/API, package metadata, or runtime/build behavior changed.
 - Rebase sanity: after a green `pnpm check:changed`, a clean rebase onto current
   `origin/main` does not require rerunning the full changed gate when the rebase
   has no conflicts and the branch diff is materially unchanged. Do a quick

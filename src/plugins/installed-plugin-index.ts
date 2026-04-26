@@ -103,6 +103,7 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
 };
@@ -222,6 +223,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   }
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
+  }
+  if (record.activation?.onAgentHarnesses?.length) {
+    codes.push("activation-agent-harness-hint");
   }
   if (record.activation?.onChannels?.length) {
     codes.push("activation-channel-hint");
@@ -588,6 +592,9 @@ function buildInstalledPluginIndex(
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
     }
@@ -597,8 +604,14 @@ function buildInstalledPluginIndex(
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;
+    }
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
     }
     if (candidate?.packageName) {
       indexRecord.packageName = candidate.packageName;

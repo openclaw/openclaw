@@ -22,7 +22,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/shared/string-normalization.ts",
         "src/utils/provider-utils.ts",
       ]),
-    ).toEqual(["src/shared/string-normalization.ts", "src/utils/provider-utils.ts"]);
+    ).toEqual(["src/shared/string-normalization.test.ts", "src/utils/provider-utils.test.ts"]);
   });
 
   it("keeps the broad changed run for Vitest wiring edits", () => {
@@ -123,7 +123,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.extension-browser.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/browser/src/browser/**/*.test.ts"],
+        includePatterns: ["extensions/browser/src/browser/cdp.helpers.test.ts"],
         watchMode: false,
       },
     ]);
@@ -135,6 +135,32 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/helpers/channels/plugin.ts",
       ]),
     ).toBeNull();
+  });
+
+  it("routes channel helper edits through the tests that import them", () => {
+    expect(resolveChangedTestTargetPlan(["test/helpers/channels/directory-ids.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/discord/src/directory-contract.test.ts",
+        "extensions/slack/src/directory-contract.test.ts",
+        "extensions/telegram/src/directory-contract.test.ts",
+      ],
+    });
+  });
+
+  it("routes channel contract helper edits through contract shards", () => {
+    const plan = resolveChangedTestTargetPlan([
+      "test/helpers/channels/registry-backed-contract-shards.ts",
+    ]);
+
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toContain(
+      "src/channels/plugins/contracts/plugin.registry-backed-shard-a.contract.test.ts",
+    );
+    expect(plan.targets).toContain(
+      "src/channels/plugins/contracts/threading.registry-backed-shard-h.contract.test.ts",
+    );
+    expect(plan.targets).not.toContain("extensions/discord/src/channel-actions.contract.test.ts");
   });
 
   it("routes precise plugin contract helpers without broad-running every shard", () => {
@@ -208,7 +234,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.extension-providers.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/lmstudio/src/**/*.test.ts"],
+        includePatterns: ["extensions/lmstudio/src/runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -392,7 +418,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.utils.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/utils/**/*.test.ts"],
+        includePatterns: ["src/utils/provider-utils.test.ts"],
         watchMode: false,
       },
     ]);
@@ -459,16 +485,16 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps non-allowlisted plugin-sdk source files on the heavy lane plus extension tests", () => {
+  it("routes plugin-sdk source files with sibling tests narrowly plus extension tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/facade-runtime.ts",
     ]);
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.plugin-sdk.config.ts",
+        config: "test/vitest/vitest.bundled.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
         watchMode: false,
       },
       ...listFullExtensionVitestProjectConfigs().map((config) => ({
@@ -480,7 +506,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps non-allowlisted commands source files on the heavy lane", () => {
+  it("routes command source files with sibling tests narrowly on the command lane", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/channels.add.ts",
     ]);
@@ -489,10 +515,29 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/commands/**/*.test.ts"],
+        includePatterns: ["src/commands/channels.add.test.ts"],
         watchMode: false,
       },
     ]);
+  });
+
+  it("keeps focused changed mode to precise targets only", () => {
+    expect(
+      resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"], {
+        focused: true,
+      }),
+    ).toEqual({
+      mode: "targets",
+      targets: ["src/commands/channels.add.test.ts"],
+    });
+  });
+
+  it("uses import-graph targets in focused changed mode", () => {
+    expect(
+      resolveChangedTestTargetPlan(["test/helpers/plugins/plugin-registration.ts"], {
+        focused: true,
+      }).targets,
+    ).toContain("extensions/openrouter/index.test.ts");
   });
 
   it.each([

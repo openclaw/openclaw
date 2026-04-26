@@ -19,6 +19,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -33,12 +34,10 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
-  collectInstalledGlobalPackageErrors,
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
-  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
@@ -90,6 +89,7 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
@@ -398,68 +398,45 @@ async function runPackageInstallUpdate(params: {
     }
   }
 
-  const updateStep = await runUpdateStep({
-    name: "global update",
-    argv: globalInstallArgs(installTarget, installSpec),
-    env: installEnv,
+  const packageUpdate = await runGlobalPackageUpdateSteps({
+    installTarget,
+    installSpec,
+    packageName,
+    packageRoot: pkgRoot,
+    runCommand,
     timeoutMs: params.timeoutMs,
-    progress: params.progress,
+    ...(installEnv === undefined ? {} : { env: installEnv }),
+    runStep: (stepParams) =>
+      runUpdateStep({
+        ...stepParams,
+        progress: params.progress,
+      }),
+    postVerifyStep: async (verifiedPackageRoot) => {
+      const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+      if (entryPath) {
+        return await runUpdateStep({
+          name: `${CLI_NAME} doctor`,
+          argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
+          env: {
+            ...process.env,
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          },
+          timeoutMs: params.timeoutMs,
+          progress: params.progress,
+        });
+      }
+      return null;
+    },
   });
 
-  const steps = [updateStep];
-  let afterVersion = beforeVersion;
-
-  const verifiedPackageRoot =
-    (
-      await resolveGlobalInstallTarget({
-        manager: installTarget,
-        runCommand,
-        timeoutMs: params.timeoutMs,
-      })
-    ).packageRoot ?? pkgRoot;
-  if (verifiedPackageRoot) {
-    afterVersion = await readPackageVersion(verifiedPackageRoot);
-    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
-    const verificationErrors = await collectInstalledGlobalPackageErrors({
-      packageRoot: verifiedPackageRoot,
-      expectedVersion,
-    });
-    if (verificationErrors.length > 0) {
-      steps.push({
-        name: "global install verify",
-        command: `verify ${verifiedPackageRoot}`,
-        cwd: verifiedPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-        stdoutTail: null,
-      });
-    }
-    const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
-    if (entryPath) {
-      const doctorStep = await runUpdateStep({
-        name: `${CLI_NAME} doctor`,
-        argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
-        env: {
-          ...process.env,
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        },
-        timeoutMs: params.timeoutMs,
-        progress: params.progress,
-      });
-      steps.push(doctorStep);
-    }
-  }
-
-  const failedStep = steps.find((step) => step.exitCode !== 0);
   return {
-    status: failedStep ? "error" : "ok",
+    status: packageUpdate.failedStep ? "error" : "ok",
     mode: manager,
-    root: verifiedPackageRoot ?? params.root,
-    reason: failedStep ? failedStep.name : undefined,
+    root: packageUpdate.verifiedPackageRoot ?? params.root,
+    reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
-    after: { version: afterVersion },
-    steps,
+    after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
   };
 }
@@ -479,7 +456,7 @@ async function runGitUpdate(params: {
   devTargetRef?: string;
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-  const effectiveTimeout = params.timeoutMs ?? 20 * 60_000;
+  const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
 
   const cloneStep = params.switchToGit
@@ -561,6 +538,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
+  timeoutMs: number;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     if (!params.opts.json) {
@@ -613,6 +591,7 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
+    timeoutMs: params.timeoutMs,
     skipIds: new Set(syncResult.summary.switchedToNpm),
     logger: pluginLogger,
     onIntegrityDrift: async (drift) => {
@@ -920,12 +899,14 @@ async function runPostCorePluginUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
+  timeoutMs: number;
 }): Promise<PostCorePluginUpdateResult> {
   return await updatePluginsAfterCoreUpdate({
     root: params.root,
     channel: params.channel,
     configSnapshot: params.configSnapshot,
     opts: params.opts,
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -977,6 +958,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   }
   if (params.opts.yes) {
     argv.push("--yes");
+  }
+  if (params.opts.timeout) {
+    argv.push("--timeout", params.opts.timeout);
   }
   const resultDir =
     params.opts.json === true
@@ -1042,6 +1026,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (timeoutMs === null) {
     return;
   }
+  const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   const root = await resolveUpdateRoot();
   if (postCoreUpdateResume) {
@@ -1060,6 +1045,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       channel: postCoreUpdateChannel,
       configSnapshot: await readConfigFileSnapshot(),
       opts,
+      timeoutMs: updateStepTimeoutMs,
     });
     if (opts.json) {
       await writePostCorePluginUpdateResultFile(
@@ -1170,7 +1156,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       mode = await resolveGlobalManager({
         root,
         installKind,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
+        timeoutMs: updateStepTimeoutMs,
       });
     }
 
@@ -1295,7 +1281,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           root,
           installKind,
           tag,
-          timeoutMs: timeoutMs ?? 20 * 60_000,
+          timeoutMs: updateStepTimeoutMs,
           startedAt,
           progress,
           jsonMode: Boolean(opts.json),
@@ -1353,54 +1339,30 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (switchToGit && result.status === "ok" && result.mode === "git") {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Switched from a package install to a git checkout. Skipping remaining post-update work in the old CLI process; rerun follow-up commands from the new git install if needed.",
-        ),
-      );
-    } else {
-      defaultRuntime.writeJson(result);
-    }
-    defaultRuntime.exit(0);
-    return;
-  }
-
   let postUpdateConfigSnapshot = configSnapshot;
   if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
-    if (switchToGit) {
-      if (!opts.json) {
-        defaultRuntime.log(
-          theme.muted(
-            `Skipped persisting update.channel=${requestedChannel} in the pre-update CLI process after switching to a git install.`,
-          ),
-        );
-      }
-    } else {
-      const next = {
-        ...configSnapshot.sourceConfig,
-        update: {
-          ...configSnapshot.sourceConfig.update,
-          channel: requestedChannel,
-        },
-      };
-      await replaceConfigFile({
-        nextConfig: next,
-        baseHash: configSnapshot.hash,
-      });
-      postUpdateConfigSnapshot = {
-        ...configSnapshot,
-        hash: undefined,
-        parsed: next,
-        sourceConfig: asResolvedSourceConfig(next),
-        resolved: asResolvedSourceConfig(next),
-        runtimeConfig: asRuntimeConfig(next),
-        config: asRuntimeConfig(next),
-      };
-      if (!opts.json) {
-        defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-      }
+    const next = {
+      ...configSnapshot.sourceConfig,
+      update: {
+        ...configSnapshot.sourceConfig.update,
+        channel: requestedChannel,
+      },
+    };
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: configSnapshot.hash,
+    });
+    postUpdateConfigSnapshot = {
+      ...configSnapshot,
+      hash: undefined,
+      parsed: next,
+      sourceConfig: asResolvedSourceConfig(next),
+      resolved: asResolvedSourceConfig(next),
+      runtimeConfig: asRuntimeConfig(next),
+      config: asRuntimeConfig(next),
+    };
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
     }
   }
 
@@ -1423,21 +1385,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
   }
 
-  const deferOldProcessPostUpdateWork = switchToGit && result.mode === "git";
-  if (deferOldProcessPostUpdateWork) {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
-        ),
-      );
-    }
-  } else if (!pluginsUpdatedInFreshProcess) {
+  if (!pluginsUpdatedInFreshProcess) {
     postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
       configSnapshot: postUpdateConfigSnapshot,
       opts,
+      timeoutMs: updateStepTimeoutMs,
     });
   }
 
@@ -1481,34 +1435,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  if (deferOldProcessPostUpdateWork) {
-    if (!opts.json) {
-      defaultRuntime.log(
-        theme.muted(
-          "Skipped completion/restart follow-ups in the pre-update CLI process after switching to a git install.",
-        ),
-      );
-    }
-  } else {
-    await tryWriteCompletionCache(postUpdateRoot, Boolean(opts.json));
-    await tryInstallShellCompletion({
-      jsonMode: Boolean(opts.json),
-      skipPrompt: Boolean(opts.yes),
-    });
+  await tryWriteCompletionCache(postUpdateRoot, Boolean(opts.json));
+  await tryInstallShellCompletion({
+    jsonMode: Boolean(opts.json),
+    skipPrompt: Boolean(opts.yes),
+  });
 
-    const restartOk = await maybeRestartService({
-      shouldRestart,
-      result: resultWithPostUpdate,
-      opts,
-      refreshServiceEnv: refreshGatewayServiceEnv,
-      gatewayPort,
-      restartScriptPath,
-      invocationCwd,
-    });
-    if (!restartOk) {
-      defaultRuntime.exit(1);
-      return;
-    }
+  const restartOk = await maybeRestartService({
+    shouldRestart,
+    result: resultWithPostUpdate,
+    opts,
+    refreshServiceEnv: refreshGatewayServiceEnv,
+    gatewayPort,
+    restartScriptPath,
+    invocationCwd,
+  });
+  if (!restartOk) {
+    defaultRuntime.exit(1);
+    return;
   }
 
   if (!opts.json) {
