@@ -915,6 +915,11 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         fastModeDefault: false, // per-agent fast mode override
         embeddedHarness: { runtime: "auto", fallback: "pi" },
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
+        tts: {
+          providers: {
+            elevenlabs: { voiceId: "EXAVITQu4vr4xnSDxMaL" },
+          },
+        },
         skills: ["docs-search"], // replaces agents.defaults.skills when set
         identity: {
           name: "Samantha",
@@ -950,6 +955,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
@@ -1162,7 +1168,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
-- **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
+- **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).
   - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.

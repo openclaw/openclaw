@@ -140,7 +140,13 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
     expect(result.installed).toBe(true);
     expect(result.status).toBe("installed");
-    expect(result.cfg.plugins?.installs).toBeUndefined();
+    expect(result.cfg.plugins?.installs).toEqual({
+      "demo-plugin": expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+      }),
+    });
     expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
       expect.objectContaining({
         config: result.cfg,
@@ -467,7 +473,14 @@ describe("ensureOnboardingPluginInstalled", () => {
       );
       expect(result.installed).toBe(true);
       expect(result.status).toBe("installed");
-      expect(result.cfg.plugins?.installs).toBeUndefined();
+      expect(result.cfg.plugins?.installs).toEqual({
+        "demo-plugin": {
+          pluginId: "demo-plugin",
+          source: "path",
+          sourcePath: "./plugins/demo",
+          spec: "@demo/plugin@1.2.3",
+        },
+      });
     });
   });
 
@@ -527,7 +540,14 @@ describe("ensureOnboardingPluginInstalled", () => {
         );
         expect(result.installed).toBe(true);
         expect(result.status).toBe("installed");
-        expect(result.cfg.plugins?.installs).toBeUndefined();
+        expect(result.cfg.plugins?.installs).toEqual({
+          "demo-plugin": {
+            pluginId: "demo-plugin",
+            source: "path",
+            sourcePath: "./plugins/demo",
+            spec: "@demo/plugin@1.2.3",
+          },
+        });
       },
     );
   });

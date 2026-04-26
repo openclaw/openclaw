@@ -234,6 +234,9 @@ export type LoggingConfig = {
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
+  tracesEndpoint?: string;
+  metricsEndpoint?: string;
+  logsEndpoint?: string;
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;

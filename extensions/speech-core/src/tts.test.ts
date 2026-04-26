@@ -49,7 +49,7 @@ vi.mock("../api.js", async () => {
   };
 });
 
-const { _test, maybeApplyTtsToPayload } = await import("./tts.js");
+const { _test, maybeApplyTtsToPayload, resolveTtsConfig } = await import("./tts.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -156,5 +156,84 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+});
+
+describe("speech-core per-agent TTS config", () => {
+  it("deep-merges the active agent TTS override over messages.tts", () => {
+    const cfg = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: "${OPENAI_API_KEY}",
+              voice: "coral",
+              speed: 1,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "reader",
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  voice: "nova",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveTtsConfig(cfg, "reader");
+
+    expect(resolved.rawConfig).toMatchObject({
+      enabled: true,
+      provider: "openai",
+      providers: {
+        openai: {
+          apiKey: "${OPENAI_API_KEY}",
+          voice: "nova",
+          speed: 1,
+        },
+      },
+    });
+  });
+
+  it("ignores prototype-pollution keys in agent TTS overrides", () => {
+    const cfg = {
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "coral",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "reader",
+            tts: JSON.parse(
+              '{"providers":{"openai":{"voice":"nova","__proto__":{"polluted":true}}}}',
+            ),
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveTtsConfig(cfg, "reader");
+
+    expect(resolved.rawConfig?.providers?.openai).toEqual({ voice: "nova" });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });

@@ -253,7 +253,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
   });
 
-  it("emits error events when stream consumption stops early", async () => {
+  it("emits completed events when stream consumption stops early", async () => {
     async function* stream() {
       yield { type: "text", text: "first" };
       yield { type: "text", text: "second" };
@@ -279,12 +279,15 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       }
     });
 
-    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
     expect(events[1]).toMatchObject({
-      type: "model.call.error",
+      type: "model.call.completed",
       callId: "call-abandoned",
-      errorCategory: "StreamAbandoned",
       durationMs: expect.any(Number),
     });
+    expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });

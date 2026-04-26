@@ -119,7 +119,9 @@ function loadReplyMediaPathsRuntime() {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (!shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto })) {
+  if (
+    !shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto, agentId: params.agentId })
+  ) {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
@@ -729,6 +731,7 @@ export async function dispatchReplyFromConfig(
         kind: "final",
         inboundAudio,
         ttsAuto: sessionTtsAuto,
+        agentId: sessionAgentId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
@@ -996,6 +999,7 @@ export async function dispatchReplyFromConfig(
               kind: "tool",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
@@ -1097,6 +1101,7 @@ export async function dispatchReplyFromConfig(
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
@@ -1167,7 +1172,7 @@ export async function dispatchReplyFromConfig(
         routedFinalCount += finalReply.routedFinalCount;
       }
 
-      const ttsMode = resolveConfiguredTtsMode(cfg);
+      const ttsMode = resolveConfiguredTtsMode(cfg, sessionAgentId);
       // Generate TTS-only reply after block streaming completes (when there's no final reply).
       // This handles the case where block streaming succeeds and drops final payloads,
       // but we still want TTS audio to be generated from the accumulated block content.
@@ -1185,6 +1190,7 @@ export async function dispatchReplyFromConfig(
             kind: "final",
             inboundAudio,
             ttsAuto: sessionTtsAuto,
+            agentId: sessionAgentId,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {

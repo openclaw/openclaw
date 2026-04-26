@@ -10,6 +10,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
@@ -287,6 +291,7 @@ export const CronToolSchema = Type.Object(
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  currentDeliveryContext?: DeliveryContext;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -443,6 +448,27 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
+function inferDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.to) {
+    return null;
+  }
+  const delivery: CronDelivery = {
+    mode: "announce",
+    to: normalized.to,
+  };
+  if (normalized.channel) {
+    delivery.channel = normalized.channel as CronMessageChannel;
+  }
+  if (normalized.accountId) {
+    delivery.accountId = normalized.accountId;
+  }
+  if (normalized.threadId != null) {
+    delivery.threadId = normalized.threadId;
+  }
+  return delivery;
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -583,7 +609,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           if (
-            opts?.agentSessionKey &&
+            (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
             job &&
             typeof job === "object" &&
             "payload" in job &&
@@ -613,11 +639,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred =
+                inferDeliveryFromContext(opts.currentDeliveryContext) ??
+                inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
-                  ...delivery,
                   ...inferred,
+                  ...delivery,
                 } satisfies CronDelivery;
               }
             }

@@ -38,7 +38,7 @@ const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 function createSlackCurrentConversationBindingRegistry() {
   return createTestRegistry([
@@ -75,6 +75,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "codex") {
     return "codex";
+  }
+  if (normalized === "droid") {
+    return "droid";
   }
   if (normalized === "opencode") {
     return "opencode";
@@ -141,6 +144,7 @@ function logLiveStep(message: string): void {
 
 function shouldRequireBoundAssistantTranscript(liveAgent: LiveAcpAgent): boolean {
   return (
+    liveAgent === "droid" ||
     liveAgent === "opencode" ||
     isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT)
   );

@@ -89,8 +89,10 @@ vi.mock("../../plugins/loader.js", () => ({
 }));
 
 const clearPluginDiscoveryCache = vi.fn();
+const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
 vi.mock("../../plugins/discovery.js", () => ({
   clearPluginDiscoveryCache: () => clearPluginDiscoveryCache(),
+  discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
 }));
 
 import fs from "node:fs";
@@ -210,6 +212,7 @@ beforeEach(() => {
     autoEnabledReasons: {},
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
+  discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
   loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
@@ -313,7 +316,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.installed).toBe(true);
     expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
     expect(result.cfg.plugins?.allow).toContain("bundled-chat");
-    expect(result.cfg.plugins?.installs).toBeUndefined();
+    expect(result.cfg.plugins?.installs).toEqual({
+      "bundled-chat": expect.objectContaining({
+        source: "npm",
+        spec: bundledChatNpmSpec,
+        installPath: "/tmp/bundled-chat",
+      }),
+    });
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedIntegrity: bundledChatIntegrity,

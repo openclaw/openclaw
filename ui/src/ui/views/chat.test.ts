@@ -15,6 +15,7 @@ import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
+import { renderChat } from "./chat.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -40,6 +41,83 @@ const loadSessionsMock = vi.hoisted(() =>
 
 vi.mock("../icons.ts", () => ({
   icons: {},
+}));
+
+vi.mock("../chat/build-chat-items.ts", () => ({
+  buildChatItems: (props: {
+    messages: unknown[];
+    stream: string | null;
+    streamStartedAt: number | null;
+  }) => {
+    if (props.messages.length > 0) {
+      return [
+        {
+          kind: "group",
+          key: "group:assistant:test",
+          role: "assistant",
+          messages: props.messages.map((message, index) => ({
+            key: `message:${index}`,
+            message,
+          })),
+          timestamp: 1,
+          isStreaming: false,
+        },
+      ];
+    }
+    if (props.stream !== null) {
+      return props.stream
+        ? [
+            {
+              kind: "stream",
+              key: "stream:test",
+              text: props.stream,
+              startedAt: props.streamStartedAt ?? 1,
+            },
+          ]
+        : [{ kind: "reading-indicator", key: "reading:test" }];
+    }
+    return [];
+  },
+}));
+
+vi.mock("../chat/grouped-render.ts", () => ({
+  renderMessageGroup: (group: { messages: Array<{ message: unknown }> }) => {
+    const element = document.createElement("div");
+    element.className = "chat-group";
+    element.textContent = group.messages
+      .map(({ message }) => {
+        if (typeof message === "object" && message !== null && "content" in message) {
+          const content = (message as { content?: unknown }).content;
+          if (typeof content === "string") {
+            return content;
+          }
+          return content == null ? "" : JSON.stringify(content);
+        }
+        return String(message);
+      })
+      .join("\n");
+    return element;
+  },
+  renderReadingIndicatorGroup: () => {
+    const element = document.createElement("div");
+    element.className = "chat-reading-indicator";
+    return element;
+  },
+  renderStreamingGroup: (text: string) => {
+    const element = document.createElement("div");
+    element.className = "chat-stream";
+    element.textContent = text;
+    return element;
+  },
+}));
+
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
+vi.mock("../chat/tool-expansion-state.ts", () => ({
+  getExpandedToolCards: () => new Map<string, boolean>(),
+  syncToolCardExpansionState: () => undefined,
 }));
 
 vi.mock("../controllers/agents.ts", () => ({
@@ -220,10 +298,138 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
+function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
+  const container = document.createElement("div");
+  render(
+    renderChat({
+      sessionKey: "main",
+      onSessionKeyChange: () => undefined,
+      thinkingLevel: null,
+      showThinking: false,
+      showToolCalls: true,
+      loading: false,
+      sending: false,
+      compactionStatus: null,
+      fallbackStatus: null,
+      messages: [],
+      sideResult: null,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      assistantAvatarUrl: null,
+      draft: "",
+      queue: [],
+      realtimeTalkActive: false,
+      realtimeTalkStatus: "idle",
+      realtimeTalkDetail: null,
+      realtimeTalkTranscript: null,
+      connected: true,
+      canSend: true,
+      disabledReason: null,
+      error: null,
+      sessions: null,
+      focusMode: false,
+      sidebarOpen: false,
+      sidebarContent: null,
+      sidebarError: null,
+      splitRatio: 0.6,
+      canvasHostUrl: null,
+      embedSandboxMode: "scripts",
+      allowExternalEmbedUrls: false,
+      assistantName: "Val",
+      assistantAvatar: null,
+      userName: null,
+      userAvatar: null,
+      localMediaPreviewRoots: [],
+      assistantAttachmentAuthToken: null,
+      autoExpandToolCalls: false,
+      attachments: [],
+      onAttachmentsChange: () => undefined,
+      showNewMessages: false,
+      onScrollToBottom: () => undefined,
+      onRefresh: () => undefined,
+      onToggleFocusMode: () => undefined,
+      getDraft: () => "",
+      onDraftChange: () => undefined,
+      onRequestUpdate: () => undefined,
+      onSend: () => undefined,
+      onCompact: () => undefined,
+      onToggleRealtimeTalk: () => undefined,
+      onAbort: () => undefined,
+      onQueueRemove: () => undefined,
+      onQueueSteer: () => undefined,
+      onDismissSideResult: () => undefined,
+      onNewSession: () => undefined,
+      onClearHistory: () => undefined,
+      agentsList: null,
+      currentAgentId: "main",
+      onAgentChange: () => undefined,
+      onNavigateToAgent: () => undefined,
+      onSessionSelect: () => undefined,
+      onOpenSidebar: () => undefined,
+      onCloseSidebar: () => undefined,
+      onSplitRatioChange: () => undefined,
+      onChatScroll: () => undefined,
+      basePath: "",
+      ...overrides,
+    }),
+    container,
+  );
+  return container;
+}
+
 afterEach(() => {
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   vi.unstubAllGlobals();
+});
+
+describe("chat loading skeleton", () => {
+  it("shows the skeleton while the initial history load has no rendered content", () => {
+    const container = renderChatView({ loading: true });
+
+    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
+  it("keeps existing messages visible without the skeleton during a background reload", () => {
+    const container = renderChatView({
+      loading: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "Already loaded answer",
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.textContent).toContain("Already loaded answer");
+  });
+
+  it("keeps active stream content visible without the skeleton during a background reload", () => {
+    const container = renderChatView({
+      loading: true,
+      stream: "Partial streamed answer",
+      streamStartedAt: 1,
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.textContent).toContain("Partial streamed answer");
+  });
+
+  it("keeps the reading indicator visible without the skeleton before stream text arrives", () => {
+    const container = renderChatView({
+      loading: true,
+      stream: "",
+      streamStartedAt: 1,
+    });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
 });
 
 describe("chat queue", () => {
@@ -325,8 +531,16 @@ describe("chat welcome", () => {
 });
 
 describe("chat session controls", () => {
-  it("patches the current session model from the chat header picker", async () => {
+  it("patches the current session model and refreshes active tool visibility", async () => {
     const { state, request } = createChatHeaderState();
+    state.agentsPanel = "tools";
+    state.agentsSelectedId = "main";
+    state.toolsEffectiveResultKey = "main:main";
+    state.toolsEffectiveResult = {
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    };
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
@@ -348,29 +562,6 @@ describe("chat session controls", () => {
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-  });
-
-  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
-    const { state, request } = createChatHeaderState();
-    state.agentsPanel = "tools";
-    state.agentsSelectedId = "main";
-    state.toolsEffectiveResultKey = "main:main";
-    state.toolsEffectiveResult = {
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-
-    modelSelect!.value = "openai/gpt-5-mini";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
     expect(request).toHaveBeenCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "main",

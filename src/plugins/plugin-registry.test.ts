@@ -117,16 +117,6 @@ function createIndex(
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
-        contributions: {
-          providers: [pluginId],
-          channels: [],
-          channelConfigs: [],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: false,
           memory: false,
@@ -210,17 +200,25 @@ describe("plugin registry facade", () => {
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
-    const baseIndex = createIndex("openai");
-    const plugin = baseIndex.plugins[0];
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "", "utf8");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        configSchema: { type: "object" },
+        providers: ["openai", "openai-codex"],
+        channels: ["openai-chat"],
+      }),
+      "utf8",
+    );
     const index = createIndex("openai", {
       plugins: [
         {
-          ...plugin,
-          contributions: {
-            ...plugin.contributions,
-            providers: ["openai", "openai-codex"],
-            channels: ["openai-chat"],
-          },
+          ...createIndex("openai").plugins[0],
+          manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+          source: path.join(rootDir, "index.ts"),
+          rootDir,
         },
       ],
     });

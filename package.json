@@ -1494,6 +1494,7 @@
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:claude": "OPENCLAW_LIVE_ACP_BIND_AGENT=claude bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:codex": "OPENCLAW_LIVE_ACP_BIND_AGENT=codex bash scripts/test-live-acp-bind-docker.sh",
+    "test:docker:live-acp-bind:droid": "OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1 bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:gemini": "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:opencode": "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1 bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",

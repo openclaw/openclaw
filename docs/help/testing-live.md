@@ -219,6 +219,7 @@ Notes:
 - Overrides:
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=claude`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=codex`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=droid`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=gemini`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=opencode`
   - `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini`
@@ -250,6 +251,7 @@ Single-agent Docker recipes:
 ```bash
 pnpm test:docker:live-acp-bind:claude
 pnpm test:docker:live-acp-bind:codex
+pnpm test:docker:live-acp-bind:droid
 pnpm test:docker:live-acp-bind:gemini
 pnpm test:docker:live-acp-bind:opencode
 ```
@@ -258,8 +260,9 @@ Docker notes:
 
 - The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
 - By default, it runs the ACP bind smoke against the aggregate live CLI agents in sequence: `claude`, `codex`, then `gemini`.
-- Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=opencode` to narrow the matrix.
-- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the bundled embedded `acpx/runtime` package from the `acpx` plugin.
+- Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=droid`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=opencode` to narrow the matrix.
+- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the bundled embedded `acpx/runtime` package from the `acpx` plugin.
+- The Droid Docker variant stages `~/.factory` for settings, forwards `FACTORY_API_KEY`, and requires that API key because local Factory OAuth/keyring auth is not portable into the container. It uses ACPX's built-in `droid exec --output-format acp` registry entry.
 - The OpenCode Docker variant is a strict single-agent regression lane. It writes a temporary `OPENCODE_CONFIG_CONTENT` default model from `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL` (default `opencode/kimi-k2.6`) after sourcing `~/.profile`, and `pnpm test:docker:live-acp-bind:opencode` requires a bound assistant transcript instead of accepting the generic post-bind skip.
 - Direct `acpx` CLI calls are only a manual/workaround path for comparing behavior outside the Gateway. The Docker ACP bind smoke exercises OpenClaw's embedded `acpx` runtime backend.
 

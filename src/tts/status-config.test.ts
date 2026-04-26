@@ -104,6 +104,40 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("reports per-agent TTS overrides", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "off",
+                provider: "openai",
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "reader",
+                  tts: {
+                    auto: "always",
+                    provider: "elevenlabs",
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig,
+          agentId: "reader",
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "elevenlabs",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
     await withStatusTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw-dev");

@@ -29,6 +29,7 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
+import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlerRegistrations,
   clearPluginInteractiveHandlers,
@@ -4026,18 +4027,22 @@ module.exports = { id: "throws-after-import", register() {} };`,
           body: `module.exports = { id: "tracked-install-cache", register() {} };`,
         });
 
+        writePersistedInstalledPluginIndexInstallRecordsSync(
+          {
+            "tracked-install-cache": {
+              source: "path" as const,
+              installPath: "~/plugins/tracked-install-cache",
+              sourcePath: "~/plugins/tracked-install-cache",
+            },
+          },
+          { stateDir },
+        );
+
         const options = {
           config: {
             plugins: {
               load: { paths: [plugin.file] },
               allow: ["tracked-install-cache"],
-              installs: {
-                "tracked-install-cache": {
-                  source: "path" as const,
-                  installPath: "~/plugins/tracked-install-cache",
-                  sourcePath: "~/plugins/tracked-install-cache",
-                },
-              },
             },
           },
         };
@@ -6360,18 +6365,21 @@ module.exports = {
               dir: globalDir,
               filename: "index.cjs",
             });
+            writePersistedInstalledPluginIndexInstallRecordsSync(
+              {
+                "demo-installed-duplicate": {
+                  source: "npm",
+                  installPath: globalDir,
+                },
+              },
+              { stateDir },
+            );
 
             return loadOpenClawPlugins({
               cache: false,
               config: {
                 plugins: {
                   allow: ["demo-installed-duplicate"],
-                  installs: {
-                    "demo-installed-duplicate": {
-                      source: "npm",
-                      installPath: globalDir,
-                    },
-                  },
                   entries: {
                     "demo-installed-duplicate": { enabled: true },
                   },

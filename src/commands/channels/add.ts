@@ -5,10 +5,9 @@ import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
-import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
-import { withoutPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -241,29 +240,16 @@ export async function channelsAddCommand(
       }
     }
 
-    const shouldMovePluginInstalls = Boolean(
-      nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
-    );
-    const writtenConfig = shouldMovePluginInstalls
-      ? withoutPluginInstallRecords(nextConfig)
-      : nextConfig;
-    if (shouldMovePluginInstalls) {
-      await commitPluginInstallRecordsWithConfig({
-        nextInstallRecords: nextConfig.plugins?.installs ?? {},
-        nextConfig: writtenConfig,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-      });
-    } else {
-      await replaceConfigFile({
-        nextConfig: writtenConfig,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-      });
-    }
-    if (shouldMovePluginInstalls) {
+    const committed = await commitConfigWithPendingPluginInstalls({
+      nextConfig,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    const writtenConfig = committed.config;
+    if (committed.movedInstallRecords) {
       await refreshPluginRegistryAfterConfigMutation({
         config: writtenConfig,
         reason: "source-changed",
-        installRecords: nextConfig.plugins?.installs ?? {},
+        installRecords: committed.installRecords,
         logger: { warn: (message) => runtime.log(message) },
       });
     }
@@ -395,29 +381,16 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  const shouldMovePluginInstalls = Boolean(
-    nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
-  );
-  const writtenConfig = shouldMovePluginInstalls
-    ? withoutPluginInstallRecords(nextConfig)
-    : nextConfig;
-  if (shouldMovePluginInstalls) {
-    await commitPluginInstallRecordsWithConfig({
-      nextInstallRecords: nextConfig.plugins?.installs ?? {},
-      nextConfig: writtenConfig,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-  } else {
-    await replaceConfigFile({
-      nextConfig: writtenConfig,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-  }
-  if (shouldMovePluginInstalls || pluginRegistrySourceChanged) {
+  const committed = await commitConfigWithPendingPluginInstalls({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
+  const writtenConfig = committed.config;
+  if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
     await refreshPluginRegistryAfterConfigMutation({
       config: writtenConfig,
       reason: "source-changed",
-      ...(shouldMovePluginInstalls ? { installRecords: nextConfig.plugins?.installs ?? {} } : {}),
+      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
       logger: { warn: (message) => runtime.log(message) },
     });
   }
@@ -440,7 +413,7 @@ export async function channelsAddCommand(
             }),
         },
       ],
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
   }

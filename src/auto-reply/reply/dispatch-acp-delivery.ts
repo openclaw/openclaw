@@ -88,6 +88,7 @@ async function shouldTreatDeliveredTextAsVisible(params: {
 async function maybeApplyAcpTts(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
+  agentId?: string;
   channel?: string;
   kind: ReplyDispatchKind;
   inboundAudio: boolean;
@@ -100,6 +101,7 @@ async function maybeApplyAcpTts(params: {
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
+    agentId: params.agentId,
   });
   if (!ttsStatus) {
     return params.payload;
@@ -107,7 +109,7 @@ async function maybeApplyAcpTts(params: {
   if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
     return params.payload;
   }
-  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg) === "final") {
+  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg, params.agentId) === "final") {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -118,6 +120,7 @@ async function maybeApplyAcpTts(params: {
     kind: params.kind,
     inboundAudio: params.inboundAudio,
     ttsAuto: params.ttsAuto,
+    agentId: params.agentId,
   });
 }
 
@@ -153,6 +156,7 @@ export type AcpDispatchDeliveryCoordinator = {
 
 export function createAcpDispatchDeliveryCoordinator(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
@@ -294,6 +298,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const ttsPayload = await maybeApplyAcpTts({
       payload,
       cfg: params.cfg,
+      agentId: params.agentId,
       channel: params.ttsChannel,
       kind,
       inboundAudio: params.inboundAudio,
