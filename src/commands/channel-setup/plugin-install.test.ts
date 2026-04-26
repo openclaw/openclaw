@@ -159,20 +159,41 @@ function makeSkipInstallPrompter() {
   return { prompter, select };
 }
 
+function makeManifestRecord(plugin: {
+  id: string;
+  channels?: string[];
+  origin?: "bundled" | "global" | "workspace";
+  activation?: { onChannels?: string[] };
+}) {
+  const rootDir = `/tmp/openclaw-plugins/${plugin.id}`;
+  return {
+    id: plugin.id,
+    origin: plugin.origin ?? "bundled",
+    channels: plugin.channels ?? [],
+    providers: [],
+    cliBackends: [],
+    hooks: [],
+    skills: [],
+    rootDir,
+    source: path.join(rootDir, "index.js"),
+    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    ...(plugin.activation ? { activation: plugin.activation } : {}),
+  };
+}
+
 function mockActivationOnlyPlugin(plugin: {
   id: string;
   origin?: "bundled" | "global" | "workspace";
 }) {
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [
-      {
+      makeManifestRecord({
         id: plugin.id,
-        channels: [],
-        ...(plugin.origin === undefined ? {} : { origin: plugin.origin }),
+        origin: plugin.origin,
         activation: {
           onChannels: ["external-chat"],
         },
-      },
+      }),
     ],
     diagnostics: [],
   });
@@ -746,7 +767,12 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "custom-external-chat-plugin", channels: ["external-chat"] }],
+      plugins: [
+        makeManifestRecord({
+          id: "custom-external-chat-plugin",
+          channels: ["external-chat"],
+        }),
+      ],
       diagnostics: [],
     });
 
