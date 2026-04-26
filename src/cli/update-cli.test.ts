@@ -524,11 +524,11 @@ describe("update-cli", () => {
   it("respawns into the updated package root before running post-update tasks", async () => {
     const { entrypoints } = setupUpdatedRootRefresh();
 
-    await updateCommand({ yes: true });
+    await updateCommand({ yes: true, timeout: "1800" });
 
     expect(spawn).toHaveBeenCalledWith(
       expect.stringMatching(/node/),
-      [entrypoints[0], "update", "--yes"],
+      [entrypoints[0], "update", "--yes", "--timeout", "1800"],
       expect.objectContaining({
         stdio: "inherit",
         env: expect.objectContaining({
@@ -623,6 +623,22 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("passes the update timeout budget into post-core plugin updates", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ restart: false, timeout: "1800" });
+      },
+    );
+
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_800_000 }),
+    );
   });
 
   it("uses a fail-closed integrity policy for post-core plugin updates", async () => {

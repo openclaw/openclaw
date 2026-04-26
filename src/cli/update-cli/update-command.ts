@@ -89,6 +89,7 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 20 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
@@ -455,7 +456,7 @@ async function runGitUpdate(params: {
   devTargetRef?: string;
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-  const effectiveTimeout = params.timeoutMs ?? 20 * 60_000;
+  const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
 
   const cloneStep = params.switchToGit
@@ -537,6 +538,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
+  timeoutMs: number;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     if (!params.opts.json) {
@@ -589,6 +591,7 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
+    timeoutMs: params.timeoutMs,
     skipIds: new Set(syncResult.summary.switchedToNpm),
     logger: pluginLogger,
     onIntegrityDrift: async (drift) => {
@@ -896,12 +899,14 @@ async function runPostCorePluginUpdate(params: {
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
+  timeoutMs: number;
 }): Promise<PostCorePluginUpdateResult> {
   return await updatePluginsAfterCoreUpdate({
     root: params.root,
     channel: params.channel,
     configSnapshot: params.configSnapshot,
     opts: params.opts,
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -953,6 +958,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   }
   if (params.opts.yes) {
     argv.push("--yes");
+  }
+  if (params.opts.timeout) {
+    argv.push("--timeout", params.opts.timeout);
   }
   const resultDir =
     params.opts.json === true
@@ -1018,6 +1026,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (timeoutMs === null) {
     return;
   }
+  const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   const root = await resolveUpdateRoot();
   if (postCoreUpdateResume) {
@@ -1036,6 +1045,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       channel: postCoreUpdateChannel,
       configSnapshot: await readConfigFileSnapshot(),
       opts,
+      timeoutMs: updateStepTimeoutMs,
     });
     if (opts.json) {
       await writePostCorePluginUpdateResultFile(
@@ -1146,7 +1156,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       mode = await resolveGlobalManager({
         root,
         installKind,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
+        timeoutMs: updateStepTimeoutMs,
       });
     }
 
@@ -1271,7 +1281,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           root,
           installKind,
           tag,
-          timeoutMs: timeoutMs ?? 20 * 60_000,
+          timeoutMs: updateStepTimeoutMs,
           startedAt,
           progress,
           jsonMode: Boolean(opts.json),
@@ -1414,6 +1424,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       channel,
       configSnapshot: postUpdateConfigSnapshot,
       opts,
+      timeoutMs: updateStepTimeoutMs,
     });
   }
 
