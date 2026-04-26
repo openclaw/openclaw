@@ -280,6 +280,7 @@ export async function monitorWebChannel(
               reconnectAttempts: snapshot.reconnectAttempts,
               messagesHandled: snapshot.handledMessages,
               lastInboundAt: snapshot.lastInboundAt,
+              lastTransportActivityAt: snapshot.lastTransportActivityAt,
               authAgeMs,
               uptimeMs: snapshot.uptimeMs,
               ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
@@ -297,20 +298,22 @@ export async function monitorWebChannel(
             }
           },
           onWatchdogTimeout: (snapshot) => {
-            const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
-            const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
+            const minutesSinceTransportActivity = Math.floor(
+              (Date.now() - snapshot.lastTransportActivityAt) / 60000,
+            );
             statusController.noteWatchdogStale();
             heartbeatLogger.warn(
               {
                 connectionId: snapshot.connectionId,
-                minutesSinceLastMessage,
+                minutesSinceTransportActivity,
                 lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+                lastTransportActivityAt: new Date(snapshot.lastTransportActivityAt),
                 messagesHandled: snapshot.handledMessages,
               },
-              "Message timeout detected - forcing reconnect",
+              "Transport activity timeout detected - forcing reconnect",
             );
             whatsappHeartbeatLog.warn(
-              `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+              `No WhatsApp transport activity in ${minutesSinceTransportActivity}m - restarting connection`,
             );
           },
         });

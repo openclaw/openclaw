@@ -146,6 +146,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
+- The reconnect watchdog uses WhatsApp Web transport activity, not inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
@@ -509,6 +510,9 @@ Behavior notes:
 
   <Accordion title="Linked but disconnected / reconnect loop">
     Symptom: linked account with repeated disconnects or reconnect attempts.
+
+    Quiet accounts can stay connected indefinitely; the watchdog should only restart
+    when WhatsApp Web transport activity stops or the socket closes.
 
     Fix:
 
