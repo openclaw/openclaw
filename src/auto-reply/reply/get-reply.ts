@@ -232,7 +232,7 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const configuredTypingTtlSeconds = agentCfg?.typingTtlSeconds ?? sessionCfg?.typingTtlSeconds;
+  const configuredTypingTtlSeconds = sessionCfg?.typingTtlSeconds ?? agentCfg?.typingTtlSeconds;
   const typingTtlMs =
     typeof configuredTypingTtlSeconds === "number" ? configuredTypingTtlSeconds * 1000 : undefined;
   const typing = createTypingController({
