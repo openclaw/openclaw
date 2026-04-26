@@ -65,6 +65,19 @@ model calls must not export `StreamAbandoned` on successful turns; raw diagnosti
 `openclaw.content.*` attributes must stay out of the trace. It writes
 `otel-smoke-summary.json` next to the QA suite artifacts.
 
+For the Docker observability smoke, run:
+
+```bash
+pnpm test:docker:observability
+```
+
+That builds or reuses the shared Docker E2E image, runs the OTEL trace smoke
+inside the container, then runs the `docker-prometheus-smoke` QA scenario with
+the `diagnostics-prometheus` plugin enabled. Set
+`OPENCLAW_DOCKER_OBSERVABILITY_LOOPS=<count>` to repeat both checks inside one
+Docker run while preserving per-loop artifacts under
+`.artifacts/docker-observability/...`.
+
 For a transport-real Matrix smoke lane, run:
 
 ```bash
