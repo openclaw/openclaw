@@ -21,6 +21,7 @@ export type DaemonInstallOptions = {
   token?: string;
   force?: boolean;
   json?: boolean;
+  stageOnly?: boolean;
 };
 
 export type DaemonLifecycleOptions = {

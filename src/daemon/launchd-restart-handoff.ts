@@ -105,10 +105,9 @@ if launchctl kickstart -k "$service_target"; then
   status=0
 else
   status=$?
-  if launchctl bootstrap "$domain" "$plist_path"; then
-    launchctl kickstart -k "$service_target"
-    status=$?
-  fi
+  launchctl bootstrap "$domain" "$plist_path"
+  launchctl kickstart -k "$service_target"
+  status=$?
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2

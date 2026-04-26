@@ -45,6 +45,9 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=kickstart");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('if launchctl kickstart -k "$service_target"; then');
+    expect(args[1]).toContain(
+      'launchctl bootstrap "$domain" "$plist_path"\n  launchctl kickstart -k "$service_target"',
+    );
     expect(args[1]).not.toMatch(/launchctl[^\n]*\/dev\/null/);
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
@@ -67,6 +70,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("reason=launchd-auto-reload");
     expect(args[1]).toContain("print_retry_count=$((print_retry_count - 1))");
     expect(args[1]).toContain("sleep 0.2");
+    expect(args[1]).toContain('print_retry_count="15"');
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
     expect(args[1]).toContain('if launchctl start "$label"; then');
     expect(args[1]).not.toContain('basename "$service_target"');

@@ -151,9 +151,9 @@ exit 0
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
+      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
       // Should clear disabled state and fall back to bootstrap when kickstart fails.
-      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);

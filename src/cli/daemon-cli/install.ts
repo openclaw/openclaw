@@ -200,7 +200,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     emit,
     fail,
     install: async () => {
-      await service.install({
+      const writeService = opts.stageOnly ? service.stage : service.install;
+      await writeService({
         env: installEnv,
         stdout,
         programArguments,

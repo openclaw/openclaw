@@ -1806,6 +1806,35 @@ describe("update-cli", () => {
       },
     },
     {
+      name: "stages macOS LaunchAgent env before detached update handoff",
+      run: async () => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        try {
+          vi.mocked(runGatewayUpdate).mockResolvedValue({
+            status: "ok",
+            mode: "git",
+            steps: [],
+            durationMs: 100,
+          } satisfies UpdateRunResult);
+          serviceLoaded.mockResolvedValue(true);
+
+          await updateCommand({});
+        } finally {
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+      },
+      assert: () => {
+        expect(runDaemonInstall).toHaveBeenCalledWith({
+          force: true,
+          json: undefined,
+          stageOnly: true,
+        });
+        expect(runRestartScript).toHaveBeenCalled();
+        expect(runDaemonRestart).not.toHaveBeenCalled();
+      },
+    },
+    {
       name: "falls back to daemon restart when service env refresh cannot complete",
       run: async () => {
         vi.mocked(runDaemonRestart).mockResolvedValue(true);

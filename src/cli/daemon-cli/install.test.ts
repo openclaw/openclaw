@@ -188,6 +188,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
+    service.install.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
@@ -221,6 +222,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
+    service.install.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
@@ -300,6 +302,24 @@ describe("runDaemonInstall", () => {
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+  });
+
+  it("stages service files without activating the service for internal update refreshes", async () => {
+    await runDaemonInstall({ json: true, force: true, stageOnly: true });
+
+    const firstCall = installDaemonServiceAndEmitMock.mock.calls.at(0) as unknown[] | undefined;
+    const params = firstCall?.[0] as { install: () => Promise<void> } | undefined;
+    expect(params).toBeDefined();
+
+    await params?.install();
+
+    expect(service.stage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programArguments: ["openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+      }),
+    );
+    expect(service.install).not.toHaveBeenCalled();
   });
 
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {

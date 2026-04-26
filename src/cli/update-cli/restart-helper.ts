@@ -124,8 +124,8 @@ printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%F
 # then re-register via bootstrap and kickstart. The final status is captured
 # before self-cleanup so a genuine failure remains observable.
 status=0
+launchctl enable 'gui/${uid}/${escaped}'
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
-  launchctl enable 'gui/${uid}/${escaped}'
   launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
   launchctl kickstart -k 'gui/${uid}/${escaped}'
   status=$?

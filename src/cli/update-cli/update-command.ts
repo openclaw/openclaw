@@ -267,6 +267,7 @@ async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
   invocationCwd?: string;
+  stageOnly?: boolean;
 }): Promise<void> {
   const args = ["gateway", "install", "--force"];
   if (params.jsonMode) {
@@ -274,7 +275,7 @@ async function refreshGatewayServiceEnv(params: {
   }
 
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
-  if (entrypoint) {
+  if (entrypoint && !params.stageOnly) {
     const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
       cwd: params.result.root,
       env: resolveServiceRefreshEnv(process.env, params.invocationCwd),
@@ -288,7 +289,14 @@ async function refreshGatewayServiceEnv(params: {
     );
   }
 
-  await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+  const installOpts: Parameters<typeof runDaemonInstall>[0] = {
+    force: true,
+    json: params.jsonMode || undefined,
+  };
+  if (params.stageOnly) {
+    installOpts.stageOnly = true;
+  }
+  await runDaemonInstall(installOpts);
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -801,12 +809,17 @@ async function maybeRestartService(params: {
         : undefined;
       let restarted = false;
       let restartInitiated = false;
+      const stageMacLaunchAgentRestart =
+        process.platform === "darwin" &&
+        Boolean(params.restartScriptPath) &&
+        params.refreshServiceEnv;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
             invocationCwd: params.invocationCwd,
+            stageOnly: stageMacLaunchAgentRestart,
           });
         } catch (err) {
           // Always log the refresh failure so callers can detect it (issue #56772).

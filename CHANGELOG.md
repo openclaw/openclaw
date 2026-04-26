@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS Gateway/update: stage LaunchAgent plist refreshes before detached update restart handoff, clear disabled launchd state before kickstart, and retry kickstart after bootstrap repair so recoverable restart failures do not leave the gateway unloaded. Fixes #60885. Thanks @cceausu, @moxy-kit, @vishutdhar, @dafacto, @ze1tgeist88, and @rismay.
 - Logging: propagate internal request trace scopes through Gateway HTTP requests and WebSocket frames so file logs, diagnostic events, agent run traces, model-call traces, OTEL spans, and trusted provider `traceparent` headers share a correlatable `traceId` without logging raw request or model content. Fixes #40353. Thanks @liangruochong44-ui.
 - Diagnostics/OTEL: capture privacy-safe model-call request payload bytes, streamed response bytes, first-response latency, and total duration in diagnostic events, plugin hooks, stability snapshots, and OTEL model-call spans/metrics without logging raw model content. Fixes #33832. Thanks @wwh830.
 - Logging: write validated diagnostic trace context as top-level `traceId`, `spanId`, `parentSpanId`, and `traceFlags` fields in file-log JSONL records so traced requests and model calls are easier to correlate in log processors. Refs #40353. Thanks @liangruochong44-ui.
