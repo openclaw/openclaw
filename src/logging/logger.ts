@@ -202,6 +202,37 @@ function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined
   return normalizeTraceContext((value as { trace?: unknown }).trace);
 }
 
+function getSortedNumericLogArgs(logObj: TsLogRecord): unknown[] {
+  return Object.entries(logObj)
+    .filter(([key]) => /^\d+$/.test(key))
+    .toSorted((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, value]) => value);
+}
+
+function extractLogBindingPrefix(numericArgs: unknown[]): {
+  bindings?: Record<string, unknown>;
+  args: unknown[];
+} {
+  if (
+    typeof numericArgs[0] === "string" &&
+    numericArgs[0].length <= MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS &&
+    numericArgs[0].trim().startsWith("{")
+  ) {
+    try {
+      const parsed = JSON.parse(numericArgs[0]);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return {
+          bindings: parsed as Record<string, unknown>,
+          args: numericArgs.slice(1),
+        };
+      }
+    } catch {
+      // ignore malformed json bindings
+    }
+  }
+  return { args: numericArgs };
+}
+
 function findLogTraceContext(
   bindings: Record<string, unknown> | undefined,
   numericArgs: readonly unknown[],
@@ -217,6 +248,20 @@ function findLogTraceContext(
     }
   }
   return undefined;
+}
+
+function buildTraceFileLogFields(logObj: TsLogRecord): Record<string, string> | undefined {
+  const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
+  const trace = findLogTraceContext(bindings, args);
+  if (!trace) {
+    return undefined;
+  }
+  return {
+    traceId: trace.traceId,
+    ...(trace.spanId ? { spanId: trace.spanId } : {}),
+    ...(trace.parentSpanId ? { parentSpanId: trace.parentSpanId } : {}),
+    ...(trace.traceFlags ? { traceFlags: trace.traceFlags } : {}),
+  };
 }
 
 function buildDiagnosticLogRecord(logObj: TsLogRecord) {
@@ -235,27 +280,7 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
         };
       }
     | undefined;
-  const numericArgs = Object.entries(logObj)
-    .filter(([key]) => /^\d+$/.test(key))
-    .toSorted((a, b) => Number(a[0]) - Number(b[0]))
-    .map(([, value]) => value);
-
-  let bindings: Record<string, unknown> | undefined;
-  if (
-    typeof numericArgs[0] === "string" &&
-    numericArgs[0].length <= MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS &&
-    numericArgs[0].trim().startsWith("{")
-  ) {
-    try {
-      const parsed = JSON.parse(numericArgs[0]);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        bindings = parsed as Record<string, unknown>;
-        numericArgs.shift();
-      }
-    } catch {
-      // ignore malformed json bindings
-    }
-  }
+  const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
 
   const trace = findLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
@@ -420,7 +445,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         currentFileBytes = getCurrentLogFileBytes(activeFile);
       }
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const line = redactSensitiveText(JSON.stringify({ ...logObj, time }));
+      const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
+      const line = redactSensitiveText(JSON.stringify({ ...logObj, time, ...traceFields }));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
