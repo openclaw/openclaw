@@ -10,14 +10,14 @@ describe("parseTimeoutMs", () => {
     expect(parseTimeoutMs(undefined)).toBeUndefined();
     expect(parseTimeoutMs("")).toBeUndefined();
     expect(parseTimeoutMs("nope")).toBeUndefined();
+    expect(parseTimeoutMs("123abc")).toBeUndefined();
   });
 });
 
 describe("parseTimeoutMsWithFallback", () => {
-  it("returns the fallback for missing or empty values", () => {
+  it("returns the fallback for missing values", () => {
     expect(parseTimeoutMsWithFallback(undefined, 3000)).toBe(3000);
     expect(parseTimeoutMsWithFallback(null, 3000)).toBe(3000);
-    expect(parseTimeoutMsWithFallback("  ", 3000)).toBe(3000);
   });
 
   it("parses positive numbers and strings", () => {
@@ -39,5 +39,11 @@ describe("parseTimeoutMsWithFallback", () => {
   it("throws on non-positive parsed values", () => {
     expect(() => parseTimeoutMsWithFallback("0", 3000)).toThrow("invalid --timeout: 0");
     expect(() => parseTimeoutMsWithFallback("-1", 3000)).toThrow("invalid --timeout: -1");
+  });
+
+  it("throws on empty, partial-numeric, and fractional values", () => {
+    expect(() => parseTimeoutMsWithFallback("  ", 3000)).toThrow("invalid --timeout");
+    expect(() => parseTimeoutMsWithFallback("1000ms", 3000)).toThrow("invalid --timeout: 1000ms");
+    expect(() => parseTimeoutMsWithFallback("1.5", 3000)).toThrow("invalid --timeout: 1.5");
   });
 });

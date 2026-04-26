@@ -12,9 +12,12 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
     if (!trimmed) {
       return undefined;
     }
-    value = Number.parseInt(trimmed, 10);
+    if (!/^-?\d+$/.test(trimmed)) {
+      return undefined;
+    }
+    value = Number(trimmed);
   }
-  return Number.isFinite(value) ? value : undefined;
+  return Number.isFinite(value) && Number.isInteger(value) ? value : undefined;
 }
 
 export function parseTimeoutMsWithFallback(
@@ -43,11 +46,14 @@ export function parseTimeoutMsWithFallback(
   }
 
   if (!value) {
-    return fallbackMs;
+    throw new Error("invalid --timeout");
   }
 
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`invalid --timeout: ${value}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`invalid --timeout: ${value}`);
   }
   return parsed;

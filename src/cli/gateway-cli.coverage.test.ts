@@ -145,6 +145,15 @@ describe("gateway-cli coverage", () => {
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
   });
 
+  it("rejects invalid gateway call timeout before calling Gateway", async () => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "call", "health", "--timeout", "1000ms", "--json"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Error: invalid --timeout");
+  });
+
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     gatewayStatusCommand.mockClear();
 

@@ -25,6 +25,7 @@ import {
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -92,8 +93,11 @@ const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     )
     .option("--json", "Output JSON", false);
 
-const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) =>
-  withProgress(
+const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) => {
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS, {
+    invalidType: "error",
+  });
+  return await withProgress(
     {
       label: `Devices ${method}`,
       indeterminate: true,
@@ -106,11 +110,12 @@ const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unk
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
+        timeoutMs,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
+};
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) {

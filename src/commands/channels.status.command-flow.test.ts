@@ -286,4 +286,15 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       }),
     );
   });
+
+  it("rejects invalid timeout before falling back to config-only status", async () => {
+    const { runtime } = createCapturingTestRuntime();
+
+    await expect(channelsStatusCommand({ timeout: "1000ms" }, runtime as never)).rejects.toThrow(
+      "invalid --timeout: 1000ms",
+    );
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.requireValidConfigSnapshot).not.toHaveBeenCalled();
+  });
 });

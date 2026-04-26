@@ -354,6 +354,14 @@ describe("devices cli remove", () => {
       }),
     );
   });
+
+  it("rejects invalid timeout before calling Gateway", async () => {
+    await expect(runDevicesCommand(["remove", "device-1", "--timeout", "1000ms"])).rejects.toThrow(
+      "invalid --timeout: 1000ms",
+    );
+
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 });
 
 describe("devices cli clear", () => {
