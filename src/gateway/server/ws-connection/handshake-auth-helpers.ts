@@ -262,9 +262,13 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (!isBackendClient) {
     return false;
   }
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesBootstrapTokenAuth = params.authMethod === "bootstrap-token";
+  const usesDeviceTokenAuth = params.authMethod === "device-token";
   return (
-    params.locality === "direct_local" && !params.hasBrowserOriginHeader && usesBootstrapTokenAuth
+    params.locality === "direct_local" &&
+    !params.hasBrowserOriginHeader &&
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesBootstrapTokenAuth || usesDeviceTokenAuth)
   );
 }
 
