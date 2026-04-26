@@ -1,11 +1,12 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
+import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { hasKind } from "../plugins/slots.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
@@ -76,10 +77,17 @@ function appendUniqueEnvVarCandidates(
 function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
-  const registry = loadPluginManifestRegistry({
+  const index = loadPluginRegistrySnapshot({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env,
+  });
+  const registry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params?.config,
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+    includeDisabled: true,
   });
   const candidates: Record<string, string[]> = {};
   for (const plugin of registry.plugins) {
