@@ -1,0 +1,137 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  appendSessionRecoveryEvent,
+  readSessionRecoveryEventsForTest,
+  resolveSessionRecoveryLogPath,
+} from "./recovery-log.js";
+import {
+  clearSessionStoreCacheForTest,
+  recordSessionMetaFromInbound,
+} from "./store.js";
+
+const suiteRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-session-recovery-log-",
+});
+
+describe("session recovery log", () => {
+  beforeAll(async () => {
+    await suiteRootTracker.setup();
+  });
+
+  afterEach(() => {
+    clearSessionStoreCacheForTest();
+  });
+
+  afterAll(async () => {
+    await suiteRootTracker.cleanup();
+  });
+
+  async function createStorePath() {
+    const dir = await suiteRootTracker.make("case");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+    return storePath;
+  }
+
+  it("appends JSONL recovery events next to the session store", async () => {
+    const storePath = await createStorePath();
+    await appendSessionRecoveryEvent({
+      storePath,
+      eventId: "event-1",
+      eventType: "session.bound",
+      timestamp: 123,
+      sessionKey: "agent:main:discord:dm:user-1",
+      sessionId: "sess-1",
+      source: { kind: "inbound", provider: "discord", channel: undefined },
+      details: { messageSid: "msg-1", omitted: undefined },
+    });
+
+    const logPath = resolveSessionRecoveryLogPath(storePath);
+    const raw = await fs.readFile(logPath, "utf-8");
+    expect(raw.trim().split(/\r?\n/)).toHaveLength(1);
+    await expect(fs.stat(logPath)).resolves.toMatchObject({ mode: expect.any(Number) });
+
+    const events = await readSessionRecoveryEventsForTest(storePath);
+    expect(events).toEqual([
+      {
+        version: 1,
+        eventId: "event-1",
+        eventType: "session.bound",
+        timestamp: 123,
+        sessionKey: "agent:main:discord:dm:user-1",
+        sessionId: "sess-1",
+        source: { kind: "inbound", provider: "discord" },
+        details: { messageSid: "msg-1" },
+      },
+    ]);
+  });
+
+  it("records inbound session metadata as an append-only recovery event", async () => {
+    const storePath = await createStorePath();
+    const ctx: MsgContext = {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      From: "user-1",
+      To: "bot-1",
+      AccountId: "default",
+      OriginatingChannel: "discord" as MsgContext["OriginatingChannel"],
+      OriginatingTo: "user-1",
+      MessageSid: "message-1",
+      MessageThreadId: "thread-1",
+      NativeChannelId: "dm-1",
+    };
+
+    const entry = await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: "Agent:Main:Discord:DM:User-1",
+      ctx,
+    });
+
+    expect(entry?.sessionId).toBeTruthy();
+    const events = await readSessionRecoveryEventsForTest(storePath);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      version: 1,
+      eventType: "session.meta.recorded",
+      sessionKey: "agent:main:discord:dm:user-1",
+      sessionId: entry?.sessionId,
+      source: {
+        kind: "inbound",
+        provider: "discord",
+        surface: "discord",
+        channel: "discord",
+        chatType: "direct",
+      },
+      details: {
+        accountId: "default",
+        from: "user-1",
+        to: "bot-1",
+        originatingTo: "user-1",
+        messageSid: "message-1",
+        messageThreadId: "thread-1",
+        nativeChannelId: "dm-1",
+      },
+    });
+  });
+
+  it("does not fail inbound metadata recording when recovery event append fails", async () => {
+    const storePath = await createStorePath();
+    const appendSpy = vi.spyOn(fs, "appendFile").mockRejectedValueOnce(new Error("disk full"));
+    try {
+      await expect(
+        recordSessionMetaFromInbound({
+          storePath,
+          sessionKey: "agent:main:webchat:dm:user-1",
+          ctx: { Provider: "webchat", ChatType: "direct" },
+        }),
+      ).resolves.toMatchObject({ sessionId: expect.any(String) });
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+});

@@ -34,6 +34,7 @@ import {
   type SessionStoreLockQueue,
   type SessionStoreLockTask,
 } from "./store-lock-state.js";
+import { appendSessionRecoveryEvent } from "./recovery-log.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -677,7 +678,7 @@ export async function recordSessionMetaFromInbound(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
-  return await updateSessionStore(
+  const result = await updateSessionStore(
     storePath,
     (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
@@ -713,6 +714,37 @@ export async function recordSessionMetaFromInbound(params: {
     },
     { activeSessionKey: normalizeStoreSessionKey(sessionKey) },
   );
+  if (result) {
+    await appendSessionRecoveryEvent({
+      storePath,
+      eventType: "session.meta.recorded",
+      sessionKey: normalizeStoreSessionKey(sessionKey),
+      sessionId: result.sessionId,
+      source: {
+        kind: "inbound",
+        provider: ctx.Provider,
+        surface: ctx.Surface,
+        channel: ctx.OriginatingChannel,
+        chatType: ctx.ChatType,
+      },
+      details: {
+        accountId: ctx.AccountId,
+        from: ctx.From,
+        to: ctx.To,
+        originatingTo: ctx.OriginatingTo,
+        messageSid: ctx.MessageSid,
+        messageSidFull: ctx.MessageSidFull,
+        messageThreadId: ctx.MessageThreadId,
+        replyToId: ctx.ReplyToId,
+        rootMessageId: ctx.RootMessageId,
+        nativeChannelId: ctx.NativeChannelId,
+        nativeDirectUserId: ctx.NativeDirectUserId,
+      },
+    }).catch((err) => {
+      log.warn(`Failed to append session recovery event: ${String(err)}`);
+    });
+  }
+  return result;
 }
 
 export async function updateLastRoute(params: {
