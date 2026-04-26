@@ -267,14 +267,10 @@ function pickCliSessionId(
 }
 
 function shouldUnwrapNestedCliResultText(params: {
-  backend: CliBackendConfig;
   providerId?: string;
   parsed: Record<string, unknown>;
 }): boolean {
-  const isClaudeBackend =
-    (params.providerId && isClaudeCliProvider(params.providerId)) ||
-    /^claude(?:$|[\\/-])/i.test(params.backend.command.trim());
-  if (!isClaudeBackend) {
+  if (!params.providerId || !isClaudeCliProvider(params.providerId)) {
     return false;
   }
   return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
@@ -304,7 +300,7 @@ export function parseCliJson(
       collectCliText(parsed.response) ||
       collectCliText(parsed);
     const trimmedText = (
-      shouldUnwrapNestedCliResultText({ backend, providerId, parsed })
+      shouldUnwrapNestedCliResultText({ providerId, parsed })
         ? unwrapNestedCliResultText(nextText)
         : nextText
     ).trim();
