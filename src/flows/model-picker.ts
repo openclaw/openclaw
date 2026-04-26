@@ -8,6 +8,7 @@ import {
 } from "../agents/model-picker-visibility.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
@@ -622,12 +623,16 @@ export async function promptDefaultModel(
     return { model: selection };
   }
 
-  const catalogProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
-  try {
-    catalog = await loadModelCatalog({ config: cfg });
-  } finally {
-    catalogProgress.stop();
+  if (cfg.models?.mode === "replace") {
+    catalog = buildConfiguredModelCatalog({ cfg });
+  } else {
+    const catalogProgress = params.prompter.progress("Loading available models");
+    try {
+      catalog = await loadModelCatalog({ config: cfg });
+    } finally {
+      catalogProgress.stop();
+    }
   }
   if (catalog.length === 0) {
     return promptManualModel({
@@ -894,12 +899,16 @@ export async function promptModelAllowlist(params: {
     return {};
   }
 
-  const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
-  try {
-    catalog = await loadModelCatalog({ config: cfg });
-  } finally {
-    allowlistProgress.stop();
+  if (cfg.models?.mode === "replace") {
+    catalog = buildConfiguredModelCatalog({ cfg });
+  } else {
+    const allowlistProgress = params.prompter.progress("Loading available models");
+    try {
+      catalog = await loadModelCatalog({ config: cfg });
+    } finally {
+      allowlistProgress.stop();
+    }
   }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const noCatalogInitialKeys =

@@ -3,6 +3,7 @@ import {
   type ModelCatalogEntry,
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
+import { buildConfiguredModelCatalog } from "../agents/model-selection.js";
 import { getRuntimeConfig } from "../config/config.js";
 
 export type GatewayModelChoice = ModelCatalogEntry;
@@ -17,5 +18,9 @@ export function __resetModelCatalogCacheForTest() {
 export async function loadGatewayModelCatalog(params?: {
   getConfig?: () => ReturnType<typeof getRuntimeConfig>;
 }): Promise<GatewayModelChoice[]> {
-  return await loadModelCatalog({ config: (params?.getConfig ?? getRuntimeConfig)() });
+  const cfg = (params?.getConfig ?? getRuntimeConfig)();
+  if (cfg.models?.mode === "replace") {
+    return buildConfiguredModelCatalog({ cfg });
+  }
+  return await loadModelCatalog({ config: cfg });
 }
