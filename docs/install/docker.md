@@ -177,6 +177,8 @@ Use the published Gateway URL, Tailscale, or wide-area DNS-SD for Docker hosts.
 Set `OPENCLAW_DISABLE_BONJOUR=0` only when running with host networking, macvlan,
 or another network where mDNS multicast is known to work.
 
+For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
+
 ### Storage and persistence
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
