@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import {
@@ -115,35 +115,59 @@ function isHostDenialToolText(text: string): boolean {
   return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
+function redactStringsDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactToolPayloadText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactStringsDeep);
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = redactStringsDeep(child);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function sanitizeToolArgs(args: unknown): unknown {
+  return redactStringsDeep(args);
+}
+
 export function sanitizeToolResult(result: unknown): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
   const record = result as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...record };
   const content = Array.isArray(record.content) ? record.content : null;
-  if (!content) {
-    return record;
+  if (content) {
+    out.content = content.map((item) => {
+      if (!item || typeof item !== "object") {
+        return item;
+      }
+      const entry = item as Record<string, unknown>;
+      const type = readStringValue(entry.type);
+      if (type === "text" && typeof entry.text === "string") {
+        const redacted = redactToolPayloadText(entry.text);
+        return Object.assign({}, entry, { text: truncateToolText(redacted) });
+      }
+      if (type === "image") {
+        const data = readStringValue(entry.data);
+        const bytes = data ? data.length : undefined;
+        const cleaned = { ...entry };
+        delete cleaned.data;
+        return Object.assign({}, cleaned, { bytes, omitted: true });
+      }
+      return entry;
+    });
   }
-  const sanitized = content.map((item) => {
-    if (!item || typeof item !== "object") {
-      return item;
-    }
-    const entry = item as Record<string, unknown>;
-    const type = readStringValue(entry.type);
-    if (type === "text" && typeof entry.text === "string") {
-      const redacted = redactSensitiveText(entry.text, { mode: "tools" });
-      return Object.assign({}, entry, { text: truncateToolText(redacted) });
-    }
-    if (type === "image") {
-      const data = readStringValue(entry.data);
-      const bytes = data ? data.length : undefined;
-      const cleaned = { ...entry };
-      delete cleaned.data;
-      return Object.assign({}, cleaned, { bytes, omitted: true });
-    }
-    return entry;
-  });
-  return { ...record, content: sanitized };
+  if (record.details !== undefined) {
+    out.details = redactStringsDeep(record.details);
+  }
+  return out;
 }
 
 export function extractToolResultText(result: unknown): string | undefined {
