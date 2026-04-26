@@ -7,12 +7,28 @@ import {
 } from "./api.js";
 import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    response: new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
+    release: async () => {},
+  })),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  };
+});
+
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
 afterEach(() => {
   process.env.VITEST = ORIGINAL_VITEST;
   process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  fetchWithSsrFGuardMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -45,35 +61,23 @@ describe("huggingface models", () => {
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {
     process.env.VITEST = "false";
     process.env.NODE_ENV = "development";
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
-      ),
-    );
 
     await discoverHuggingfaceModels("hf_test_token");
 
-    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: HUGGINGFACE_DISCOVERY_TIMEOUT_MS }),
+    );
   });
 
   it("accepts a custom discovery timeout override", async () => {
     process.env.VITEST = "false";
     process.env.NODE_ENV = "development";
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
-      ),
-    );
 
     await discoverHuggingfaceModels("hf_test_token", 25_000);
 
-    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 25_000 }),
+    );
   });
 
   describe("isHuggingfacePolicyLocked", () => {
