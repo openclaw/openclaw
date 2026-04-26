@@ -40,8 +40,6 @@ import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
@@ -70,7 +68,6 @@ import {
 } from "../pi-embedded-helpers.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
-import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -99,7 +96,6 @@ import {
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
-  scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -125,6 +121,7 @@ import {
   buildTraceToolSummary,
   createEmptyAuthProfileStore,
 } from "./run/run-orchestration-helpers.js";
+import { buildEmbeddedRunAttemptInput } from "./run/runtime-plan-factory.js";
 import {
   buildBeforeModelResolveAttachments,
   resolveEffectiveRuntimeModel,
@@ -708,150 +705,40 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const basePrompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
-          const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          const attempt = await runEmbeddedAttemptWithBackend(
+            buildEmbeddedRunAttemptInput({
+              runParams: params,
+              resolvedSessionKey,
+              resolvedWorkspace,
+              agentDir,
+              agentId: workspaceResolution.agentId,
+              isCanonicalWorkspace,
+              contextEngine,
+              contextTokenBudget: ctxInfo.tokens,
+              provider,
+              modelId,
+              effectiveModel,
+              harnessId: agentHarness.id,
+              pluginHarnessOwnsTransport,
+              apiKeyInfo,
+              runtimeAuthState,
+              lastProfileId,
+              lockedProfileId,
+              initialReplayState: accumulatedReplayState,
+              authStorage,
+              modelRegistry,
+              legacyBeforeAgentStartResult,
+              thinkLevel,
+              resolvedToolResultFormat,
+              bootstrapPromptWarningSignaturesSeen,
+              instructions: {
+                ackExecutionFastPathInstruction,
+                planningOnlyRetryInstruction,
+                reasoningOnlyRetryInstruction,
+                emptyResponseRetryInstruction,
+              },
+            }),
           );
-          const prompt =
-            promptAdditions.length > 0
-              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
-              : basePrompt;
-          let resolvedStreamApiKey: string | undefined;
-          if (!runtimeAuthState && apiKeyInfo) {
-            resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
-          }
-          const runtimePlan = buildAgentRuntimePlan({
-            provider,
-            modelId,
-            model: effectiveModel,
-            modelApi: effectiveModel.api,
-            harnessId: agentHarness.id,
-            harnessRuntime: agentHarness.id,
-            allowHarnessAuthProfileForwarding: pluginHarnessOwnsTransport,
-            authProfileProvider: lastProfileId?.split(":", 1)[0],
-            sessionAuthProfileId: lastProfileId,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            agentId: workspaceResolution.agentId,
-            thinkingLevel: thinkLevel,
-            extraParamsOverride: {
-              ...params.streamParams,
-              fastMode: params.fastMode,
-            },
-          });
-
-          const attempt = await runEmbeddedAttemptWithBackend({
-            sessionId: params.sessionId,
-            sessionKey: resolvedSessionKey,
-            sandboxSessionKey: params.sandboxSessionKey,
-            trigger: params.trigger,
-            memoryFlushWritePath: params.memoryFlushWritePath,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
-            spawnedBy: params.spawnedBy,
-            isCanonicalWorkspace,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            senderIsOwner: params.senderIsOwner,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            sessionFile: params.sessionFile,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            config: params.config,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            skillsSnapshot: params.skillsSnapshot,
-            prompt,
-            transcriptPrompt: params.transcriptPrompt,
-            images: params.images,
-            imageOrder: params.imageOrder,
-            clientTools: params.clientTools,
-            disableTools: params.disableTools,
-            provider,
-            modelId,
-            // Use the harness selected before model/auth setup for the actual
-            // attempt too. Otherwise plugin-owned transports can skip PI auth
-            // bootstrap but drift back to PI when the attempt is created.
-            agentHarnessId: agentHarness.id,
-            runtimePlan,
-            model: applyAuthHeaderOverride(
-              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
-              // When runtime auth exchange produced a different credential
-              // (runtimeAuthState is set), the exchanged token lives in
-              // authStorage and the SDK will pick it up automatically.
-              // Skip header injection to avoid leaking the pre-exchange key.
-              runtimeAuthState ? null : apiKeyInfo,
-              params.config,
-            ),
-            resolvedApiKey: resolvedStreamApiKey,
-            authProfileId: lastProfileId,
-            authProfileIdSource: lockedProfileId ? "user" : "auto",
-            initialReplayState: accumulatedReplayState,
-            authStorage,
-            modelRegistry,
-            agentId: workspaceResolution.agentId,
-            legacyBeforeAgentStartResult,
-            thinkLevel,
-            fastMode: params.fastMode,
-            verboseLevel: params.verboseLevel,
-            reasoningLevel: params.reasoningLevel,
-            toolResultFormat: resolvedToolResultFormat,
-            execOverrides: params.execOverrides,
-            bashElevated: params.bashElevated,
-            timeoutMs: params.timeoutMs,
-            runId: params.runId,
-            abortSignal: params.abortSignal,
-            replyOperation: params.replyOperation,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
-            blockReplyBreak: params.blockReplyBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
-            inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
-            ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
-            silentExpected: params.silentExpected,
-            bootstrapContextMode: params.bootstrapContextMode,
-            bootstrapContextRunKind: params.bootstrapContextRunKind,
-            toolsAllow: params.toolsAllow,
-            disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
-            requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-            internalEvents: params.internalEvents,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          });
 
           const {
             aborted,
