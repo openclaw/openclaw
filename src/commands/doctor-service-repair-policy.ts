@@ -1,6 +1,6 @@
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-export type ServiceRepairPolicy = "auto" | "prompt" | "external" | "disabled";
+export type ServiceRepairPolicy = "auto" | "external";
 
 export const SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
 
@@ -13,9 +13,7 @@ export function resolveServiceRepairPolicy(
   const value = env[SERVICE_REPAIR_POLICY_ENV]?.trim().toLowerCase();
   switch (value) {
     case "auto":
-    case "prompt":
     case "external":
-    case "disabled":
       return value;
     default:
       return "auto";
@@ -25,7 +23,7 @@ export function resolveServiceRepairPolicy(
 export function isServiceRepairExternallyManaged(
   policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
 ): boolean {
-  return policy === "external" || policy === "disabled";
+  return policy === "external";
 }
 
 export async function confirmDoctorServiceRepair(
@@ -35,13 +33,6 @@ export async function confirmDoctorServiceRepair(
 ): Promise<boolean> {
   if (isServiceRepairExternallyManaged(policy)) {
     return false;
-  }
-
-  if (policy === "prompt") {
-    if (!prompter.repairMode.canPrompt) {
-      return false;
-    }
-    return await (prompter.confirmServiceRepair?.(params) ?? prompter.confirmRuntimeRepair(params));
   }
 
   return await prompter.confirmRuntimeRepair(params);

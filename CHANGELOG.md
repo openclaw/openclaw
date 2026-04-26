@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Doctor: honor `OPENCLAW_SERVICE_REPAIR_POLICY=external` by reporting gateway service health while skipping service install/start/restart/bootstrap, supervisor rewrites, and legacy service cleanup for externally managed environments. Thanks @shakkernerd.
+
 ## 2026.4.25
 
 ### Changes
@@ -79,7 +83,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Doctor: honor `OPENCLAW_SERVICE_REPAIR_POLICY=external` by reporting gateway service health while skipping service install/start/restart/bootstrap, supervisor rewrites, and legacy service cleanup for externally managed environments. Thanks @shakkernerd.
 - UI/Windows: quote resolved pnpm `.cmd` launcher paths before spawning UI install/build/test commands so Node installs under `C:\Program Files` no longer fail as `C:\Program`. Fixes #45275. Thanks @Kobevictor, @stoppieboy, and @iubns.
 - Codex/agent: translate `--thinking minimal` to `low` for modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) at request build time so the first turn is accepted instead of paying a wasted call + retry-with-low fallback. Older Codex models still receive `minimal` directly. Fixes #71946. Thanks @hclsys.
 - Plugins/uninstall: remove tracked plugin files from their recorded managed extensions root even when the current state directory points somewhere else, so `openclaw plugins uninstall --force` does not leave the plugin discoverable. Thanks @shakkernerd.

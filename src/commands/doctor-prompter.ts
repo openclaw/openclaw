@@ -16,7 +16,6 @@ export type DoctorPrompter = {
   confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmRuntimeRepair: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmServiceRepair?: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   select: <T>(params: Parameters<typeof select>[0], fallback: T) => Promise<T>;
   shouldRepair: boolean;
   shouldForce: boolean;
@@ -80,18 +79,6 @@ export function createDoctorPrompter(params: {
       }
       if (!repairMode.canPrompt) {
         return p.initialValue ?? false;
-      }
-      return guardCancel(
-        await confirm({
-          ...p,
-          message: stylePromptMessage(p.message),
-        }),
-        params.runtime,
-      );
-    },
-    confirmServiceRepair: async (p) => {
-      if (repairMode.nonInteractive || !repairMode.canPrompt) {
-        return false;
       }
       return guardCancel(
         await confirm({

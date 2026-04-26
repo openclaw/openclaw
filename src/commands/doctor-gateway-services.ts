@@ -335,27 +335,15 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const repair =
-    serviceRepairPolicy === "prompt"
-      ? await confirmDoctorServiceRepair(
-          prompter,
-          {
-            message: needsAggressive
-              ? "Overwrite gateway service config with current defaults now?"
-              : "Update gateway service config to the recommended defaults now?",
-            initialValue: needsAggressive ? prompter.shouldForce : true,
-          },
-          serviceRepairPolicy,
-        )
-      : needsAggressive
-        ? await prompter.confirmAggressiveAutoFix({
-            message: "Overwrite gateway service config with current defaults now?",
-            initialValue: prompter.shouldForce,
-          })
-        : await prompter.confirmAutoFix({
-            message: "Update gateway service config to the recommended defaults now?",
-            initialValue: true,
-          });
+  const repair = needsAggressive
+    ? await prompter.confirmAggressiveAutoFix({
+        message: "Overwrite gateway service config with current defaults now?",
+        initialValue: prompter.shouldForce,
+      })
+    : await prompter.confirmAutoFix({
+        message: "Update gateway service config to the recommended defaults now?",
+        initialValue: true,
+      });
   if (!repair) {
     return;
   }
