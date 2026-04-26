@@ -217,9 +217,7 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).not.toBe(first.request.requestId);
     expect(second.request.role).toBe("operator");
     expect(second.request.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(second.request.scopes).toEqual(
-      expect.arrayContaining(["operator.read", "operator.write"]),
-    );
+    expect(second.request.scopes).toEqual([]);
 
     const list = await listDevicePairing(baseDir);
     expect(list.pending).toHaveLength(1);
@@ -232,7 +230,7 @@ describe("device pairing tokens", () => {
     );
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
+    expect(paired?.scopes).toEqual([]);
   });
 
   test("approves mixed node and operator requests with admin caller scopes", async () => {

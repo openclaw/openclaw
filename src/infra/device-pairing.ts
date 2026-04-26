@@ -519,10 +519,6 @@ export async function requestDevicePairing(
           incoming.roles,
           incoming.role,
         );
-        const mergedScopes = mergeScopes(
-          ...existing.map((pending) => pending.scopes),
-          incoming.scopes,
-        );
         return buildPendingDevicePairingRequest({
           deviceId,
           isRepair,
@@ -530,7 +526,7 @@ export async function requestDevicePairing(
             ...incoming,
             role: normalizeRole(incoming.role) ?? latestPending?.role,
             roles: mergedRoles,
-            scopes: mergedScopes,
+            scopes: latestPending?.scopes ?? incoming.scopes,
             // Preserve interactive visibility when superseding pending requests:
             // if any previous pending request was interactive, keep this one interactive.
             silent: resolveSupersededPendingSilent({
