@@ -12,7 +12,7 @@ import {
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonFile,
+  readDurableJsonFile,
   reconcilePendingPairingRequests,
   resolvePairingPaths,
   writeJsonAtomic,
@@ -143,8 +143,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   const [pending, paired] = await Promise.all([
-    readJsonFile<Record<string, DevicePairingPendingRequest>>(pendingPath),
-    readJsonFile<Record<string, PairedDevice>>(pairedPath),
+    readDurableJsonFile<Record<string, DevicePairingPendingRequest>>(pendingPath),
+    readDurableJsonFile<Record<string, PairedDevice>>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
     pendingById: pending ?? {},

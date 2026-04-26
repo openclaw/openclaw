@@ -75,6 +75,9 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: treat normal early model stream cleanup as a completed
   model call instead of exporting a misleading `StreamAbandoned` error span.
   Thanks @vincentkoc.
+- Gateway/pairing: stop corrupt or unreadable device/node pairing stores from
+  being treated as empty state, preserving `paired.json` for repair instead of
+  overwriting approved pairings. Fixes #71873. Thanks @iret77.
 - ACP: wait for the configured runtime backend to become healthy before startup
   identity reconciliation, avoiding transient acpx warnings during Gateway boot.
   Fixes #40566.
