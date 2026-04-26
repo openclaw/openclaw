@@ -36,6 +36,7 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const PROACTIVE_CANDIDATE_TAG_RE = /<\s*\/?\s*proactive(?:[-_])candidate\b[^<>]*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -320,12 +321,12 @@ function coerceText(value: unknown): string {
   return "";
 }
 
-function stripFinalTagsFromText(text: unknown): string {
+function stripInternalAssistantWrapperTags(text: unknown): string {
   const normalized = coerceText(text);
   if (!normalized) {
     return normalized;
   }
-  return normalized.replace(FINAL_TAG_RE, "");
+  return normalized.replace(FINAL_TAG_RE, "").replace(PROACTIVE_CANDIDATE_TAG_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -378,7 +379,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
+  const stripped = stripInternalRuntimeContext(stripInternalAssistantWrapperTags(raw));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

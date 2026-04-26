@@ -1,5 +1,4 @@
 import { Type, type TSchema } from "@sinclair/typebox";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
@@ -457,20 +456,7 @@ function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): st
     const scopedActions = listChannelSupportedActions(
       buildMessageActionDiscoveryInput(params, currentChannel),
     );
-    const allActions = new Set<string>(["send", ...scopedActions]);
-    // Include actions from other configured channels so isolated/cron agents
-    // can invoke cross-channel actions without validation errors.
-    for (const plugin of listChannelPlugins()) {
-      if (plugin.id === currentChannel) {
-        continue;
-      }
-      for (const action of listChannelSupportedActions(
-        buildMessageActionDiscoveryInput(params, plugin.id),
-      )) {
-        allActions.add(action);
-      }
-    }
-    return Array.from(allActions);
+    return Array.from(new Set<string>(["send", ...scopedActions]));
   }
   return listAllMessageToolActions(params);
 }
@@ -553,37 +539,16 @@ function buildMessageToolDescription(options?: {
       }
     : undefined;
 
-  // If we have a current channel, show its actions and list other configured channels
+  // If we have a current channel, describe only that scoped channel surface.
   if (currentChannel && messageToolDiscoveryParams) {
     const channelActions = listChannelSupportedActions(
       buildMessageActionDiscoveryInput(messageToolDiscoveryParams, currentChannel),
     );
     if (channelActions.length > 0) {
-      // Always include "send" as a base action
       const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
-      let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
-
-      // Include other configured channels so cron/isolated agents can discover them
-      const otherChannels: string[] = [];
-      for (const plugin of listChannelPlugins()) {
-        if (plugin.id === currentChannel) {
-          continue;
-        }
-        const actions = listChannelSupportedActions(
-          buildMessageActionDiscoveryInput(messageToolDiscoveryParams, plugin.id),
-        );
-        if (actions.length > 0) {
-          const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
-          otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
-        }
-      }
-      if (otherChannels.length > 0) {
-        desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
-      }
-
       return appendMessageToolReadHint(
-        desc,
+        `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`,
         Array.from(allActions) as Iterable<ChannelMessageActionName | "send">,
       );
     }

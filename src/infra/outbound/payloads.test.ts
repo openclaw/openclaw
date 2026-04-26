@@ -71,6 +71,26 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("strips proactive_candidate wrappers before delivery projection", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: '<proactive_candidate source="telegram-reminder">Reminder: stand up for a minute.</proactive_candidate>',
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Reminder: stand up for a minute.",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("drops JSON NO_REPLY action payloads without media", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -96,7 +116,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("keeps mixed NO_REPLY text literal and only suppresses exact sentinel payloads", () => {
+  it("strips non-substantive NO_REPLY fragments and only suppresses exact silent payloads", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
         { text: "NO_REPLY thanks for the update" },
@@ -114,7 +134,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         audioAsVoice: false,
       },
       {
-        text: "thanks NO_REPLY",
+        text: "thanks",
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,

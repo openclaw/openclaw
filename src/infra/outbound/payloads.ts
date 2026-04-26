@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -80,7 +81,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
   }
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
-  const normalizedPayload: ReplyPayload = {
+  const normalizedPayload = normalizeReplyPayload({
     ...payload,
     text:
       formatBtwTextForExternalDelivery({
@@ -93,8 +94,8 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
-  };
-  if (!isRenderablePayload(normalizedPayload)) {
+  });
+  if (!normalizedPayload || !isRenderablePayload(normalizedPayload)) {
     return null;
   }
   const parts = resolveSendableOutboundReplyParts(normalizedPayload);

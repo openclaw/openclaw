@@ -464,7 +464,8 @@ describe("message tool schema scoping", () => {
       expectButtons: true,
       expectButtonStyle: true,
       expectTelegramPollExtras: true,
-      expectedActions: ["send", "react", "poll", "poll-vote"],
+      expectedActions: ["send", "react", "poll"],
+      unexpectedActions: ["poll-vote"],
     },
     {
       provider: "discord",
@@ -473,7 +474,8 @@ describe("message tool schema scoping", () => {
       expectButtons: false,
       expectButtonStyle: false,
       expectTelegramPollExtras: true,
-      expectedActions: ["send", "poll", "poll-vote", "react"],
+      expectedActions: ["send", "poll", "poll-vote"],
+      unexpectedActions: ["react"],
     },
     {
       provider: "slack",
@@ -482,7 +484,8 @@ describe("message tool schema scoping", () => {
       expectButtons: false,
       expectButtonStyle: false,
       expectTelegramPollExtras: true,
-      expectedActions: ["send", "react", "poll", "poll-vote"],
+      expectedActions: ["send", "react"],
+      unexpectedActions: ["poll", "poll-vote"],
     },
   ])(
     "scopes schema fields for $provider",
@@ -494,6 +497,7 @@ describe("message tool schema scoping", () => {
       expectButtonStyle,
       expectTelegramPollExtras,
       expectedActions,
+      unexpectedActions,
     }) => {
       setActivePluginRegistry(
         createTestRegistry([
@@ -536,6 +540,9 @@ describe("message tool schema scoping", () => {
       }
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
+      }
+      for (const action of unexpectedActions) {
+        expect(actionEnum).not.toContain(action);
       }
       if (expectTelegramPollExtras) {
         expect(properties.pollDurationSeconds).toBeDefined();
@@ -715,7 +722,7 @@ describe("message tool schema scoping", () => {
     expect(getToolProperties(unscopedTool).interactive).toBeUndefined();
   });
 
-  it("uses discovery account scope for other configured channel actions", () => {
+  it("does not leak other configured channel actions into scoped schemas", () => {
     const currentPlugin = createChannelPlugin({
       id: "discord",
       label: "Discord",
@@ -750,9 +757,9 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "discord",
     });
 
-    expect(getActionEnum(getToolProperties(scopedTool))).toContain("react");
+    expect(getActionEnum(getToolProperties(scopedTool))).not.toContain("react");
     expect(getActionEnum(getToolProperties(unscopedTool))).not.toContain("react");
-    expect(scopedTool.description).toContain("telegram (react, send)");
+    expect(scopedTool.description).not.toContain("telegram (react, send)");
     expect(unscopedTool.description).not.toContain("telegram (react, send)");
   });
 
@@ -917,7 +924,7 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("leaveGroup");
   });
 
-  it("includes other configured channels when currentChannel is set", () => {
+  it("describes only the current configured channel when currentChannel is set", () => {
     const signalPlugin = createChannelPlugin({
       id: "signal",
       label: "Signal",
@@ -946,11 +953,9 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    // Current channel actions are listed
     expect(tool.description).toContain("Current channel (signal) supports: react, send.");
-    // Other configured channels are also listed
-    expect(tool.description).toContain("Other configured channels:");
-    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+    expect(tool.description).not.toContain("Other configured channels:");
+    expect(tool.description).not.toContain("telegram (");
   });
 
   it("normalizes channel aliases before building the current channel description", () => {

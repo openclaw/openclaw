@@ -20,6 +20,17 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips proactive_candidate wrapper tags", () => {
+    expect(sanitizeUserFacingText("<proactive_candidate>Hello</proactive_candidate>")).toBe(
+      "Hello",
+    );
+    expect(
+      sanitizeUserFacingText(
+        'Before <proactive_candidate source="heartbeat">check in</proactive_candidate> after',
+      ),
+    ).toBe("Before check in after");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {

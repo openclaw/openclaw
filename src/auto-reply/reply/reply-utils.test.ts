@@ -125,6 +125,15 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
+  it("strips proactive_candidate wrappers from outbound payload text", () => {
+    const result = normalizeReplyPayload({
+      text: '<proactive_candidate source="telegram-reminder">Reminder: stand up for a minute.</proactive_candidate>',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Reminder: stand up for a minute.");
+  });
+
   it("strips glued leading NO_REPLY text without leaking the token", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLYThe user is saying hello",
