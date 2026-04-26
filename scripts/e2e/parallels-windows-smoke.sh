@@ -12,6 +12,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 INSTALL_URL="https://openclaw.ai/install.ps1"
 HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
@@ -138,6 +139,8 @@ Options:
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for the agent-turn smoke.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -181,6 +184,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -249,19 +257,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.5"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -2367,8 +2375,31 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_run_openclaw "" "" models set "$MODEL_ID"
+  guest_run_openclaw "" "" config set agents.defaults.skipBootstrap true --strict-json
+  guest_powershell "$(cat <<'EOF'
+$workspace = $env:OPENCLAW_WORKSPACE_DIR
+if (-not $workspace) {
+  $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+}
+$stateDir = Join-Path $workspace '.openclaw'
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+@'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels Windows smoke test assistant.
+'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
+@'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
+Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+EOF
+)"
   guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
-    agent --agent main --message "Reply with exact ASCII text OK only." --json
+    agent --agent main --session-id parallels-windows-smoke --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {

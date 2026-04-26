@@ -172,6 +172,10 @@ runs the same lanes before release approval.
   - Use `--platform macos`, `--platform windows`, or `--platform linux` while
     iterating on one guest. Use `--json` for the summary artifact path and
     per-lane status.
+  - The OpenAI lane uses `openai/gpt-5.5` for the live agent-turn proof by
+    default. Pass `--model <provider/model>` or set
+    `OPENCLAW_PARALLELS_OPENAI_MODEL` when deliberately validating another
+    OpenAI model.
   - Wrap long local runs in a host timeout so Parallels transport stalls cannot
     consume the rest of the testing window:
 
