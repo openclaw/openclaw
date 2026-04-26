@@ -106,6 +106,7 @@ export async function runPluginHostCleanup(params: {
   reason: PluginHostCleanupReason;
   sessionKey?: string;
   runId?: string;
+  preserveSchedulerJobIds?: ReadonlySet<string>;
 }): Promise<PluginHostCleanupResult> {
   const persistentCleanupCount = await clearPluginOwnedSessionStores({
     pluginId: params.pluginId,
@@ -166,6 +167,8 @@ export async function runPluginHostCleanup(params: {
     pluginId: params.pluginId,
     reason: params.reason,
     sessionKey: params.sessionKey,
+    records: registry?.sessionSchedulerJobs,
+    preserveJobIds: params.preserveSchedulerJobIds,
   });
   for (const failure of schedulerFailures) {
     failures.push(failure);
@@ -197,6 +200,20 @@ function collectLoadedPluginIds(registry: PluginRegistry): Set<string> {
   );
 }
 
+function collectSchedulerJobIds(
+  registry: PluginRegistry | null | undefined,
+  pluginId: string,
+): Set<string> {
+  return new Set(
+    (registry?.sessionSchedulerJobs ?? [])
+      .filter((registration) => registration.pluginId === pluginId)
+      .map((registration) =>
+        typeof registration.job.id === "string" ? registration.job.id.trim() : "",
+      )
+      .filter(Boolean),
+  );
+}
+
 export async function cleanupReplacedPluginHostRegistry(params: {
   previousRegistry?: PluginRegistry | null;
   nextRegistry?: PluginRegistry | null;
@@ -208,14 +225,21 @@ export async function cleanupReplacedPluginHostRegistry(params: {
   const nextPluginIds = params.nextRegistry
     ? collectLoadedPluginIds(params.nextRegistry)
     : new Set();
-  const previousHostPluginIds = collectHostHookPluginIds(previousRegistry);
+  const previousPluginIds = new Set([
+    ...collectLoadedPluginIds(previousRegistry),
+    ...collectHostHookPluginIds(previousRegistry),
+  ]);
   const failures: PluginHostCleanupFailure[] = [];
   let cleanupCount = 0;
-  for (const pluginId of previousHostPluginIds) {
+  for (const pluginId of previousPluginIds) {
+    const restarted = nextPluginIds.has(pluginId);
     const result = await runPluginHostCleanup({
       registry: previousRegistry,
       pluginId,
-      reason: nextPluginIds.has(pluginId) ? "restart" : "disable",
+      reason: restarted ? "restart" : "disable",
+      preserveSchedulerJobIds: restarted
+        ? collectSchedulerJobIds(params.nextRegistry, pluginId)
+        : undefined,
     });
     cleanupCount += result.cleanupCount;
     failures.push(...result.failures);

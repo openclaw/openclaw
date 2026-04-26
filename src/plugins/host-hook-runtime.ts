@@ -1,4 +1,5 @@
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -27,6 +28,7 @@ type PluginHostRuntimeState = {
 };
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
+const log = createSubsystemLogger("plugins/host-hooks");
 
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
   return resolveGlobalSingleton<PluginHostRuntimeState>(PLUGIN_HOST_RUNTIME_STATE_KEY, () => ({
@@ -149,6 +151,16 @@ function isTerminalAgentRunEvent(event: AgentEventPayload): boolean {
   return event.stream === "lifecycle" && (phase === "end" || phase === "error");
 }
 
+function logAgentEventSubscriptionFailure(params: {
+  pluginId: string;
+  subscriptionId: string;
+  error: unknown;
+}): void {
+  log.warn(
+    `plugin agent event subscription failed: plugin=${params.pluginId} subscription=${params.subscriptionId} error=${String(params.error)}`,
+  );
+}
+
 export function dispatchPluginAgentEventSubscriptions(params: {
   registry: PluginRegistry | null | undefined;
   event: AgentEventPayload;
@@ -172,7 +184,23 @@ export function dispatchPluginAgentEventSubscriptions(params: {
         clearPluginRunContext({ pluginId, runId, namespace });
       },
     };
-    void Promise.resolve(registration.subscription.handle(structuredClone(params.event), ctx));
+    try {
+      void Promise.resolve(
+        registration.subscription.handle(structuredClone(params.event), ctx),
+      ).catch((error) => {
+        logAgentEventSubscriptionFailure({
+          pluginId,
+          subscriptionId: registration.subscription.id,
+          error,
+        });
+      });
+    } catch (error) {
+      logAgentEventSubscriptionFailure({
+        pluginId,
+        subscriptionId: registration.subscription.id,
+        error,
+      });
+    }
   }
   if (isTerminalAgentRunEvent(params.event)) {
     clearPluginRunContext({ runId: params.event.runId });
@@ -201,13 +229,100 @@ export function registerPluginSessionSchedulerJob(params: {
   return { id, pluginId: params.pluginId, sessionKey, kind };
 }
 
+function deletePluginSessionSchedulerJob(params: {
+  pluginId: string;
+  jobId: string;
+  sessionKey?: string;
+}): void {
+  const state = getPluginHostRuntimeState();
+  const jobs = state.schedulerJobsByPlugin.get(params.pluginId);
+  const record = jobs?.get(params.jobId);
+  if (!jobs || !record) {
+    return;
+  }
+  if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+    return;
+  }
+  jobs.delete(params.jobId);
+  if (jobs.size === 0) {
+    state.schedulerJobsByPlugin.delete(params.pluginId);
+  }
+}
+
+function hasPluginSessionSchedulerJob(params: {
+  pluginId: string;
+  jobId: string;
+  sessionKey?: string;
+}): boolean {
+  const state = getPluginHostRuntimeState();
+  const record = state.schedulerJobsByPlugin.get(params.pluginId)?.get(params.jobId);
+  if (!record) {
+    return false;
+  }
+  return !params.sessionKey || record.job.sessionKey === params.sessionKey;
+}
+
 export async function cleanupPluginSessionSchedulerJobs(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
   sessionKey?: string;
+  records?: readonly {
+    pluginId: string;
+    pluginName?: string;
+    job: PluginSessionSchedulerJobRegistration;
+  }[];
+  preserveJobIds?: ReadonlySet<string>;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
+  if (params.records) {
+    for (const record of params.records) {
+      if (params.pluginId && record.pluginId !== params.pluginId) {
+        continue;
+      }
+      const jobId = normalizeOptionalString(record.job.id);
+      const sessionKey = normalizeOptionalString(record.job.sessionKey);
+      if (!jobId || !sessionKey) {
+        continue;
+      }
+      if (params.sessionKey && sessionKey !== params.sessionKey) {
+        continue;
+      }
+      const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
+      if (
+        !preserveJob &&
+        !hasPluginSessionSchedulerJob({
+          pluginId: record.pluginId,
+          jobId,
+          sessionKey: params.sessionKey,
+        })
+      ) {
+        continue;
+      }
+      try {
+        await record.job.cleanup?.({
+          reason: params.reason,
+          sessionKey,
+          jobId,
+        });
+      } catch (error) {
+        failures.push({
+          pluginId: record.pluginId,
+          hookId: `scheduler:${jobId}`,
+          error,
+        });
+        continue;
+      }
+      if (!preserveJob) {
+        deletePluginSessionSchedulerJob({
+          pluginId: record.pluginId,
+          jobId,
+          sessionKey: params.sessionKey,
+        });
+      }
+    }
+    return failures;
+  }
   const pluginIds = params.pluginId ? [params.pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const pluginId of pluginIds) {
     const jobs = state.schedulerJobsByPlugin.get(pluginId);
@@ -230,6 +345,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
           hookId: `scheduler:${jobId}`,
           error,
         });
+        continue;
       }
       jobs.delete(jobId);
     }

@@ -1336,17 +1336,57 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const normalizeHostHookString = (value: unknown): string =>
+    typeof value === "string" ? normalizePluginHostHookId(value) : "";
+
+  const normalizeOptionalHostHookString = (value: unknown): string | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value !== "string") {
+      return "";
+    }
+    return value.trim();
+  };
+
+  const normalizeHostHookStringList = (value: unknown): string[] | undefined | null => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(value)) {
+      return null;
+    }
+    const normalized = value.map((item) => normalizeOptionalHostHookString(item));
+    if (normalized.some((item) => !item)) {
+      return null;
+    }
+    return normalized as string[];
+  };
+
+  const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
+    "session",
+    "tool",
+    "run",
+    "settings",
+  ]);
+
   const registerSessionExtension = (
     record: PluginRecord,
     extension: PluginSessionExtensionRegistration,
   ) => {
-    const namespace = normalizePluginHostHookId(extension.namespace);
-    if (!namespace) {
+    const namespace = normalizeHostHookString(extension.namespace);
+    const description = normalizeHostHookString(extension.description);
+    if (
+      !namespace ||
+      !description ||
+      (extension.project !== undefined && typeof extension.project !== "function") ||
+      (extension.cleanup !== undefined && typeof extension.cleanup !== "function")
+    ) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "session extension registration missing namespace",
+        message: "session extension registration requires namespace and description",
       });
       return;
     }
@@ -1368,7 +1408,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       extension: {
         ...extension,
         namespace,
-        description: extension.description.trim(),
+        description,
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -1388,13 +1428,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const id = normalizePluginHostHookId(policy.id);
-    if (!id || typeof policy.evaluate !== "function") {
+    const id = normalizeHostHookString(policy.id);
+    const description = normalizeHostHookString(policy.description);
+    if (!id || !description || typeof policy.evaluate !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "trusted tool policy registration requires id and evaluate()",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
       });
       return;
     }
@@ -1414,7 +1455,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       policy: {
         ...policy,
         id,
-        description: policy.description.trim(),
+        description,
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -1422,7 +1463,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
-    const toolName = normalizePluginHostHookId(metadata.toolName);
+    const toolName = normalizeHostHookString(metadata.toolName);
     if (!toolName) {
       pushDiagnostic({
         level: "error",
@@ -1432,10 +1473,45 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existing = (registry.toolMetadata ?? []).find(
+      (entry) => entry.metadata.toolName === toolName,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `tool metadata already registered: ${toolName} (${existing.pluginId})`,
+      });
+      return;
+    }
+    const displayName = normalizeOptionalHostHookString(metadata.displayName);
+    const description = normalizeOptionalHostHookString(metadata.description);
+    const tags = normalizeHostHookStringList(metadata.tags);
+    if (
+      displayName === "" ||
+      description === "" ||
+      tags === null ||
+      (metadata.risk !== undefined && !["low", "medium", "high"].includes(metadata.risk))
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `tool metadata registration has invalid metadata: ${toolName}`,
+      });
+      return;
+    }
     (registry.toolMetadata ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
-      metadata: { ...metadata, toolName },
+      metadata: {
+        ...metadata,
+        toolName,
+        ...(displayName !== undefined ? { displayName } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+      },
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1445,13 +1521,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     descriptor: PluginControlUiDescriptor,
   ) => {
-    const id = normalizePluginHostHookId(descriptor.id);
-    if (!id || !descriptor.label.trim()) {
+    const id = normalizeHostHookString(descriptor.id);
+    const label = normalizeHostHookString(descriptor.label);
+    const description = normalizeOptionalHostHookString(descriptor.description);
+    const placement = normalizeOptionalHostHookString(descriptor.placement);
+    const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
+    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
+    if (
+      !id ||
+      !label ||
+      !controlUiSurfaces.has(surface as PluginControlUiDescriptor["surface"]) ||
+      description === "" ||
+      placement === "" ||
+      requiredScopes === null
+    ) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "control UI descriptor registration requires id and label",
+        message:
+          "control UI descriptor registration requires id, surface, label, and valid optional fields",
       });
       return;
     }
@@ -1479,7 +1568,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     (registry.controlUiDescriptors ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
-      descriptor: { ...descriptor, id, label: descriptor.label.trim() },
+      descriptor: {
+        ...descriptor,
+        id,
+        surface: surface as PluginControlUiDescriptor["surface"],
+        label,
+        ...(description !== undefined ? { description } : {}),
+        ...(placement !== undefined ? { placement } : {}),
+        ...(requiredScopes !== undefined
+          ? { requiredScopes: requiredScopes as OperatorScope[] }
+          : {}),
+      },
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1535,17 +1634,53 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     job: PluginSessionSchedulerJobRegistration,
   ) => {
+    const jobId = normalizeHostHookString(job.id);
+    const sessionKey = normalizeHostHookString(job.sessionKey);
+    const kind = normalizeHostHookString(job.kind);
+    if (
+      jobId &&
+      (registry.sessionSchedulerJobs ?? []).some(
+        (entry) => entry.pluginId === record.id && entry.job.id === jobId,
+      )
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session scheduler job already registered: ${jobId}`,
+      });
+      return undefined;
+    }
+    if (!jobId || !sessionKey || !kind) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session scheduler job registration requires unique id, sessionKey, and kind",
+      });
+      return undefined;
+    }
+    if (registryParams.activateGlobalSideEffects === false) {
+      (registry.sessionSchedulerJobs ??= []).push({
+        pluginId: record.id,
+        pluginName: record.name,
+        job: { ...job, id: jobId, sessionKey, kind },
+        source: record.source,
+        rootDir: record.rootDir,
+      });
+      return { id: jobId, pluginId: record.id, sessionKey, kind };
+    }
     const handle = registerPluginSessionSchedulerJob({
       pluginId: record.id,
       pluginName: record.name,
-      job,
+      job: { ...job, id: jobId, sessionKey, kind },
     });
     if (!handle) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "session scheduler job registration requires id, sessionKey, and kind",
+        message: "session scheduler job registration requires unique id, sessionKey, and kind",
       });
       return undefined;
     }

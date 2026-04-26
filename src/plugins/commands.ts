@@ -199,7 +199,7 @@ export async function executePluginCommand(params: {
     return { text: "⚠️ This command requires authorization." };
   }
   const requiredScopes = command.requiredScopes ?? [];
-  if (requiredScopes.length > 0) {
+  if (requiredScopes.length > 0 && params.gatewayClientScopes) {
     const scopes = new Set(params.gatewayClientScopes ?? []);
     const hasAdmin = scopes.has(ADMIN_SCOPE);
     const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope));

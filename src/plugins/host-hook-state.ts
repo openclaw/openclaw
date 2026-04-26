@@ -215,6 +215,8 @@ export async function enqueuePluginNextTurnInjection(params: {
     injection: { ...params.injection, sessionKey, text },
     now,
   });
+  let enqueued = false;
+  let resultId = record.id;
   await updateSessionStore(loaded.storePath, (store) => {
     const entry = store[loaded.storeKey];
     if (!entry) {
@@ -224,10 +226,11 @@ export async function enqueuePluginNextTurnInjection(params: {
     const existing = [...(injections[params.pluginId] ?? [])].filter(
       (candidate) => !isExpired(candidate, now),
     );
-    if (
-      record.idempotencyKey &&
-      existing.some((candidate) => candidate.idempotencyKey === record.idempotencyKey)
-    ) {
+    const duplicate = record.idempotencyKey
+      ? existing.find((candidate) => candidate.idempotencyKey === record.idempotencyKey)
+      : undefined;
+    if (duplicate) {
+      resultId = duplicate.id;
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
       return;
@@ -235,8 +238,9 @@ export async function enqueuePluginNextTurnInjection(params: {
     injections[params.pluginId] = [...existing, record];
     entry.pluginNextTurnInjections = injections;
     entry.updatedAt = now;
+    enqueued = true;
   });
-  return { enqueued: true, id: record.id, sessionKey: canonicalKey };
+  return { enqueued, id: resultId, sessionKey: canonicalKey };
 }
 
 export async function drainPluginNextTurnInjections(params: {
@@ -360,7 +364,7 @@ export async function projectPluginSessionExtensions(params: {
           state,
         })
       : state;
-    if (projected !== undefined) {
+    if (projected !== undefined && isPluginJsonValue(projected)) {
       projections.push({
         pluginId: registration.pluginId,
         namespace: registration.extension.namespace,
@@ -369,6 +373,10 @@ export async function projectPluginSessionExtensions(params: {
     }
   }
   return projections;
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
 }
 
 export function projectPluginSessionExtensionsSync(params: {
@@ -385,13 +393,23 @@ export function projectPluginSessionExtensionsSync(params: {
     const state = params.entry.pluginExtensions?.[registration.pluginId]?.[
       registration.extension.namespace
     ] as PluginJsonValue | undefined;
-    if (state === undefined || registration.extension.project) {
+    if (state === undefined) {
+      continue;
+    }
+    const projected = registration.extension.project
+      ? registration.extension.project({
+          sessionKey: params.sessionKey,
+          sessionId: params.entry.sessionId,
+          state,
+        })
+      : state;
+    if (isPromiseLike(projected) || projected === undefined || !isPluginJsonValue(projected)) {
       continue;
     }
     projections.push({
       pluginId: registration.pluginId,
       namespace: registration.extension.namespace,
-      value: copyJsonValue(state),
+      value: copyJsonValue(projected),
     });
   }
   return projections;
