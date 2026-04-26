@@ -233,6 +233,37 @@ describe("device pairing tokens", () => {
     expect(paired?.scopes).toEqual([]);
   });
 
+  test("preserves original scopes when re-requesting with escalated scope list", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expect(first.created).toBe(true);
+
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: ["operator.read", "operator.admin"],
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+
+    const list = await listDevicePairing(baseDir);
+    expect(list.pending).toHaveLength(1);
+    expect(list.pending[0]?.scopes).toEqual(["operator.read"]);
+  });
+
   test("approves mixed node and operator requests with admin caller scopes", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
