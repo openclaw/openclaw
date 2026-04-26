@@ -398,23 +398,6 @@ export function resolveInboundConversationResolution(
     return artifactResolution;
   }
 
-  const bundledPlugin = getLoadedChannelPlugin(channel);
-  const bundledConversation =
-    bundledPlugin !== plugin
-      ? bundledPlugin?.messaging?.resolveInboundConversation?.(resolverParams)
-      : undefined;
-  const bundledPluginResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: bundledConversation,
-    source: "inbound-bundled-plugin",
-    threadId,
-    plugin,
-  });
-  if (bundledPluginResolution || bundledConversation === null) {
-    return bundledPluginResolution;
-  }
-
   const parentConversationId =
     resolveChannelTargetId({
       channel,
