@@ -85,7 +85,7 @@ async function prepareIsolatedCodexHome(baseDir: string): Promise<string> {
 async function writeCodexAcpWrapper(baseDir: string): Promise<string> {
   await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(), { encoding: "utf8", mode: 0o755 });
+  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(), { encoding: "utf8" });
   await fs.chmod(wrapperPath, 0o755);
   return wrapperPath;
 }
@@ -93,6 +93,7 @@ async function writeCodexAcpWrapper(baseDir: string): Promise<string> {
 function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
   const baseCommand = `${quoteCommandPart(process.execPath)} ${quoteCommandPart(wrapperPath)}`;
   const trimmedConfiguredCommand = configuredCommand?.trim();
+  // ACPX stores agent commands as shell-like strings and splits them before spawn.
   return trimmedConfiguredCommand ? `${baseCommand} ${trimmedConfiguredCommand}` : baseCommand;
 }
 
