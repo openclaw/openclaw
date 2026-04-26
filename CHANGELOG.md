@@ -81,6 +81,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/pairing: stop corrupt or unreadable device/node pairing stores from
   being treated as empty state, preserving `paired.json` for repair instead of
   overwriting approved pairings. Fixes #71873. Thanks @iret77.
+- ACP: keep `/acp` management commands, plus local `/status` and `/unfocus`,
+  on the Gateway path inside ACP-bound threads so they are not consumed as ACP
+  prompt text. Fixes #66298. Thanks @kindomLee.
 - ACP: wait for the configured runtime backend to become healthy before startup
   identity reconciliation, avoiding transient acpx warnings during Gateway boot.
   Fixes #40566.
@@ -150,6 +153,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/onboarding: defer channel/provider plugin install records until the owning config write commits, keeping setup failures from advancing the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Plugins/config: route configure and agent setup writes with pending plugin install records through the plugin index commit helper so provider onboarding metadata is not stripped by plain config writes. Thanks @shakkernerd.
 - Plugins/channels: merge pending channel plugin install records with the existing plugin index before config writes, preserving unrelated tracked installs during channel setup, resolve, remove, and capability repair flows. Thanks @shakkernerd.
+- Plugins/config: defer shipped `plugins.installs` index migration during config writes until the guarded config commit window and roll it back if the config write fails before commit. Thanks @shakkernerd.
 - Sessions: keep embedded runtime context out of the visible user prompt by
   sending it as a hidden next-turn custom message, and teach doctor to repair
   affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.

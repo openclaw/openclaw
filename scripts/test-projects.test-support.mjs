@@ -290,6 +290,11 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/auto-reply/reply/dispatch-from-config.test.ts",
     ],
   ],
+  ["src/auto-reply/reply/commands-acp.ts", ["src/auto-reply/reply/commands-acp.test.ts"]],
+  [
+    "src/auto-reply/reply/dispatch-acp-command-bypass.ts",
+    ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
+  ],
 ]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",

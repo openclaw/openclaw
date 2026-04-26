@@ -1637,6 +1637,24 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  it("handles /acp close in a bound thread when text commands are disabled", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await handleAcpCommand(createThreadParams("/acp close", baseCfg), false);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+  });
+
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],

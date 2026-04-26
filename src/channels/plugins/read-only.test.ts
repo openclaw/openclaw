@@ -538,6 +538,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
+        includeSetupRuntimeFallback: true,
       },
     );
 
@@ -715,6 +716,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
+        includeSetupRuntimeFallback: true,
       },
     );
 

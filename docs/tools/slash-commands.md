@@ -9,6 +9,11 @@ title: "Slash commands"
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
+When a conversation or thread is bound to an ACP session, normal follow-up text
+routes to that ACP harness. Gateway management commands still stay local:
+`/acp ...` always reaches the OpenClaw ACP command handler, and `/status` plus
+`/unfocus` stay local whenever command handling is enabled for the surface.
+
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
