@@ -33,6 +33,8 @@ export type GoogleMeetChromeHealth = {
   lastOutputAt?: string;
   lastInputBytes?: number;
   lastOutputBytes?: number;
+  consecutiveInputErrors?: number;
+  lastInputError?: string;
   browserUrl?: string;
   browserTitle?: string;
   bridgeClosed?: boolean;

@@ -52,6 +52,8 @@ export async function startNodeRealtimeAudioBridge(params: {
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
   let lastOutputBytes = 0;
+  let consecutiveInputErrors = 0;
+  let lastInputError: string | undefined;
   const resolved = resolveGoogleMeetRealtimeProvider({
     config: params.config,
     fullConfig: params.fullConfig,
@@ -183,6 +185,8 @@ export async function startNodeRealtimeAudioBridge(params: {
           timeoutMs: 2_000,
         });
         const result = asRecord(asRecord(raw).payload ?? raw);
+        consecutiveInputErrors = 0;
+        lastInputError = undefined;
         const base64 = readString(result.base64);
         if (base64) {
           const audio = Buffer.from(base64, "base64");
@@ -195,8 +199,17 @@ export async function startNodeRealtimeAudioBridge(params: {
         }
       } catch (error) {
         if (!stopped) {
-          params.logger.warn(`[google-meet] node audio input failed: ${formatErrorMessage(error)}`);
-          await stop();
+          const message = formatErrorMessage(error);
+          consecutiveInputErrors += 1;
+          lastInputError = message;
+          params.logger.warn(
+            `[google-meet] node audio input failed (${consecutiveInputErrors}/5): ${message}`,
+          );
+          if (consecutiveInputErrors >= 5 || /unknown bridgeId|bridge is not open/i.test(message)) {
+            await stop();
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
         }
       }
     }
@@ -219,6 +232,8 @@ export async function startNodeRealtimeAudioBridge(params: {
       lastOutputAt,
       lastInputBytes,
       lastOutputBytes,
+      consecutiveInputErrors,
+      lastInputError,
       bridgeClosed: stopped,
     }),
     stop,

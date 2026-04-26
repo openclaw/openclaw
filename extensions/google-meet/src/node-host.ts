@@ -13,6 +13,8 @@ import {
 
 type NodeBridgeSession = {
   id: string;
+  url?: string;
+  mode?: string;
   input?: ChildProcess;
   output?: ChildProcess;
   chunks: Buffer[];
@@ -23,6 +25,7 @@ type NodeBridgeSession = {
   lastOutputAt?: string;
   lastInputBytes: number;
   lastOutputBytes: number;
+  closedAt?: string;
 };
 
 const sessions = new Map<string, NodeBridgeSession>();
@@ -101,19 +104,24 @@ function stopSession(session: NodeBridgeSession) {
     return;
   }
   session.closed = true;
-  session.input?.kill("SIGTERM");
-  session.output?.kill("SIGTERM");
+  session.closedAt = new Date().toISOString();
+  terminateChild(session.input);
+  terminateChild(session.output);
   wake(session);
 }
 
 function startCommandPair(params: {
   inputCommand: string[];
   outputCommand: string[];
+  url?: string;
+  mode?: string;
 }): NodeBridgeSession {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const session: NodeBridgeSession = {
     id: `meet_node_${randomUUID()}`,
+    url: params.url,
+    mode: params.mode,
     chunks: [],
     waiters: [],
     closed: false,
@@ -145,6 +153,32 @@ function startCommandPair(params: {
   outputProcess.on("error", () => stopSession(session));
   sessions.set(session.id, session);
   return session;
+}
+
+function terminateChild(child?: ChildProcess) {
+  if (!child) {
+    return;
+  }
+  let exited = child.exitCode !== null || child.signalCode !== null;
+  child.once?.("exit", () => {
+    exited = true;
+  });
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // Best-effort cleanup for node-host child processes.
+  }
+  const timer = setTimeout(() => {
+    if (exited) {
+      return;
+    }
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Process may have exited after the grace check.
+    }
+  }, 2_000);
+  timer.unref?.();
 }
 
 async function pullAudio(params: Record<string, unknown>) {
@@ -227,6 +261,8 @@ function startChrome(params: Record<string, unknown>) {
       outputCommand: readStringArray(params.audioOutputCommand) ?? [
         ...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
       ],
+      url,
+      mode: readString(params.mode),
     });
     bridgeId = session.id;
     audioBridge = { type: "node-command-pair" };
@@ -290,6 +326,72 @@ function bridgeStatus(params: Record<string, unknown>) {
   };
 }
 
+function normalizeMeetKey(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    if (url.hostname.toLowerCase() !== "meet.google.com") {
+      return value;
+    }
+    const match = /^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.exec(url.pathname);
+    return match?.[1]?.toLowerCase() ?? value;
+  } catch {
+    return value;
+  }
+}
+
+function summarizeSession(session: NodeBridgeSession) {
+  return {
+    bridgeId: session.id,
+    url: session.url,
+    mode: session.mode,
+    closed: session.closed,
+    createdAt: session.createdAt,
+    closedAt: session.closedAt,
+    lastInputAt: session.lastInputAt,
+    lastOutputAt: session.lastOutputAt,
+    lastInputBytes: session.lastInputBytes,
+    lastOutputBytes: session.lastOutputBytes,
+  };
+}
+
+function listSessions(params: Record<string, unknown>) {
+  const urlKey = normalizeMeetKey(readString(params.url));
+  const mode = readString(params.mode);
+  const bridges = [...sessions.values()]
+    .filter((session) => !urlKey || normalizeMeetKey(session.url) === urlKey)
+    .filter((session) => !mode || session.mode === mode)
+    .map(summarizeSession);
+  return { bridges };
+}
+
+function stopSessionsByUrl(params: Record<string, unknown>) {
+  const urlKey = normalizeMeetKey(readString(params.url));
+  if (!urlKey) {
+    throw new Error("url required");
+  }
+  const mode = readString(params.mode);
+  const exceptBridgeId = readString(params.exceptBridgeId);
+  let stopped = 0;
+  for (const [bridgeId, session] of sessions) {
+    if (exceptBridgeId && bridgeId === exceptBridgeId) {
+      continue;
+    }
+    if (normalizeMeetKey(session.url) !== urlKey) {
+      continue;
+    }
+    if (mode && session.mode !== mode) {
+      continue;
+    }
+    stopSession(session);
+    sessions.delete(bridgeId);
+    stopped += 1;
+  }
+  return { ok: true, stopped };
+}
+
 function stopChrome(params: Record<string, unknown>) {
   const bridgeId = readString(params.bridgeId);
   if (!bridgeId) {
@@ -319,6 +421,12 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       break;
     case "status":
       result = bridgeStatus(params);
+      break;
+    case "list":
+      result = listSessions(params);
+      break;
+    case "stopByUrl":
+      result = stopSessionsByUrl(params);
       break;
     case "pullAudio":
       result = await pullAudio(params);
