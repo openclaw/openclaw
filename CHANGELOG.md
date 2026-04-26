@@ -113,6 +113,9 @@ Docs: https://docs.openclaw.ai
 - Media delivery: avoid sending generated image attachments twice when the
   assistant reply already includes explicit `MEDIA:` lines for the same turn,
   and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
+- Codex harness: ignore retryable app-server error notifications after Codex
+  recovers, and preserve the real nested error message for terminal app-server
+  failures instead of replacing it with a generic failure. Thanks @pashpashpash.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.
