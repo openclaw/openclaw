@@ -39,7 +39,8 @@ export function resolveSessionKey(
   scope: SessionScope,
   ctx: MsgContext,
   mainKey?: string,
-  agentId: string = DEFAULT_AGENT_ID,
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
@@ -49,7 +50,9 @@ export function resolveSessionKey(
   if (scope === "global") {
     return raw;
   }
-  const canonicalAgentId = normalizeAgentId(agentId);
+  const canonicalAgentId = normalizeAgentId(
+    agentId || env.OPENCLAW_DEFAULT_AGENT_ID?.trim() || DEFAULT_AGENT_ID,
+  );
   const canonicalMainKey = normalizeMainKey(mainKey);
   const canonical = buildAgentMainSessionKey({
     agentId: canonicalAgentId,
