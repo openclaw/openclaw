@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
@@ -43,9 +44,15 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   if (!env) {
     return false;
   }
-  return loadPluginManifestRegistry({
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     env,
+  });
+  return loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    env,
+    includeDisabled: true,
   }).plugins.some((plugin) => {
     if (params.origin && plugin.origin !== params.origin) {
       return false;

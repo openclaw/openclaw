@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
@@ -56,11 +57,18 @@ function resolveBundledManifestRecordsByPluginId(params: {
   onlyPluginIds: readonly string[];
 }) {
   const allowedPluginIds = new Set(params.onlyPluginIds);
+  const index = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   return new Map(
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      includeDisabled: true,
     })
       .plugins.filter((record) => record.origin === "bundled" && allowedPluginIds.has(record.id))
       .map((record) => [record.id, record] as const),
