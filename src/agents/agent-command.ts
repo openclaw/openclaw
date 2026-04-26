@@ -954,6 +954,7 @@ async function agentCommandInternal(
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
+              originalProvider: provider,
               cfg,
               sessionEntry,
               sessionId,

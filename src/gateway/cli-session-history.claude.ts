@@ -420,12 +420,20 @@ export function readClaudeCliFallbackSeed(params: {
     return undefined;
   }
 
-  let summaryText: string | undefined;
-  let boundaryFallbackText: string | undefined;
-  // Buffer turns into a window that resets every time we cross a compact
-  // boundary. After the walk completes, `windowedTurns` holds turns from
-  // the most recent (post-boundary) window, which matches what Claude Code
-  // would replay alongside the summary on its own resume.
+  // Pair each compact_boundary with the summary entry that preceded it
+  // since the previous boundary, so a later compaction whose summary is
+  // missing (e.g. crash mid-write) does not silently keep an older
+  // compaction's summary alive (#72069 Codex P2). Walk shape:
+  //   - explicit `summary` entry queues into `pendingSummary` until the
+  //     next boundary "consumes" it.
+  //   - `compact_boundary` flushes the pending summary into `lastSummary`,
+  //     refreshes `lastBoundaryFallback` from the boundary's content, and
+  //     drops the windowed turns and tool registry.
+  //   - everything after the latest boundary forms the recent-window the
+  //     fallback runner will replay alongside the summary.
+  let pendingSummary: string | undefined;
+  let lastSummary: string | undefined;
+  let lastBoundaryFallback: string | undefined;
   let windowedTurns: TranscriptLikeMessage[] = [];
   const toolNameRegistry: ToolNameRegistry = new Map();
 
@@ -442,15 +450,17 @@ export function readClaudeCliFallbackSeed(params: {
 
     const explicitSummary = extractSummaryText(parsed);
     if (explicitSummary) {
-      // Explicit summary entries are written by `/compact`; later entries
-      // supersede earlier ones the same way Claude Code itself replays
-      // only the most recent summary.
-      summaryText = explicitSummary;
+      // Queue the summary; the next boundary will pair it with itself.
+      // Multiple summaries between boundaries (rare) take the last one,
+      // matching how Claude Code's resume picks the most recent summary.
+      pendingSummary = explicitSummary;
       continue;
     }
 
     if (isCompactBoundary(parsed)) {
-      boundaryFallbackText = extractCompactBoundaryFallbackText(parsed) ?? boundaryFallbackText;
+      lastSummary = pendingSummary; // may be undefined if no preceding summary
+      pendingSummary = undefined;
+      lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;
       // Drop turns that lived before this boundary — they are now
       // represented by the summary, and replaying them would double-count
       // their tokens against the fallback model's budget.
@@ -468,7 +478,10 @@ export function readClaudeCliFallbackSeed(params: {
   }
 
   const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
-  const resolvedSummaryText = summaryText ?? boundaryFallbackText;
+  // Honor a `/compact` summary that was written but never followed by a
+  // boundary marker (older Claude Code build, or graceful-degrade case).
+  // `pendingSummary` then carries the latest such summary into the result.
+  const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
   if (!resolvedSummaryText && recentTurns.length === 0) {
     return undefined;
   }

@@ -234,6 +234,15 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  /**
+   * The provider the user originally requested for this turn (i.e. the
+   * primary candidate of the fallback chain). Used to scope claude-cli
+   * fallback context seeding to chains that actually started on claude-cli;
+   * a stale `cliSessionBindings["claude-cli"]` from an unrelated past run
+   * must not contaminate fallbacks that started on another provider
+   * (Codex review #72069 P1).
+   */
+  originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
@@ -267,8 +276,15 @@ export function runAgentAttempt(params: {
   // Harvest a compacted context (Claude's own `/compact` summary plus the
   // most recent post-boundary turns) and prepend it to the retry prompt.
   // This mirrors what Claude Code itself replays after compaction.
+  //
+  // Gate explicitly on `originalProvider === "claude-cli"`: if the user-
+  // requested provider for this run was not claude-cli, any claude-cli
+  // session binding on the entry is stale state from an earlier run and
+  // must not bleed into this fallback chain.
   const claudeCliFallbackPrelude =
-    params.isFallbackRetry && !isClaudeCliProvider(params.providerOverride)
+    params.isFallbackRetry &&
+    isClaudeCliProvider(params.originalProvider) &&
+    !isClaudeCliProvider(params.providerOverride)
       ? buildClaudeCliFallbackContextPrelude({
           cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
         })

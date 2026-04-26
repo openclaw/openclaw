@@ -189,9 +189,15 @@ function formatFallbackTurns(
   if (turns.length === 0 || remainingBudget <= 0) {
     return { text: "", consumed: 0 };
   }
-  // Walk newest -> oldest, prepending lines until we exceed the budget.
-  // Stops at the oldest turn we can include in full so we never deliver a
-  // truncated mid-turn fragment to the fallback model.
+  // Walk newest -> oldest, prepending lines until one does not fit.
+  //
+  // We stop on the FIRST oversized turn instead of skipping it and then
+  // continuing into older ones. The fallback prelude is a "most recent
+  // contiguous window" summary — what was happening just before the
+  // failed attempt — so a non-contiguous slice (newest + something from
+  // 20 turns ago, gap in the middle) would mislead the fallback model
+  // about the actual flow. Sparse coverage is worse than fewer turns:
+  // greptile flagged this as a P2 on #72069; behavior is intentional.
   const lines: string[] = [];
   let consumed = 0;
   for (let i = turns.length - 1; i >= 0; i -= 1) {
@@ -209,9 +215,6 @@ function formatFallbackTurns(
     }
     const line = `${role}: ${text}`;
     if (consumed + line.length + 1 > remainingBudget) {
-      // Skip this turn rather than chop it; if even the most recent turn
-      // is too large to include cleanly, stop emitting (the prelude is a
-      // best-effort sketch, not a transcript).
       break;
     }
     lines.unshift(line);
