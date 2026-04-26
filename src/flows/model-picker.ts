@@ -780,10 +780,6 @@ export async function promptDefaultModel(
       label: configuredRaw
         ? `Keep current (${configuredLabel})`
         : `Keep current (default: ${resolvedKey})`,
-      hint:
-        configuredRaw && configuredLabel !== configuredRaw
-          ? `resolves to ${resolvedKey}`
-          : undefined,
     });
   }
   if (includeManual) {
