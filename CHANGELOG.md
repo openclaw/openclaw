@@ -68,6 +68,9 @@ Docs: https://docs.openclaw.ai
 - TTS: strip model-emitted TTS directives from streamed block text before channel
   delivery, including directives split across adjacent blocks, while preserving
   the accumulated raw reply for final-mode synthesis. Fixes #38937.
+- TTS: keep explicit `provider=...` directive keys scoped to that provider and
+  warn on unsupported keys instead of letting another speech provider consume
+  overlapping keys. Fixes #60131.
 - ACP: send subagent and async-task completion wakes to external ACP harnesses as
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
