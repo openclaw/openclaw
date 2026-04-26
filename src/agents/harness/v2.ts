@@ -83,12 +83,16 @@ const nativeAgentHarnessV2Factories = new Map<string, NativeAgentHarnessV2Factor
 export function registerNativeAgentHarnessV2Factory(
   harnessId: string,
   factory: NativeAgentHarnessV2Factory,
-): void {
+): () => void {
+  const previous = nativeAgentHarnessV2Factories.get(harnessId);
   nativeAgentHarnessV2Factories.set(harnessId, factory);
-}
-
-export function clearNativeAgentHarnessV2Factories(): void {
-  nativeAgentHarnessV2Factories.clear();
+  return () => {
+    if (previous) {
+      nativeAgentHarnessV2Factories.set(harnessId, previous);
+      return;
+    }
+    nativeAgentHarnessV2Factories.delete(harnessId);
+  };
 }
 
 export function getNativeAgentHarnessV2Factory(

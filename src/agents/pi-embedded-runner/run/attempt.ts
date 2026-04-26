@@ -219,6 +219,13 @@ import {
 } from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import { summarizeSessionContext } from "./attempt-message-summary.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  collectAttemptExplicitToolAllowlistSources,
+  resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tools.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -340,13 +347,6 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
-import {
-  applyEmbeddedAttemptToolsAllow,
-  collectAttemptExplicitToolAllowlistSources,
-  resolveUnknownToolGuardThreshold,
-  shouldCreateBundleMcpRuntimeForAttempt,
-} from "./attempt-tools.js";
-
 export {
   applyEmbeddedAttemptToolsAllow,
   resolveUnknownToolGuardThreshold,
@@ -379,8 +379,6 @@ export function remapInjectedContextFilesToWorkspace(params: {
       : file;
   });
 }
-
-import { summarizeSessionContext } from "./attempt-message-summary.js";
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   return stripToolResultDetails(normalizeAssistantReplayContent(messages));

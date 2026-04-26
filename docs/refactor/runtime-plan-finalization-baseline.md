@@ -70,7 +70,7 @@ The RFC's recon was a read-only WebFetch sweep against an earlier `origin/main` 
 | Test asserting native V2 result shape == adapted V1 result shape | did not exist                        | still does not exist                                                                                                         | PR 2 must add this parity test.                                                                                                                                  |
 | `check:architecture` script                                      | exists, chains import-cycles + madge | unchanged                                                                                                                    | OK.                                                                                                                                                              |
 
-The three RFC-cited helper files that PR 3 + PR 4 must reuse (not move) all still exist at the same paths:
+The RFC-cited helper files that PR 3 + PR 4 must reuse (not move) all still exist at the same paths:
 
 - `src/agents/pi-embedded-runner/run/attempt.transcript-policy.ts`
 - `src/agents/pi-embedded-runner/run/attempt.subscription-cleanup.ts`

@@ -12,6 +12,7 @@ import {
   selectAgentHarness,
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
+import { registerNativeAgentHarnessV2Factory } from "./v2.js";
 
 const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
 
@@ -137,6 +138,37 @@ describe("runAgentHarnessAttemptWithFallback", () => {
 
     expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs selected PI attempts through a registered native V2 factory when present", async () => {
+    const nativeResult = createAttemptResult("native-pi");
+    const restoreFactory = registerNativeAgentHarnessV2Factory("pi", (harness) => ({
+      id: harness.id,
+      label: harness.label,
+      pluginId: harness.pluginId,
+      supports: (ctx) => harness.supports(ctx),
+      prepare: async (params) => ({
+        harnessId: harness.id,
+        label: harness.label,
+        pluginId: harness.pluginId,
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => nativeResult,
+      resolveOutcome: async (_session, result) => result,
+      cleanup: async () => {},
+    }));
+    try {
+      const result = await runAgentHarnessAttemptWithFallback(
+        createAttemptParams({ agents: { defaults: { agentRuntime: { id: "auto" } } } }),
+      );
+
+      expect(result.sessionIdUsed).toBe("native-pi");
+      expect(piRunAttempt).not.toHaveBeenCalled();
+    } finally {
+      restoreFactory();
+    }
   });
 
   it("surfaces an auto-selected plugin harness failure instead of replaying through PI", async () => {

@@ -13,18 +13,30 @@
 
 export {
   abortEmbeddedAgentRun,
+  abortEmbeddedPiRun,
   compactEmbeddedAgentSession,
+  compactEmbeddedPiSession,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunStreaming,
+  isEmbeddedPiRunActive,
+  isEmbeddedPiRunStreaming,
   queueEmbeddedAgentMessage,
+  queueEmbeddedPiMessage,
   resolveActiveEmbeddedAgentRunSessionId,
+  resolveActiveEmbeddedRunSessionId,
   resolveEmbeddedSessionLane,
   runEmbeddedAgent,
+  runEmbeddedPiAgent,
   waitForEmbeddedAgentRunEnd,
-} from "../embedded-runner/index.js";
+  waitForEmbeddedPiRunEnd,
+} from "../pi-embedded-runner.js";
 export type {
   EmbeddedAgentCompactResult,
   EmbeddedAgentMeta,
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunResult,
-} from "../embedded-runner/index.js";
+  EmbeddedPiAgentMeta,
+  EmbeddedPiCompactResult,
+  EmbeddedPiRunMeta,
+  EmbeddedPiRunResult,
+} from "../pi-embedded-runner.js";

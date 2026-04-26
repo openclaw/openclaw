@@ -15,8 +15,11 @@ import {
 } from "../pi-embedded-runner.js";
 import {
   abortEmbeddedAgentRun as abortEmbeddedAgentRunFromPiDirBarrel,
+  abortEmbeddedPiRun as abortEmbeddedPiRunFromPiDirBarrel,
   compactEmbeddedAgentSession as compactEmbeddedAgentSessionFromPiDirBarrel,
+  compactEmbeddedPiSession as compactEmbeddedPiSessionFromPiDirBarrel,
   runEmbeddedAgent as runEmbeddedAgentFromPiDirBarrel,
+  runEmbeddedPiAgent as runEmbeddedPiAgentFromPiDirBarrel,
 } from "./index.js";
 
 describe("embedded runner compatibility aliases", () => {
@@ -34,7 +37,10 @@ describe("embedded runner compatibility aliases", () => {
     expect(abortEmbeddedAgentRunFromNeutralDirBarrel).toBe(abortEmbeddedPiRun);
     // Deprecated PI directory barrel chains through the canonical directory barrel.
     expect(runEmbeddedAgentFromPiDirBarrel).toBe(runEmbeddedPiAgent);
+    expect(runEmbeddedPiAgentFromPiDirBarrel).toBe(runEmbeddedPiAgent);
     expect(compactEmbeddedAgentSessionFromPiDirBarrel).toBe(compactEmbeddedPiSession);
+    expect(compactEmbeddedPiSessionFromPiDirBarrel).toBe(compactEmbeddedPiSession);
     expect(abortEmbeddedAgentRunFromPiDirBarrel).toBe(abortEmbeddedPiRun);
+    expect(abortEmbeddedPiRunFromPiDirBarrel).toBe(abortEmbeddedPiRun);
   });
 });

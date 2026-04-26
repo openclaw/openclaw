@@ -16,11 +16,11 @@ export function createPiAgentHarness(): AgentHarness {
 }
 
 /**
- * Native AgentHarnessV2 for the built-in PI embedded runner. At PR 2 (RFC 72072)
- * the lifecycle methods still bottom out in `runEmbeddedAttempt`, so the
- * visible AgentHarnessAttemptResult must remain identical to the V1-adapter
- * path. PR 4 is where prepare/start/cleanup will plumb through the split
- * lifecycle modules.
+ * Native AgentHarnessV2 for the built-in PI embedded runner. This cleanup
+ * package keeps the lifecycle methods bottoming out in `runEmbeddedAttempt`,
+ * so the visible AgentHarnessAttemptResult remains identical to the V1-adapter
+ * path. Follow-up structural PRs can plumb prepare/start/cleanup through split
+ * lifecycle modules once those seams exist.
  */
 export function createPiAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
   return {

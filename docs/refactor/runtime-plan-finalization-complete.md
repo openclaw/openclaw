@@ -13,7 +13,7 @@ PR 7 of 7 for [RFC 72072](https://github.com/openclaw/openclaw/issues/72072). Do
 
 ## Series at a glance
 
-All seven PRs were opened as drafts on fresh `origin/main` branches; none stack. Each PR's body links the others.
+All seven PRs were opened as drafts on fresh `origin/main` branches; none stack. Each PR links the RFC plus the relevant predecessor and follow-up PRs.
 
 | #   | Title                                      | PR                                                        | Effect                                                                                                                                                                                                                       |
 | --- | ------------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -88,7 +88,7 @@ The RFC asks for end-to-end smoke across all four routes after the series merges
 | `codex/*` GPT-5.4        | Same checklist.                                                                                                                                                                |
 | `codex-cli/*` GPT-5.4    | Same checklist.                                                                                                                                                                |
 
-This handoff doc cannot run the smoke matrix from CI — it depends on live model auth and operator-side environment. The expectation is that maintainers run it after the series merges and capture transcripts in the relevant project tracker; nothing in the seven PRs touches the smoke pathway, so a baseline pass before the first PR lands gives the cleanest comparison.
+This handoff doc cannot run the smoke matrix from CI — it depends on live model auth and operator-side environment. The expectation is that maintainers run it after the series merges and capture transcripts in the relevant project tracker. The cleanup PRs avoid live smoke in CI, but the Harness V2 resolution change still warrants operator verification before treating the finalization series as complete.
 
 ## Acceptance criteria assessment (RFC verbatim)
 
