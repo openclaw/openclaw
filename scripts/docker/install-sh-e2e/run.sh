@@ -74,9 +74,9 @@ fi
 
 echo "==> Run official installer one-liner"
 if [[ "$INSTALL_TAG" == "beta" ]]; then
-  OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash
+  curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash
 elif [[ "$INSTALL_TAG" != "latest" ]]; then
-  OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
+  curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash
 else
   curl -fsSL "$INSTALL_URL" | bash
 fi

@@ -341,10 +341,14 @@ const releasePathChunks = {
     }),
   ],
   "package-update": [
-    npmLane("install-e2e", "OPENCLAW_E2E_MODELS=both pnpm test:install:e2e", {
-      resources: ["service"],
-      weight: 4,
-    }),
+    npmLane(
+      "install-e2e",
+      "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=both pnpm test:install:e2e",
+      {
+        resources: ["service"],
+        weight: 4,
+      },
+    ),
     npmLane(
       "npm-onboard-channel-agent",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",

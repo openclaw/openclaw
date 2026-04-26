@@ -67,6 +67,21 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 - The test wrapper prints a short `[test] passed|failed|skipped ... in ...`
   line. Vitest's own duration is still the per-shard detail.
 
+## Routing Model
+
+- `pnpm changed:lanes --json` answers "which check lanes does this diff touch?"
+  It is used by `pnpm check:changed` for typecheck/lint/guard selection.
+- `pnpm test:changed` answers "which Vitest targets are worth running now?" It
+  uses the same changed path list, but applies a cheaper test-target resolver.
+- Direct test edits run themselves. Source edits prefer explicit mappings,
+  sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
+  edits are skipped by default unless they have precise mapped tests.
+- Public SDK or contract edits do not automatically run every plugin test.
+  `check:changed` proves extension type contracts; the agent chooses the
+  smallest plugin/contract Vitest proof that matches the actual risk.
+- Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when a harness,
+  config, package, or unknown-root edit really needs the broad Vitest fallback.
+
 ## CI Debugging
 
 Start with current run state, not logs for everything:

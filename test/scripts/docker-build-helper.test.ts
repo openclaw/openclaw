@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
+const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
+const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -34,5 +37,35 @@ describe("docker build helper", () => {
       expect(script, path).not.toMatch(/\bdocker build\b/);
       expect(script, path).not.toMatch(/run_logged\s+\S+\s+docker\s+build/);
     }
+  });
+
+  it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
+    const scheduler = readFileSync(DOCKER_ALL_SCHEDULER_PATH, "utf8");
+
+    expect(scheduler).toContain("env.PNPM_HOME");
+    expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
+    expect(scheduler).toContain("path.dirname(process.execPath)");
+    expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
+    expect(scheduler).toContain("withResolvedPnpmCommand");
+    expect(scheduler).toContain("OPENCLAW_DOCKER_ALL_PNPM_COMMAND");
+  });
+
+  it("runs release installer E2E against the npm beta tag", () => {
+    const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
+
+    expect(scenarios).toContain(
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=both pnpm test:install:e2e"',
+    );
+  });
+
+  it("passes installer tag env to bash, not curl", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+
+    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash');
+    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash');
+    expect(runner).not.toContain('OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash');
+    expect(runner).not.toContain(
+      'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',
+    );
   });
 });

@@ -5,7 +5,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { runTelegramQaLive } from "../../extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts";
 
 function parseBoolean(value: string | undefined) {
@@ -26,6 +25,10 @@ function resolveCredentialSource(env: NodeJS.ProcessEnv) {
 
 function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
+}
+
+function formatErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function resolveTrustedOpenClawCommand(rawCommand: string) {

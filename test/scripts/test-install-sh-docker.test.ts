@@ -6,6 +6,7 @@ const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
+const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -55,6 +56,15 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain("restore_local_dist_from_image");
     expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+  });
+
+  it("allows release branch head refs for secret-backed Docker release checks", () => {
+    const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("WORKFLOW_REF_NAME: ${{ github.ref_name }}");
+    expect(workflow).toContain("release-branch-head");
+    expect(workflow).toContain("refs/remotes/origin/${WORKFLOW_REF_NAME}");
+    expect(workflow).toContain("match the current release branch head");
   });
 
   it("prints package size audits for release smoke tarballs", () => {

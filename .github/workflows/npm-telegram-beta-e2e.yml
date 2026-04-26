@@ -34,34 +34,8 @@ env:
   PNPM_VERSION: "10.33.0"
 
 jobs:
-  validate_dispatch_ref:
-    name: Validate dispatch ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    steps:
-      - name: Require main workflow ref
-        env:
-          WORKFLOW_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-            echo "NPM Telegram beta E2E must be dispatched from main so workflow logic stays controlled." >&2
-            exit 1
-          fi
-
-  approve_release_manager:
-    name: Approve npm Telegram beta E2E
-    needs: validate_dispatch_ref
-    runs-on: ubuntu-latest
-    environment: npm-release
-    steps:
-      - name: Record approval
-        env:
-          PACKAGE_SPEC: ${{ inputs.package_spec }}
-        run: echo "Approved npm Telegram beta E2E for ${PACKAGE_SPEC}"
-
   run_npm_telegram_beta_e2e:
     name: Run published npm Telegram E2E
-    needs: approve_release_manager
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -71,7 +45,7 @@ jobs:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - name: Checkout main
+      - name: Checkout dispatch ref
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -145,6 +119,7 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
