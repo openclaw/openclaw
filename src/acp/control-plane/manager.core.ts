@@ -247,6 +247,14 @@ export class AcpSessionManager {
       if (!session.acp || !session.sessionKey) {
         continue;
       }
+      // Skip terminal one-shot records: their identity stays `pending` by
+      // design (one-shot sessions complete without resolving the long-lived
+      // runtime session id), but reconciling them on every gateway startup
+      // logs a misleading `failed=N` total that looks like an ACP runtime
+      // regression even though fresh ACP launches are healthy. (#72013)
+      if (session.acp.mode === "oneshot") {
+        continue;
+      }
       const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
       if (
         !isSessionIdentityPending(currentIdentity) ||

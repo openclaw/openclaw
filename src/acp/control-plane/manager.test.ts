@@ -2609,6 +2609,47 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.getStatus).not.toHaveBeenCalled();
   });
 
+  it("skips startup reconcile for terminal one-shot sessions (#72013)", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const sessionKey = "agent:codex:acp:oneshot:cron:smoke:7373ab192b2317f4";
+    const oneshotMeta: SessionAcpMeta = {
+      ...readySessionMeta({ agent: "codex", mode: "oneshot" }),
+      identity: {
+        state: "pending",
+        acpxRecordId: sessionKey,
+        acpxSessionId: "acpx-session-oneshot-1",
+        source: "status",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-oneshot-1",
+          updatedAt: Date.now(),
+          acp: oneshotMeta,
+        },
+        acp: oneshotMeta,
+      },
+    ]);
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 0, resolved: 0, failed: 0 });
+    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+    expect(runtimeState.getStatus).not.toHaveBeenCalled();
+  });
+
   it("reconciles prompt-learned agent session IDs even when runtime status omits them", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({
