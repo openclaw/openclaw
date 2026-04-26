@@ -132,6 +132,11 @@ async function maybeApplyTtsToReplyPayload(
   ) {
     return params.payload;
   }
+  // FIX: Add inboundAudio check for "inbound" auto mode (fixes #72034, #65951)
+  const ttsAuto = normalizeTtsAutoMode(params.ttsAuto);
+  if (ttsAuto === "inbound" && !params.inboundAudio) {
+    return params.payload;
+  }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   return maybeApplyTtsToPayload(params);
 }
