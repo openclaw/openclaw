@@ -275,11 +275,11 @@ export async function runPreparedReply(
     const content = await fs.readFile(personalityPath, "utf-8");
     if (content.length > 8192) {
       console.warn("PERSONALITY.md is too large, truncating to 8KB");
-      rootPersonality = content.substring(0, 8192);
+      rootPersonality = content.slice(0, 8192);
     } else {
       rootPersonality = content;
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err.code !== "ENOENT") {
       console.error("Failed to read root personality file:", err);
     }

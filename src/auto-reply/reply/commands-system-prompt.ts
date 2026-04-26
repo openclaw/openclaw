@@ -16,8 +16,6 @@ import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 export type CommandsSystemPromptBundle = {
   systemPrompt: string;
@@ -148,30 +146,11 @@ export async function resolveCommandsSystemPromptBundle(
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
 
-  let rootPersonality: string | undefined = undefined;
-  try {
-    const personalityPath = path.join(workspaceDir, "PERSONALITY.md");
-
-    const content = await fs.readFile(personalityPath, "utf-8");
-    
-    if (content.length > 8192) {
-      console.warn("PERSONALITY.md is too large, truncating to 8KB");
-      rootPersonality = content.slice(0, 8192);
-    } else {
-      rootPersonality = content;
-    }
-    console.log("Root personality loaded from PERSONALITY.md");
-  } catch (err: unknown) {
-    if (err.code !== "ENOENT") {
-      console.error("Failed to read root personality file:", err);
-    }
-  }
-
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,
     reasoningLevel: params.resolvedReasoningLevel,
-    extraSystemPrompt: rootPersonality,
+    extraSystemPrompt: undefined,
     ownerNumbers: undefined,
     reasoningTagHint: false,
     toolNames,
