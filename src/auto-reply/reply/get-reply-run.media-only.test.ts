@@ -90,8 +90,7 @@ vi.mock("./groups.js", () => ({
       return {
         activation,
         canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent:
-          activation === "always" && params.silentReplyPolicy === "allow",
+        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
       };
     },
   ),
@@ -284,7 +283,7 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it("propagates empty-assistant silence only for always-on group runs", async () => {
+  it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 
     let call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
@@ -297,7 +296,7 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
   it("does not propagate empty-assistant silence for direct runs", async () => {
