@@ -662,6 +662,40 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds the emotion translation contract only when voice.md is present and emotions are enabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      emotionMode: "on",
+      contextFiles: [
+        { path: "./voice.md", content: "Voice library" },
+        { path: "./SOUL.md", content: "Persona" },
+      ],
+    });
+
+    expect(prompt).toContain("## Speech Preparation Contract");
+    expect(prompt).toContain("rewrite it through the loaded `voice.md` speech-preparation library");
+    // Per Copilot review: assert on the actual context-file headings rather than
+    // bare `"SOUL.md"` / `"voice.md"` substrings — those also match the SOUL
+    // guidance line and the Speech Preparation Contract reference, so a weaker
+    // assertion would pass even if the context files were misordered.
+    const soulHeading = prompt.indexOf("## ./SOUL.md");
+    const voiceHeading = prompt.indexOf("## ./voice.md");
+    expect(soulHeading).toBeGreaterThanOrEqual(0);
+    expect(voiceHeading).toBeGreaterThanOrEqual(0);
+    expect(soulHeading).toBeLessThan(voiceHeading);
+  });
+
+  it("omits the emotion translation contract for minimal prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      emotionMode: "full",
+      contextFiles: [{ path: "./voice.md", content: "Voice library" }],
+    });
+
+    expect(prompt).not.toContain("## Speech Preparation Contract");
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

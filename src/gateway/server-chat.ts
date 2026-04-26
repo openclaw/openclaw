@@ -1,9 +1,11 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
+import { type EmotionMode, normalizeEmotionMode } from "../emotion-mode.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { sanitizeDirectiveAndEmotionTagsForDisplay } from "../utils/directive-tags.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
   normalizeLiveAssistantEventText,
@@ -84,6 +86,13 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
+// PR-D: per-session emotion mode for visible-stream sanitization. The
+// resolveMergedAssistantText / appendUniqueSuffix helpers are imported from
+// the canonical chat-merge module on main; we add only the emotion-mode lookup.
+function resolveSessionEmotionMode(sessionKey: string) {
+  return normalizeEmotionMode(loadSessionEntry(sessionKey).entry?.emotionMode) ?? "off";
+}
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
@@ -153,6 +162,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  emotionModes: Map<string, EmotionMode>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
@@ -164,6 +174,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const emotionModes = new Map<string, EmotionMode>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
@@ -172,6 +183,7 @@ export function createChatRunState(): ChatRunState {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    emotionModes.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
@@ -181,6 +193,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    emotionModes,
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
@@ -446,6 +459,7 @@ export function createAgentEventHandler({
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.emotionModes.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
   };
@@ -504,6 +518,7 @@ export function createAgentEventHandler({
       fastMode: row?.fastMode,
       verboseLevel: row?.verboseLevel,
       traceLevel: row?.traceLevel,
+      emotionMode: row?.emotionMode,
       reasoningLevel: row?.reasoningLevel,
       elevatedLevel: row?.elevatedLevel,
       sendPolicy: row?.sendPolicy,
@@ -645,6 +660,9 @@ export function createAgentEventHandler({
     delta?: unknown,
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
+    const emotionMode =
+      chatRunState.emotionModes.get(clientRunId) ?? resolveSessionEmotionMode(sessionKey);
+    chatRunState.emotionModes.set(clientRunId, emotionMode);
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
@@ -656,7 +674,14 @@ export function createAgentEventHandler({
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
     const projected = projectLiveAssistantBufferedText(mergedRawText);
-    const mergedText = projected.text;
+    // PR-D: emotion-tag sanitization on the live visible buffer happens AFTER
+    // main's projection logic so we don't fight projectLiveAssistantBufferedText
+    // for control over what reaches the client. emotionMode === "off" or "full"
+    // is a no-op; emotionMode === "on" hides tags from the visible stream.
+    const mergedText = sanitizeDirectiveAndEmotionTagsForDisplay(projected.text, {
+      emotionMode,
+      hideTrailingPartialEmotionTag: true,
+    }).text;
     chatRunState.buffers.set(clientRunId, mergedText);
     if (projected.suppress) {
       return;
@@ -769,6 +794,7 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.emotionModes.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
       const payload = {

@@ -1,3 +1,4 @@
+import type { EmotionMode } from "../emotion-mode.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
@@ -98,10 +99,12 @@ export function buildSessionHistorySnapshot(params: {
   maxChars?: number;
   limit?: number;
   cursor?: string;
+  emotionMode?: EmotionMode;
 }): SessionHistorySnapshot {
   const visibleMessages = toSessionHistoryMessages(
     projectChatDisplayMessages(params.rawMessages, {
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      emotionMode: params.emotionMode,
     }),
   );
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
@@ -117,6 +120,8 @@ export class SessionHistorySseState {
   private readonly maxChars: number;
   private readonly limit: number | undefined;
   private readonly cursor: string | undefined;
+  private readonly resolveEmotionMode?: () => EmotionMode;
+  private emotionMode: EmotionMode;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
 
@@ -126,12 +131,16 @@ export class SessionHistorySseState {
     maxChars?: number;
     limit?: number;
     cursor?: string;
+    emotionMode?: EmotionMode;
+    resolveEmotionMode?: () => EmotionMode;
   }): SessionHistorySseState {
     return new SessionHistorySseState({
       target: params.target,
       maxChars: params.maxChars,
       limit: params.limit,
       cursor: params.cursor,
+      emotionMode: params.emotionMode,
+      resolveEmotionMode: params.resolveEmotionMode,
       initialRawMessages: params.rawMessages,
     });
   }
@@ -141,21 +150,39 @@ export class SessionHistorySseState {
     maxChars?: number;
     limit?: number;
     cursor?: string;
+    emotionMode?: EmotionMode;
+    resolveEmotionMode?: () => EmotionMode;
     initialRawMessages?: unknown[];
   }) {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
+    this.resolveEmotionMode = params.resolveEmotionMode;
+    this.emotionMode = this.resolveEmotionMode?.() ?? params.emotionMode ?? "off";
     const rawMessages = params.initialRawMessages ?? this.readRawMessages();
     const snapshot = buildSessionHistorySnapshot({
       rawMessages,
       maxChars: this.maxChars,
       limit: this.limit,
       cursor: this.cursor,
+      emotionMode: this.emotionMode,
     });
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+  }
+
+  /**
+   * Re-resolve the current per-session emotion mode on every snapshot/refresh.
+   * Per Greptile P2 (session-history-state.ts:127): the original PR froze
+   * `emotionMode` at construction time, so a `/emotions full` typed mid-stream
+   * would not affect an open SSE history connection. Reading via
+   * `resolveEmotionMode()` lets the gateway feed the latest persisted value
+   * from the session store on every projection.
+   */
+  private getCurrentEmotionMode(): EmotionMode {
+    this.emotionMode = this.resolveEmotionMode?.() ?? this.emotionMode;
+    return this.emotionMode;
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -174,9 +201,14 @@ export class SessionHistorySseState {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
-    const [sanitizedMessage] = toSessionHistoryMessages(
-      projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
-    );
+    const projected = projectChatDisplayMessages([nextMessage], {
+      maxChars: this.maxChars,
+      emotionMode: this.getCurrentEmotionMode(),
+    });
+    if (projected.length === 0) {
+      return null;
+    }
+    const [sanitizedMessage] = toSessionHistoryMessages(projected);
     if (!sanitizedMessage) {
       return null;
     }
@@ -197,6 +229,7 @@ export class SessionHistorySseState {
       maxChars: this.maxChars,
       limit: this.limit,
       cursor: this.cursor,
+      emotionMode: this.getCurrentEmotionMode(),
     });
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.sentHistory = snapshot.history;

@@ -174,6 +174,7 @@ export type SessionEntry = {
   traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  emotionMode?: "off" | "on" | "full";
   ttsAuto?: TtsAutoMode;
   /** Hash of the latest assistant reply that was sent through `/tts latest`. */
   lastTtsReadLatestHash?: string;

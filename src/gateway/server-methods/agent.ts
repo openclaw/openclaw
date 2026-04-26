@@ -216,6 +216,7 @@ function emitSessionsChanged(
             fastMode: sessionRow.fastMode,
             verboseLevel: sessionRow.verboseLevel,
             traceLevel: sessionRow.traceLevel,
+            emotionMode: sessionRow.emotionMode,
             reasoningLevel: sessionRow.reasoningLevel,
             elevatedLevel: sessionRow.elevatedLevel,
             sendPolicy: sessionRow.sendPolicy,

@@ -226,4 +226,85 @@ describe("SessionHistorySseState", () => {
     ).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
   });
+
+  test("strips emotion tags from history in normal mode and preserves them in full mode", () => {
+    const rawMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[softly] hello there" }],
+        __openclaw: { seq: 1 },
+      },
+    ];
+
+    const hidden = buildSessionHistorySnapshot({
+      rawMessages,
+      emotionMode: "on",
+    });
+    const visible = buildSessionHistorySnapshot({
+      rawMessages,
+      emotionMode: "full",
+    });
+
+    expect(hidden.history.messages[0]?.content).toEqual([{ type: "text", text: "hello there" }]);
+    expect(visible.history.messages[0]?.content).toEqual([
+      { type: "text", text: "[softly] hello there" },
+    ]);
+  });
+
+  test("preserves bracketed user text while still hiding assistant emotion tags", () => {
+    const rawMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Use [A-Z] in the regex" }],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[softly] hello there" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+
+    const hidden = buildSessionHistorySnapshot({
+      rawMessages,
+      emotionMode: "on",
+    });
+
+    expect(hidden.history.messages[0]?.content).toEqual([
+      { type: "text", text: "Use [A-Z] in the regex" },
+    ]);
+    expect(hidden.history.messages[1]?.content).toEqual([{ type: "text", text: "hello there" }]);
+  });
+
+  test("refresh picks up updated emotion mode for an open SSE stream", () => {
+    const rawMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[softly] hello there" }],
+        __openclaw: { seq: 1 },
+      },
+    ];
+    let emotionMode: "off" | "on" | "full" = "on";
+    const readSpy = vi.spyOn(sessionUtils, "readSessionMessages").mockReturnValue(rawMessages);
+    try {
+      const state = SessionHistorySseState.fromRawSnapshot({
+        target: { sessionId: "sess-main" },
+        rawMessages,
+        emotionMode,
+        resolveEmotionMode: () => emotionMode,
+      });
+
+      expect(state.snapshot().messages[0]?.content).toEqual([
+        { type: "text", text: "hello there" },
+      ]);
+
+      emotionMode = "full";
+      expect(state.refresh().messages[0]?.content).toEqual([
+        { type: "text", text: "[softly] hello there" },
+      ]);
+      expect(readSpy).toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
 });

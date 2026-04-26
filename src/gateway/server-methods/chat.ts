@@ -184,6 +184,11 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
+// PR-D note: chat history sanitization in this file is delegated to
+// projectChatDisplayMessages (in chat-display-projection.ts), which now accepts
+// emotionMode and gates emotion-tag stripping to assistant-role messages only
+// (per Copilot's review of the original PR's chat.ts:919).
+
 type ChatSendDeliveryEntry = {
   deliveryContext?: {
     channel?: string;

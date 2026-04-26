@@ -1,4 +1,5 @@
 export {
+  extractEmotionsDirective,
   extractElevatedDirective,
   extractReasoningDirective,
   extractTraceDirective,

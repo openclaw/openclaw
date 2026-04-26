@@ -55,6 +55,7 @@ export type GatewaySessionRow = {
   fastMode?: boolean;
   verboseLevel?: string;
   traceLevel?: string;
+  emotionMode?: SessionEntry["emotionMode"];
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";

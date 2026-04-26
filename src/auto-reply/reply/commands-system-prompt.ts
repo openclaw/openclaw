@@ -13,6 +13,7 @@ import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { normalizeEmotionMode } from "../../emotion-mode.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { listRegisteredPluginCommands } from "../../plugins/command-registry-state.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -147,11 +148,16 @@ export async function resolveCommandsSystemPromptBundle(
       }
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg, sessionAgentId) : undefined;
+  // PR-C: emotionMode gates voice.md system-prompt injection. Agent-defaults
+  // `emotionDefault` was dropped from this family (Copilot review); resolve
+  // from session only, where /emotions writes its directive output.
+  const emotionMode = normalizeEmotionMode(targetSessionEntry?.emotionMode) ?? "off";
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,
     reasoningLevel: params.resolvedReasoningLevel,
+    emotionMode,
     extraSystemPrompt: undefined,
     ownerNumbers: undefined,
     reasoningTagHint: false,

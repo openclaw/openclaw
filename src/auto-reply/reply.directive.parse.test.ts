@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
+  extractEmotionsDirective,
   extractElevatedDirective,
   extractReasoningDirective,
   extractTraceDirective,
@@ -61,6 +62,12 @@ describe("directive parsing", () => {
     const res = extractReasoningDirective("/reasoning stream please");
     expect(res.hasDirective).toBe(true);
     expect(res.reasoningLevel).toBe("stream");
+  });
+
+  it("matches emotions directive", () => {
+    const res = extractEmotionsDirective("/emotions full please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.emotionMode).toBe("full");
   });
 
   it("matches fast directive", () => {

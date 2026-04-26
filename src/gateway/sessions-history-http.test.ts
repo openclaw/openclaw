@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { createCachedEmotionModeResolver } from "./sessions-history-http.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -24,6 +25,7 @@ const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -62,6 +64,25 @@ async function seedSession(params?: { text?: string }) {
   }
   return { storePath };
 }
+
+test("createCachedEmotionModeResolver honors the initial mode for the first ttl window", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-04-20T00:00:00.000Z"));
+  const loadEmotionMode = vi.fn(() => "full" as const);
+  const resolveEmotionMode = createCachedEmotionModeResolver({
+    initialEmotionMode: "on",
+    ttlMs: 250,
+    loadEmotionMode,
+  });
+
+  expect(resolveEmotionMode()).toBe("on");
+  expect(loadEmotionMode).not.toHaveBeenCalled();
+
+  vi.advanceTimersByTime(251);
+
+  expect(resolveEmotionMode()).toBe("full");
+  expect(loadEmotionMode).toHaveBeenCalledTimes(1);
+});
 
 function makeTranscriptAssistantMessage(params: {
   text: string;
@@ -268,6 +289,36 @@ async function openBoundedHistoryStreamWithSecondMessage(
 }
 
 describe("session history HTTP endpoints", () => {
+  test("caches live emotion mode reads across bursty SSE updates", () => {
+    vi.useFakeTimers();
+    try {
+      const loadEmotionMode = vi
+        .fn<() => "off" | "on" | "full">()
+        .mockReturnValueOnce("full")
+        .mockReturnValue("on");
+      const resolveEmotionMode = createCachedEmotionModeResolver({
+        initialEmotionMode: "off",
+        ttlMs: 250,
+        loadEmotionMode,
+      });
+
+      expect(resolveEmotionMode()).toBe("off");
+      expect(resolveEmotionMode()).toBe("off");
+      expect(loadEmotionMode).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(251);
+      expect(resolveEmotionMode()).toBe("full");
+      expect(resolveEmotionMode()).toBe("full");
+      expect(loadEmotionMode).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(251);
+      expect(resolveEmotionMode()).toBe("on");
+      expect(loadEmotionMode).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("returns session history over direct REST", async () => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {

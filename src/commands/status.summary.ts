@@ -62,6 +62,10 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
+  const emotion = entry?.emotionMode;
+  if (typeof emotion === "string" && emotion.length > 0) {
+    flags.push(`emotions:${emotion}`);
+  }
   const reasoning = entry?.reasoningLevel;
   if (typeof reasoning === "string" && reasoning.length > 0) {
     flags.push(`reasoning:${reasoning}`);
@@ -230,6 +234,7 @@ export async function getStatusSummary(
           fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
           traceLevel: entry?.traceLevel,
+          emotionMode: entry?.emotionMode,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,
           systemSent: entry?.systemSent,

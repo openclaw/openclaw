@@ -1,9 +1,11 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { EmotionMode } from "../emotion-mode.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { sanitizeEmotionTagsForMode } from "../shared/text/emotion-tags.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -58,7 +60,18 @@ export function isToolHistoryBlockType(type: unknown): boolean {
 
 function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: {
+    preserveExactToolPayload?: boolean;
+    maxChars?: number;
+    /**
+     * PR-D: when set, additionally sanitize emotion tags from text fields
+     * according to the per-session emotion mode. Caller is responsible for
+     * gating this to assistant-role messages only — non-assistant messages
+     * with bracketed text (e.g. `[Note]`) must be preserved verbatim per
+     * Copilot's review of the original PR (`chat.ts:919`).
+     */
+    emotionMode?: EmotionMode;
+  },
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -68,8 +81,24 @@ function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  // Per Copilot review on chat-display-projection.ts:326 — tool-history blocks
+  // (where `preserveExactToolPayload` is true) must not have their text rewritten
+  // by emotion-tag sanitization either, because the operator-facing tool surface
+  // depends on byte-exact preservation. Only inline `[[…]]` directives are
+  // stripped on those blocks; emotion tags pass through.
+  const applyEmotionSanitization = (text: string) => {
+    const stripped = stripInlineDirectiveTagsForDisplay(text);
+    if (preserveExactToolPayload || opts?.emotionMode === undefined) {
+      return stripped;
+    }
+    const sanitized = sanitizeEmotionTagsForMode(stripped.text, opts.emotionMode);
+    return {
+      text: sanitized.text,
+      changed: stripped.changed || sanitized.changed,
+    };
+  };
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = applyEmotionSanitization(entry.text);
     if (preserveExactToolPayload) {
       entry.text = stripped.text;
       changed ||= stripped.changed;
@@ -80,7 +109,7 @@ function sanitizeChatHistoryContentBlock(
     }
   }
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = applyEmotionSanitization(entry.content);
     if (preserveExactToolPayload) {
       entry.content = stripped.text;
       changed ||= stripped.changed;
@@ -214,6 +243,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  emotionMode?: EmotionMode,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -266,8 +296,24 @@ function sanitizeChatHistoryMessage(
     }
   }
 
+  // PR-D: emotion-tag sanitization is gated to assistant-role messages only,
+  // per Copilot's review of the original PR (`chat.ts:919`). Non-assistant
+  // messages with bracketed text (e.g. `[Note]` from a user) must be
+  // preserved verbatim — we only strip inline `[[…]]` directive tags.
+  const messageEmotionMode = entry.role === "assistant" ? emotionMode : undefined;
+  const stripWithEmotionMode = (text: string) => {
+    const stripped = stripInlineDirectiveTagsForDisplay(text);
+    if (messageEmotionMode === undefined) {
+      return stripped;
+    }
+    const sanitized = sanitizeEmotionTagsForMode(stripped.text, messageEmotionMode);
+    return {
+      text: sanitized.text,
+      changed: stripped.changed || sanitized.changed,
+    };
+  };
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = stripWithEmotionMode(entry.content);
     if (preserveExactToolPayload) {
       entry.content = stripped.text;
       changed ||= stripped.changed;
@@ -278,7 +324,11 @@ function sanitizeChatHistoryMessage(
     }
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
+      sanitizeChatHistoryContentBlock(block, {
+        preserveExactToolPayload,
+        maxChars,
+        emotionMode: messageEmotionMode,
+      }),
     );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
@@ -294,7 +344,7 @@ function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = stripWithEmotionMode(entry.text);
     if (preserveExactToolPayload) {
       entry.text = stripped.text;
       changed ||= stripped.changed;
@@ -374,6 +424,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  emotionMode?: EmotionMode,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -385,7 +436,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, emotionMode);
     changed ||= res.changed;
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
@@ -499,12 +550,16 @@ function filterVisibleProjectedHistoryMessages(
 
 export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; emotionMode?: EmotionMode },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   return filterVisibleProjectedHistoryMessages(
     toProjectedMessages(
-      sanitizeChatHistoryMessages(source, options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS),
+      sanitizeChatHistoryMessages(
+        source,
+        options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+        options?.emotionMode,
+      ),
     ),
   );
 }

@@ -149,6 +149,44 @@ describe("gateway sessions patch", () => {
     expect(entry.reasoningLevel).toBeUndefined();
   });
 
+  test("persists emotionMode=off (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, emotionMode: "off" },
+      }),
+    );
+    expect(entry.emotionMode).toBe("off");
+  });
+
+  test("persists emotionMode=full", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, emotionMode: "full" },
+      }),
+    );
+    expect(entry.emotionMode).toBe("full");
+  });
+
+  test("clears emotionMode when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { emotionMode: "on" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, emotionMode: null },
+      }),
+    );
+    expect(entry.emotionMode).toBeUndefined();
+  });
+
+  test("rejects invalid emotionMode values", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, emotionMode: "loud" as unknown as "off" | "on" | "full" },
+    });
+    expectPatchError(result, "invalid emotionMode");
+  });
+
   test("persists fastMode=false (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

@@ -13,6 +13,7 @@ export type SessionStatus = {
   fastMode?: boolean;
   verboseLevel?: string;
   traceLevel?: string;
+  emotionMode?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   systemSent?: boolean;

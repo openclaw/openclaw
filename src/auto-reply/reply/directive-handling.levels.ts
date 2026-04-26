@@ -1,3 +1,4 @@
+import { type EmotionMode, normalizeEmotionMode } from "../../emotion-mode.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 
 export async function resolveCurrentDirectiveLevels(params: {
@@ -5,6 +6,7 @@ export async function resolveCurrentDirectiveLevels(params: {
     thinkingLevel?: unknown;
     fastMode?: unknown;
     verboseLevel?: unknown;
+    emotionMode?: unknown;
     reasoningLevel?: unknown;
     elevatedLevel?: unknown;
   };
@@ -12,6 +14,11 @@ export async function resolveCurrentDirectiveLevels(params: {
     fastModeDefault?: unknown;
     reasoningDefault?: unknown;
   };
+  // PR-B note: agent-level / global `emotionDefault` was dropped per Copilot
+  // review (it rejected "full" while session mode accepts it). The
+  // globalAgentDefaults parameter is kept for callsite compatibility but no
+  // longer carries an emotion-default field.
+  globalAgentDefaults?: Record<string, unknown>;
   agentCfg?: {
     thinkingDefault?: unknown;
     verboseDefault?: unknown;
@@ -22,6 +29,7 @@ export async function resolveCurrentDirectiveLevels(params: {
   currentThinkLevel: ThinkLevel | undefined;
   currentFastMode: boolean | undefined;
   currentVerboseLevel: VerboseLevel | undefined;
+  currentEmotionMode: EmotionMode;
   currentReasoningLevel: ReasoningLevel;
   currentElevatedLevel: ElevatedLevel | undefined;
 }> {
@@ -39,6 +47,11 @@ export async function resolveCurrentDirectiveLevels(params: {
   const currentVerboseLevel =
     (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (params.agentCfg?.verboseDefault as VerboseLevel | undefined);
+  // Per Copilot review on directive-handling.levels.ts:51 — validate via
+  // `normalizeEmotionMode` before consuming. The session store may carry
+  // legacy / manually-edited / future-version values; an unguarded cast would
+  // surface them through `/emotions` status output.
+  const currentEmotionMode = normalizeEmotionMode(params.sessionEntry?.emotionMode) ?? "off";
   const currentReasoningLevel =
     (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     (params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
@@ -50,6 +63,7 @@ export async function resolveCurrentDirectiveLevels(params: {
     currentThinkLevel,
     currentFastMode,
     currentVerboseLevel,
+    currentEmotionMode,
     currentReasoningLevel,
     currentElevatedLevel,
   };

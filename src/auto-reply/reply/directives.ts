@@ -1,3 +1,4 @@
+import { normalizeEmotionMode, type EmotionMode } from "../../emotion-mode.js";
 import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel, TraceLevel } from "../thinking.js";
 import {
@@ -126,6 +127,24 @@ export function extractVerboseDirective(body?: string): {
   };
 }
 
+export function extractEmotionsDirective(body?: string): {
+  cleaned: string;
+  emotionMode?: EmotionMode;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(body, ["emotions", "emotion"], normalizeEmotionMode);
+  return {
+    cleaned: extracted.cleaned,
+    emotionMode: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
 export function extractTraceDirective(body?: string): {
   cleaned: string;
   traceLevel?: TraceLevel;
@@ -226,5 +245,13 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
+export type {
+  ElevatedLevel,
+  EmotionMode,
+  NoticeLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  TraceLevel,
+  VerboseLevel,
+};
 export { extractExecDirective } from "./exec/directive.js";
