@@ -1,4 +1,5 @@
 import { createJiti } from "jiti";
+import { normalizeJitiFileSpecifier } from "./jiti-file-specifier.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderJitiCacheKey,
@@ -24,8 +25,9 @@ export function getCachedPluginJitiLoader(params: {
   cacheScopeKey?: string;
 }): PluginJitiLoader {
   const jitiFilename = params.jitiFilename ?? params.modulePath;
+  const jitiRootSpecifier = normalizeJitiFileSpecifier(jitiFilename);
   if (params.cacheScopeKey) {
-    const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey}`;
+    const scopedCacheKey = `${jitiRootSpecifier}::${params.cacheScopeKey}`;
     const cached = params.cache.get(scopedCacheKey);
     if (cached) {
       return cached;
@@ -69,15 +71,28 @@ export function getCachedPluginJitiLoader(params: {
       tryNative,
       aliasMap,
     });
-  const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey ?? cacheKey}`;
+  const scopedCacheKey = `${jitiRootSpecifier}::${params.cacheScopeKey ?? cacheKey}`;
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
   }
-  const loader = (params.createLoader ?? createJiti)(jitiFilename, {
+  const rawLoader = (params.createLoader ?? createJiti)(jitiRootSpecifier, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
+  const loader = new Proxy(rawLoader, {
+    apply(target, thisArg, argArray) {
+      const [first, ...rest] = argArray as [unknown, ...unknown[]];
+      if (typeof first === "string") {
+        return Reflect.apply(
+          target,
+          thisArg,
+          [normalizeJitiFileSpecifier(first), ...rest] as never,
+        ) as never;
+      }
+      return Reflect.apply(target, thisArg, argArray as never) as never;
+    },
+  }) as PluginJitiLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;
 }
