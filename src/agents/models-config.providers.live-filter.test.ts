@@ -8,7 +8,7 @@ function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   } as NodeJS.ProcessEnv;
 }
 
-function resolveOwners(provider: string): readonly string[] | undefined {
+function ownerIdsForProvider(provider: string): readonly string[] | undefined {
   return provider === "claude-cli" ? ["anthropic"] : undefined;
 }
 
@@ -20,7 +20,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_PROVIDERS: "claude-cli",
         }),
-        resolveOwners,
+        resolveOwners: ownerIdsForProvider,
       }),
     ).toEqual(["anthropic"]);
   });
@@ -32,7 +32,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_GATEWAY_PROVIDERS: "claude-cli",
         }),
-        resolveOwners,
+        resolveOwners: ownerIdsForProvider,
       }),
     ).toEqual(["anthropic"]);
   });
@@ -44,7 +44,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_PROVIDERS: "openrouter",
         }),
-        resolveOwners,
+        resolveOwners: ownerIdsForProvider,
       }),
     ).toEqual(["openrouter"]);
   });
