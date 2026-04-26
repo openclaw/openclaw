@@ -6,7 +6,10 @@ import Testing
 
 private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
     var state: URLSessionTask.State = .running
+    var autoRespond = false
     private(set) var sentMessages: [URLSessionWebSocketTask.Message] = []
+    private var sentChallenge = false
+    private var respondedRequestIds = Set<String>()
 
     func resume() {}
 
@@ -19,11 +22,54 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 
     func receive() async throws -> URLSessionWebSocketTask.Message {
+        if self.autoRespond {
+            if !self.sentChallenge {
+                self.sentChallenge = true
+                return .string("""
+                {"type":"event","event":"connect.challenge","payload":{"nonce":"test-nonce"}}
+                """)
+            }
+            if let request = self.latestUnrespondedRequest() {
+                self.respondedRequestIds.insert(request.id)
+                if request.method == "connect" {
+                    return .string("""
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"policy":{}}}
+                    """)
+                }
+                return .string("""
+                {"type":"res","id":"\(request.id)","ok":true,"payload":{}}
+                """)
+            }
+        }
         throw URLError(.cannotConnectToHost)
     }
 
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
         completionHandler(.failure(URLError(.cannotConnectToHost)))
+    }
+
+    private func latestUnrespondedRequest() -> (id: String, method: String)? {
+        for message in self.sentMessages.reversed() {
+            let data: Data?
+            switch message {
+            case .string(let text):
+                data = Data(text.utf8)
+            case .data(let raw):
+                data = raw
+            @unknown default:
+                data = nil
+            }
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = json["id"] as? String,
+                  let method = json["method"] as? String,
+                  !self.respondedRequestIds.contains(id)
+            else {
+                continue
+            }
+            return (id, method)
+        }
+        return nil
     }
 }
 
@@ -66,6 +112,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 
     @Test func `send agent keeps empty voice wake trigger field`() async throws {
         let (connection, session) = makeTestGatewayConnection()
+        session.task.autoRespond = true
         _ = await connection.sendAgent(GatewayAgentInvocation(
             message: "test",
             sessionKey: "main",
