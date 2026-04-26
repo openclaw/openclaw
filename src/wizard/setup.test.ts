@@ -169,6 +169,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
   resolvePluginProviders: resolvePluginProvidersRuntime,
+  resolvePluginSetupProvider: vi.fn(() => undefined),
 }));
 
 vi.mock("../commands/model-picker.js", () => ({

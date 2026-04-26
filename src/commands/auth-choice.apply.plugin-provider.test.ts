@@ -14,14 +14,23 @@ type EnsureOnboardingPluginInstalled =
   typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled;
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<() => ProviderPlugin | undefined>(() => undefined),
+);
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders,
+  resolvePluginSetupProvider,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
+}));
+
+const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
 }));
 
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
@@ -172,6 +181,8 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyAuthProfileConfig.mockImplementation((config) => config);
+    resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    resolvePluginSetupProvider.mockReturnValue(undefined);
     resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
     ensureOnboardingPluginInstalled.mockImplementation(async ({ cfg, entry }) => ({
       cfg,
@@ -318,6 +329,36 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       agentDir: undefined,
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("uses manifest-owned setup providers without loading the broad provider runtime", async () => {
+    const provider = buildProvider();
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "local-provider-plugin",
+      providerId: LOCAL_PROVIDER_ID,
+      methodId: LOCAL_AUTH_METHOD_ID,
+      choiceId: LOCAL_PROVIDER_ID,
+      choiceLabel: LOCAL_PROVIDER_LABEL,
+    });
+    resolvePluginSetupProvider.mockReturnValue(provider);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: LOCAL_DEFAULT_MODEL,
+    });
+    expect(resolvePluginSetupProvider).toHaveBeenCalledWith({
+      provider: LOCAL_PROVIDER_ID,
+      config: {},
+      workspaceDir: "/tmp/workspace",
+      env: undefined,
+      pluginIds: ["local-provider-plugin"],
+    });
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("installs a missing provider plugin and retries setup resolution", async () => {
