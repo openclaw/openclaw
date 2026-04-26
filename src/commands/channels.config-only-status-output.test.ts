@@ -181,6 +181,9 @@ describe("config-only channels status output", () => {
     expect(joined).toContain("TokenOnly primary");
     expect(joined).toContain("configured, secret unavailable in this command path");
     expect(joined).toContain("token:config (unavailable)");
+    expect(joined).toContain("openclaw status --deep");
+    expect(joined).toContain("broader gateway health probes");
+    expect(joined).not.toContain("channels status --deep");
   });
 
   it("prefers resolved config snapshots when command-local secret resolution succeeds", async () => {
