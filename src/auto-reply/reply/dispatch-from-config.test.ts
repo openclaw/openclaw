@@ -3120,7 +3120,7 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(firstNotice?.text).toContain("is not currently loaded.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
 
     replyResolver.mockClear();
     hookMocks.runner.runInboundClaim.mockClear();
@@ -3147,7 +3147,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(secondDispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
@@ -3205,7 +3205,7 @@ describe("dispatchReplyFromConfig", () => {
       | undefined;
     expect(notice?.text).toContain("is not currently loaded.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
   });
 
   it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
