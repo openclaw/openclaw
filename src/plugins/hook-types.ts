@@ -82,6 +82,7 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "cron_lifecycle"
   | "gateway_start"
   | "gateway_stop"
   | "before_dispatch"
@@ -116,6 +117,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "cron_lifecycle",
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
@@ -557,6 +559,33 @@ export type PluginHookSubagentEndedEvent = {
   error?: string;
 };
 
+export type PluginHookCronLifecycleContext = {
+  storePath?: string;
+};
+
+export type PluginHookCronLifecycleEvent = {
+  jobId: string;
+  jobName?: string;
+  agentId?: string;
+  action: "started" | "finished";
+  payloadKind?: "agentTurn" | "systemEvent";
+  sessionTarget?: string;
+  wakeMode?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  status?: "ok" | "error" | "skipped";
+  error?: string;
+  summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: string;
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+};
+
 export type PluginHookGatewayContext = {
   port?: number;
   config?: OpenClawConfig;
@@ -827,6 +856,10 @@ export type PluginHookHandlerMap = {
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  cron_lifecycle: (
+    event: PluginHookCronLifecycleEvent,
+    ctx: PluginHookCronLifecycleContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,

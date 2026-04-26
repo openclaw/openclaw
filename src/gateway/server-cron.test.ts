@@ -14,6 +14,8 @@ const {
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
+  hasHooksMock,
+  runCronLifecycleMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
@@ -24,6 +26,8 @@ const {
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
+  hasHooksMock: vi.fn(),
+  runCronLifecycleMock: vi.fn(async () => {}),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -77,6 +81,13 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: hasHooksMock,
+    runCronLifecycle: runCronLifecycleMock,
+  }),
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -100,6 +111,9 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
+    hasHooksMock.mockReset();
+    runCronLifecycleMock.mockClear();
+    hasHooksMock.mockReturnValue(false);
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -427,6 +441,73 @@ describe("buildGatewayCronService", () => {
             }),
           }),
         }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it.each([
+    {
+      name: "agentTurn",
+      payload: { kind: "agentTurn" as const, message: "run report" },
+      sessionTarget: "isolated" as const,
+    },
+    {
+      name: "systemEvent",
+      payload: { kind: "systemEvent" as const, text: "check inbox" },
+      sessionTarget: "main" as const,
+    },
+  ])("emits cron_lifecycle start and finish hooks for $name jobs", async (jobInput) => {
+    const cfg = createCronConfig(`server-cron-lifecycle-${jobInput.name}`);
+    loadConfigMock.mockReturnValue(cfg);
+    hasHooksMock.mockImplementation((hookName) => hookName === "cron_lifecycle");
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: `${jobInput.name}-lifecycle`,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: jobInput.sessionTarget,
+        wakeMode: "next-heartbeat",
+        payload: jobInput.payload,
+      });
+
+      await state.cron.run(job.id, "force");
+
+      await vi.waitFor(() => expect(runCronLifecycleMock).toHaveBeenCalledTimes(2));
+      expect(runCronLifecycleMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          jobId: job.id,
+          jobName: `${jobInput.name}-lifecycle`,
+          agentId: "main",
+          action: "started",
+          payloadKind: jobInput.payload.kind,
+          sessionTarget: jobInput.sessionTarget,
+          wakeMode: "next-heartbeat",
+          runAtMs: expect.any(Number),
+        }),
+        { storePath: cfg.cron?.store },
+      );
+      expect(runCronLifecycleMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          jobId: job.id,
+          jobName: `${jobInput.name}-lifecycle`,
+          agentId: "main",
+          action: "finished",
+          payloadKind: jobInput.payload.kind,
+          status: "ok",
+          durationMs: expect.any(Number),
+          nextRunAtMs: expect.any(Number),
+        }),
+        { storePath: cfg.cron?.store },
       );
     } finally {
       state.cron.stop();
