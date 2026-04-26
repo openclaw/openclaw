@@ -23,6 +23,13 @@ function createQmdConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createBuiltinConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+  return {
+    agents,
+    memory: { backend: "builtin" },
+  } as OpenClawConfig;
+}
+
 function createGatewayLogMock() {
   return { info: vi.fn(), warn: vi.fn() };
 }
@@ -37,11 +44,8 @@ describe("startGatewayMemoryBackend", () => {
     }));
   });
 
-  it("skips initialization when memory backend is not qmd", async () => {
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-      memory: { backend: "builtin" },
-    } as OpenClawConfig;
+  it("skips builtin startup work when the provider is not explicitly local", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "main", default: true }] });
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayMemoryBackend({ cfg, log });
@@ -49,6 +53,60 @@ describe("startGatewayMemoryBackend", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("prewarms builtin local embeddings for explicitly local memory search", async () => {
+    const cfg = createBuiltinConfig({
+      defaults: { memorySearch: { enabled: true, provider: "local" } },
+      list: [{ id: "main", default: true }],
+    });
+    const log = createGatewayLogMock();
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: {
+        search: vi.fn(),
+        readFile: vi.fn(),
+        status: vi.fn(),
+        probeEmbeddingAvailability,
+        probeVectorAvailability: vi.fn(async () => true),
+        close: vi.fn(),
+      },
+    });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm completed for agent "main"',
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning when builtin local embedding prewarm reports unavailable", async () => {
+    const cfg = createBuiltinConfig({
+      defaults: { memorySearch: { enabled: true, provider: "local" } },
+      list: [{ id: "main", default: true }],
+    });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: {
+        search: vi.fn(),
+        readFile: vi.fn(),
+        status: vi.fn(),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: false, error: "model missing" })),
+        probeVectorAvailability: vi.fn(async () => false),
+        close: vi.fn(),
+      },
+    });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      'builtin local memory startup prewarm failed for agent "main": model missing',
+    );
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it("initializes qmd backend for each configured agent", async () => {
