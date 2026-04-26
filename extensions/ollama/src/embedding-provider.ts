@@ -12,6 +12,7 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveOllamaApiBase } from "./provider-models.js";
+import { OLLAMA_PROVIDER_PREFIX_RE } from "./stream.js";
 
 export type OllamaEmbeddingProvider = {
   id: string;
@@ -77,11 +78,6 @@ async function withRemoteHttpResponse<T>(params: {
     await release();
   }
 }
-
-// Mirrors normalizeOllamaWireModelId in stream.ts — strips routing-side
-// "ollama/" or "ollama-<key>/" prefixes so custom-named ollama-compat providers
-// match the bare names the Ollama backend serves. Issue #72353.
-const OLLAMA_PROVIDER_PREFIX_RE = /^ollama(?:-[a-zA-Z0-9_-]+)?\//;
 
 function normalizeEmbeddingModel(model: string): string {
   const trimmed = model.trim();

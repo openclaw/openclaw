@@ -243,8 +243,9 @@ export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaC
 // "ollama-studio2/") so the wire model field matches what the Ollama backend
 // catalogs. Custom-named ollama-compat providers all surface as "ollama-<key>/"
 // at this layer; only those are stripped, leaving real Ollama registry
-// namespaces such as "library/llama3" untouched. Issue #72353.
-const OLLAMA_PROVIDER_PREFIX_RE = /^ollama(?:-[a-zA-Z0-9_-]+)?\//;
+// namespaces such as "library/llama3" untouched. Issue #72353. Exported so the
+// embedding path can reuse the same source of truth.
+export const OLLAMA_PROVIDER_PREFIX_RE = /^ollama(?:-[a-zA-Z0-9_-]+)?\//;
 
 function normalizeOllamaWireModelId(modelId: string): string {
   const trimmed = modelId.trim();
