@@ -157,6 +157,9 @@ const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
 const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
+/** Last-user prompts that must use memory mock branches; do not hijack with Skill Workshop review JSON. */
+const QA_SKILL_WORKSHOP_REVIEW_DEFER_LAST_USER_RE =
+  /thread memory check|memory tools check|session memory ranking check|memory unavailable check|silent snack recall check/i;
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 
 type MockScenarioState = {
@@ -1269,7 +1272,10 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
+  if (
+    QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText) &&
+    !QA_SKILL_WORKSHOP_REVIEW_DEFER_LAST_USER_RE.test(prompt)
+  ) {
     return buildAssistantEvents(
       JSON.stringify({
         action: "create",

@@ -929,6 +929,41 @@ describe("qa mock openai server", () => {
     ]);
   });
 
+  it("does not let Skill Workshop review mock branch override thread memory isolation", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const threadPrompt =
+      "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
+    const res = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Review transcript for durable skill updates.\nReturn JSON only. No markdown unless inside JSON strings.",
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: threadPrompt }],
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"name":"memory_search"');
+    expect(text).not.toContain('"action":"create"');
+    expect(text).not.toContain("animated-gif-workflow");
+  });
+
   it("supports advanced QA memory and subagent recovery prompts", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
