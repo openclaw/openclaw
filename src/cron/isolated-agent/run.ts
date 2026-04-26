@@ -982,6 +982,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       agentDir: prepared.context.agentDir,
       agentSessionKey: prepared.context.agentSessionKey,
+      runSessionKey: prepared.context.runSessionKey,
       workspaceDir: prepared.context.workspaceDir,
       lane: params.lane,
       resolvedDelivery: {
