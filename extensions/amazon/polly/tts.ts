@@ -83,6 +83,7 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
     const name = err instanceof Error ? err.name : "UnknownError";
     throw new Error(
       `Amazon Polly synthesis failed (voice=${voiceId}, engine=${engine}, region=${region}): [${name}] ${message}`,
+      { cause: err },
     );
   } finally {
     clearTimeout(timeout);

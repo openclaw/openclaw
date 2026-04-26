@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech";
-import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { pollySynthesize, pollyListVoices } from "./tts.js";
 
 const DEFAULT_VOICE = "Ruth";
@@ -48,15 +47,22 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
     case "voice":
     case "polly_voice":
     case "pollyvoice":
-      if (!ctx.policy.allowVoice) { return { handled: true }; }
+      if (!ctx.policy.allowVoice) {
+        return { handled: true };
+      }
       return { handled: true, overrides: { ...ctx.currentOverrides, voice: ctx.value } };
     case "engine":
     case "polly_engine":
     case "pollyengine": {
-      if (!ctx.policy.allowModelId) { return { handled: true }; }
+      if (!ctx.policy.allowModelId) {
+        return { handled: true };
+      }
       const engine = ctx.value.toLowerCase();
       if (!(POLLY_ENGINES as readonly string[]).includes(engine)) {
-        return { handled: true, warnings: [`invalid Polly engine "${ctx.value}" (expected: ${POLLY_ENGINES.join(", ")})`] };
+        return {
+          handled: true,
+          warnings: [`invalid Polly engine "${ctx.value}" (expected: ${POLLY_ENGINES.join(", ")})`],
+        };
       }
       return { handled: true, overrides: { ...ctx.currentOverrides, engine } };
     }
@@ -73,7 +79,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
  * Convert MP3 audio to Opus-in-OGG for WhatsApp voice note compatibility.
  */
 async function convertToOpusOgg(inputBuffer: Buffer): Promise<Buffer> {
-  const tmpDir = os.tmpdir();
+  const { resolvePreferredOpenClawTmpDir } = await import("openclaw/plugin-sdk/temp-path");
+  const tmpDir = resolvePreferredOpenClawTmpDir();
   const id = `polly-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const inputPath = path.join(tmpDir, `${id}.mp3`);
   const outputPath = path.join(tmpDir, `${id}.ogg`);
@@ -81,13 +88,20 @@ async function convertToOpusOgg(inputBuffer: Buffer): Promise<Buffer> {
   try {
     await fs.writeFile(inputPath, inputBuffer);
     await runFfmpeg([
-      "-i", inputPath,
-      "-c:a", "libopus",
-      "-b:a", "64k",
-      "-ar", "48000",
-      "-ac", "1",
-      "-application", "voip",
-      "-y", outputPath,
+      "-i",
+      inputPath,
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      "-application",
+      "voip",
+      "-y",
+      outputPath,
     ]);
     return await fs.readFile(outputPath);
   } finally {
@@ -100,7 +114,9 @@ async function convertToOpusOgg(inputBuffer: Buffer): Promise<Buffer> {
  * Build the Amazon Polly speech provider.
  * Config is read from the parent `amazon` plugin's `polly` key.
  */
-export function buildPollySpeechProvider(pluginConfig?: Record<string, unknown>): SpeechProviderPlugin {
+export function buildPollySpeechProvider(
+  pluginConfig?: Record<string, unknown>,
+): SpeechProviderPlugin {
   const pollyConfig = (pluginConfig?.polly ?? {}) as Record<string, unknown>;
 
   return {
@@ -117,14 +133,27 @@ export function buildPollySpeechProvider(pluginConfig?: Record<string, unknown>)
     parseDirectiveToken,
 
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = readPollyConfig((baseTtsConfig as Record<string, unknown>)?.polly as Record<string, unknown> ?? baseTtsConfig as Record<string, unknown>);
+      const base = readPollyConfig(
+        ((baseTtsConfig as Record<string, unknown>)?.polly as Record<string, unknown>) ??
+          (baseTtsConfig as Record<string, unknown>),
+      );
       return {
         ...base,
-        ...(trimToUndefined(talkProviderConfig.voice) == null ? {} : { voice: trimToUndefined(talkProviderConfig.voice)! }),
-        ...(trimToUndefined(talkProviderConfig.engine) == null ? {} : { engine: trimToUndefined(talkProviderConfig.engine)! }),
-        ...(trimToUndefined(talkProviderConfig.region) == null ? {} : { region: trimToUndefined(talkProviderConfig.region)! }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null ? {} : { languageCode: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.sampleRate) == null ? {} : { sampleRate: trimToUndefined(talkProviderConfig.sampleRate) }),
+        ...(trimToUndefined(talkProviderConfig.voice) == null
+          ? {}
+          : { voice: trimToUndefined(talkProviderConfig.voice)! }),
+        ...(trimToUndefined(talkProviderConfig.engine) == null
+          ? {}
+          : { engine: trimToUndefined(talkProviderConfig.engine)! }),
+        ...(trimToUndefined(talkProviderConfig.region) == null
+          ? {}
+          : { region: trimToUndefined(talkProviderConfig.region)! }),
+        ...(trimToUndefined(talkProviderConfig.languageCode) == null
+          ? {}
+          : { languageCode: trimToUndefined(talkProviderConfig.languageCode) }),
+        ...(trimToUndefined(talkProviderConfig.sampleRate) == null
+          ? {}
+          : { sampleRate: trimToUndefined(talkProviderConfig.sampleRate) }),
       };
     },
 
@@ -132,7 +161,9 @@ export function buildPollySpeechProvider(pluginConfig?: Record<string, unknown>)
       ...(trimToUndefined(params.voice) == null ? {} : { voice: trimToUndefined(params.voice) }),
       ...(trimToUndefined(params.engine) == null ? {} : { engine: trimToUndefined(params.engine) }),
       ...(trimToUndefined(params.region) == null ? {} : { region: trimToUndefined(params.region) }),
-      ...(trimToUndefined(params.language) == null ? {} : { languageCode: trimToUndefined(params.language) }),
+      ...(trimToUndefined(params.language) == null
+        ? {}
+        : { languageCode: trimToUndefined(params.language) }),
     }),
 
     listVoices: async (req) => {
@@ -152,9 +183,7 @@ export function buildPollySpeechProvider(pluginConfig?: Record<string, unknown>)
     },
 
     isConfigured: ({ providerConfig }) => {
-      const config = readPollyConfig(
-        (providerConfig ?? pollyConfig) as Record<string, unknown>,
-      );
+      const config = readPollyConfig((providerConfig ?? pollyConfig) as Record<string, unknown>);
       return config.enabled;
     },
 

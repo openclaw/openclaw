@@ -1,12 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   TranscribeStreamingClient,
   StartStreamTranscriptionCommand,
   type LanguageCode,
 } from "@aws-sdk/client-transcribe-streaming";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { getAwsClient } from "../shared/client-cache.js";
 
 export type TranscribeParams = {
@@ -37,7 +36,9 @@ const NATIVE_MIME_MAP: Record<string, TranscribeEncoding> = {
 };
 
 function resolveNativeEncoding(mime?: string): TranscribeEncoding | null {
-  if (!mime) { return null; }
+  if (!mime) {
+    return null;
+  }
   const base = mime.split(";")[0].trim().toLowerCase();
   return NATIVE_MIME_MAP[base] ?? null;
 }
@@ -48,24 +49,35 @@ function resolveNativeEncoding(mime?: string): TranscribeEncoding | null {
  * Returns { buffer, encoding, sampleRate } for the converted audio.
  */
 async function convertToPcm(inputBuffer: Buffer, mime?: string): Promise<Buffer> {
-  const tmpDir = os.tmpdir();
+  const { resolvePreferredOpenClawTmpDir } = await import("openclaw/plugin-sdk/temp-path");
+  const tmpDir = resolvePreferredOpenClawTmpDir();
   const id = `transcribe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const ext = mime?.includes("mp3") || mime?.includes("mpeg") ? ".mp3"
-    : mime?.includes("m4a") || mime?.includes("mp4") ? ".m4a"
-    : mime?.includes("webm") ? ".webm"
-    : mime?.includes("aac") ? ".aac"
-    : ".bin";
+  const ext =
+    mime?.includes("mp3") || mime?.includes("mpeg")
+      ? ".mp3"
+      : mime?.includes("m4a") || mime?.includes("mp4")
+        ? ".m4a"
+        : mime?.includes("webm")
+          ? ".webm"
+          : mime?.includes("aac")
+            ? ".aac"
+            : ".bin";
   const inputPath = path.join(tmpDir, `${id}${ext}`);
   const outputPath = path.join(tmpDir, `${id}.pcm`);
 
   try {
     await fs.writeFile(inputPath, inputBuffer);
     await runFfmpeg([
-      "-i", inputPath,
-      "-f", "s16le",        // signed 16-bit little-endian PCM
-      "-ar", "16000",       // 16kHz sample rate
-      "-ac", "1",           // mono
-      "-y", outputPath,
+      "-i",
+      inputPath,
+      "-f",
+      "s16le", // signed 16-bit little-endian PCM
+      "-ar",
+      "16000", // 16kHz sample rate
+      "-ac",
+      "1", // mono
+      "-y",
+      outputPath,
     ]);
     return await fs.readFile(outputPath);
   } finally {
@@ -78,7 +90,10 @@ async function convertToPcm(inputBuffer: Buffer, mime?: string): Promise<Buffer>
  * Resolve audio buffer and encoding for Transcribe Streaming.
  * Converts unsupported formats to PCM via ffmpeg.
  */
-async function resolveAudioInput(buffer: Buffer, mime?: string): Promise<{
+async function resolveAudioInput(
+  buffer: Buffer,
+  mime?: string,
+): Promise<{
   audioBuffer: Buffer;
   encoding: TranscribeEncoding;
   sampleRate: number;
@@ -156,6 +171,7 @@ export async function transcribeAudio(params: TranscribeParams): Promise<string>
     const name = err instanceof Error ? err.name : "UnknownError";
     throw new Error(
       `Amazon Transcribe failed (region=${region}, language=${language ?? "en-US"}): [${name}] ${message}`,
+      { cause: err },
     );
   } finally {
     clearTimeout(timeout);
