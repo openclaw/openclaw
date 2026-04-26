@@ -69,6 +69,10 @@ Docs: https://docs.openclaw.ai
   plain prompts instead of OpenClaw internal runtime-context envelopes, while
   keeping those envelopes out of ACP transcripts.
 - TTS/status: show configured TTS model, voice, and sanitized custom endpoint in `/status`, preserve OpenAI-compatible TTS instructions on custom endpoints, and retry empty Microsoft/Edge TTS output once. Addresses #46602, #47232, and #43936. Thanks @leekuangtao, @Huntterxx, and @rex993.
+- Providers/vLLM: send Nemotron 3 chat-template kwargs when thinking is off
+  and honor configured `params.chat_template_kwargs` for OpenAI-compatible
+  completions, so vLLM/Nemotron replies stay visible instead of becoming
+  thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
 - Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
   retry once, repair replay, and allow configured model fallback instead of
   preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
