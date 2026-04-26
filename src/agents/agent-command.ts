@@ -40,6 +40,8 @@ import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
+  resolveAcpPromptBody,
+  resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
@@ -247,8 +249,6 @@ async function prepareAgentCommandExecution(
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
-  const body = prependInternalEventContext(message, opts.internalEvents);
-  const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -366,6 +366,12 @@ async function prepareAgentCommandExecution(
         sessionKey,
       })
     : null;
+  const body =
+    acpResolution?.kind === "ready"
+      ? resolveAcpPromptBody(message, opts.internalEvents)
+      : prependInternalEventContext(message, opts.internalEvents);
+  const transcriptBody =
+    opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
     body,

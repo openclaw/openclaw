@@ -372,7 +372,7 @@ One-shot ACP sessions spawned by another agent run are background children, simi
 - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
 - The child runs in its own ACP harness session.
 - Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
-- Completion reports back through the internal task-completion announce path.
+- Completion reports back through the task-completion announce path. OpenClaw converts internal completion metadata into a plain ACP prompt before sending it to an external harness, so harnesses do not see OpenClaw-only runtime context markers.
 - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
 
 Do not treat this path as a peer-to-peer chat between parent and child. The child already has a completion channel back to the parent.

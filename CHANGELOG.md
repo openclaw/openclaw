@@ -63,6 +63,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP: send subagent and async-task completion wakes to external ACP harnesses as
+  plain prompts instead of OpenClaw internal runtime-context envelopes, while
+  keeping those envelopes out of ACP transcripts.
 - Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
   retry once, repair replay, and allow configured model fallback instead of
   preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
