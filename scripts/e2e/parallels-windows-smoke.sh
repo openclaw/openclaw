@@ -614,6 +614,150 @@ EOF
 )"
 }
 
+guest_run_agent_turn_process() {
+  local env_name_q env_value_q runner_basename runner_script_path runner_url runner_url_q
+  local runner_name stdout_name stderr_name done_name
+  local start_seconds poll_deadline startup_checked state_rc log_rc done_rc
+  local agent_combined done_status launcher_state
+  env_name_q="$(ps_single_quote "$API_KEY_ENV")"
+  env_value_q="$(ps_single_quote "$API_KEY_VALUE")"
+  runner_basename="openclaw-parallels-agent-runner-$RANDOM-$RANDOM.ps1"
+  runner_script_path="$MAIN_TGZ_DIR/$runner_basename"
+  runner_url="http://$HOST_IP:$HOST_PORT/$runner_basename"
+  runner_url_q="$(ps_single_quote "$runner_url")"
+  runner_name="openclaw-parallels-agent-$RANDOM-$RANDOM.ps1"
+  stdout_name="openclaw-parallels-agent-$RANDOM-$RANDOM.out.log"
+  stderr_name="openclaw-parallels-agent-$RANDOM-$RANDOM.err.log"
+  done_name="openclaw-parallels-agent-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_AGENT_S + 60))
+  startup_checked=0
+
+  cat >"$runner_script_path" <<'EOF'
+param(
+  [string]$StdoutPath,
+  [string]$StderrPath,
+  [string]$DonePath,
+  [string]$EnvName,
+  [string]$EnvValue
+)
+$ErrorActionPreference = 'Continue'
+try {
+  if ($EnvName -ne '') {
+    Set-Item -Path ('Env:' + $EnvName) -Value $EnvValue
+  }
+  $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
+  if (-not (Test-Path $node)) {
+    $node = 'node'
+  }
+  $entry = Join-Path $env:APPDATA 'npm\node_modules\openclaw\openclaw.mjs'
+  & $node $entry agent --local --agent main --session-id 'parallels-windows-smoke' --message 'Reply with exact ASCII text OK only.' --json > $StdoutPath 2> $StderrPath
+  Set-Content -Path $DonePath -Value ([string]$LASTEXITCODE)
+  exit $LASTEXITCODE
+} catch {
+  $_ | Out-String | Set-Content -Path $StderrPath
+  Set-Content -Path $DonePath -Value '1'
+  exit 1
+}
+EOF
+
+  guest_powershell_poll 20 "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$stdout = Join-Path \$env:TEMP '$stdout_name'
+\$stderr = Join-Path \$env:TEMP '$stderr_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$stdout, \$stderr, \$done -Force -ErrorAction SilentlyContinue
+curl.exe -fsSL '${runner_url_q}' -o \$runner
+Start-Process powershell.exe -ArgumentList @(
+  '-NoProfile',
+  '-ExecutionPolicy',
+  'Bypass',
+  '-File',
+  \$runner,
+  '-StdoutPath',
+  \$stdout,
+  '-StderrPath',
+  \$stderr,
+  '-DonePath',
+  \$done,
+  '-EnvName',
+  '${env_name_q}',
+  '-EnvValue',
+  '${env_value_q}'
+) -WindowStyle Hidden | Out-Null
+EOF
+  )"
+
+  while true; do
+    set +e
+    agent_combined="$(
+      guest_powershell_poll 20 "\$stdout = Join-Path \$env:TEMP '$stdout_name'; \$stderr = Join-Path \$env:TEMP '$stderr_name'; \$out = ''; \$err = ''; if (Test-Path \$stdout) { \$out = Get-Content -Path \$stdout -Raw -ErrorAction SilentlyContinue }; if (Test-Path \$stderr) { \$err = Get-Content -Path \$stderr -Raw -ErrorAction SilentlyContinue }; \$out + [Environment]::NewLine + \$err"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -eq 0 ]] && printf '%s\n' "$agent_combined" | grep -Eq '"finalAssistant(Raw|Visible)Text":[[:space:]]*"OK"'; then
+      printf '%s\n' "$agent_combined"
+      guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$done = Join-Path \$env:TEMP '$done_name'; Remove-Item \$runner, \$done -Force -ErrorAction SilentlyContinue"
+      return 0
+    fi
+
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    done_rc=$?
+    set -e
+    if [[ $done_rc -eq 0 && -n "$done_status" ]]; then
+      if [[ $log_rc -eq 0 && -n "$agent_combined" ]]; then
+        printf '%s\n' "$agent_combined"
+      fi
+      guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$done = Join-Path \$env:TEMP '$done_name'; Remove-Item \$runner, \$done -Force -ErrorAction SilentlyContinue"
+      warn "openclaw agent finished without OK response (exit $done_status)"
+      return 1
+    fi
+
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$stdout = Join-Path \$env:TEMP '$stdout_name'; \$stderr = Join-Path \$env:TEMP '$stderr_name'; \$done = Join-Path \$env:TEMP '$done_name'; \$currentPid = \$PID; \$process = Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -ne \$currentPid -and ((\$_.CommandLine -like '*$runner_name*') -or (\$_.CommandLine -like '*openclaw.mjs*agent*parallels-windows-smoke*')) } | Select-Object -First 1; 'runner=' + (Test-Path \$runner) + ' stdout=' + (Test-Path \$stdout) + ' stderr=' + (Test-Path \$stderr) + ' done=' + (Test-Path \$done) + ' process=' + [bool]\$process"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"stdout=False"* && "$launcher_state" == *"stderr=False"* && "$launcher_state" == *"done=False"* && "$launcher_state" == *"process=False"* ]]; then
+        warn "windows agent helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+
+    if (( SECONDS >= poll_deadline )); then
+      if [[ $log_rc -eq 0 && -n "$agent_combined" ]]; then
+        printf '%s\n' "$agent_combined"
+      fi
+      guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$done = Join-Path \$env:TEMP '$done_name'; Remove-Item \$runner, \$done -Force -ErrorAction SilentlyContinue"
+      warn "openclaw agent timed out after $TIMEOUT_AGENT_S seconds"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+stop_gateway_processes_for_local_agent_turn() {
+  guest_powershell_poll 20 "$(cat <<'EOF'
+$processes = Get-CimInstance Win32_Process | Where-Object {
+  $_.CommandLine -match 'openclaw(.cmd|.mjs|\\dist\\index.js)?.*gateway'
+}
+foreach ($process in $processes) {
+  Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+}
+if ($processes) {
+  "Stopped OpenClaw gateway processes for local agent turn"
+}
+EOF
+)"
+}
+
 ensure_vm_running_for_retry() {
   local status
   status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
@@ -1335,6 +1479,7 @@ PY
 }
 
 install_latest_release() {
+  local expected_version="${1:-}"
   local install_url_q version_flag_q
   local script_url
   local runner_name log_name done_name done_status launcher_state guest_log
@@ -1429,6 +1574,13 @@ PY
       if ! stream_windows_latest_install_log; then
         warn "windows latest install helper log drain failed after completion"
       fi
+      if [[ "$done_status" != "0" ]] && recover_successful_published_install "$log_state_path" "$expected_version"; then
+        rm -f "$log_state_path"
+        return 0
+      fi
+      if [[ "$done_status" != "0" ]]; then
+        dump_latest_guest_npm_log_tail "windows latest install npm debug tail" || true
+      fi
       rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
@@ -1452,12 +1604,41 @@ PY
       if ! stream_windows_latest_install_log; then
         warn "windows latest install helper log drain failed after timeout"
       fi
+      dump_latest_guest_npm_log_tail "windows latest install npm debug tail" || true
       warn "windows latest install helper timed out waiting for done file"
       rm -f "$log_state_path"
       return 1
     fi
     sleep 2
   done
+}
+
+recover_successful_published_install() {
+  local log_path="$1"
+  local expected_version="$2"
+  local installed_version rc
+
+  [[ -n "$expected_version" ]] || return 1
+  [[ -f "$log_path" ]] || return 1
+  grep -Fq "OpenClaw installed successfully" "$log_path" || return 1
+  grep -Fq "Cannot process argument transformation on parameter 'Succeeded'" "$log_path" || return 1
+  grep -Fq "System.Object[]" "$log_path" || return 1
+  grep -Fq "System.Boolean" "$log_path" || return 1
+
+  set +e
+  installed_version="$(guest_run_openclaw "" "" "--version")"
+  rc=$?
+  set -e
+  installed_version="${installed_version//$'\r'/}"
+  if [[ $rc -ne 0 || "$installed_version" != *"OpenClaw $expected_version "* ]]; then
+    warn "published installer reported known success-return bug, but installed version did not match $expected_version"
+    printf '%s\n' "$installed_version" >&2
+    return 1
+  fi
+
+  warn "published installer reported known success-return bug after installing $expected_version; continuing"
+  printf '%s\n' "$installed_version"
+  return 0
 }
 
 install_main_tgz() {
@@ -2397,10 +2578,9 @@ New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 '@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
 Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
 EOF
-)"
-  stop_gateway
-  guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
-    agent --local --agent main --session-id parallels-windows-smoke --message "Reply with exact ASCII text OK only." --json
+  )"
+  stop_gateway_processes_for_local_agent_turn
+  guest_run_agent_turn_process
 }
 
 capture_latest_ref_failure() {
@@ -2449,7 +2629,7 @@ run_fresh_main_lane() {
 run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
-  local baseline_version
+  local baseline_version baseline_install_phase
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "upgrade.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
@@ -2462,8 +2642,13 @@ run_upgrade_lane() {
     phase_run "upgrade.verify-baseline-package-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   else
     baseline_version="$(baseline_install_version)"
-    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_latest_release || return $?
-    LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline)")"
+    baseline_install_phase="upgrade.install-baseline"
+    if ! phase_run "$baseline_install_phase" "$TIMEOUT_INSTALL_S" install_latest_release "$baseline_version"; then
+      phase_run "upgrade.wait-for-user-baseline-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
+      phase_run "upgrade.install-baseline-retry" "$TIMEOUT_INSTALL_S" install_latest_release "$baseline_version" || return $?
+      baseline_install_phase="upgrade.install-baseline-retry"
+    fi
+    LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path "$baseline_install_phase")")"
     phase_run "upgrade.verify-baseline-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$baseline_version" || return $?
   fi
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
