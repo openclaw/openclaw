@@ -370,6 +370,9 @@ One-shot ACP sessions spawned by another agent run are background children, simi
 - Parent progress relays suppress commentary-phase assistant text, including
   signature-only phase metadata, so internal planning text does not briefly
   surface and then disappear when the durable child transcript is replayed.
+- Codex ACP parent progress relays also keep phase-unknown assistant text
+  internal; the completion announce path remains the source for the parent
+  to rewrite child results.
 
 Do not treat this path as a peer-to-peer chat between parent and child. The child already has a completion channel back to the parent.
 

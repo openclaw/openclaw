@@ -86,8 +86,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-1",
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-1",
-      agentId: "codex",
+      childSessionKey: "agent:claude:acp:child-1",
+      agentId: "claude",
       deliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
@@ -113,9 +113,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(texts.some((text) => text.includes("Started claude session"))).toBe(true);
+    expect(texts.some((text) => text.includes("claude: hello from child"))).toBe(true);
+    expect(texts.some((text) => text.includes("claude run completed in 2s"))).toBe(true);
     expect(
       enqueueSystemEventMock.mock.calls.every(
         (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
@@ -142,8 +142,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-2",
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-2",
-      agentId: "codex",
+      childSessionKey: "agent:claude:acp:child-2",
+      agentId: "claude",
       streamFlushMs: 1,
       noOutputNoticeMs: 1_000,
       noOutputPollMs: 250,
@@ -165,7 +165,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("resumed output."))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(true);
+    expect(texts.some((text) => text.includes("claude: resumed output"))).toBe(true);
 
     emitAgentEvent({
       runId: "run-2",
@@ -263,8 +263,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-5",
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-5",
-      agentId: "codex",
+      childSessionKey: "agent:claude:acp:child-5",
+      agentId: "claude",
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });
@@ -286,7 +286,40 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    expect(texts.some((text) => text.includes("claude: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("suppresses phase-unknown Codex ACP assistant relay text", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-codex-unphased",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-unphased",
+      agentId: "codex",
+      emitStartNotice: false,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-codex-unphased",
+      stream: "assistant",
+      data: {
+        delta: "I will first clone the repository into a temporary directory.",
+      },
+    });
+    vi.advanceTimersByTime(15);
+    emitAgentEvent({
+      runId: "run-codex-unphased",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+      },
+    });
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("clone the repository"))).toBe(false);
+    expect(texts.some((text) => text.includes("codex:"))).toBe(false);
     relay.dispose();
   });
 

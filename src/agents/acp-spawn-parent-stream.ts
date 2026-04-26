@@ -22,6 +22,16 @@ function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function isCodexAcpRelayAgent(agentId: string): boolean {
+  const normalized = compactWhitespace(agentId).toLowerCase();
+  return (
+    normalized === "codex" ||
+    normalized === "openai-codex" ||
+    normalized.startsWith("codex/") ||
+    normalized.startsWith("openai-codex/")
+  );
+}
+
 function truncate(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
@@ -324,7 +334,10 @@ export function startAcpSpawnParentStreamRelay(params: {
         ...(assistantPhase ? { phase: assistantPhase } : {}),
       });
 
-      if (assistantPhase === "commentary") {
+      if (
+        assistantPhase === "commentary" ||
+        (!assistantPhase && isCodexAcpRelayAgent(params.agentId))
+      ) {
         lastProgressAt = Date.now();
         return;
       }

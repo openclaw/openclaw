@@ -61,6 +61,9 @@ transcript path on disk when you need the raw full transcript.
   showing text. Delegation planning/commentary for `sessions_spawn` stays
   internal instead of flashing in WebChat/Control UI and disappearing after
   history replay.
+- ACP Codex progress relays also hold phase-unknown assistant text inside the
+  child stream log and rely on the task-completion announce for parent-visible
+  results.
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
