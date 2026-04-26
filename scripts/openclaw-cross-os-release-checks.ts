@@ -18,6 +18,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -57,6 +58,24 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-lab/",
   "dist/extensions/qa-matrix/",
 ];
+
+type CommandInvocation = {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  shell?: boolean;
+  windowsVerbatimArguments?: boolean;
+};
+
+type RunCommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  logPath: string;
+  timeoutMs?: number;
+  check?: boolean;
+  shell?: boolean;
+  windowsVerbatimArguments?: boolean;
+};
 
 if (isMainModule()) {
   try {
@@ -174,6 +193,16 @@ export function resolveRunnerMatrix(params) {
   };
 }
 
+export function resolveExecutionModeForSuite(suite: string): "fresh" | "upgrade" {
+  if (suite === "packaged-fresh" || suite === "installer-fresh") {
+    return "fresh";
+  }
+  if (suite === "packaged-upgrade" || suite === "dev-update") {
+    return "upgrade";
+  }
+  throw new Error(`Unsupported suite "${suite}" for execution mode resolution.`);
+}
+
 export function readRunnerOverrideEnv(env = process.env) {
   const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) => {
     const primaryValue = primary?.trim();
@@ -240,7 +269,7 @@ async function main(argv) {
   const sourceDir = args["source-dir"]?.trim() ? resolve(args["source-dir"].trim()) : "";
   const provider = args["provider"]?.trim() || "";
   const suite = args["suite"]?.trim() || "";
-  const mode = args["mode"] ?? "both";
+  const mode = args["mode"]?.trim() || (suite ? resolveExecutionModeForSuite(suite) : "both");
   const inputRef = args["ref"]?.trim() || "";
   const previousVersion = args["previous-version"]?.trim() || "";
   const baselineSpec =
@@ -2121,10 +2150,10 @@ async function installPackageSpec(params) {
     npm_config_location: "global",
     npm_config_prefix: params.lane.prefixDir,
   };
-  rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
-  await runCommand(
-    npmCommand(),
-    [
+  const npmInvocation: CommandInvocation = resolveNpmRunner({
+    env: installEnv,
+    execPath: process.execPath,
+    npmArgs: [
       "install",
       "-g",
       params.packageSpec,
@@ -2133,13 +2162,16 @@ async function installPackageSpec(params) {
       "--no-audit",
       "--loglevel=notice",
     ],
-    {
-      cwd: params.lane.homeDir,
-      env: installEnv,
-      logPath: params.logPath,
-      timeoutMs: params.timeoutMs ?? installTimeoutMs(),
-    },
-  );
+  });
+  rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
+  await runCommand(npmInvocation.command, npmInvocation.args, {
+    cwd: params.lane.homeDir,
+    env: npmInvocation.env ?? installEnv,
+    logPath: params.logPath,
+    shell: npmInvocation.shell,
+    timeoutMs: params.timeoutMs ?? installTimeoutMs(),
+    windowsVerbatimArguments: npmInvocation.windowsVerbatimArguments,
+  });
 }
 
 function installTimeoutMs() {
@@ -2660,14 +2692,15 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
-async function runCommand(command, args, options) {
+async function runCommand(command: string, args: string[], options: RunCommandOptions) {
   return new Promise((resolvePromise, rejectPromise) => {
     const useWindowsShell = process.platform === "win32" && /\.(cmd|bat)$/iu.test(command);
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      shell: useWindowsShell,
+      shell: options.shell ?? useWindowsShell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
       windowsHide: true,
     });
     const logStream = createWriteStream(options.logPath, { flags: "a" });
