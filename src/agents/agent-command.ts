@@ -702,11 +702,11 @@ async function agentCommandInternal(
     if (hasExplicitRunOverride && opts.allowModelOverride !== true) {
       throw new Error("Model override is not authorized for this caller.");
     }
-    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasExplicitRunOverride;
+    const needsModelCatalog = Boolean(hasAllowlist);
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
-    let allowAnyModel = false;
+    let allowAnyModel = !hasAllowlist;
 
     if (needsModelCatalog) {
       modelCatalog = await loadModelCatalog({ config: cfg });
@@ -805,16 +805,12 @@ async function agentCommandInternal(
     }
 
     if (!resolvedThinkLevel) {
-      let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-      if (!catalogForThinking || catalogForThinking.length === 0) {
-        modelCatalog = await loadModelCatalog({ config: cfg });
-        catalogForThinking = modelCatalog;
-      }
+      const catalogForThinking = modelCatalog ?? allowedModelCatalog;
       resolvedThinkLevel = resolveThinkingDefault({
         cfg,
         provider,
         model,
-        catalog: catalogForThinking,
+        catalog: catalogForThinking.length > 0 ? catalogForThinking : undefined,
       });
     }
     if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {

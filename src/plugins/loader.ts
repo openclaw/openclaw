@@ -2540,6 +2540,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                     installExecutionRoot: params.installExecutionRoot,
                     missingSpecs: params.installSpecs ?? params.missingSpecs,
                     env,
+                    warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
                   }));
               installer(installParams);
             },

@@ -26,6 +26,7 @@ const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 export type GatewayRestartWaitOutcome =
   | "healthy"
   | "plugin-errors"
+  | "version-mismatch"
   | "stale-pids"
   | "stopped-free"
   | "timeout";
@@ -413,6 +414,9 @@ export async function waitForGatewayHealthyRestart(params: {
     }
     if (snapshot.activatedPluginErrors?.length) {
       return withWaitContext(snapshot, "plugin-errors", attempt * delayMs);
+    }
+    if (snapshot.versionMismatch) {
+      return withWaitContext(snapshot, "version-mismatch", attempt * delayMs);
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", attempt * delayMs);

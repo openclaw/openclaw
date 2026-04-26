@@ -41,6 +41,22 @@ function writeInstalledPackage(rootDir: string, packageName: string, version: st
   );
 }
 
+function statfsFixture(params: {
+  bavail: number;
+  bsize?: number;
+  blocks?: number;
+}): ReturnType<typeof fs.statfsSync> {
+  return {
+    type: 0,
+    bsize: params.bsize ?? 1024,
+    blocks: params.blocks ?? 2_000_000,
+    bfree: params.bavail,
+    bavail: params.bavail,
+    files: 0,
+    ffree: 0,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
@@ -273,6 +289,41 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         cwd: installRoot,
       }),
+    );
+  });
+
+  it("warns but still installs bundled runtime deps when disk space looks low", () => {
+    const installRoot = makeTempDir();
+    const warn = vi.fn();
+    vi.spyOn(fs, "statfsSync").mockReturnValue(
+      statfsFixture({
+        bavail: 256,
+        bsize: 1024 * 1024,
+      }),
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["acpx@0.5.3"],
+      env: {},
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Low disk space near"));
+    expect(spawnSyncMock).toHaveBeenCalled();
+    expect(fs.existsSync(path.join(installRoot, "node_modules", "acpx", "package.json"))).toBe(
+      true,
     );
   });
 

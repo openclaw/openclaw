@@ -84,6 +84,10 @@ openclaw tasks maintenance [--apply] [--json]
 ```
 
 Previews or applies task and Task Flow reconciliation, cleanup stamping, and pruning.
+For cron tasks, reconciliation uses persisted run logs/job state before marking an
+old active task `lost`, so completed cron runs do not become false audit errors
+just because the in-memory Gateway runtime state is gone. Offline CLI audit is
+not authoritative for the Gateway's process-local cron active-job set.
 
 ### `flow`
 

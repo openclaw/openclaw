@@ -9,7 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
-import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-targets";
+import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
@@ -738,52 +738,34 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-const VOICE_DELIVERY_CHANNELS = new Set([
-  "bluebubbles",
-  "telegram",
-  "feishu",
-  "whatsapp",
-  "matrix",
-  "discord",
-]);
-const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
-const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu", "whatsapp"]);
-const AUDIO_FILE_VOICE_MEMO_CHANNELS = new Set(["bluebubbles"]);
-
-function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
-}
-
 function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
-  const channelId = resolveChannelId(channel);
-  return channelId !== null && VOICE_DELIVERY_CHANNELS.has(channelId);
+  return resolveChannelTtsVoiceDelivery(channel) !== undefined;
 }
 
 function supportsTranscodedVoiceNoteTts(channel: string | undefined): boolean {
-  const channelId = resolveChannelId(channel);
-  return channelId !== null && TRANSCODED_VOICE_NOTE_CHANNELS.has(channelId);
+  const delivery = resolveChannelTtsVoiceDelivery(channel);
+  return delivery?.synthesisTarget === "voice-note" && delivery.transcodesAudio === true;
 }
 
 function resolveTtsSynthesisTarget(channel: string | undefined): "audio-file" | "voice-note" {
-  const channelId = resolveChannelId(channel);
-  return channelId !== null && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  return resolveChannelTtsVoiceDelivery(channel)?.synthesisTarget ?? "audio-file";
 }
 
 function supportsAudioFileVoiceMemoOutput(params: {
   fileExtension?: string;
   outputFormat?: string;
+  audioFileFormats?: readonly string[];
 }): boolean {
+  const formats = new Set(params.audioFileFormats?.map((format) => format.trim().toLowerCase()));
+  if (formats.size === 0) {
+    return false;
+  }
   const extension = params.fileExtension?.trim().toLowerCase();
-  if (extension === ".mp3" || extension === ".caf") {
+  if (extension && formats.has(extension.replace(/^\./, ""))) {
     return true;
   }
   const outputFormat = params.outputFormat?.trim().toLowerCase();
-  return (
-    outputFormat === "mp3" ||
-    outputFormat === "caf" ||
-    outputFormat === "audio/mpeg" ||
-    outputFormat === "audio/x-caf"
-  );
+  return outputFormat ? formats.has(outputFormat) : false;
 }
 
 function shouldDeliverTtsAsVoice(params: {
@@ -793,17 +775,24 @@ function shouldDeliverTtsAsVoice(params: {
   fileExtension?: string;
   outputFormat?: string;
 }): boolean {
-  const channelId = resolveChannelId(params.channel);
-  if (channelId === null || !supportsNativeVoiceNoteTts(channelId)) {
+  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  if (!delivery) {
     return false;
   }
-  if (AUDIO_FILE_VOICE_MEMO_CHANNELS.has(channelId)) {
-    return params.target === "audio-file" && supportsAudioFileVoiceMemoOutput(params);
+  if (delivery.synthesisTarget === "audio-file") {
+    return (
+      params.target === "audio-file" &&
+      supportsAudioFileVoiceMemoOutput({
+        fileExtension: params.fileExtension,
+        outputFormat: params.outputFormat,
+        audioFileFormats: delivery.audioFileFormats,
+      })
+    );
   }
   if (params.target !== "voice-note") {
     return false;
   }
-  return params.voiceCompatible === true || supportsTranscodedVoiceNoteTts(params.channel);
+  return params.voiceCompatible === true || delivery.transcodesAudio === true;
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -287,6 +288,20 @@ describe("update-cli", () => {
       expect.any(Object),
     );
   };
+
+  const statfsFixture = (params: {
+    bavail: number;
+    bsize?: number;
+    blocks?: number;
+  }): ReturnType<typeof fsSync.statfsSync> => ({
+    type: 0,
+    bsize: params.bsize ?? 1024,
+    blocks: params.blocks ?? 2_000_000,
+    bfree: params.bavail,
+    bavail: params.bavail,
+    files: 0,
+    ffree: 0,
+  });
 
   const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult =>
     ({
@@ -909,6 +924,28 @@ describe("update-cli", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logs.join("\n")).not.toContain("already-current");
+  });
+
+  it("warns but still runs package updates when disk space looks low", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      statfsFixture({
+        bavail: 256,
+        bsize: 1024 * 1024,
+      }),
+    );
+
+    await updateCommand({ yes: true });
+
+    expectPackageInstallSpec("openclaw@latest");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain("Low disk space near");
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
@@ -1643,6 +1680,52 @@ describe("update-cli", () => {
     });
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails a JSON package update when fallback restart leaves the old gateway running", async () => {
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: createCaseDir("openclaw-updated-root"),
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    prepareRestartScript.mockResolvedValue(null);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.23",
+        connId: "old-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true, json: true });
+
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain(
+      "Gateway version mismatch: expected 2026.4.24, running gateway reported 2026.4.23.",
+    );
+    expect(doctorCommand).not.toHaveBeenCalled();
   });
 
   it("fails a package update when the restarted gateway reports activated plugin load errors", async () => {

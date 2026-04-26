@@ -544,6 +544,51 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("does not treat persisted auth alone as gateway startup intent", () => {
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expectStartupPluginIdsCase({
+      config: {} as OpenClawConfig,
+      env: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+      } as NodeJS.ProcessEnv,
+      expected: ["browser"],
+    });
+  });
+
+  it("does not treat persisted auth alone as deferred channel startup intent", () => {
+    loadPluginManifestRegistry
+      .mockReset()
+      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+
+    expect(
+      resolveConfiguredDeferredChannelPluginIds({
+        config: {
+          plugins: {
+            allow: ["workspace-demo-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([]);
+  });
+
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
     loadPluginManifestRegistry
       .mockReset()

@@ -305,6 +305,38 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("stops waiting once the restarted gateway reports the wrong version", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.23", connId: "old" },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: "version-mismatch",
+      elapsedMs: 0,
+      versionMismatch: {
+        expected: "2026.4.24",
+        actual: "2026.4.23",
+      },
+    });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("marks matching-version restarts unhealthy when activated plugins failed to load", async () => {
     probeGateway.mockResolvedValue({
       ok: true,

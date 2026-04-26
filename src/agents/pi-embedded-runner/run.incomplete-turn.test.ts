@@ -298,6 +298,44 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     );
   });
 
+  it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_silent_group", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      runId: "run-reasoning-only-silent",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("reasoning-only assistant turn detected"),
+    );
+    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+    expect(result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(result.meta.livenessState).toBe("working");
+  });
+
   it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -1161,6 +1199,44 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         provider: "openai-codex",
         model: "gpt-5.5",
         content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats reasoning-only assistant turns as silent only when the caller allows it", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "end_turn",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_silent_helper", type: "reasoning" }),
+          },
+        ],
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
 

@@ -32,6 +32,7 @@ type PluginInstallLogger = {
 
 type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
 
@@ -797,7 +798,10 @@ async function installPluginFromPackageDir(
     return scanResult;
   }
 
-  const deps = manifest.dependencies ?? {};
+  const deps = {
+    ...manifest.dependencies,
+    ...manifest.optionalDependencies,
+  };
   const peerDeps = manifest.peerDependencies ?? {};
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,

@@ -79,12 +79,20 @@ ignores user npm prefix/global settings, so global-install npm config does not
 redirect bundled plugin dependencies into `~/node_modules` or the global package
 tree.
 
+Before package updates and bundled runtime-dependency repairs, OpenClaw tries a
+best-effort disk-space check for the target volume. Low space produces a warning
+with the checked path, but does not block the update because filesystem quotas,
+snapshots, and network volumes can change after the check. The actual npm
+install, copy, and post-install verification remain authoritative.
+
 ### Bundled plugin runtime dependencies
 
 Packaged installs keep bundled plugin runtime dependencies out of the read-only
 package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs
 runtime dependencies only for bundled plugins that are active in config, active
 through legacy channel config, or enabled by their bundled manifest default.
+Persisted channel auth state alone does not trigger Gateway startup
+runtime-dependency repair.
 
 Explicit disablement wins. A disabled plugin or channel does not get its
 runtime dependencies repaired just because it exists in the package. External

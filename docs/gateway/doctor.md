@@ -584,6 +584,9 @@ Notes:
 - If token auth requires a token and the configured token SecretRef is unresolved, doctor blocks the install/repair path with actionable guidance.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
 - For Linux user-systemd units, doctor token drift checks now include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
+- Doctor service repairs refuse to rewrite, stop, or restart a gateway service
+  from an older OpenClaw binary when the config was last written by a newer
+  version. See [Gateway troubleshooting](/gateway/troubleshooting#split-brain-installs-and-newer-config-guard).
 - You can always force a full rewrite via `openclaw gateway install --force`.
 
 ### 16) Gateway runtime + port diagnostics

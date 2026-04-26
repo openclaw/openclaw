@@ -9,9 +9,33 @@ describe("OpenClaw provider index", () => {
         Moonshot: {
           id: "moonshot",
           name: "Moonshot AI",
-          plugin: { id: "moonshot", package: " @openclaw/plugin-moonshot " },
+          plugin: {
+            id: "moonshot",
+            package: " @openclaw/plugin-moonshot ",
+            install: {
+              npmSpec: " @openclaw/plugin-moonshot@1.2.3 ",
+              defaultChoice: "npm",
+              expectedIntegrity: " sha512-moonshot ",
+            },
+          },
           docs: "/providers/moonshot",
           categories: ["cloud", "llm"],
+          authChoices: [
+            {
+              method: " api-key ",
+              choiceId: " moonshot-api-key ",
+              choiceLabel: " Moonshot API key ",
+              groupLabel: " Moonshot AI ",
+              assistantPriority: -1,
+              assistantVisibility: "visible",
+              onboardingScopes: ["text-inference", "bad-scope"],
+            },
+            {
+              method: "__proto__",
+              choiceId: "bad",
+              choiceLabel: "Bad",
+            },
+          ],
           previewCatalog: {
             api: "openai-responses",
             baseUrl: "https://api.moonshot.ai/v1",
@@ -38,9 +62,26 @@ describe("OpenClaw provider index", () => {
           plugin: {
             id: "moonshot",
             package: "@openclaw/plugin-moonshot",
+            install: {
+              npmSpec: "@openclaw/plugin-moonshot@1.2.3",
+              defaultChoice: "npm",
+              expectedIntegrity: "sha512-moonshot",
+            },
           },
           docs: "/providers/moonshot",
           categories: ["cloud", "llm"],
+          authChoices: [
+            {
+              method: "api-key",
+              choiceId: "moonshot-api-key",
+              choiceLabel: "Moonshot API key",
+              assistantPriority: -1,
+              assistantVisibility: "visible",
+              groupId: "moonshot",
+              groupLabel: "Moonshot AI",
+              onboardingScopes: ["text-inference"],
+            },
+          ],
           previewCatalog: {
             api: "openai-responses",
             baseUrl: "https://api.moonshot.ai/v1",

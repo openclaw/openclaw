@@ -380,20 +380,26 @@ export async function runEmbeddedPiAgent(
         agentHarnessId: params.agentHarnessId,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
-      if (!pluginHarnessOwnsTransport) {
-        await ensureOpenClawModelsJson(params.config, agentDir);
-      }
-
-      const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
+      const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
-        // Plugin harnesses may expose synthetic providers that PI cannot
-        // discover safely; resolve their model metadata without touching PI
-        // auth/model stores.
-        { skipPiDiscovery: pluginHarnessOwnsTransport },
+        {
+          // Plugin dynamic model hooks can resolve explicit model refs without
+          // first generating PI models.json. This keeps one-shot model runs from
+          // blocking on unrelated provider discovery.
+          skipPiDiscovery: true,
+        },
       );
+      const modelResolution =
+        dynamicModelResolution.model || pluginHarnessOwnsTransport
+          ? dynamicModelResolution
+          : await (async () => {
+              await ensureOpenClawModelsJson(params.config, agentDir);
+              return await resolveModelAsync(provider, modelId, agentDir, params.config);
+            })();
+      const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",

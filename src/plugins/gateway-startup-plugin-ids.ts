@@ -41,7 +41,7 @@ function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
 
 function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   const disabled = listDisabledChannelIds(config);
-  return listPotentialConfiguredChannelIds(config, env)
+  return listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false })
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
 }

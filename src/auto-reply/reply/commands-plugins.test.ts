@@ -6,7 +6,7 @@ import { buildPluginsCommandParams } from "./commands.test-harness.js";
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
-const buildPluginSnapshotReportMock = vi.hoisted(() => vi.fn());
+const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
@@ -69,7 +69,7 @@ vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,
   buildPluginInspectReport: buildPluginInspectReportMock,
-  buildPluginSnapshotReport: buildPluginSnapshotReportMock,
+  buildPluginRegistrySnapshotReport: buildPluginRegistrySnapshotReportMock,
   formatPluginCompatibilityNotice: formatPluginCompatibilityNoticeMock,
 }));
 
@@ -121,7 +121,7 @@ describe("handlePluginsCommand", () => {
       config: buildCfg(),
       issues: [],
     });
-    buildPluginSnapshotReportMock.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [
         {
@@ -260,8 +260,8 @@ describe("handlePluginsCommand", () => {
     );
   });
 
-  it("resolves write targets by runtime-derived plugin name", async () => {
-    buildPluginDiagnosticsReportMock.mockReturnValue({
+  it("resolves write targets by indexed plugin name without loading diagnostics", async () => {
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [
         {
@@ -280,8 +280,8 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalled();
-    expect(buildPluginSnapshotReportMock).not.toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 
   it("returns an explicit unauthorized reply for native /plugins list", async () => {

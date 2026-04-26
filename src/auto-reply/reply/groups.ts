@@ -269,8 +269,7 @@ export function resolveGroupSilentReplyBehavior(params: {
   return {
     activation,
     canUseSilentReply,
-    allowEmptyAssistantReplyAsSilent:
-      activation === "always" && params.silentReplyPolicy === "allow",
+    allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
   };
 }
 

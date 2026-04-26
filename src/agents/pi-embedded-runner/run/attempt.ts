@@ -681,71 +681,72 @@ export async function runEmbeddedAttempt(
         ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
-    const toolsRaw = params.disableTools
-      ? []
-      : (() => {
-          const allTools = createOpenClawCodingTools({
-            agentId: sessionAgentId,
-            ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
-            exec: {
-              ...params.execOverrides,
-              elevated: params.bashElevated,
-            },
-            sandbox,
-            messageProvider: params.messageChannel ?? params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
-            spawnedBy: params.spawnedBy,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            senderIsOwner: params.senderIsOwner,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            sessionKey: sandboxSessionKey,
-            sessionId: params.sessionId,
-            runId: params.runId,
-            agentDir,
-            workspaceDir: effectiveWorkspace,
-            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+    const toolsRaw =
+      params.disableTools || params.modelRun
+        ? []
+        : (() => {
+            const allTools = createOpenClawCodingTools({
+              agentId: sessionAgentId,
+              ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+              exec: {
+                ...params.execOverrides,
+                elevated: params.bashElevated,
+              },
               sandbox,
-              resolvedWorkspace,
-            }),
-            config: params.config,
-            abortSignal: runAbortController.signal,
-            modelProvider: params.model.provider,
-            modelId: params.modelId,
-            modelCompat: extractModelCompat(params.model),
-            modelApi: params.model.api,
-            modelContextWindowTokens: params.model.contextWindow,
-            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            modelHasVision: params.model.input?.includes("image") ?? false,
-            requireExplicitMessageTarget:
-              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-            disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
-            onYield: (message) => {
-              yieldDetected = true;
-              yieldMessage = message;
-              queueYieldInterruptForSession?.();
-              runAbortController.abort("sessions_yield");
-              abortSessionForYield?.();
-            },
-          });
-          return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
-        })();
+              messageProvider: params.messageChannel ?? params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              messageTo: params.messageTo,
+              messageThreadId: params.messageThreadId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              memberRoleIds: params.memberRoleIds,
+              spawnedBy: params.spawnedBy,
+              senderId: params.senderId,
+              senderName: params.senderName,
+              senderUsername: params.senderUsername,
+              senderE164: params.senderE164,
+              senderIsOwner: params.senderIsOwner,
+              allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
+              agentDir,
+              workspaceDir: effectiveWorkspace,
+              // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+              // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+              spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+                sandbox,
+                resolvedWorkspace,
+              }),
+              config: params.config,
+              abortSignal: runAbortController.signal,
+              modelProvider: params.model.provider,
+              modelId: params.modelId,
+              modelCompat: extractModelCompat(params.model),
+              modelApi: params.model.api,
+              modelContextWindowTokens: params.model.contextWindow,
+              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+              currentChannelId: params.currentChannelId,
+              currentThreadTs: params.currentThreadTs,
+              currentMessageId: params.currentMessageId,
+              replyToMode: params.replyToMode,
+              hasRepliedRef: params.hasRepliedRef,
+              modelHasVision: params.model.input?.includes("image") ?? false,
+              requireExplicitMessageTarget:
+                params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+              disableMessageTool: params.disableMessageTool,
+              forceMessageTool: params.forceMessageTool,
+              onYield: (message) => {
+                yieldDetected = true;
+                yieldMessage = message;
+                queueYieldInterruptForSession?.();
+                runAbortController.abort("sessions_yield");
+                abortSessionForYield?.();
+              },
+            });
+            return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
+          })();
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
@@ -1057,7 +1058,9 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const promptMode =
+      params.promptMode ??
+      (params.modelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -2389,6 +2392,17 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: params.transcriptPrompt,
           });
+          const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
+          if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+            const runtimeSystemPrompt = composeSystemPromptWithHookContext({
+              baseSystemPrompt: systemPromptText,
+              appendSystemContext: runtimeSystemContext,
+            });
+            if (runtimeSystemPrompt) {
+              applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              systemPromptText = runtimeSystemPrompt;
+            }
+          }
 
           // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
@@ -2426,6 +2440,7 @@ export async function runEmbeddedAttempt(
 
           if (
             !skipPromptSubmission &&
+            !promptSubmission.runtimeOnly &&
             !hasPromptSubmissionContent({
               prompt: promptSubmission.prompt,
               messages: activeSession.messages,
@@ -2619,19 +2634,23 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            await queueRuntimeContextForNextTurn({
-              session: activeSession,
-              runtimeContext: promptSubmission.runtimeContext,
-            });
-
-            // Only pass images option if there are actually images to pass
-            // This avoids potential issues with models that don't expect the images parameter
-            if (imageResult.images.length > 0) {
-              await abortable(
-                activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-              );
-            } else {
+            if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
+            } else {
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext: promptSubmission.runtimeContext,
+              });
+
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptSubmission.prompt));
+              }
             }
           }
         } catch (err) {

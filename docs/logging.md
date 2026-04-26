@@ -23,6 +23,11 @@ By default, the Gateway writes a rolling log file under:
 
 The date uses the gateway host's local timezone.
 
+Each file rotates when it reaches `logging.maxFileBytes` (default: 100 MB).
+OpenClaw keeps up to five numbered archives beside the active file, such as
+`openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead of
+suppressing diagnostics.
+
 You can override this in `~/.openclaw/openclaw.json`:
 
 ```json
