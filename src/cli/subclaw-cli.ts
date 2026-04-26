@@ -58,6 +58,6 @@ export function registerSubclawCli(program: Command) {
 }
 
 function buildSubclawSessionKey(directory: string, agentId: string): string {
-  const dirHash = crypto.createHash("sha256").update(directory).digest("hex").slice(0, 8);
+  const dirHash = crypto.createHash("sha256").update(directory).digest("hex").slice(0, 16);
   return `agent:${agentId}:subclaw-${dirHash}`;
 }

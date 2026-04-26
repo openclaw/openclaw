@@ -103,6 +103,9 @@ function run(cmd, args) {
     // resolution via basename (which could pick the wrong binary).
     const useShell = shouldUseShellForCommand(cmd);
     const useQuotedShell = useShell && cmd.includes(" ");
+    if (useQuotedShell) {
+      assertSafeWindowsShellArgs(args);
+    }
     const spawnCmd = useQuotedShell ? `"${cmd}"` : cmd;
     const spawnOpts = useQuotedShell
       ? { cwd: uiDir, stdio: "inherit", env: process.env, shell: true }
@@ -132,6 +135,9 @@ function runSync(cmd, args, envOverride) {
     // quotes so the shell receives the explicit absolute path.
     const useShell = shouldUseShellForCommand(cmd);
     const useQuotedShell = useShell && cmd.includes(" ");
+    if (useQuotedShell) {
+      assertSafeWindowsShellArgs(args);
+    }
     const spawnCmd = useQuotedShell ? `"${cmd}"` : cmd;
     const spawnOpts = useQuotedShell
       ? { cwd: uiDir, stdio: "inherit", env: envOverride ?? process.env, shell: true }
