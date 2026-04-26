@@ -16,6 +16,16 @@ export const QWEN_STANDARD_GLOBAL_BASE_URL =
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
+export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
+export const QWEN_36_MAX_PREVIEW_MODEL_ID = "qwen3.6-max-preview";
+
+// Models that require Standard (pay-as-you-go) endpoint; not available on Coding Plan.
+export const QWEN_STANDARD_ONLY_MODEL_IDS: ReadonlyArray<string> = [
+  QWEN_36_PLUS_MODEL_ID,
+  QWEN_36_FLASH_MODEL_ID,
+  QWEN_36_MAX_PREVIEW_MODEL_ID,
+];
+
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -37,7 +47,16 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
     id: QWEN_36_PLUS_MODEL_ID,
     name: QWEN_36_PLUS_MODEL_ID,
-    reasoning: false,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_36_FLASH_MODEL_ID,
+    name: QWEN_36_FLASH_MODEL_ID,
+    reasoning: true,
     input: ["text", "image"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,
@@ -47,6 +66,15 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     id: "qwen3-max-2026-01-23",
     name: "qwen3-max-2026-01-23",
     reasoning: false,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_36_MAX_PREVIEW_MODEL_ID,
+    name: QWEN_36_MAX_PREVIEW_MODEL_ID,
+    reasoning: true,
     input: ["text"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 262_144,
@@ -132,7 +160,9 @@ export function buildQwenModelCatalogForBaseUrl(
 ): ReadonlyArray<ModelDefinitionConfig> {
   return isQwen36PlusSupportedBaseUrl(baseUrl)
     ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+    : QWEN_MODEL_CATALOG.filter(
+        (model) => !QWEN_STANDARD_ONLY_MODEL_IDS.includes(model.id),
+      );
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {

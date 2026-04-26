@@ -1,7 +1,11 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isQwenCodingPlanBaseUrl, QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./models.js";
+import {
+  isQwenCodingPlanBaseUrl,
+  QWEN_STANDARD_ONLY_MODEL_IDS,
+  QWEN_BASE_URL,
+} from "./models.js";
 import {
   applyQwenConfig,
   applyQwenConfigCn,
@@ -39,7 +43,7 @@ function resolveConfiguredQwenBaseUrl(
   return undefined;
 }
 
-function isQwen36PlusUnsupportedForConfig(params: {
+function isQwenStandardOnlyModelUnsupportedForConfig(params: {
   config: Parameters<typeof resolveConfiguredQwenBaseUrl>[0];
   baseUrl?: string;
 }): boolean {
@@ -91,7 +95,7 @@ export default defineSingleProviderPluginEntry({
         noteMessage: [
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
-          "Endpoint: dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "Endpoint: dashscope-intl.dashscope.aliyuncs.com/compatible-mode/v1",
           "Models: qwen3.6-plus, qwen3.5-plus, qwen3-coder-plus, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Standard (Global/Intl)",
@@ -169,7 +173,9 @@ export default defineSingleProviderPluginEntry({
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
         return undefined;
       }
-      const models = providerConfig.models?.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+      const models = providerConfig.models?.filter(
+        (model) => !QWEN_STANDARD_ONLY_MODEL_IDS.includes(model.id),
+      );
       return models && models.length !== providerConfig.models?.length
         ? { ...providerConfig, models }
         : undefined;
@@ -178,15 +184,15 @@ export default defineSingleProviderPluginEntry({
       const provider = normalizeProviderId(ctx.provider);
       if (
         (provider !== PROVIDER_ID && provider !== LEGACY_PROVIDER_ID) ||
-        ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
-        !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
+        !QWEN_STANDARD_ONLY_MODEL_IDS.includes(ctx.modelId) ||
+        !isQwenStandardOnlyModelUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
       ) {
         return undefined;
       }
       return {
         suppress: true,
         errorMessage:
-          "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+          `Unknown model: ${ctx.provider}/${ctx.modelId}. ${ctx.modelId} is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.`,
       };
     },
   },
