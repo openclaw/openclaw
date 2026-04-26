@@ -148,8 +148,7 @@ export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean 
     return false;
   }
   return filter.some(
-    (prefix) =>
-      normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+    (prefix) => normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
   );
 }
 

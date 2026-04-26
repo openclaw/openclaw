@@ -15,7 +15,6 @@ import { enableConsoleCapture } from "../logging.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
-import { createCliProgress } from "./progress.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
 import {
   finalizeDebugProxyCapture,
@@ -34,6 +33,7 @@ import {
 import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { createCliProgress } from "./progress.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
