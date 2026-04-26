@@ -342,6 +342,8 @@ export async function collectPluginsTrustFindings(params: {
                 | boolean
                 | undefined,
               globalSetting: params.cfg.commands?.nativeSkills,
+              stateDir: params.stateDir,
+              autoDefault: plugin.commands?.nativeSkillsAutoEnabled === true,
             });
           }),
         )

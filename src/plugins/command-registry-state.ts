@@ -1,4 +1,5 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
@@ -90,7 +91,10 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   const providerName = normalizeOptionalLowercaseString(provider);
   if (
     providerName &&
-    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
+    (
+      getLoadedChannelPlugin(providerName)?.commands ??
+      resolveReadOnlyChannelCommandDefaults(providerName)
+    )?.nativeCommandsAutoEnabled !== true
   ) {
     return [];
   }

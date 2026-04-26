@@ -143,6 +143,10 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
           label: "Demo",
           blurb: "Demo channel",
           preferOver: ["legacy-demo"],
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: false,
+          },
         },
         install: {
           npmSpec: "@vendor/demo-plugin@1.2.3",
@@ -195,6 +199,10 @@ describe("installed plugin index", () => {
             label: "Demo",
             blurb: "Demo channel",
             preferOver: ["legacy-demo"],
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
           },
           compat: [
             "activation-channel-hint",

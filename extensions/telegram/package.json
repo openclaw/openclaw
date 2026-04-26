@@ -38,6 +38,10 @@
         "https://openclaw.ai"
       ],
       "markdownCapable": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      },
       "configuredState": {
         "specifier": "./configured-state",
         "exportName": "hasTelegramConfiguredState"

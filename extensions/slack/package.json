@@ -28,6 +28,10 @@
       "blurb": "supported (Socket Mode).",
       "systemImage": "number",
       "markdownCapable": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": false,
+        "nativeSkillsAutoEnabled": false
+      },
       "configuredState": {
         "specifier": "./configured-state",
         "exportName": "hasSlackConfiguredState"

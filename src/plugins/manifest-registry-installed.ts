@@ -5,7 +5,12 @@ import type { PluginCandidate } from "./discovery.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  getPackageManifestMetadata,
+  type OpenClawPackageManifest,
+  type PackageManifest,
+} from "./manifest.js";
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {
   return record.rootDir || path.dirname(record.manifestPath || process.cwd());
@@ -22,8 +27,45 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
+function resolveInstalledPackageManifest(
+  record: InstalledPluginIndexRecord,
+): OpenClawPackageManifest | undefined {
+  if (!record.packageChannel) {
+    return undefined;
+  }
+  if (record.packageChannel.commands) {
+    return { channel: record.packageChannel };
+  }
+  const rootDir = resolveInstalledPluginRootDir(record);
+  const packageJsonPath = record.packageJson?.path
+    ? path.resolve(rootDir, record.packageJson.path)
+    : undefined;
+  if (!packageJsonPath) {
+    return { channel: record.packageChannel };
+  }
+  const relative = path.relative(rootDir, packageJsonPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { channel: record.packageChannel };
+  }
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
+    const packageManifest = getPackageManifestMetadata(packageJson);
+    return {
+      channel: {
+        ...record.packageChannel,
+        ...(packageManifest?.channel?.commands
+          ? { commands: packageManifest.channel.commands }
+          : {}),
+      },
+    };
+  } catch {
+    return { channel: record.packageChannel };
+  }
+}
+
 function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
+  const packageManifest = resolveInstalledPackageManifest(record);
   return {
     idHint: record.pluginId,
     source: record.source ?? resolveFallbackPluginSource(record),
@@ -34,7 +76,7 @@ function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate 
     ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
     ...(record.packageName ? { packageName: record.packageName } : {}),
     ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-    ...(record.packageChannel ? { packageManifest: { channel: record.packageChannel } } : {}),
+    ...(packageManifest ? { packageManifest } : {}),
     packageDir: rootDir,
   };
 }

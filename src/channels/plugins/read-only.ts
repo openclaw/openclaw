@@ -15,6 +15,7 @@ import type { loadOpenClawPlugins as loadOpenClawPluginsType } from "../../plugi
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import { listChannelPlugins } from "./registry.js";
@@ -72,6 +73,10 @@ type ReadOnlyChannelPluginResolution = {
   missingConfiguredChannelIds: string[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
+type ChannelCommandDefaults = Pick<
+  NonNullable<ChannelPlugin["commands"]>,
+  "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
+>;
 
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
@@ -123,6 +128,26 @@ function readOwnRecordValue(record: Record<string, unknown>, key: string): unkno
 
 function normalizeManifestText(value: string | undefined, fallback: string): string {
   return sanitizeForLog(value?.trim() || fallback).trim();
+}
+
+function normalizeChannelCommandDefaults(
+  value: ChannelCommandDefaults | undefined,
+): ChannelCommandDefaults | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const nativeCommandsAutoEnabled =
+    typeof value.nativeCommandsAutoEnabled === "boolean"
+      ? value.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
 }
 
 function rebindChannelConfig(
@@ -258,6 +283,9 @@ function buildManifestChannelPlugin(params: {
     channelConfig?.description ?? catalogMeta?.blurb,
     params.record.description || "",
   );
+  const commands = normalizeChannelCommandDefaults(
+    channelConfig?.commands ?? catalogMeta?.commands,
+  );
   return {
     id: params.channelId,
     meta: {
@@ -273,6 +301,7 @@ function buildManifestChannelPlugin(params: {
           : {}),
     },
     capabilities: { chatTypes: ["direct"] },
+    ...(commands ? { commands } : {}),
     ...(channelConfig
       ? {
           configSchema: {
@@ -316,6 +345,47 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
     return record.setup?.requiresRuntime === false || !record.setupSource;
   }
   return record.channelCatalogMeta?.id === channelId;
+}
+
+export function resolveReadOnlyChannelCommandDefaults(
+  channelId: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+    workspaceDir?: string;
+  } = {},
+): ChannelCommandDefaults | undefined {
+  const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
+  if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
+    return undefined;
+  }
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    stateDir: options.stateDir,
+    workspaceDir: options.workspaceDir,
+    env: options.env ?? process.env,
+    includeDisabled: true,
+  });
+  for (const record of registry.plugins) {
+    if (!record.channels.includes(normalizedChannelId)) {
+      continue;
+    }
+    const channelConfigValue = record.channelConfigs
+      ? readOwnRecordValue(record.channelConfigs as Record<string, unknown>, normalizedChannelId)
+      : undefined;
+    const channelConfig =
+      channelConfigValue &&
+      typeof channelConfigValue === "object" &&
+      !Array.isArray(channelConfigValue)
+        ? (channelConfigValue as ManifestChannelConfigRecord)
+        : undefined;
+    const commands = normalizeChannelCommandDefaults(
+      channelConfig?.commands ?? record.channelCatalogMeta?.commands,
+    );
+    if (commands) {
+      return commands;
+    }
+  }
+  return undefined;
 }
 
 function rebindChannelPluginConfig(

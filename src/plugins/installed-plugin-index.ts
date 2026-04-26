@@ -69,7 +69,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
 
 export type InstalledPluginPackageChannelInfo = Pick<
   PluginPackageChannel,
-  "id" | "label" | "blurb" | "preferOver"
+  "id" | "label" | "blurb" | "preferOver" | "commands"
 >;
 
 export type InstalledPluginIndexRecord = {
@@ -317,11 +317,27 @@ function normalizePackageChannel(
   const label = normalizeStringField(channel?.label);
   const blurb = normalizeStringField(channel?.blurb);
   const preferOver = normalizeStringListField(channel?.preferOver);
+  const commands =
+    channel?.commands &&
+    typeof channel.commands === "object" &&
+    !Array.isArray(channel.commands) &&
+    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
+      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
+      ? {
+          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
+            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
+            : {}),
+          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
+            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
+            : {}),
+        }
+      : undefined;
   return {
     id,
     ...(label ? { label } : {}),
     ...(blurb ? { blurb } : {}),
     ...(preferOver ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
   };
 }
 
