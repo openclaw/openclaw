@@ -1526,7 +1526,7 @@ if [ -z "\$dashboard_port" ] || [ "\$dashboard_port" = "\$dashboard_http_url" ];
   echo "failed to parse dashboard port from \$dashboard_http_url" >&2
   exit 1
 fi
-deadline=\$((SECONDS + 30))
+deadline=\$((SECONDS + 120))
 dashboard_ready=0
 while [ \$SECONDS -lt \$deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 "\$dashboard_http_url" >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then

@@ -38,6 +38,7 @@ import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  withBundledRuntimeDepsFilesystemLock,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
@@ -269,6 +270,7 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+const BUNDLED_RUNTIME_MIRROR_LOCK_DIR = ".openclaw-runtime-mirror.lock";
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -706,34 +708,40 @@ function mirrorBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   installRoot: string;
 }): string {
-  const mirrorParent = prepareBundledPluginRuntimeDistMirror({
-    installRoot: params.installRoot,
-    pluginRoot: params.pluginRoot,
-  });
-  const mirrorRoot = path.join(mirrorParent, params.pluginId);
-  fs.mkdirSync(params.installRoot, { recursive: true });
-  try {
-    fs.chmodSync(params.installRoot, 0o755);
-  } catch {
-    // Best-effort only: staged roots may live on filesystems that reject chmod.
-  }
-  fs.mkdirSync(mirrorParent, { recursive: true });
-  try {
-    fs.chmodSync(mirrorParent, 0o755);
-  } catch {
-    // Best-effort only: the access check below will surface non-writable dirs.
-  }
-  fs.accessSync(mirrorParent, fs.constants.W_OK);
-  const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
-  const stagedRoot = path.join(tempDir, "plugin");
-  try {
-    copyBundledPluginRuntimeRoot(params.pluginRoot, stagedRoot);
-    fs.rmSync(mirrorRoot, { recursive: true, force: true });
-    fs.renameSync(stagedRoot, mirrorRoot);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  return mirrorRoot;
+  return withBundledRuntimeDepsFilesystemLock(
+    params.installRoot,
+    BUNDLED_RUNTIME_MIRROR_LOCK_DIR,
+    () => {
+      const mirrorParent = prepareBundledPluginRuntimeDistMirror({
+        installRoot: params.installRoot,
+        pluginRoot: params.pluginRoot,
+      });
+      const mirrorRoot = path.join(mirrorParent, params.pluginId);
+      fs.mkdirSync(params.installRoot, { recursive: true });
+      try {
+        fs.chmodSync(params.installRoot, 0o755);
+      } catch {
+        // Best-effort only: staged roots may live on filesystems that reject chmod.
+      }
+      fs.mkdirSync(mirrorParent, { recursive: true });
+      try {
+        fs.chmodSync(mirrorParent, 0o755);
+      } catch {
+        // Best-effort only: the access check below will surface non-writable dirs.
+      }
+      fs.accessSync(mirrorParent, fs.constants.W_OK);
+      const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
+      const stagedRoot = path.join(tempDir, "plugin");
+      try {
+        copyBundledPluginRuntimeRoot(params.pluginRoot, stagedRoot);
+        fs.rmSync(mirrorRoot, { recursive: true, force: true });
+        fs.renameSync(stagedRoot, mirrorRoot);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+      return mirrorRoot;
+    },
+  );
 }
 
 function prepareBundledPluginRuntimeDistMirror(params: {
@@ -759,6 +767,9 @@ function prepareBundledPluginRuntimeDistMirror(params: {
     try {
       fs.symlinkSync(sourcePath, targetPath, entry.isDirectory() ? "junction" : "file");
     } catch {
+      if (fs.existsSync(targetPath)) {
+        continue;
+      }
       if (entry.isDirectory()) {
         copyBundledPluginRuntimeRoot(sourcePath, targetPath);
       } else if (entry.isFile()) {
@@ -853,17 +864,21 @@ function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void
         `  defaultExport = defaultExport.default;`,
         `}`,
       ];
+  const content = [
+    `export * from ${JSON.stringify(normalizedSpecifier)};`,
+    ...defaultForwarder,
+    "export { defaultExport as default };",
+    "",
+  ].join("\n");
+  try {
+    if (fs.readFileSync(targetPath, "utf8") === content) {
+      return;
+    }
+  } catch {
+    // Missing or unreadable wrapper; rewrite below.
+  }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(
-    targetPath,
-    [
-      `export * from ${JSON.stringify(normalizedSpecifier)};`,
-      ...defaultForwarder,
-      "export { defaultExport as default };",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+  fs.writeFileSync(targetPath, content, "utf8");
 }
 
 function ensureOpenClawPluginSdkAlias(distRoot: string): void {
