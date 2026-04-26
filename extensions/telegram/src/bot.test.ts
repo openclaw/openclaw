@@ -1788,7 +1788,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
-  it("uses external_reply quote text for partial replies", async () => {
+  it("uses top-level quote text for external partial replies", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
@@ -1801,13 +1801,13 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "Sure, see below",
         date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
         external_reply: {
           message_id: 9002,
           text: "Can you summarize this?",
           from: { first_name: "Ada" },
-          quote: {
-            text: "summarize this",
-          },
         },
       },
       me: { username: "openclaw_bot" },

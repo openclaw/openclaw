@@ -503,22 +503,22 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.fromMessageId).toBe(456);
   });
 
-  it("marks partial external replies as external targets", () => {
+  it("marks top-level quote metadata on external replies as external targets", () => {
     const result = describeReplyTarget({
       message_id: 5,
       date: 1300,
       chat: { id: 1, type: "private" },
       text: "Comment on forwarded message",
+      quote: {
+        text: "quoted slice",
+        position: 4,
+        entities: [{ type: "italic", offset: 0, length: 6 }],
+      },
       external_reply: {
         message_id: 4,
         date: 1200,
         chat: { id: 1, type: "private" },
         text: "Forwarded from elsewhere",
-        quote: {
-          text: "quoted slice",
-          position: 4,
-          entities: [{ type: "italic", offset: 0, length: 6 }],
-        },
         from: { id: 123, first_name: "Eve", is_bot: false },
       },
     } as any);
