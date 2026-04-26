@@ -66,6 +66,7 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  loadPluginManifestRegistryForPluginRegistry: () => loadPluginManifestRegistry(),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin,

@@ -47,6 +47,30 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({
+    plugins: [
+      {
+        id: "document-extract",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: [],
+        legacyPluginIds: [],
+        contracts: { documentExtractors: ["pdf"] },
+      },
+      {
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: ["openai", "openai-codex"],
+        legacyPluginIds: [],
+        contracts: {},
+      },
+    ],
+  })),
 }));
 
 vi.mock("./manifest-registry.js", () => ({

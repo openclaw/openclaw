@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getPluginRegistryState = vi.hoisted(() => vi.fn());
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginRegistrySnapshot: vi.fn((_params?: unknown) => ({ plugins: [] })),
 }));
 
 vi.mock("./runtime-state.js", () => ({
@@ -17,6 +17,11 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+  loadPluginManifestRegistryForPluginRegistry: () =>
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex({
+      index: pluginRegistryMocks.loadPluginRegistrySnapshot({ cache: true }),
+      includeDisabled: true,
+    }),
 }));
 
 import { resolveRuntimeSyntheticAuthProviderRefs } from "./synthetic-auth.runtime.js";
