@@ -1,6 +1,6 @@
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -19,8 +19,35 @@ type ProviderAccountStatus = {
   visibleInConfiguredLists?: boolean;
 };
 
+export type ProviderSummaryMetadata = {
+  label: string;
+  defaultAccountId: string;
+  visibleInConfiguredLists: boolean;
+};
+
 function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
+}
+
+export function buildProviderSummaryMetadataIndex(
+  cfg: OpenClawConfig,
+): Map<ChannelId, ProviderSummaryMetadata> {
+  return new Map(
+    listReadOnlyChannelPluginsForConfig(cfg, {
+      includeSetupRuntimeFallback: false,
+    }).map((plugin) => [
+      plugin.id,
+      {
+        label: plugin.meta.label,
+        defaultAccountId: resolveChannelDefaultAccountId({
+          plugin,
+          cfg,
+          accountIds: plugin.config.listAccountIds(cfg),
+        }),
+        visibleInConfiguredLists: isChannelVisibleInConfiguredLists(plugin.meta),
+      },
+    ]),
+  );
 }
 
 function isUnresolvedSecretRefResolutionError(error: unknown): boolean {
@@ -37,8 +64,7 @@ function formatChannelAccountLabel(params: {
   accountId: string;
   name?: string;
 }): string {
-  const label =
-    params.providerLabel ?? getChannelPlugin(params.provider)?.meta.label ?? params.provider;
+  const label = params.providerLabel ?? params.provider;
   const account = params.name?.trim()
     ? `${params.accountId} (${params.name.trim()})`
     : params.accountId;
@@ -134,31 +160,26 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
-  const plugin = getChannelPlugin(provider);
-  if (!plugin) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return resolveChannelDefaultAccountId({ plugin, cfg });
+function resolveDefaultAccountId(
+  provider: ChannelId,
+  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>,
+): string {
+  return metadataByProvider.get(provider)?.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
 }
 
-function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConfig): boolean {
-  if (entry.visibleInConfiguredLists !== undefined) {
-    if (!entry.visibleInConfiguredLists) {
-      const providerConfig = (cfg as Record<string, unknown>)[entry.provider];
-      return Boolean(entry.configured) || Boolean(providerConfig);
-    }
-    return Boolean(entry.configured);
+function shouldShowProviderEntry(params: {
+  entry: ProviderAccountStatus;
+  cfg: OpenClawConfig;
+  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
+}): boolean {
+  const visibleInConfiguredLists =
+    params.entry.visibleInConfiguredLists ??
+    params.metadataByProvider.get(params.entry.provider)?.visibleInConfiguredLists;
+  if (visibleInConfiguredLists === false) {
+    const providerConfig = (params.cfg as Record<string, unknown>)[params.entry.provider];
+    return Boolean(params.entry.configured) || Boolean(providerConfig);
   }
-  const plugin = getChannelPlugin(entry.provider);
-  if (!plugin) {
-    return Boolean(entry.configured);
-  }
-  if (!isChannelVisibleInConfiguredLists(plugin.meta)) {
-    const providerConfig = (cfg as Record<string, unknown>)[plugin.id];
-    return Boolean(entry.configured) || Boolean(providerConfig);
-  }
-  return Boolean(entry.configured);
+  return Boolean(params.entry.configured);
 }
 
 function formatProviderEntry(entry: ProviderAccountStatus): string {
@@ -171,7 +192,11 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
-export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[]): string[] {
+export function summarizeBindings(
+  cfg: OpenClawConfig,
+  bindings: AgentBinding[],
+  metadataByProvider = buildProviderSummaryMetadataIndex(cfg),
+): string[] {
   if (bindings.length === 0) {
     return [];
   }
@@ -181,11 +206,13 @@ export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[])
     if (!channel) {
       continue;
     }
-    const accountId = binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
+    const accountId =
+      binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
     const key = providerAccountKey(channel, accountId);
     if (!seen.has(key)) {
       const label = formatChannelAccountLabel({
         provider: channel,
+        providerLabel: metadataByProvider.get(channel)?.label,
         accountId,
       });
       seen.set(key, label);
@@ -199,9 +226,12 @@ export function listProvidersForAgent(params: {
   cfg: OpenClawConfig;
   bindings: AgentBinding[];
   providerStatus: Map<string, ProviderAccountStatus>;
+  providerMetadata?: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
 }): string[] {
   const allProviderEntries = [...params.providerStatus.values()];
   const providerLines: string[] = [];
+  const metadataByProvider =
+    params.providerMetadata ?? buildProviderSummaryMetadataIndex(params.cfg);
   if (params.bindings.length > 0) {
     const seen = new Set<string>();
     for (const binding of params.bindings) {
@@ -209,7 +239,8 @@ export function listProvidersForAgent(params: {
       if (!channel) {
         continue;
       }
-      const accountId = binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
+      const accountId =
+        binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
       const key = providerAccountKey(channel, accountId);
       if (seen.has(key)) {
         continue;
@@ -220,7 +251,11 @@ export function listProvidersForAgent(params: {
         providerLines.push(formatProviderEntry(status));
       } else {
         providerLines.push(
-          `${formatChannelAccountLabel({ provider: channel, accountId })}: unknown`,
+          `${formatChannelAccountLabel({
+            provider: channel,
+            providerLabel: metadataByProvider.get(channel)?.label,
+            accountId,
+          })}: unknown`,
         );
       }
     }
@@ -229,7 +264,7 @@ export function listProvidersForAgent(params: {
 
   if (params.summaryIsDefault) {
     for (const entry of allProviderEntries) {
-      if (shouldShowProviderEntry(entry, params.cfg)) {
+      if (shouldShowProviderEntry({ entry, cfg: params.cfg, metadataByProvider })) {
         providerLines.push(formatProviderEntry(entry));
       }
     }

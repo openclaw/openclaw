@@ -11,6 +11,7 @@ import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
   buildProviderStatusIndex,
+  buildProviderSummaryMetadataIndex,
   listProvidersForAgent,
   summarizeBindings,
 } from "./agents.providers.js";
@@ -107,11 +108,12 @@ export async function agentsListCommand(
   // catalog entry, this keeps `agents list --json` on the config-only path.
   const includeProviderDetails = !opts.json || opts.bindings === true;
   const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
+  const providerMetadata = includeProviderDetails ? buildProviderSummaryMetadataIndex(cfg) : null;
 
   for (const summary of summaries) {
     const bindings = bindingMap.get(summary.id) ?? [];
-    if (includeProviderDetails && providerStatus) {
-      const routes = summarizeBindings(cfg, bindings);
+    if (includeProviderDetails && providerStatus && providerMetadata) {
+      const routes = summarizeBindings(cfg, bindings, providerMetadata);
       if (routes.length > 0) {
         summary.routes = routes;
       } else if (summary.isDefault) {
@@ -123,6 +125,7 @@ export async function agentsListCommand(
         cfg,
         bindings,
         providerStatus,
+        providerMetadata,
       });
       if (providerLines.length > 0) {
         summary.providers = providerLines;
