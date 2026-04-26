@@ -1,0 +1,14 @@
+{
+  "id": "secrets-gcp",
+  "enabledByDefault": false,
+  "name": "GCP Secret Manager",
+  "description": "Resolve SecretRef sources of type \"gcp\" via Google Cloud Secret Manager.",
+  "contracts": {
+    "secretProviders": ["gcp"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
