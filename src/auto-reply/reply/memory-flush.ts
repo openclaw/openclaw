@@ -49,7 +49,7 @@ function resolveMemoryFlushGateState<
    * `resolveEffectiveCompactionReserveTokens` in `src/agents/pi-settings.ts`.
    * Named without the `Floor` suffix because the floor is only one input to
    * this value; using just the floor ignores a user-configured `reserveTokens`
-   * above the floor and is the bug fixed in this commit.
+   * above the floor.
    */
   reserveTokens: number;
   softThresholdTokens: number;

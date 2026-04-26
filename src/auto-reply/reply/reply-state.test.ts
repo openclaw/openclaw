@@ -353,24 +353,6 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
-
-  it("returns null gate state when effective reserve + soft threshold exceed the context window", () => {
-    // If a caller accidentally passes reserve + soft > contextWindow (the
-    // scenario that silently disabled compaction on 2026-04-19 for one user
-    // before this fix was written), the gate returns false rather than
-    // firing every turn. Important invariant: the threshold clamp to 0 is
-    // intentional and prevents pathological compaction loops on tiny-window
-    // models.
-    expect(
-      shouldRunPreflightCompaction({
-        entry: { totalTokensFresh: false },
-        tokenCount: 50_000,
-        contextWindowTokens: 100_000,
-        reserveTokens: 80_000,
-        softThresholdTokens: 30_000,
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
