@@ -9,9 +9,7 @@ import {
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
-  createDiagnosticTraceContext,
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
@@ -182,6 +180,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { startRunLifecycleDiagnostics } from "./attempt-lifecycle.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
@@ -215,10 +214,7 @@ import {
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import {
-  diagnosticErrorCategory,
-  wrapStreamFnWithDiagnosticModelCallEvents,
-} from "./attempt.model-diagnostic-events.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -410,41 +406,12 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-    const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
-    const runTrace = freezeDiagnosticTraceContext(
-      createChildDiagnosticTraceContext(diagnosticTrace),
-    );
-    const diagnosticRunBase = {
-      runId: params.runId,
-      ...(params.sessionKey && { sessionKey: params.sessionKey }),
-      ...(params.sessionId && { sessionId: params.sessionId }),
-      provider: params.provider,
-      model: params.modelId,
-      trigger: params.trigger,
-      ...((params.messageChannel ?? params.messageProvider)
-        ? { channel: params.messageChannel ?? params.messageProvider }
-        : {}),
-      trace: runTrace,
-    };
-    emitTrustedDiagnosticEvent({
-      type: "run.started",
-      ...diagnosticRunBase,
-    });
-    const diagnosticRunStartedAt = Date.now();
-    let diagnosticRunCompleted = false;
-    emitDiagnosticRunCompleted = (outcome, err) => {
-      if (diagnosticRunCompleted) {
-        return;
-      }
-      diagnosticRunCompleted = true;
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        ...diagnosticRunBase,
-        durationMs: Date.now() - diagnosticRunStartedAt,
-        outcome,
-        ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
-      });
-    };
+    const {
+      diagnosticTrace,
+      runTrace,
+      emitCompleted: emitRunDiagnosticCompleted,
+    } = startRunLifecycleDiagnostics(params);
+    emitDiagnosticRunCompleted = emitRunDiagnosticCompleted;
     const toolsRaw =
       params.disableTools || params.modelRun
         ? []
