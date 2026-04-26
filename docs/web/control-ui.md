@@ -33,7 +33,7 @@ The dashboard settings panel keeps a token for the current browser tab session a
 
 ## Device pairing (first connection)
 
-When you connect to the Control UI from a new browser or device, the Gateway requires a **one-time pairing approval** — even if you're on the same Tailnet with `gateway.auth.allowTailscale: true`. This is a security measure to prevent unauthorized access.
+When you connect to the Control UI from a new browser or device, the Gateway usually requires a **one-time pairing approval**. This is a security measure to prevent unauthorized access.
 
 **What you'll see:** "disconnected (1008): pairing required"
 
@@ -58,7 +58,8 @@ Once approved, the device is remembered and won't require re-approval unless you
 
 <Note>
 - Direct local loopback browser connections (`127.0.0.1` / `localhost`) are auto-approved.
-- Tailnet and LAN browser connects still require explicit approval, even when they originate from the same machine.
+- Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity.
+- Direct Tailnet binds, LAN browser connects, and browser profiles without device identity still require explicit approval.
 - Each browser profile generates a unique device ID, so switching browsers or clearing browser data will require re-pairing.
 </Note>
 
@@ -237,7 +238,7 @@ Absolute external `http(s)` embed URLs stay blocked by default. If you intention
 
     - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
-    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or `"password"`.
+    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or `"password"`.
 
     For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
 
