@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: count failed health-monitor restart attempts toward cooldown and hourly caps, and evict stale account lifecycle state during channel reloads so repeated Discord gateway recovery cannot loop on old status. Fixes #38596. (#40413) Thanks @jellyAI-dev and @vashquez.
 - Cron/context engine: run isolated cron jobs under run-scoped context-engine session keys so prior runs of the same job are not inherited unless the job is explicitly session-bound. (#72292) Thanks @jalehman.
 - Control UI: localize command palette labels, categories, skill shortcuts, footer hints, and connect-command copy labels while preserving localized command palette search matching. (#61130, #61119) Thanks @rubensfox20.
+- Plugins/memory-lancedb: request float embedding responses from OpenAI-compatible servers so local providers that default SDK requests to base64 no longer return dimension-mismatched LanceDB vectors while preserving configured dimensions. Fixes #45982. (#59048, #46069, #45986) Thanks @deep-introspection, @xiaokhkh, @caicongyang, and @thiswind.
 
 ## 2026.4.26
 
