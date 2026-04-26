@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
@@ -57,14 +56,8 @@ function resolveBundledManifestRecordsByPluginId(params: {
   onlyPluginIds: readonly string[];
 }) {
   const allowedPluginIds = new Set(params.onlyPluginIds);
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
   return new Map(
-    loadPluginManifestRegistryForInstalledIndex({
-      index,
+    loadPluginManifestRegistryForPluginRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,

@@ -1,8 +1,7 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import {
   createPluginIdScopeSet,
   normalizePluginIdScope,
@@ -65,13 +64,7 @@ function loadInstalledWebProviderManifestRecords(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): readonly PluginManifestRecord[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return loadPluginManifestRegistryForInstalledIndex({
-    index,
+  return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
 }));
 
@@ -11,6 +12,8 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
@@ -35,6 +38,9 @@ function createProviderAuthChoice(overrides: Record<string, unknown>) {
 
 function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    plugins,
+  });
+  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     plugins,
   });
 }
@@ -64,6 +70,10 @@ describe("provider auth choice manifest helpers", () => {
   beforeEach(() => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+    });
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [],
     });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();

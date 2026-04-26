@@ -1,6 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
@@ -19,12 +18,10 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
 }
 
 function resolveManifestSyntheticAuthProviderRefs(): string[] {
-  const index = loadPluginRegistrySnapshot({ cache: true });
   return uniqueProviderRefs(
-    loadPluginManifestRegistryForInstalledIndex({
-      index,
-      includeDisabled: true,
-    }).plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+    loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true }).plugins.flatMap(
+      (plugin) => plugin.syntheticAuthRefs ?? [],
+    ),
   );
 }
 

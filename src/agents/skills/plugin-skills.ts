@@ -7,9 +7,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../../plugins/plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
@@ -50,12 +49,7 @@ export function resolvePluginSkillDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const index = loadPluginRegistrySnapshot({
-    workspaceDir,
-    config: params.config,
-  });
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.config,
     includeDisabled: true,

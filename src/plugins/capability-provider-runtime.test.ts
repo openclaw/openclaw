@@ -15,10 +15,10 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-  loadPluginManifestRegistry: vi.fn<() => MockManifestRegistry>(() =>
-    createEmptyMockManifestRegistry(),
+  loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
+    () => createEmptyMockManifestRegistry(),
   ),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   withBundledPluginAllowlistCompat: vi.fn(
     ({ config, pluginIds }: { config?: OpenClawConfig; pluginIds: string[] }) =>
       ({
@@ -41,9 +41,21 @@ vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
 }));
 
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
-}));
+vi.mock("./plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
+    loadPluginManifestRegistryForPluginRegistry: (
+      ...args: Parameters<typeof mocks.loadPluginManifestRegistry>
+    ) => {
+      const [{ includeDisabled: _includeDisabled, ...params } = {}] = args as [
+        Record<string, unknown>?,
+      ];
+      return mocks.loadPluginManifestRegistry(params);
+    },
+  };
+});
 
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginAllowlistCompat: mocks.withBundledPluginAllowlistCompat,
@@ -73,10 +85,8 @@ function expectBundledCompatLoadPath(params: {
   };
 }) {
   expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
-    index: expect.anything(),
     config: params.cfg,
     env: process.env,
-    includeDisabled: true,
   });
   expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
     config: params.allowlistCompat,
