@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +16,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [] })),
+  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn(() => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -39,14 +39,29 @@ const mockState = vi.hoisted(() => ({
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
 }));
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
-  buildModelsProviderData: mockState.buildModelsProviderData,
-  createReplyPrefixOptions: vi.fn(() => ({})),
-  createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
-  isRequestBodyLimitError: vi.fn(() => false),
-  logTypingFailure: vi.fn(),
-  readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
-}));
+vi.mock("./runtime-api.js", () => {
+  return {
+    buildModelsProviderData: mockState.buildModelsProviderData,
+    createChannelReplyPipeline: vi.fn(() => ({
+      onModelSelected: vi.fn(),
+      typingCallbacks: {},
+    })),
+    createDedupeCache: vi.fn(() => ({
+      check: () => false,
+    })),
+    createReplyPrefixOptions: vi.fn(() => ({})),
+    createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
+    isRequestBodyLimitError: vi.fn(() => false),
+    logTypingFailure: vi.fn(),
+    formatInboundFromLabel: vi.fn(() => ""),
+    rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
+    readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+    resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
+      sessionKey: params.baseSessionKey,
+      parentSessionKey: undefined,
+    })),
+  };
+});
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => ({
@@ -71,12 +86,16 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", () => ({
-  createMattermostClient: mockState.createMattermostClient,
-  fetchMattermostChannel: mockState.fetchMattermostChannel,
-  normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim() ?? ""),
-  sendMattermostTyping: vi.fn(),
-}));
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    createMattermostClient: mockState.createMattermostClient,
+    fetchMattermostChannel: mockState.fetchMattermostChannel,
+    normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim() ?? ""),
+    sendMattermostTyping: vi.fn(),
+  };
+});
 
 vi.mock("./model-picker.js", () => ({
   renderMattermostModelSummaryView: vi.fn(),
@@ -104,11 +123,11 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
-  const incoming = req as unknown as IncomingMessage;
+  const incoming = req as PassThrough & IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
@@ -124,13 +143,38 @@ function createResponse(): {
   getBody: () => string;
 } {
   let body = "";
-  const res = {
-    statusCode: 200,
-    setHeader() {},
-    end(chunk?: string | Buffer) {
+  class TestServerResponse extends ServerResponse {
+    override setHeader() {
+      return this;
+    }
+
+    override end(): this;
+    override end(cb: () => void): this;
+    override end(chunk: string | Buffer | Uint8Array, cb?: () => void): this;
+    override end(
+      chunk: string | Buffer | Uint8Array,
+      encoding: BufferEncoding,
+      cb?: () => void,
+    ): this;
+    override end(
+      chunkOrCb?: string | Buffer | Uint8Array | (() => void),
+      encodingOrCb?: BufferEncoding | (() => void),
+      cb?: () => void,
+    ): this {
+      const chunk = typeof chunkOrCb === "function" ? undefined : chunkOrCb;
+      const callback =
+        typeof chunkOrCb === "function"
+          ? chunkOrCb
+          : typeof encodingOrCb === "function"
+            ? encodingOrCb
+            : cb;
       body = chunk ? String(chunk) : "";
-    },
-  } as unknown as ServerResponse;
+      callback?.();
+      return this;
+    }
+  }
+
+  const res = new TestServerResponse(createRequest(""));
   return {
     res,
     getBody: () => body,
@@ -148,7 +192,8 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
@@ -159,6 +204,7 @@ describe("slash-http cfg threading", () => {
     mockState.fetchMattermostChannel.mockClear();
     mockState.sendMessageMattermost.mockClear();
     mockState.normalizeMattermostAllowList.mockClear();
+    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {
@@ -189,5 +235,30 @@ describe("slash-http cfg threading", () => {
         accountId: "default",
       }),
     );
+  });
+
+  it("does not rely on Set.has for command token validation", async () => {
+    const commandTokens = new Set(["valid-token"]);
+    const hasSpy = vi.fn(() => {
+      throw new Error("Set.has should not be used for slash token validation");
+    });
+    Object.defineProperty(commandTokens, "has", {
+      value: hasSpy,
+      configurable: true,
+    });
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens,
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
+    expect(hasSpy).not.toHaveBeenCalled();
   });
 });

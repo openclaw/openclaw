@@ -1,9 +1,13 @@
+import { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
+import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
+import { createDedupeCache, type OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
 import {
-  formatInboundFromLabel as formatInboundFromLabelShared,
-  resolveThreadSessionKeys as resolveThreadSessionKeysShared,
-  type OpenClawConfig,
-} from "../runtime-api.js";
-export { createDedupeCache, rawDataToString } from "../runtime-api.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+
+export { createDedupeCache, rawDataToString };
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -30,8 +34,7 @@ function normalizeAgentId(value: string | undefined | null): string {
     return trimmed;
   }
   return (
-    trimmed
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(trimmed)
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+/, "")
       .replace(/-+$/, "")
@@ -56,7 +59,7 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
 
 export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
   const entry = resolveAgentEntry(cfg, agentId);
-  return entry?.identity?.name?.trim() || undefined;
+  return normalizeOptionalString(entry?.identity?.name);
 }
 
 export function resolveThreadSessionKeys(params: {

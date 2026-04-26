@@ -160,7 +160,6 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
                 );
               default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }
           } catch (err) {
@@ -172,5 +171,5 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     { name: "feishu_perm" },
   );
 
-  api.logger.info?.(`feishu_perm: Registered feishu_perm tool`);
+  api.logger.debug?.(`feishu_perm: Registered feishu_perm tool`);
 }

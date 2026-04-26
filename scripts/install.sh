@@ -179,11 +179,13 @@ bootstrap_gum_temp() {
     gum_tmpdir="$(mktemp -d)"
     TMPFILES+=("$gum_tmpdir")
 
+    ui_info "Preparing spinner support"
     if ! download_file "${base}/${asset}" "$gum_tmpdir/$asset"; then
         GUM_REASON="download failed"
         return 1
     fi
 
+    ui_info "Verifying spinner support download"
     if ! download_file "${base}/checksums.txt" "$gum_tmpdir/checksums.txt"; then
         GUM_REASON="checksum unavailable or failed"
         return 1
@@ -444,6 +446,7 @@ run_quiet_step() {
 
     local log
     log="$(mktempfile)"
+    local showed_progress=false
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
@@ -453,10 +456,18 @@ run_quiet_step() {
         if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
             return 0
         fi
+        showed_progress=true
     else
+        # Keep users informed even when gum spinner cannot run (for example shell functions).
+        ui_info "${title}"
+        showed_progress=true
         if "$@" >"$log" 2>&1; then
             return 0
         fi
+    fi
+
+    if [[ "$showed_progress" == "false" ]]; then
+        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -1432,7 +1443,7 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
@@ -1443,7 +1454,7 @@ install_node() {
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1454,7 +1465,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
@@ -1942,6 +1953,11 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+to_lowercase_ascii() {
+    # macOS still ships Bash 3.2, so avoid `${value,,}` here.
+    printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 is_explicit_package_install_spec() {
     local value="${1:-}"
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
@@ -1949,10 +1965,12 @@ is_explicit_package_install_spec() {
 
 can_resolve_registry_package_version() {
     local value="${1:-}"
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ "${value,,}" == "main" ]]; then
+    if [[ "$normalized_value" == "main" ]]; then
         return 1
     fi
     if is_explicit_package_install_spec "$value"; then
@@ -1964,7 +1982,9 @@ can_resolve_registry_package_version() {
 resolve_package_install_spec() {
     local package_name="$1"
     local value="$2"
-    if [[ "${value,,}" == "main" ]]; then
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
+    if [[ "$normalized_value" == "main" ]]; then
         echo "github:openclaw/openclaw#main"
         return 0
     fi
@@ -2074,7 +2094,7 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
         return
     fi
 
@@ -2129,15 +2149,10 @@ if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
 # Inline fallback when version-parse.sh could not be sourced (for example, stdin install).
 extract_openclaw_semver() {
     local raw="${1:-}"
-    local parsed=""
-    parsed="$(
-        printf '%s\n' "$raw" \
-            | tr -d '\r' \
-            | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
-            | head -n 1 \
-            || true
-    )"
-    printf '%s' "${parsed#v}"
+    raw="${raw//$'\r'/}"
+    if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
 }
 fi
 
@@ -2149,7 +2164,9 @@ resolve_openclaw_version() {
         claw="$(command -v openclaw)"
     fi
     if [[ -n "$claw" ]]; then
-        raw_version_output=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        raw_version_output=$("$claw" --version 2>/dev/null || true)
+        raw_version_output="${raw_version_output%%$'\n'*}"
+        raw_version_output="${raw_version_output//$'\r'/}"
         version="$(extract_openclaw_semver "$raw_version_output")"
         if [[ -z "$version" ]]; then
             version="$raw_version_output"
@@ -2259,6 +2276,8 @@ main() {
         return 0
     fi
 
+    # bootstrap_gum_temp may perform network downloads before any spinner is available.
+    echo -e "${INFO}Preparing installer interface...${NC}"
     bootstrap_gum_temp || true
     print_installer_banner
     print_gum_status
@@ -2466,15 +2485,13 @@ main() {
                 return 0
             fi
             local -a doctor_args=()
-            if [[ "$NO_ONBOARD" == "1" ]]; then
-                if "$claw" doctor --help 2>/dev/null | grep -q -- "--non-interactive"; then
-                    doctor_args+=("--non-interactive")
-                fi
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
             else
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
             fi
@@ -2492,7 +2509,7 @@ main() {
             ui_info "Skipping onboard (requested); run openclaw onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true

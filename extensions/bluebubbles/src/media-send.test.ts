@@ -19,7 +19,7 @@ vi.mock("./send.js", () => ({
   sendMessageBlueBubbles: sendMessageBlueBubblesMock,
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
 }));
 
@@ -322,5 +322,28 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
       expect.objectContaining({ url: "https://example.com/file.png" }),
     );
     expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes asVoice through to attachment delivery", async () => {
+    runtimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: new Uint8Array([1, 2, 3]),
+      contentType: "audio/mpeg",
+      fileName: "voice.mp3",
+    });
+
+    await sendBlueBubblesMedia({
+      cfg: createConfig(),
+      to: "chat:123",
+      mediaUrl: "https://example.com/voice.mp3",
+      asVoice: true,
+    });
+
+    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asVoice: true,
+        contentType: "audio/mpeg",
+        filename: "voice.mp3",
+      }),
+    );
   });
 });

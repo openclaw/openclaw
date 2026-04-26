@@ -1,11 +1,14 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
+import { configureProgramHelp } from "./help.js";
 
-const hasEmittedCliBannerMock = vi.fn(() => false);
-const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
-const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
-const resolveCommitHashMock = vi.fn<() => string | null>(() => "abc1234");
+const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
+const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
+const formatDocsLinkMock = vi.hoisted(() =>
+  vi.fn((_path: string, full: string) => `https://${full}`),
+);
+const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
@@ -44,13 +47,11 @@ vi.mock("./register.subclis.js", () => ({
   getSubCliCommandsWithSubcommands: () => ["gateway"],
 }));
 
-const { configureProgramHelp } = await import("./help.js");
-
 const testProgramContext: ProgramContext = {
   programVersion: "9.9.9-test",
-  channelOptions: ["telegram"],
-  messageChannelOptions: "telegram",
-  agentChannelOptions: "last|telegram",
+  channelOptions: ["quietchat"],
+  messageChannelOptions: "quietchat",
+  agentChannelOptions: "last|quietchat",
 };
 
 describe("configureProgramHelp", () => {

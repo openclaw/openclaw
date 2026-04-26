@@ -1,0 +1,91 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
+
+const hoisted = vi.hoisted(() => ({
+  withOperatorApprovalsGatewayClient: vi.fn(),
+  clientRequest: vi.fn(),
+}));
+
+vi.mock("../gateway/operator-approvals-client.js", () => ({
+  withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
+}));
+
+describe("resolveApprovalOverGateway", () => {
+  beforeEach(() => {
+    hoisted.clientRequest.mockReset().mockResolvedValue({ ok: true });
+    hoisted.withOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (_, run) => {
+      await run({ request: hoisted.clientRequest });
+    });
+  });
+
+  it("routes exec approvals through exec.approval.resolve", async () => {
+    await resolveApprovalOverGateway({
+      cfg: { gateway: { auth: { token: "cfg-token" } } } as never,
+      approvalId: "approval-1",
+      decision: "allow-once",
+      gatewayUrl: "ws://gateway.example.test",
+      clientDisplayName: "QuietChat approval (default)",
+    });
+
+    expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledWith(
+      {
+        config: { gateway: { auth: { token: "cfg-token" } } },
+        gatewayUrl: "ws://gateway.example.test",
+        clientDisplayName: "QuietChat approval (default)",
+      },
+      expect.any(Function),
+    );
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-1",
+      decision: "allow-once",
+    });
+  });
+
+  it("routes plugin approvals through plugin.approval.resolve", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "plugin:approval-1",
+      decision: "deny",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "plugin:approval-1",
+      decision: "deny",
+    });
+  });
+
+  it("falls back to plugin.approval.resolve only for not-found exec approvals when enabled", async () => {
+    const notFoundError = Object.assign(new Error("unknown or expired approval id"), {
+      gatewayCode: "APPROVAL_NOT_FOUND",
+    });
+    hoisted.clientRequest.mockRejectedValueOnce(notFoundError).mockResolvedValueOnce({ ok: true });
+
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      decision: "allow-always",
+      allowPluginFallback: true,
+    });
+
+    expect(hoisted.clientRequest.mock.calls).toEqual([
+      ["exec.approval.resolve", { id: "approval-1", decision: "allow-always" }],
+      ["plugin.approval.resolve", { id: "approval-1", decision: "allow-always" }],
+    ]);
+  });
+
+  it("does not fall back for non-not-found exec approval failures", async () => {
+    hoisted.clientRequest.mockRejectedValueOnce(new Error("permission denied"));
+
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        decision: "deny",
+        allowPluginFallback: true,
+      }),
+    ).rejects.toThrow("permission denied");
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+  });
+});

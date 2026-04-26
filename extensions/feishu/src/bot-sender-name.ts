@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -11,6 +12,12 @@ type SenderNameResult = {
   name?: string;
   permissionError?: FeishuPermissionError;
 };
+
+type FeishuContactUserGetResponse = Awaited<
+  ReturnType<ReturnType<typeof createFeishuClient>["contact"]["user"]["get"]>
+>;
+
+type FeishuLogger = (...args: unknown[]) => void;
 
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
@@ -29,7 +36,7 @@ function correctFeishuScopeInUrl(url: string): string {
 }
 
 function shouldSuppressPermissionErrorNotice(permissionError: FeishuPermissionError): boolean {
-  const message = permissionError.message.toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(permissionError.message);
   return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
 }
 
@@ -69,7 +76,7 @@ function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "u
 export async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
   senderId: string;
-  log: (...args: any[]) => void;
+  log: FeishuLogger;
 }): Promise<SenderNameResult> {
   const { account, senderId, log } = params;
   if (!account.configured) {
@@ -90,17 +97,14 @@ export async function resolveFeishuSenderName(params: {
   try {
     const client = createFeishuClient(account);
     const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-    const res: any = await client.contact.user.get({
+    const res: FeishuContactUserGetResponse = await client.contact.user.get({
       path: { user_id: normalizedSenderId },
       params: { user_id_type: userIdType },
     });
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
+    const user = res.data?.user;
+    const name = user?.name ?? user?.nickname ?? user?.en_name;
 
-    if (name && typeof name === "string") {
+    if (name) {
       senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return { name };
     }

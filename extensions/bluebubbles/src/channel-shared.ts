@@ -1,17 +1,16 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
-import { BlueBubblesConfigSchema } from "./config-schema.js";
+import { BlueBubblesChannelConfigSchema } from "./config-schema.js";
 import type { ChannelPlugin } from "./runtime-api.js";
 import { normalizeBlueBubblesHandle } from "./targets.js";
 
@@ -41,7 +40,7 @@ export const bluebubblesCapabilities: ChannelPlugin<ResolvedBlueBubblesAccount>[
 };
 
 export const bluebubblesReload = { configPrefixes: ["channels.bluebubbles"] };
-export const bluebubblesConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema);
+export const bluebubblesConfigSchema = BlueBubblesChannelConfigSchema;
 
 export const bluebubblesConfigAdapter =
   createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
@@ -59,7 +58,7 @@ export const bluebubblesConfigAdapter =
   });
 
 export function describeBlueBubblesAccount(account: ResolvedBlueBubblesAccount) {
-  return describeAccountSnapshot({
+  return describeWebhookAccountSnapshot({
     account,
     configured: account.configured,
     extra: {

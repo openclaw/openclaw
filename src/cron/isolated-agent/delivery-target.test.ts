@@ -1,46 +1,54 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { forumMessagingForTest } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
+vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: vi
-    .fn()
-    .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock("../../infra/outbound/target-resolver.js", () => ({
+vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
+  resolveMessageChannelSelection: vi
+    .fn()
+    .mockResolvedValue({ channel: "alpha", configured: ["alpha"] }),
+}));
+
+vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
   maybeResolveIdLikeTarget: vi.fn(),
 }));
 
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStoreSync: vi.fn(() => []),
+vi.mock("../../pairing/allow-from-store-read.js", () => ({
+  readChannelAllowFromStoreEntriesSync: vi.fn(() => []),
 }));
 
-vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
-  resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
+vi.mock("../../infra/outbound/targets.runtime.js", () => ({
+  resolveOutboundTarget: vi.fn(),
 }));
-
 const mockedModuleIds = [
-  "../../config/sessions.js",
-  "../../infra/outbound/channel-selection.js",
-  "../../infra/outbound/target-resolver.js",
-  "../../pairing/pairing-store.js",
-  "../../../extensions/whatsapp/src/accounts.js",
+  "../../config/sessions/main-session.js",
+  "../../config/sessions/paths.js",
+  "../../config/sessions/store-load.js",
+  "../../infra/outbound/channel-selection.runtime.js",
+  "../../infra/outbound/targets.runtime.js",
+  "../../infra/outbound/target-id-resolution.js",
+  "../../pairing/allow-from-store-read.js",
 ];
 
-import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
-import { loadSessionStore } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
-import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
+import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
+import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 afterAll(() => {
@@ -62,24 +70,50 @@ function createStubOutbound(label: string): ChannelOutboundAdapter {
   };
 }
 
+function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "gateway",
+    resolveTarget: ({ to, allowFrom }) => {
+      const trimmed = typeof to === "string" ? to.trim() : "";
+      if (!trimmed) {
+        return { ok: false, error: new Error(`${label} requires target`) };
+      }
+      if (allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
+        return { ok: false, error: new Error(`${label} target blocked`) };
+      }
+      return { ok: true, to: trimmed };
+    },
+  };
+}
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "telegram",
+        pluginId: "forum",
         plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: createStubOutbound("Telegram"),
+          id: "forum",
+          outbound: createStubOutbound("Forum"),
+          messaging: forumMessagingForTest,
         }),
         source: "test",
       },
       {
-        pluginId: "whatsapp",
-        plugin: createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: createStubOutbound("WhatsApp"),
-        }),
+        pluginId: "alpha",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createAllowlistAwareStubOutbound("Alpha"),
+          }),
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+            resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+              (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
+          },
+        },
         source: "test",
       },
     ]),
@@ -98,12 +132,12 @@ function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function makeTelegramBoundCfg(accountId = "account-b"): OpenClawConfig {
+function makeForumBoundCfg(accountId = "account-b"): OpenClawConfig {
   return makeCfg({
     bindings: [
       {
         agentId: AGENT_ID,
-        match: { channel: "telegram", accountId },
+        match: { channel: "forum", accountId },
       },
     ],
   });
@@ -111,15 +145,19 @@ function makeTelegramBoundCfg(accountId = "account-b"): OpenClawConfig {
 
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = {
-  channel: "telegram" as const,
-  to: "123456",
+  channel: "forum" as const,
+  to: "room:default",
 };
 
 type SessionStore = ReturnType<typeof loadSessionStore>;
 
+function setSessionStore(store: SessionStore) {
+  vi.mocked(loadSessionStore).mockReturnValue(store);
+}
+
 function setMainSessionEntry(entry?: SessionStore[string]) {
   const store = entry ? ({ "agent:test:main": entry } as SessionStore) : ({} as SessionStore);
-  vi.mocked(loadSessionStore).mockReturnValue(store);
+  setSessionStore(store);
 }
 
 function setLastSessionEntry(params: {
@@ -139,19 +177,13 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(resolveWhatsAppAccount).mockReturnValue({
-    allowFrom,
-  } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
-}
-
-function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(allowFrom);
+function setStoredAlphaAllowFrom(allowFrom: string[]) {
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue(allowFrom);
 }
 
 async function resolveForAgent(params: {
   cfg: OpenClawConfig;
-  target?: { channel?: "last" | "telegram"; to?: string };
+  target?: { channel?: "last" | "forum" | "alpha"; to?: string };
 }) {
   const channel = params.target ? params.target.channel : DEFAULT_TARGET.channel;
   const to = params.target && "to" in params.target ? params.target.to : DEFAULT_TARGET.to;
@@ -169,58 +201,123 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
 }
 
 describe("resolveDeliveryTarget", () => {
-  it("reroutes implicit whatsapp delivery to authorized allowFrom recipient", async () => {
+  it("reroutes implicit delivery to an authorized allowFrom recipient", async () => {
     setLastSessionEntry({
       sessionId: "sess-w1",
-      lastChannel: "whatsapp",
-      lastTo: "+15550000099",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
     });
-    setWhatsAppAllowFrom([]);
-    setStoredWhatsAppAllowFrom(["+15550000001"]);
+    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveLastTarget(cfg);
 
-    expect(result.channel).toBe("whatsapp");
-    expect(result.to).toBe("+15550000001");
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
   });
 
-  it("keeps explicit whatsapp target unchanged", async () => {
+  it("applies allowFrom rerouting to dry-run delivery previews", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-preview",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
+    });
+    setStoredAlphaAllowFrom(["room-allowed"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveDeliveryTarget(
+      cfg,
+      AGENT_ID,
+      {
+        channel: "last",
+        to: undefined,
+      },
+      { dryRun: true },
+    );
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+  });
+
+  it("keeps explicit delivery target unchanged", async () => {
     setLastSessionEntry({
       sessionId: "sess-w2",
-      lastChannel: "whatsapp",
-      lastTo: "+15550000099",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
     });
-    setWhatsAppAllowFrom([]);
-    setStoredWhatsAppAllowFrom(["+15550000001"]);
+    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
-      channel: "whatsapp",
-      to: "+15550000099",
+      channel: "alpha",
+      to: "room-denied",
     });
 
-    expect(result.to).toBe("+15550000099");
+    expect(result.to).toBe("room-denied");
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
     setMainSessionEntry(undefined);
-    const cfg = makeTelegramBoundCfg();
+    const cfg = makeForumBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     expect(result.accountId).toBe("account-b");
+  });
+
+  it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: {
+            channel: "forum",
+            peer: { kind: "channel", id: "room:default" },
+            accountId: "peer-first",
+          },
+        },
+        {
+          agentId: AGENT_ID,
+          match: { channel: "forum", accountId: "channel-second" },
+        },
+      ],
+    });
+
+    const result = await resolveForAgent({ cfg });
+
+    expect(result.accountId).toBe("peer-first");
+  });
+
+  it("does not infer scoped bound accountId for peerless cron delivery", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: {
+            channel: "forum",
+            guildId: "guild-1",
+            accountId: "tenant-account",
+          },
+        },
+      ],
+    });
+
+    const result = await resolveForAgent({ cfg });
+
+    expect(result.accountId).toBeUndefined();
   });
 
   it("preserves session lastAccountId when present", async () => {
     setMainSessionEntry({
       sessionId: "sess-1",
       updatedAt: 1000,
-      lastChannel: "telegram",
-      lastTo: "123456",
+      lastChannel: "forum",
+      lastTo: "room:default",
       lastAccountId: "session-account",
     });
 
-    const cfg = makeTelegramBoundCfg();
+    const cfg = makeForumBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     // Session-derived accountId should take precedence over binding
@@ -247,7 +344,7 @@ describe("resolveDeliveryTarget", () => {
     });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "telegram",
+      channel: "forum",
       to: "123456789",
     });
 
@@ -255,8 +352,63 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("user:123456789");
     expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "telegram",
+        channel: "forum",
         input: "123456789",
+      }),
+    );
+  });
+
+  it("skips id-like target normalization for dry-run delivery previews", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(maybeResolveIdLikeTarget).mockClear();
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "forum",
+        to: "123456789",
+      },
+      { dryRun: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("123456789");
+    expect(maybeResolveIdLikeTarget).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "forum",
+      to: "room:default",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        channel: "forum",
+        to: "room:default",
+      }),
+    );
+    expect(resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "forum",
+        to: "room:default",
       }),
     );
   });
@@ -268,11 +420,11 @@ describe("resolveDeliveryTarget", () => {
       bindings: [
         {
           agentId: "agent-a",
-          match: { channel: "telegram", accountId: "account-a" },
+          match: { channel: "forum", accountId: "account-a" },
         },
         {
           agentId: "agent-b",
-          match: { channel: "telegram", accountId: "account-b" },
+          match: { channel: "forum", accountId: "account-b" },
         },
       ],
     });
@@ -289,7 +441,7 @@ describe("resolveDeliveryTarget", () => {
       bindings: [
         {
           agentId: "agent-b",
-          match: { channel: "discord", accountId: "discord-account" },
+          match: { channel: "alpha", accountId: "alpha-account" },
         },
       ],
     });
@@ -302,8 +454,8 @@ describe("resolveDeliveryTarget", () => {
   it("drops session threadId when destination does not match the previous recipient", async () => {
     setLastSessionEntry({
       sessionId: "sess-2",
-      lastChannel: "telegram",
-      lastTo: "999999",
+      lastChannel: "forum",
+      lastTo: "room:other",
       lastThreadId: "thread-1",
     });
 
@@ -314,8 +466,8 @@ describe("resolveDeliveryTarget", () => {
   it("keeps session threadId when destination matches the previous recipient", async () => {
     setLastSessionEntry({
       sessionId: "sess-3",
-      lastChannel: "telegram",
-      lastTo: "123456",
+      lastChannel: "forum",
+      lastTo: "room:default",
       lastThreadId: "thread-2",
     });
 
@@ -327,7 +479,7 @@ describe("resolveDeliveryTarget", () => {
     setMainSessionEntry(undefined);
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
-    expect(result.channel).toBe("telegram");
+    expect(result.channel).toBe("alpha");
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("expected unresolved delivery target");
@@ -340,7 +492,7 @@ describe("resolveDeliveryTarget", () => {
   it("returns an error when channel selection is ambiguous", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error("Channel is required when multiple channels are configured: alpha, forum"),
     );
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
@@ -354,18 +506,19 @@ describe("resolveDeliveryTarget", () => {
   });
 
   it("uses sessionKey thread entry before main session entry", async () => {
-    vi.mocked(loadSessionStore).mockReturnValue({
+    setSessionStore({
       "agent:test:main": {
         sessionId: "main-session",
         updatedAt: 1000,
-        lastChannel: "telegram",
+        lastChannel: "forum",
         lastTo: "main-chat",
       },
       "agent:test:thread:42": {
         sessionId: "thread-session",
         updatedAt: 2000,
-        lastChannel: "telegram",
+        lastChannel: "forum",
         lastTo: "thread-chat",
+        lastThreadId: 42,
       },
     } as SessionStore);
 
@@ -375,35 +528,83 @@ describe("resolveDeliveryTarget", () => {
       to: undefined,
     });
 
-    expect(result.channel).toBe("telegram");
+    expect(result.channel).toBe("forum");
     expect(result.to).toBe("thread-chat");
+    expect(result.threadId).toBe(42);
+  });
+
+  it("falls back to the main session entry when the requested sessionKey is missing", async () => {
+    setSessionStore({
+      "agent:test:main": {
+        sessionId: "main-session",
+        updatedAt: 1000,
+        lastChannel: "forum",
+        lastTo: "main-chat",
+      },
+    } as SessionStore);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:missing",
+      to: undefined,
+    });
+
+    expect(result.channel).toBe("forum");
+    expect(result.to).toBe("main-chat");
   });
 
   it("uses main session channel when channel=last and session route exists", async () => {
     setLastSessionEntry({
       sessionId: "sess-4",
-      lastChannel: "telegram",
-      lastTo: "987654",
+      lastChannel: "forum",
+      lastTo: "room:default",
     });
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
 
-    expect(result.channel).toBe("telegram");
-    expect(result.to).toBe("987654");
+    expect(result.channel).toBe("forum");
+    expect(result.to).toBe("room:default");
     expect(result.ok).toBe(true);
+  });
+
+  it("parses explicit plugin topic targets into delivery threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops:topic:1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room:ops");
+    expect(result.threadId).toBe(1008013);
+  });
+
+  it("keeps explicit delivery threadId on first run without session history", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      threadId: "1008013",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room:ops");
+    expect(result.threadId).toBe("1008013");
   });
 
   it("explicit delivery.accountId overrides session-derived accountId", async () => {
     setLastSessionEntry({
       sessionId: "sess-5",
-      lastChannel: "telegram",
-      lastTo: "chat-999",
+      lastChannel: "forum",
+      lastTo: "room:ops",
       lastAccountId: "default",
     });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "telegram",
-      to: "chat-999",
+      channel: "forum",
+      to: "room:ops",
       accountId: "bot-b",
     });
 
@@ -414,12 +615,12 @@ describe("resolveDeliveryTarget", () => {
   it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
-      bindings: [{ agentId: AGENT_ID, match: { channel: "telegram", accountId: "bound" } }],
+      bindings: [{ agentId: AGENT_ID, match: { channel: "forum", accountId: "bound" } }],
     });
 
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
-      channel: "telegram",
-      to: "chat-777",
+      channel: "forum",
+      to: "room:ops",
       accountId: "explicit",
     });
 

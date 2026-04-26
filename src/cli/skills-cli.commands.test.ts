@@ -1,39 +1,130 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSkillsCli } from "./skills-cli.js";
 
-const loadConfigMock = vi.fn(() => ({}));
-const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
-const searchSkillsFromClawHubMock = vi.fn();
-const installSkillFromClawHubMock = vi.fn();
-const updateSkillsFromClawHubMock = vi.fn();
-const readTrackedClawHubSkillSlugsMock = vi.fn();
+const mocks = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeStdout: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const skillStatusReportFixture = {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/workspace/skills",
+    skills: [
+      {
+        name: "calendar",
+        description: "Calendar helpers",
+        source: "bundled",
+        bundled: false,
+        filePath: "/tmp/workspace/skills/calendar/SKILL.md",
+        baseDir: "/tmp/workspace/skills/calendar",
+        skillKey: "calendar",
+        emoji: "📅",
+        homepage: "https://example.com/calendar",
+        always: false,
+        disabled: false,
+        blockedByAllowlist: false,
+        eligible: true,
+        primaryEnv: "CALENDAR_API_KEY",
+        requirements: {
+          bins: [],
+          anyBins: [],
+          env: ["CALENDAR_API_KEY"],
+          config: [],
+          os: [],
+        },
+        missing: {
+          bins: [],
+          anyBins: [],
+          env: [],
+          config: [],
+          os: [],
+        },
+        configChecks: [],
+        install: [],
+      },
+    ],
+  };
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      runtimeStdout.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      runtimeStdout.push(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  const buildWorkspaceSkillStatusMock = vi.fn((workspaceDir: string, options?: unknown) => {
+    void workspaceDir;
+    void options;
+    return skillStatusReportFixture;
+  });
+  return {
+    loadConfigMock: vi.fn(() => ({})),
+    resolveDefaultAgentIdMock: vi.fn(() => "main"),
+    resolveAgentWorkspaceDirMock: vi.fn(() => "/tmp/workspace"),
+    searchSkillsFromClawHubMock: vi.fn(),
+    installSkillFromClawHubMock: vi.fn(),
+    updateSkillsFromClawHubMock: vi.fn(),
+    readTrackedClawHubSkillSlugsMock: vi.fn(),
+    buildWorkspaceSkillStatusMock,
+    skillStatusReportFixture,
+    defaultRuntime,
+    runtimeLogs,
+    runtimeStdout,
+    runtimeErrors,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const {
+  loadConfigMock,
+  resolveDefaultAgentIdMock,
+  resolveAgentWorkspaceDirMock,
+  searchSkillsFromClawHubMock,
+  installSkillFromClawHubMock,
+  updateSkillsFromClawHubMock,
+  readTrackedClawHubSkillSlugsMock,
+  buildWorkspaceSkillStatusMock,
+  skillStatusReportFixture,
+  defaultRuntime,
+  runtimeLogs,
+  runtimeStdout,
+  runtimeErrors,
+} = mocks;
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  loadConfig: () => mocks.loadConfigMock(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  resolveDefaultAgentId: () => mocks.resolveDefaultAgentIdMock(),
+  resolveAgentWorkspaceDir: () => mocks.resolveAgentWorkspaceDirMock(),
 }));
 
 vi.mock("../agents/skills-clawhub.js", () => ({
-  searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
-  installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
-  updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
-  readTrackedClawHubSkillSlugs: (...args: unknown[]) => readTrackedClawHubSkillSlugsMock(...args),
+  searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
+  installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
+  updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
+  readTrackedClawHubSkillSlugs: (...args: unknown[]) =>
+    mocks.readTrackedClawHubSkillSlugsMock(...args),
 }));
 
-const { registerSkillsCli } = await import("./skills-cli.js");
+vi.mock("../agents/skills-status.js", () => ({
+  buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
+    mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
+}));
 
 describe("skills cli commands", () => {
   const createProgram = () => {
@@ -46,7 +137,9 @@ describe("skills cli commands", () => {
   const runCommand = (argv: string[]) => createProgram().parseAsync(argv, { from: "user" });
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
+    runtimeStdout.length = 0;
+    runtimeErrors.length = 0;
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
@@ -54,6 +147,7 @@ describe("skills cli commands", () => {
     installSkillFromClawHubMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
     readTrackedClawHubSkillSlugsMock.mockReset();
+    buildWorkspaceSkillStatusMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
@@ -65,6 +159,12 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+    buildWorkspaceSkillStatusMock.mockReturnValue(skillStatusReportFixture);
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it("searches ClawHub skills from the native CLI", async () => {
@@ -135,5 +235,60 @@ describe("skills cli commands", () => {
       true,
     );
     expect(runtimeErrors).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "list",
+      argv: ["skills", "list", "--json"],
+      assert: (payload: Record<string, unknown>) => {
+        const skills = payload.skills as Array<Record<string, unknown>>;
+        expect(skills).toHaveLength(1);
+        expect(skills[0]?.name).toBe("calendar");
+      },
+    },
+    {
+      label: "info",
+      argv: ["skills", "info", "calendar", "--json"],
+      assert: (payload: Record<string, unknown>) => {
+        expect(payload.name).toBe("calendar");
+        expect(payload.primaryEnv).toBe("CALENDAR_API_KEY");
+      },
+    },
+    {
+      label: "check",
+      argv: ["skills", "check", "--json"],
+      assert: (payload: Record<string, unknown>) => {
+        expect(payload.summary).toMatchObject({
+          total: 1,
+          eligible: 1,
+        });
+      },
+    },
+  ])("routes skills $label JSON output through stdout", async ({ argv, assert }) => {
+    await runCommand(argv);
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
+      config: {},
+    });
+    expect(
+      defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeStdout.length).toBeGreaterThan(0);
+
+    const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
+    assert(payload);
+  });
+
+  it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
+    await runCommand(["skills", "list"]);
+
+    expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeStdout.at(-1)).toContain("calendar");
+    expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
   });
 });
