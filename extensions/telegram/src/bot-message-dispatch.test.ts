@@ -365,6 +365,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
+    replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
@@ -372,7 +373,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       bot,
       cfg: params.cfg ?? {},
       runtime: createRuntime(),
-      replyToMode: "first",
+      replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
@@ -437,6 +438,130 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips answer draft preview for same-chat selected quotes", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted slice",
+          ReplyToQuoteText: " quoted slice\n",
+          ReplyToIsQuote: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ replyToId: "9001" })],
+        replyQuoteMessageId: 9001,
+        replyQuoteText: " quoted slice\n",
+      }),
+    );
+  });
+
+  it("keeps answer draft preview for selected quotes when reply mode is off", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted slice",
+          ReplyToQuoteText: " quoted slice\n",
+          ReplyToIsQuote: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      replyToMode: "off",
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: undefined,
+      }),
+    );
+  });
+
+  it("passes same-chat quoted reply target id with Telegram quote text", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted slice",
+          ReplyToQuoteText: " quoted slice\n",
+          ReplyToIsQuote: true,
+          ReplyToQuotePosition: 12,
+          ReplyToQuoteEntities: [{ type: "italic", offset: 0, length: 6 }],
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ replyToId: "9001" })],
+        replyQuoteMessageId: 9001,
+        replyQuoteText: " quoted slice\n",
+        replyQuotePosition: 12,
+        replyQuoteEntities: [{ type: "italic", offset: 0, length: 6 }],
+      }),
+    );
+  });
+
+  it("does not pass a native quote target for external replies", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "external quoted slice",
+          ReplyToQuoteText: " external quoted slice\n",
+          ReplyToIsQuote: true,
+          ReplyToIsExternal: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    const params = deliverReplies.mock.calls[0]?.[0];
+    expect(params).toEqual(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ replyToId: "1001" })],
+        replyQuoteText: " external quoted slice\n",
+      }),
+    );
+    expect(params?.replyQuoteMessageId).toBeUndefined();
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {

@@ -114,6 +114,12 @@ function createThreadNotFoundError(operation = "sendMessage") {
   );
 }
 
+function createQuoteNotFoundError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote not found)`,
+  );
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -698,7 +704,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses reply_to_message_id when quote text is provided", async () => {
+  it("uses reply_parameters when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -711,6 +717,87 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+      replyQuotePosition: 17,
+      replyQuoteEntities: [{ type: "bold", offset: 0, length: 6 }],
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: " quoted text\n",
+          quote_position: 17,
+          quote_entities: [{ type: "bold", offset: 0, length: 6 }],
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        reply_to_message_id: expect.anything(),
+      }),
+    );
+  });
+
+  it("retries with legacy reply id when native quote parameters are rejected", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: " quoted text\n",
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+  });
+
+  it("uses legacy reply id when selected reply target differs from quote source", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "501" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
       replyQuoteText: "quoted text",
     });
 
@@ -718,17 +805,59 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_to_message_id: 500,
+        reply_to_message_id: 501,
         allow_sending_without_reply: true,
       }),
     );
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+  });
+
+  it("omits native quote parameters when reply mode suppresses the reply", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "off",
+      replyQuoteMessageId: 500,
+      replyQuoteText: "quoted text",
+    });
+
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("uses legacy reply id when quote text has no quoted message id", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "501" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteText: "quoted text",
+    });
+
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
-      expect.not.objectContaining({
-        reply_parameters: expect.anything(),
+      expect.objectContaining({
+        reply_to_message_id: 501,
+        allow_sending_without_reply: true,
       }),
     );
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
@@ -819,6 +948,7 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       replyToMode: "first",
+      replyQuoteMessageId: 77,
       replyQuoteText: "quoted context",
       textLimit: 12,
     });
@@ -827,8 +957,11 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
-        reply_to_message_id: 77,
-        allow_sending_without_reply: true,
+        reply_parameters: {
+          message_id: 77,
+          quote: "quoted context",
+          allow_sending_without_reply: true,
+        },
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },
