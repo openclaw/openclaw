@@ -100,6 +100,27 @@ def replace_required(content: str, old: str, new: str, label: str) -> str:
     return updated
 
 
+def replace_environment(content: str, key: str, placeholder: str, value: str) -> str:
+    """Render an optional Environment line while keeping reruns idempotent.
+
+    Older versions of this setup script edited the checked-in unit template in
+    place. Users rerunning setup from those checkouts may therefore have either
+    the original commented placeholder or an already-uncommented Environment
+    line. Accept both forms so setup can repair those installs instead of
+    failing before enabling the timer.
+    """
+    rendered = f"Environment={key}={value}"
+    replacements = (
+        (f"# Environment={key}={placeholder}", rendered),
+        (f"Environment={key}={placeholder}", rendered),
+    )
+    for old, new in replacements:
+        if old in content:
+            return content.replace(old, new)
+    print(f"ERROR: {key} placeholder not found in {service_path}", file=sys.stderr)
+    sys.exit(1)
+
+
 content = service_path.read_text()
 content = replace_required(
     content,
@@ -108,19 +129,9 @@ content = replace_required(
     "ExecStart",
 )
 if ntfy_topic:
-    content = replace_required(
-        content,
-        "# Environment=NOTIFY_NTFY=openclaw-alerts",
-        f"Environment=NOTIFY_NTFY={ntfy_topic}",
-        "NOTIFY_NTFY",
-    )
+    content = replace_environment(content, "NOTIFY_NTFY", "openclaw-alerts", ntfy_topic)
 if phone_number:
-    content = replace_required(
-        content,
-        "# Environment=NOTIFY_PHONE=+1234567890",
-        f"Environment=NOTIFY_PHONE={phone_number}",
-        "NOTIFY_PHONE",
-    )
+    content = replace_environment(content, "NOTIFY_PHONE", "+1234567890", phone_number)
 service_path.write_text(content)
 PY
 
