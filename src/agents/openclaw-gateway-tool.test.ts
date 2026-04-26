@@ -25,6 +25,29 @@ function requireGatewayTool(agentSessionKey?: string) {
   });
 }
 
+function collectActionValues(schema: unknown, values: Set<string>): void {
+  if (!schema || typeof schema !== "object") {
+    return;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if (typeof record.const === "string") {
+    values.add(record.const);
+  }
+  if (Array.isArray(record.enum)) {
+    for (const value of record.enum) {
+      if (typeof value === "string") {
+        values.add(value);
+      }
+    }
+  }
+  if (Array.isArray(record.anyOf)) {
+    for (const variant of record.anyOf) {
+      collectActionValues(variant, values);
+    }
+  }
+}
+
 function expectConfigMutationCall(params: {
   callGatewayTool: {
     mock: {
@@ -94,6 +117,19 @@ describe("gateway tool", () => {
   it("marks gateway as owner-only", async () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
+  });
+
+  it("exposes restart and config actions in the gateway tool schema", async () => {
+    const tool = requireGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const values = new Set<string>();
+    collectActionValues(parameters.properties?.action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
   });
 
   it("schedules SIGUSR1 restart", async () => {

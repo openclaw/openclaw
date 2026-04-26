@@ -302,7 +302,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -385,7 +385,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -408,7 +408,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -434,7 +434,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           list: [
             {
               id: "main",
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           ],
         },

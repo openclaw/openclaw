@@ -79,6 +79,7 @@ export type PreparedCliRunContext = {
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
+  openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;
   authEpoch?: string;
   authEpochVersion: number;

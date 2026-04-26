@@ -73,6 +73,7 @@ export type TelegramInboundBodyResult = {
   effectiveWasMentioned: boolean;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
+  audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
@@ -230,6 +231,10 @@ export async function resolveTelegramInboundBody(params: {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
+  const audioTranscribedMediaIndex =
+    preflightTranscript === undefined
+      ? undefined
+      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
     bodyText = formatAudioTranscriptForAgent(preflightTranscript);
@@ -363,6 +368,9 @@ export async function resolveTelegramInboundBody(params: {
     effectiveWasMentioned,
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
+    ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
+      ? { audioTranscribedMediaIndex }
+      : {}),
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

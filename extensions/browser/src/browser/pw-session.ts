@@ -140,6 +140,19 @@ function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
 
+function isRecoverablePlaywrightDisconnectError(err: unknown): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  return (
+    message.includes("target page, context or browser has been closed") ||
+    message.includes("browser has been closed") ||
+    message.includes("browser disconnected") ||
+    message.includes("target closed") ||
+    message.includes("connection closed") ||
+    message.includes("websocket closed") ||
+    message.includes("cdp socket closed")
+  );
+}
+
 function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
   if (!reusedCachedBrowser) {
     return false;
@@ -241,6 +254,25 @@ function clearBlockedPageRefsForCdpUrl(cdpUrl?: string): void {
 
 function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
+}
+
+function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
+  const normalized = normalizeCdpUrl(cdpUrl);
+  const cur = cachedByCdpUrl.get(normalized);
+  cachedByCdpUrl.delete(normalized);
+  connectingByCdpUrl.delete(normalized);
+  if (!cur) {
+    return null;
+  }
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
+  }
+  return cur;
+}
+
+function evictStalePlaywrightBrowserConnection(cdpUrl: string): void {
+  const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
+  cur?.browser.close().catch(() => {});
 }
 
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
@@ -1018,14 +1050,9 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   if (normalized) {
     clearBlockedTargetsForCdpUrl(normalized);
     clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = cachedByCdpUrl.get(normalized);
-    cachedByCdpUrl.delete(normalized);
-    connectingByCdpUrl.delete(normalized);
+    const cur = takeCachedPlaywrightBrowserConnection(normalized);
     if (!cur) {
       return;
-    }
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
     }
     await cur.browser.close().catch(() => {});
     return;
@@ -1152,18 +1179,9 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  const cur = cachedByCdpUrl.get(normalized);
+  const cur = takeCachedPlaywrightBrowserConnection(normalized);
   if (!cur) {
     return;
-  }
-  cachedByCdpUrl.delete(normalized);
-  // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
-  // rather than awaiting a stale promise.
-  connectingByCdpUrl.delete(normalized);
-  // Remove the "disconnected" listener to prevent the old browser's teardown
-  // from racing with a fresh connection and nulling the new cached entry.
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
   }
 
   // Best-effort: kill any stuck JS to unblock the target's execution context before we
@@ -1181,6 +1199,21 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   cur.browser.close().catch(() => {});
 }
 
+async function withPlaywrightSafeReadReconnect<T>(
+  cdpUrl: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isRecoverablePlaywrightDisconnectError(err)) {
+      throw err;
+    }
+    evictStalePlaywrightBrowserConnection(cdpUrl);
+    return await run();
+  }
+}
+
 /**
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
@@ -1196,30 +1229,56 @@ export async function listPagesViaPlaywright(opts: {
     type: string;
   }>
 > {
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-  const pages = await getAllPages(browser);
-  const results: Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }> = [];
+  return await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
+    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+    const pages = await getAllPages(browser);
+    const results: Array<{
+      targetId: string;
+      title: string;
+      url: string;
+      type: string;
+    }> = [];
 
-  for (const page of pages) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      continue;
+    for (const page of pages) {
+      if (isBlockedPageRef(opts.cdpUrl, page)) {
+        continue;
+      }
+      let tid: string | null;
+      try {
+        tid = await pageTargetId(page);
+      } catch (err) {
+        if (isRecoverablePlaywrightDisconnectError(err)) {
+          throw err;
+        }
+        tid = null;
+      }
+      if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
+        let title = "";
+        try {
+          title = await page.title();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        let url = "";
+        try {
+          url = page.url();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        results.push({
+          targetId: tid,
+          title,
+          url,
+          type: "page",
+        });
+      }
     }
-    const tid = await pageTargetId(page).catch(() => null);
-    if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-      results.push({
-        targetId: tid,
-        title: await page.title().catch(() => ""),
-        url: page.url(),
-        type: "page",
-      });
-    }
-  }
-  return results;
+    return results;
+  });
 }
 
 /**

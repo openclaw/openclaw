@@ -405,6 +405,7 @@ describe("preflightDiscordMessage", () => {
     );
     expect(result).not.toBeNull();
     expect(result?.isDirectMessage).toBe(true);
+    expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
@@ -1096,6 +1097,7 @@ describe("preflightDiscordMessage", () => {
     );
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
+    expect(result?.preflightAudioTranscript).toBe("hey openclaw");
   });
 
   it("does not transcribe guild audio from unauthorized members", async () => {

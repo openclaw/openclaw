@@ -181,6 +181,10 @@ describe("config io write", () => {
             }),
           ],
         });
+        const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          plugins?: { installs?: unknown };
+        };
+        expect(persistedConfig.plugins?.installs).toBeUndefined();
       } finally {
         mockLoadPluginManifestRegistry.mockReturnValue({
           diagnostics: [],
@@ -234,6 +238,10 @@ describe("config io write", () => {
         },
         plugins: [],
       });
+      const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        plugins?: { installs?: unknown };
+      };
+      expect(persistedConfig.plugins?.installs).toBeUndefined();
     });
   });
 

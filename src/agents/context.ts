@@ -130,9 +130,22 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
+function hasHelpOrVersionFlag(argv: string[]): boolean {
+  for (const arg of argv.slice(2)) {
+    if (arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") {
+      return true;
+    }
+  }
+  return false;
+}
+
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "agent",
   "backup",
+  "browser",
   "completion",
   "config",
   "directory",
@@ -142,8 +155,10 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "models",
+  "pairing",
   "plugins",
   "secrets",
+  "sessions",
   "status",
   "update",
   "webhooks",
@@ -158,6 +173,9 @@ export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv)
   // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
   // plugin discovery and breaks dist/source singleton assumptions.
   if (!isLikelyOpenClawCliProcess(argv)) {
+    return false;
+  }
+  if (hasHelpOrVersionFlag(argv)) {
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);
@@ -375,7 +393,7 @@ function resolveConfiguredProviderContextTokens(
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && provider !== "claude-cli") {
     return false;
   }
   const modelId = resolveModelFamilyId(model);

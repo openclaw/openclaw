@@ -17,6 +17,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginPackageChannel } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
@@ -66,6 +67,11 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplacePlugin"
 >;
 
+export type InstalledPluginPackageChannelInfo = Pick<
+  PluginPackageChannel,
+  "id" | "label" | "blurb" | "preferOver" | "commands"
+>;
+
 export type InstalledPluginIndexRecord = {
   pluginId: string;
   packageName?: string;
@@ -82,6 +88,7 @@ export type InstalledPluginIndexRecord = {
    * install intent and must not be treated as the durable install record.
    */
   packageInstall?: PluginInstallSourceInfo;
+  packageChannel?: InstalledPluginPackageChannelInfo;
   manifestPath: string;
   manifestHash: string;
   format?: PluginManifestRecord["format"];
@@ -96,6 +103,7 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
 };
@@ -198,7 +206,10 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: sortUnique(record.activation?.onAgentHarnesses ?? []),
+    agentHarnesses: sortUnique([
+      ...(record.activation?.onAgentHarnesses ?? []),
+      ...(record.cliBackends ?? []),
+    ]),
   };
 }
 
@@ -212,6 +223,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   }
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
+  }
+  if (record.activation?.onAgentHarnesses?.length) {
+    codes.push("activation-agent-harness-hint");
   }
   if (record.activation?.onChannels?.length) {
     codes.push("activation-channel-hint");
@@ -277,6 +291,61 @@ function describePackageInstallSource(
   return describePluginInstallSource(install, {
     expectedPackageName: candidate?.packageName,
   });
+}
+
+function normalizeStringField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeStringListField(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .flatMap((entry) => {
+      const normalizedEntry = normalizeStringField(entry);
+      return normalizedEntry ? [normalizedEntry] : [];
+    })
+    .filter((entry, index, all) => all.indexOf(entry) === index);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizePackageChannel(
+  channel: PluginPackageChannel | undefined,
+): InstalledPluginPackageChannelInfo | undefined {
+  const id = normalizeStringField(channel?.id);
+  if (!id) {
+    return undefined;
+  }
+  const label = normalizeStringField(channel?.label);
+  const blurb = normalizeStringField(channel?.blurb);
+  const preferOver = normalizeStringListField(channel?.preferOver);
+  const commands =
+    channel?.commands &&
+    typeof channel.commands === "object" &&
+    !Array.isArray(channel.commands) &&
+    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
+      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
+      ? {
+          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
+            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
+            : {}),
+          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
+            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
+            : {}),
+        }
+      : undefined;
+  return {
+    id,
+    ...(label ? { label } : {}),
+    ...(blurb ? { blurb } : {}),
+    ...(preferOver ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
+  };
 }
 
 function setInstallStringField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
@@ -491,6 +560,7 @@ function buildInstalledPluginIndex(
     const packageJsonPath = resolvePackageJsonPath(candidate);
     const installRecord = installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
+    const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
     const manifestHash =
       safeHashFile({
         filePath: record.manifestPath,
@@ -522,6 +592,9 @@ function buildInstalledPluginIndex(
       startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
     }
@@ -531,8 +604,14 @@ function buildInstalledPluginIndex(
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;
+    }
+    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
+      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
     }
     if (candidate?.packageName) {
       indexRecord.packageName = candidate.packageName;
@@ -545,6 +624,9 @@ function buildInstalledPluginIndex(
     }
     if (packageInstall) {
       indexRecord.packageInstall = packageInstall;
+    }
+    if (packageChannel) {
+      indexRecord.packageChannel = packageChannel;
     }
     if (packageJson) {
       indexRecord.packageJson = packageJson;

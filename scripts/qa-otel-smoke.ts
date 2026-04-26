@@ -80,6 +80,7 @@ type CapturedSpan = {
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
+  "openclaw.harness.run",
   "openclaw.model.call",
   "openclaw.context.assembled",
   "openclaw.message.delivery",
