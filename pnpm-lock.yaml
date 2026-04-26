@@ -81,24 +81,12 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
-      discord-api-types:
-        specifier: ^0.38.42
-        version: 0.38.47
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
-      express:
-        specifier: ^5.2.1
-        version: 5.2.1
       file-type:
         specifier: 22.0.1
         version: 22.0.1
-      grammy:
-        specifier: ^1.41.1
-        version: 1.42.0
-      hono:
-        specifier: 4.12.14
-        version: 4.12.14
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0

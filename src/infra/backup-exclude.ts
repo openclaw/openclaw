@@ -398,7 +398,7 @@ export function buildExcludeFilter(
   };
 
   const getExcludedStats = (): ExcludedStats => {
-    const byPattern = [...patternCounters.values()].map((p) => ({ ...p }));
+    const byPattern = structuredClone([...patternCounters.values()]);
     return {
       totalFiles: byPattern.reduce((sum, p) => sum + p.files, 0),
       totalBytes: byPattern.reduce((sum, p) => sum + p.bytes, 0),
