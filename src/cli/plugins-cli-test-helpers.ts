@@ -56,6 +56,7 @@ export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
 export const buildPluginInspectReport: UnknownMock = vi.fn();
+export const buildAllPluginInspectReports: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
@@ -248,6 +249,16 @@ vi.mock("../plugins/status.js", () => ({
       buildPluginInspectReport,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginInspectReport"],
+  buildAllPluginInspectReports: ((
+    ...args: Parameters<(typeof import("../plugins/status.js"))["buildAllPluginInspectReports"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/status.js"))["buildAllPluginInspectReports"]>,
+      ReturnType<(typeof import("../plugins/status.js"))["buildAllPluginInspectReports"]>
+    >(
+      buildAllPluginInspectReports,
+      ...args,
+    )) as (typeof import("../plugins/status.js"))["buildAllPluginInspectReports"],
   buildPluginDiagnosticsReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"]>
   ) =>
