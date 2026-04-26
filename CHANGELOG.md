@@ -73,6 +73,9 @@ Docs: https://docs.openclaw.ai
   and honor configured `params.chat_template_kwargs` for OpenAI-compatible
   completions, so vLLM/Nemotron replies stay visible instead of becoming
   thinking-only. Fixes #71891. Thanks @jmystaki-create and @dennis-lynch.
+- Subagents/memory: keep inter-session completion wakes out of memory and
+  dreaming session exports, and strip internal runtime-context blocks from
+  realtime Control UI chat events.
 - Agents/Claude: treat zero-token empty `stop` turns as failed provider output,
   retry once, repair replay, and allow configured model fallback instead of
   preserving them as successful silent replies. Fixes #71880. Thanks @MagnaAI.
