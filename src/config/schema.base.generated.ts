@@ -19654,6 +19654,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
           },
+          outboundFooter: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              template: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+          contextWarning: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              thresholds: {
+                type: "array",
+                items: {
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 999,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
         title: "Messages",

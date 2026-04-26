@@ -199,6 +199,20 @@ export const MessagesSchema = z
       .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
+    outboundFooter: z
+      .object({
+        enabled: z.boolean().optional(),
+        template: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    contextWarning: z
+      .object({
+        enabled: z.boolean().optional(),
+        thresholds: z.array(z.number().int().min(1).max(999)).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

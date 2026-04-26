@@ -248,6 +248,12 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   compactionCount?: number;
+  /**
+   * Context-warning thresholds (percent) already emitted for this session.
+   * Tracked to fire each warning once per session, regardless of how many
+   * outbound turns cross the same threshold.
+   */
+  contextWarningThresholdsTriggered?: number[];
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;

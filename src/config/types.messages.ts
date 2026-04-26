@@ -83,6 +83,37 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type OutboundFooterConfig = {
+  /** When true, strip any model-written footer and append a server-rendered one. */
+  enabled?: boolean;
+  /**
+   * Template string with placeholders rendered from live session telemetry.
+   *
+   * Supported placeholders:
+   * - `{context_pct}` integer percent of context window in use
+   * - `{context_tokens}` current usage in `Nk` form
+   * - `{context_limit}` configured limit in `Nk` form
+   * - `{compactions}` integer compaction count
+   * - `{model_alias}` active model identifier
+   *
+   * Example: `"\u{1F4DA} {context_pct}% ({context_tokens}/{context_limit}) \u00B7 \u{1F9F9} {compactions} compactions \u00B7 \u{1F9E0} {model_alias}"`
+   *
+   * The model never authors these digits. Even when `enabled` is false, any
+   * fabricated footer in the message body is still stripped.
+   */
+  template?: string;
+};
+
+export type ContextWarningConfig = {
+  /** When true, emit a one-shot warning at the configured thresholds. */
+  enabled?: boolean;
+  /**
+   * Threshold percents (0..100) at which to emit a warning. The hook fires
+   * once per threshold per session. Default: `[70, 85, 95]`.
+   */
+  thresholds?: number[];
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -122,6 +153,10 @@ export type MessagesConfig = {
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
+  /** Server-rendered status footer (strips any fabricated footer first). */
+  outboundFooter?: OutboundFooterConfig;
+  /** Once-per-session context-usage warnings prepended to outbound messages. */
+  contextWarning?: ContextWarningConfig;
 };
 
 export type NativeCommandsSetting = boolean | "auto";
