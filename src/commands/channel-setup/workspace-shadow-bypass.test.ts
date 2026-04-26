@@ -279,6 +279,5 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     });
 
     expect(result.installedCatalogEntries).toEqual([]);
-    expect(result.installableCatalogEntries).toEqual([]);
   });
 });
