@@ -65,10 +65,21 @@ describe("buildReplyPayloads heartbeat token sanitation", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
-      text: undefined,
-      mediaUrl: "file:///tmp/heartbeat.png",
+    expect(replyPayloads[0]?.text).toBeUndefined();
+    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/heartbeat.png");
+  });
+
+  it("does not expand Bun socket error formatting to heartbeat runs", async () => {
+    const text = "TypeError: fetch failed: socket connection was closed unexpectedly";
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text, isError: true }],
     });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe(text);
   });
 });
 

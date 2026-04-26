@@ -113,7 +113,7 @@ export async function buildReplyPayloads(params: {
   const sanitizedPayloads = params.payloads.flatMap((payload) => {
     let text = payload.text;
 
-    if (payload.isError && text && isBunFetchSocketError(text)) {
+    if (!params.isHeartbeat && payload.isError && text && isBunFetchSocketError(text)) {
       text = formatBunFetchSocketError(text);
     }
 
