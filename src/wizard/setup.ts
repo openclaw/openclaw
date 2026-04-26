@@ -7,12 +7,12 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { createConfigIO, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -59,6 +59,10 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
         : await writeConfigFile(nextConfig),
   });
   return committed.config;
+}
+
+async function readSetupConfigFileSnapshot() {
+  return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
 }
 
 async function resolveAuthChoiceModelSelectionPolicy(params: {
@@ -146,7 +150,7 @@ export async function runSetupWizard(
   await prompter.intro("OpenClaw setup");
   await requireRiskAcknowledgement({ opts, prompter });
 
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readSetupConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid
     ? snapshot.exists
       ? (snapshot.sourceConfig ?? snapshot.config)
@@ -173,7 +177,7 @@ export async function runSetupWizard(
   }
 
   const compatibilityNotices = snapshot.valid
-    ? buildPluginCompatibilityNotices({ config: baseConfig })
+    ? buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
     : [];
   if (compatibilityNotices.length > 0) {
     await prompter.note(
@@ -570,7 +574,7 @@ export async function runSetupWizard(
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-        await warnIfModelConfigLooksOff(nextConfig, prompter);
+        await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
       }
       break;
     }
@@ -617,6 +621,7 @@ export async function runSetupWizard(
         ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
+        browseCatalogOnDemand: true,
         workspaceDir,
         runtime,
       });
@@ -628,7 +633,7 @@ export async function runSetupWizard(
       }
     }
 
-    await warnIfModelConfigLooksOff(nextConfig, prompter);
+    await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
     break;
   }
 

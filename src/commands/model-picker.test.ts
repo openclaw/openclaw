@@ -233,6 +233,87 @@ describe("promptDefaultModel", () => {
     );
   });
 
+  it("keeps current preferred-provider models cold until browsing is requested", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      preferredProvider: "openai-codex",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result).toEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(select.mock.calls[0]?.[0]).toMatchObject({
+      searchable: false,
+      initialValue: "__keep__",
+    });
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({ value: "__keep__" }),
+      expect.objectContaining({ value: "__manual__" }),
+      expect.objectContaining({ value: "__browse__" }),
+    ]);
+  });
+
+  it("loads the full model catalog when the user chooses to browse", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5-pro",
+        name: "GPT-5.5 Pro",
+      },
+    ]);
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__browse__")
+      .mockImplementationOnce(async (params) => {
+        const option = params.options.find(
+          (entry: { value: string }) => entry.value === "openai-codex/gpt-5.5-pro",
+        );
+        return option?.value ?? params.initialValue;
+      });
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      preferredProvider: "openai-codex",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("openai-codex/gpt-5.5-pro");
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
+  });
+
   it("supports configuring vLLM during setup", async () => {
     loadModelCatalog.mockResolvedValue([
       {

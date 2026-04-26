@@ -33,6 +33,7 @@ export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
+const BROWSE_VALUE = "__browse__";
 const PROVIDER_FILTER_THRESHOLD = 30;
 
 // Internal router models are valid defaults during auth/setup but not manual API targets.
@@ -46,6 +47,7 @@ export type PromptDefaultModelParams = {
   includeProviderPluginSetups?: boolean;
   ignoreAllowlist?: boolean;
   loadCatalog?: boolean;
+  browseCatalogOnDemand?: boolean;
   preferredProvider?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -508,19 +510,69 @@ export async function promptDefaultModel(
   const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
+  const browseCatalogOnDemand = params.browseCatalogOnDemand ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const configuredRaw = resolveConfiguredModelRaw(cfg);
+  const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: useStaticModelNormalization ? false : undefined,
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
+
+  if (
+    loadCatalog &&
+    browseCatalogOnDemand &&
+    preferredProvider &&
+    allowKeep &&
+    normalizeProviderId(resolved.provider) === preferredProvider
+  ) {
+    const options: WizardSelectOption[] = [
+      {
+        value: KEEP_VALUE,
+        label: configuredRaw
+          ? `Keep current (${configuredRaw})`
+          : `Keep current (default: ${resolvedKey})`,
+        hint:
+          configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+      },
+    ];
+    if (includeManual) {
+      options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
+    }
+    options.push({
+      value: BROWSE_VALUE,
+      label: "Browse all models",
+      hint: "loads provider catalogs",
+    });
+
+    const selection = await params.prompter.select({
+      message: params.message ?? "Default model",
+      options,
+      initialValue: KEEP_VALUE,
+      searchable: false,
+    });
+    if (selection === KEEP_VALUE) {
+      return {};
+    }
+    if (selection === MANUAL_VALUE) {
+      return promptManualModel({
+        prompter: params.prompter,
+        allowBlank: false,
+        initialValue: configuredRaw || resolvedKey || undefined,
+      });
+    }
+    if (selection !== BROWSE_VALUE) {
+      return { model: selection };
+    }
+  }
 
   if (!loadCatalog) {
     const options: WizardSelectOption[] = [];

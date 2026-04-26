@@ -118,13 +118,18 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     legacyIssues: [] as Array<{ path: string; message: string }>,
   })),
 );
+const createConfigIO = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfigFileSnapshot,
+  })),
+);
 const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const buildPluginCompatibilityNotices = vi.hoisted(() =>
+const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
 const formatPluginCompatibilityNotice = vi.hoisted(() =>
@@ -185,8 +190,8 @@ vi.mock("../commands/onboard-hooks.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
+  createConfigIO,
   resolveGatewayPort,
-  readConfigFileSnapshot,
   writeConfigFile,
 }));
 
@@ -228,7 +233,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 }));
 
@@ -405,6 +410,7 @@ describe("runSetupWizard", () => {
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
+    createConfigIO.mockClear();
     ensureAuthProfileStore.mockClear();
 
     await runSetupWizard(
@@ -423,6 +429,7 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
+    expect(createConfigIO).toHaveBeenCalledWith({ pluginValidation: "skip" });
     expect(select).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
@@ -623,6 +630,7 @@ describe("runSetupWizard", () => {
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
+    warnIfModelConfigLooksOff.mockClear();
     resolveProviderPluginChoice.mockReturnValue({
       provider: {
         id: "ollama",
@@ -671,7 +679,13 @@ describe("runSetupWizard", () => {
     expect(promptDefaultModel).toHaveBeenCalledWith(
       expect.objectContaining({
         allowKeep: false,
+        browseCatalogOnDemand: true,
       }),
+    );
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ validateCatalog: false }),
     );
   });
 
@@ -744,7 +758,7 @@ describe("runSetupWizard", () => {
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilityNotices.mockReturnValue([
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
         pluginId: "legacy-plugin",
         code: "legacy-before-agent-start",
