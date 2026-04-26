@@ -1,16 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
-}));
-
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mocks.loadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
 vi.mock("./plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    mocks.loadPluginManifestRegistry(...args),
+    mocks.loadPluginManifestRegistryForPluginRegistry(...args),
 }));
 
 let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
@@ -23,8 +19,8 @@ describe("activation planner", () => {
   });
 
   beforeEach(() => {
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
           id: "memory-core",
@@ -286,7 +282,7 @@ describe("activation planner", () => {
   });
 
   it("returns capability reasons from explicit hints and manifest ownership", () => {
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
           id: "explicit-provider",
