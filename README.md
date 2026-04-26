@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Feature: Per-hour spending ceiling to prevent runaway failover costs
+- **Reward:** $169
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
