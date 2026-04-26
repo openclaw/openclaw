@@ -24,7 +24,14 @@ const HF_INFERENCE_IMAGE_MODELS = [
   "ByteDance/Hyper-SD",
 ] as const;
 
+const HF_MODEL_ID_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
 function buildEndpointUrl(baseUrl: string, model: string): string {
+  if (!HF_MODEL_ID_PATTERN.test(model)) {
+    throw new Error(
+      `Invalid Hugging Face model id: ${model} (expected "<org>/<repo>" with letters, digits, ".", "_", "-")`,
+    );
+  }
   return `${baseUrl.replace(/\/+$/, "")}/models/${model}`;
 }
 
@@ -64,6 +71,11 @@ export function buildHuggingfaceImageGenerationProvider(): ImageGenerationProvid
       },
     },
     async generateImage(req) {
+      if (req.inputImages && req.inputImages.length > 0) {
+        throw new Error(
+          "Hugging Face image generation does not support input images; use a provider with edit capability",
+        );
+      }
       const auth = await resolveApiKeyForProvider({
         provider: PROVIDER_ID,
         cfg: req.cfg,
@@ -87,7 +99,7 @@ export function buildHuggingfaceImageGenerationProvider(): ImageGenerationProvid
         defaultHeaders: {
           Authorization: `Bearer ${auth.apiKey}`,
           "Content-Type": "application/json",
-          Accept: "image/png",
+          Accept: "image/*",
         },
         provider: PROVIDER_ID,
         capability: "image",
