@@ -169,8 +169,8 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice.
 OpenClaw reads this before provider runtime loads.
-Provider setup flow prefers these manifest choices, then falls back to runtime
-wizard metadata and install-catalog choices for compatibility.
+Provider setup lists use these manifest choices, descriptor-derived setup
+choices, and install-catalog metadata without loading provider runtime.
 
 | Field                 | Required | Type                                            | What it means                                                                                            |
 | --------------------- | -------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -748,6 +748,13 @@ to stable display metadata unless runtime adapter fields such as `api`,
 the installed plugin manifest. Providers with live `/models` discovery should
 write refreshed rows through the explicit model catalog cache path instead of
 making normal listing or onboarding call provider APIs.
+
+Provider Index entries may also carry installable-plugin metadata for providers
+whose plugin has moved out of core or is otherwise not installed yet. This
+metadata mirrors the channel catalog pattern: package name, npm install spec,
+expected integrity, and cheap auth-choice labels are enough to show an
+installable setup option. Once the plugin is installed, its manifest wins and
+the Provider Index entry is ignored for that provider.
 
 Legacy top-level capability keys are deprecated. Use `openclaw doctor --fix` to
 move `speechProviders`, `realtimeTranscriptionProviders`,
