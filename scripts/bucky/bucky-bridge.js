@@ -19,6 +19,11 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const os = require("os");
+const {
+  parseTranscript,
+  extractCwdFromTranscript,
+  cwdFromProjectDir,
+} = require("./transcript-watcher.js");
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 const BUCKY_URL = "http://136.116.235.101:18789/tools/invoke";
@@ -38,8 +43,12 @@ const SSH_KEY = path.join(os.homedir(), ".ssh", "google_compute_engine");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let prevCommitHash = null; // detect new commits
-let prevSessionFile = null; // detect session changes
 let prevCurrentWorkHash = null; // only sync to GCP when content changes
+
+let sessionWatcher = null; // fs.FSWatcher for active transcript
+let watchedFile = null; // path of the file currently being watched
+let watchedFileLineCount = 0; // lines already parsed
+let sessionState = null; // latest parsed session state
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 function run(cmd, cwd) {
@@ -107,14 +116,15 @@ function getActiveClaudeProject() {
       return null;
     }
 
-    // First line of JSONL has session metadata including cwd
-    const firstLine = fs.readFileSync(latestFile, "utf8").split("\n")[0];
-    const meta = JSON.parse(firstLine);
+    // extractCwdFromTranscript scans first 20 JSONL lines for a user entry with cwd field
+    // Falls back to mechanical dir-name decode (unreliable if project dir has hyphens)
+    const projectDir = path.basename(path.dirname(latestFile));
+    const cwd = extractCwdFromTranscript(latestFile) || cwdFromProjectDir(projectDir);
 
     return {
       sessionFile: latestFile,
-      cwd: meta.cwd || null,
-      projectName: meta.cwd ? path.basename(meta.cwd) : "unknown",
+      cwd,
+      projectName: cwd ? path.basename(cwd) : "unknown",
       lastActivityMs: latestMtime,
       isActive: Date.now() - latestMtime < 15 * 60 * 1000,
     };
@@ -212,9 +222,63 @@ function syncToGCP(content) {
 }
 
 /**
+ * Set up fs.watch on the active session JSONL file.
+ * Tears down any existing watcher first.
+ */
+function setupWatcher(sessionFile) {
+  if (watchedFile === sessionFile) {
+    return;
+  } // already watching this file
+
+  if (sessionWatcher) {
+    try {
+      sessionWatcher.close();
+    } catch {
+      /* ignore */
+    }
+    sessionWatcher = null;
+  }
+
+  watchedFile = sessionFile;
+  watchedFileLineCount = 0;
+  sessionState = null;
+
+  try {
+    sessionWatcher = fs.watch(sessionFile, { persistent: false }, () => {
+      const result = parseTranscript(sessionFile, watchedFileLineCount);
+      if (!result) {
+        return;
+      }
+      // Merge state — preserve accumulated filesModified across incremental reads
+      const prevFiles = sessionState?.filesModified || [];
+      const newFiles = result.filesModified.filter((f) => !prevFiles.includes(f));
+      sessionState = {
+        lastUserMessage: result.lastUserMessage,
+        claudeAction: result.claudeAction,
+        filesModified: [...prevFiles, ...newFiles],
+        lastBashCommand: result.lastBashCommand,
+        recentError: result.recentError,
+        lastActivityMs: result.lastActivityMs,
+        lineCount: result.lineCount,
+      };
+      watchedFileLineCount = result.lineCount;
+    });
+    // Parse existing content immediately on first watch
+    const result = parseTranscript(sessionFile, 0);
+    if (result) {
+      sessionState = result;
+      watchedFileLineCount = result.lineCount;
+    }
+    console.log(`[bridge] watching transcript: ${path.basename(sessionFile)}`);
+  } catch (err) {
+    console.error("[bridge] watch error:", err.message);
+  }
+}
+
+/**
  * Overwrite CURRENT_WORK.md with current state, then sync to GCP. Silent — no WhatsApp message.
  */
-function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject) {
+function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject, sessState) {
   const projectPath = claudeCtx?.cwd || vsCodeProject || null;
   const projectName = projectPath ? path.basename(projectPath) : "unknown";
 
@@ -253,6 +317,26 @@ function updateCurrentWork(claudeCtx, gitCtx, vsCodeProject) {
       `- Status: ${claudeCtx.isActive ? "active" : `idle (last activity ${agoMin}min ago)`}`,
     );
     lines.push(`- Session file: ${path.basename(claudeCtx.sessionFile)}`);
+  }
+
+  if (sessState && claudeCtx?.isActive) {
+    lines.push("", "## Session Activity");
+    if (sessState.lastUserMessage) {
+      lines.push(`- Dirgh asked: "${sessState.lastUserMessage.slice(0, 120)}"`);
+    }
+    if (sessState.claudeAction && sessState.claudeAction !== "idle") {
+      lines.push(`- Claude is: ${sessState.claudeAction}`);
+    }
+    if (sessState.filesModified && sessState.filesModified.length > 0) {
+      const recent = sessState.filesModified.slice(-5);
+      lines.push(`- Files modified: ${recent.map((f) => path.basename(f)).join(", ")}`);
+    }
+    if (sessState.lastBashCommand) {
+      lines.push(`- Last command: \`${sessState.lastBashCommand}\``);
+    }
+    if (sessState.recentError) {
+      lines.push(`- Recent error: ${sessState.recentError.split("\n")[0].slice(0, 120)}`);
+    }
   }
 
   const content = lines.join("\n") + "\n";
@@ -306,11 +390,19 @@ async function notifyBucky(message) {
 // ── Main tick ──────────────────────────────────────────────────────────────────
 async function tick() {
   const claudeCtx = getActiveClaudeProject();
+
+  // Start watching the active session file for live context; clear stale state when no session
+  if (claudeCtx?.sessionFile) {
+    setupWatcher(claudeCtx.sessionFile);
+  } else {
+    sessionState = null;
+  }
+
   const gitCtx = getGitContext(claudeCtx?.cwd || null);
   const vsCodeProj = getVSCodeProject();
 
   // Always update CURRENT_WORK.md silently
-  updateCurrentWork(claudeCtx, gitCtx, vsCodeProj);
+  updateCurrentWork(claudeCtx, gitCtx, vsCodeProj, sessionState);
 
   // Notify on new commits (skip the very first poll — we don't know prevCommitHash yet)
   if (gitCtx?.commitHash && prevCommitHash !== null && gitCtx.commitHash !== prevCommitHash) {
@@ -326,11 +418,11 @@ async function tick() {
     }
   }
   prevCommitHash = gitCtx?.commitHash ?? prevCommitHash;
-  prevSessionFile = claudeCtx?.sessionFile ?? prevSessionFile;
 
+  const action = sessionState?.claudeAction || "no session";
   const ts = new Date().toISOString().slice(11, 19);
   console.log(
-    `[${ts}] synced: ${claudeCtx?.projectName || "no claude session"} @ ${gitCtx?.branch || "no git"}`,
+    `[${ts}] synced: ${claudeCtx?.projectName || "no claude session"} @ ${gitCtx?.branch || "no git"} | ${action}`,
   );
 }
 
