@@ -669,7 +669,7 @@ describe("bundled plugin postinstall", () => {
     await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
     await fs.writeFile(
       path.join(packageRoot, "node_modules", "acpx", "package.json"),
-      "{}\n",
+      JSON.stringify({ name: "acpx", version: "0.4.1" }),
       "utf8",
     );
     const spawnSync = vi.fn();
@@ -682,6 +682,34 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls bundled plugin deps when the installed version is stale", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "acpx", {
+      dependencies: {
+        acpx: "0.4.1",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "acpx", "package.json"),
+      JSON.stringify({ name: "acpx", version: "0.3.0" }),
+      "utf8",
+    );
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    runBundledPluginPostinstall({
+      env: { OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1", HOME: "/tmp/home" },
+      extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.4.1"]);
   });
 
   it("reinstalls bundled runtime deps when optional native children are missing", async () => {
@@ -830,7 +858,7 @@ describe("bundled plugin postinstall", () => {
     });
     await fs.writeFile(
       path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
-      "{}\n",
+      JSON.stringify({ name: "@slack/web-api", version: "7.11.0" }),
     );
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
