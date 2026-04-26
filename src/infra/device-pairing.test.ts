@@ -1013,6 +1013,66 @@ describe("device pairing tokens", () => {
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 
+  test("removing a paired device clears pending requests for that device only", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const staleRepair = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1-rotated",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    const otherPending = await requestDevicePairing(
+      {
+        deviceId: "device-2",
+        publicKey: "public-key-2",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+
+    await expect(removePairedDevice("device-1", baseDir)).resolves.toEqual({
+      deviceId: "device-1",
+    });
+
+    const pending = (await listDevicePairing(baseDir)).pending;
+    expect(pending.map((entry) => entry.requestId)).not.toContain(staleRepair.request.requestId);
+    expect(pending.map((entry) => entry.requestId)).toContain(otherPending.request.requestId);
+    await expect(
+      approveDevicePairing(
+        staleRepair.request.requestId,
+        { callerScopes: ["operator.read"] },
+        baseDir,
+      ),
+    ).resolves.toBeNull();
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("refuses to overwrite corrupt paired device state", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+    await writeFile(pairedPath, "{not-json}", "utf8");
+
+    await expect(
+      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
+    ).rejects.toThrow(/paired\.json/);
+    await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
+  });
+
   test("clears paired device state by device id", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);

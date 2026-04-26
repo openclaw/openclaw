@@ -9,6 +9,23 @@ import {
 
 export { buildCommandsPaginationKeyboard };
 
+export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
+  return buildProviderKeyboard(params.providers);
+}
+
+export function buildTelegramModelsMenuChannelData(params: {
+  providers: ProviderInfo[];
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
+  }
+  return {
+    telegram: {
+      buttons: buildTelegramModelsMenuButtons(params),
+    },
+  };
+}
+
 export function buildTelegramCommandsListChannelData(params: {
   currentPage: number;
   totalPages: number;
@@ -37,6 +54,25 @@ export function buildTelegramModelsProviderChannelData(params: {
   return {
     telegram: {
       buttons: buildProviderKeyboard(params.providers),
+    },
+  };
+}
+
+export function buildTelegramModelsAddProviderChannelData(params: {
+  providers: Array<{ id: string }>;
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
+  }
+  const buttons = params.providers.map((provider) => [
+    {
+      text: provider.id,
+      callback_data: `/models add ${provider.id}`,
+    },
+  ]);
+  return {
+    telegram: {
+      buttons,
     },
   };
 }

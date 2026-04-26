@@ -43,12 +43,14 @@ describe("video-generation runtime", () => {
   it("generates videos through the active video-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
       capabilities: {},
-      async generateVideo(req: { authStore?: unknown }) {
+      async generateVideo(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           videos: [
             {
@@ -74,6 +76,7 @@ describe("video-generation runtime", () => {
       prompt: "animate a cat",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("video-plugin");
@@ -81,6 +84,7 @@ describe("video-generation runtime", () => {
     expect(result.attempts).toEqual([]);
     expect(result.ignoredOverrides).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.videos).toEqual([
       {
         buffer: Buffer.from("mp4-bytes"),
@@ -399,6 +403,61 @@ describe("video-generation runtime", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.provider).toBe("openai");
     expect(result.attempts[0]?.error).toMatch(/does not support reference audio inputs/);
+  });
+
+  it("forwards mixed image, video, and audio references when explicitly supported", async () => {
+    const seenRequest: {
+      inputImages?: unknown;
+      inputVideos?: unknown;
+      inputAudios?: unknown;
+    } = {};
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue(
+      "fal/bytedance/seedance-2.0/fast/reference-to-video",
+    );
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "fal",
+      capabilities: {
+        videoToVideo: {
+          enabled: true,
+          maxInputImages: 9,
+          maxInputVideos: 3,
+          maxInputAudios: 3,
+        },
+      },
+      async generateVideo(req) {
+        seenRequest.inputImages = req.inputImages;
+        seenRequest.inputVideos = req.inputVideos;
+        seenRequest.inputAudios = req.inputAudios;
+        return {
+          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+          model: "bytedance/seedance-2.0/fast/reference-to-video",
+        };
+      },
+    });
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "Blend all references",
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
+
+    expect(result.provider).toBe("fal");
+    expect(result.attempts).toEqual([]);
+    expect(seenRequest).toEqual({
+      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
+      inputAudios: [{ url: "https://example.com/reference.mp3" }],
+    });
   });
 
   it("fails when every candidate is skipped for unsupported reference audio inputs", async () => {

@@ -94,7 +94,7 @@ registerCommand({
   handler: (ctx) => {
     const now = Date.now();
     const eventTime = new Date(ctx.eventTimestamp).getTime();
-    if (isNaN(eventTime)) {
+    if (Number.isNaN(eventTime)) {
       return `✅ pong!`;
     }
     const totalMs = now - eventTime;
@@ -746,6 +746,7 @@ export function registerApproveRuntimeGetter(
 registerCommand({
   name: "bot-approve",
   description: "管理命令执行审批配置",
+  requireAuth: true,
   usage: [
     `/bot-approve            查看操作指引`,
     `/bot-approve on         开启审批（白名单模式，推荐）`,

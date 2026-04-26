@@ -196,6 +196,37 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
+  it("strips split TTS directives from visible ACP block delivery", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { tts: { enabled: true } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "Intro [[tts:te" }, { skipTts: true });
+    await coordinator.deliver(
+      "block",
+      { text: "xt]]hidden[[/tts:text]] visible" },
+      { skipTts: true },
+    );
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(1, { text: "Intro " });
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(2, { text: " visible" });
+    expect(coordinator.getAccumulatedVisibleBlockText()).toBe("Intro \n visible");
+    expect(coordinator.getAccumulatedBlockTtsText()).toBe(
+      "Intro [[tts:text]]hidden[[/tts:text]] visible",
+    );
+  });
+
   it("prefers provider over surface when detecting direct channel visibility", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
@@ -411,6 +442,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         },
       }),
       "work",
+    );
+  });
+
+  it("mirrors routed ACP replies into the target ACP session", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:main:main",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      sessionKey: "agent:claude:acp:spawned",
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:spawned",
+        policySessionKey: "agent:main:main",
+      }),
     );
   });
 

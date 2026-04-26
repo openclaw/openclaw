@@ -1,11 +1,9 @@
 ---
 summary: "Delegate architecture: running OpenClaw as a named agent on behalf of an organization"
-title: Delegate Architecture
+title: Delegate architecture
 read_when: "You want an agent with its own identity that acts on behalf of humans in an organization."
 status: active
 ---
-
-# Delegate Architecture
 
 Goal: run OpenClaw as a **named delegate** — an agent with its own identity that acts "on behalf of" people in an organization. The agent never impersonates a human. It sends, reads, and schedules under its own account with explicit delegation permissions.
 
@@ -305,3 +303,9 @@ The delegate model works for any small organization:
 6. **Review and adjust** the capability tier as trust builds.
 
 Multiple organizations can share one Gateway server using multi-agent routing — each org gets its own isolated agent, workspace, and credentials.
+
+## Related
+
+- [Agent runtime](/concepts/agent)
+- [Sub-agents](/tools/subagents)
+- [Multi-agent routing](/concepts/multi-agent)

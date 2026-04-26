@@ -31,6 +31,9 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const loadInstalledPluginIndexInstallRecords = vi.fn(
+  async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
+);
 const nodeVersionSatisfiesEngine = vi.fn();
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -148,6 +151,16 @@ vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
 
+vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
+  return {
+    ...actual,
+    loadInstalledPluginIndexInstallRecords,
+    writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
+  };
+});
+
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
@@ -193,6 +206,7 @@ const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
+const { spawnSync } = await import("node:child_process");
 
 type UpdateCliScenario = {
   name: string;
@@ -458,6 +472,19 @@ describe("update-cli", () => {
     setStdoutTty(false);
   });
 
+  it("bounds completion cache refresh during update follow-up", async () => {
+    const root = createCaseDir("openclaw-completion-timeout");
+    pathExists.mockResolvedValue(true);
+
+    await updateCliShared.tryWriteCompletionCache(root, false);
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      expect.any(String),
+      [path.join(root, "openclaw.mjs"), "completion", "--write-state"],
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+  });
+
   it("respawns into the updated package root before running post-update tasks", async () => {
     const { entrypoints } = setupUpdatedRootRefresh();
 
@@ -543,6 +570,109 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("uses a fail-closed integrity policy for post-core plugin updates", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const updateCall = updateNpmInstalledPlugins.mock.calls[0]?.[0] as
+      | {
+          onIntegrityDrift?: (drift: {
+            pluginId: string;
+            spec: string;
+            expectedIntegrity: string;
+            actualIntegrity: string;
+            resolvedSpec?: string;
+          }) => Promise<boolean>;
+        }
+      | undefined;
+    const onIntegrityDrift = updateCall?.onIntegrityDrift;
+    expect(onIntegrityDrift).toBeTypeOf("function");
+    if (!onIntegrityDrift) {
+      throw new Error("missing integrity drift handler");
+    }
+
+    vi.mocked(runtimeCapture.log).mockClear();
+    await expect(
+      onIntegrityDrift({
+        pluginId: "demo",
+        spec: "@openclaw/demo@1.0.0",
+        resolvedSpec: "@openclaw/demo@1.0.0",
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+      }),
+    ).resolves.toBe(false);
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Plugin update aborted");
+  });
+
+  it("includes plugin integrity drift details in update json output", async () => {
+    updateNpmInstalledPlugins.mockImplementationOnce(
+      async (params: {
+        config: OpenClawConfig;
+        onIntegrityDrift?: (drift: {
+          pluginId: string;
+          spec: string;
+          resolvedSpec?: string;
+          resolvedVersion?: string;
+          expectedIntegrity: string;
+          actualIntegrity: string;
+          dryRun: boolean;
+        }) => Promise<boolean>;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          pluginId: "demo",
+          spec: "@openclaw/demo@1.0.0",
+          resolvedSpec: "@openclaw/demo@1.0.0",
+          resolvedVersion: "1.0.0",
+          expectedIntegrity: "sha512-old",
+          actualIntegrity: "sha512-new",
+          dryRun: false,
+        });
+        return {
+          changed: false,
+          config: params.config,
+          outcomes: [
+            {
+              pluginId: "demo",
+              status: "error",
+              message:
+                proceed === false
+                  ? "Failed to update demo: aborted: npm package integrity drift detected for @openclaw/demo@1.0.0"
+                  : "unexpected drift continuation",
+            },
+          ],
+        };
+      },
+    );
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.integrityDrifts).toEqual([
+      {
+        pluginId: "demo",
+        spec: "@openclaw/demo@1.0.0",
+        resolvedSpec: "@openclaw/demo@1.0.0",
+        resolvedVersion: "1.0.0",
+        expectedIntegrity: "sha512-old",
+        actualIntegrity: "sha512-new",
+        action: "aborted",
+      },
+    ]);
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.status).toBe("error");
   });
 
   it.each([
@@ -718,6 +848,29 @@ describe("update-cli", () => {
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
     );
+  });
+
+  it("refreshes package-manager updates when the installed version already matches the target", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.22",
+    });
+
+    await updateCommand({ yes: true });
+
+    const installCalls = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.filter(
+        ([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
+      );
+    expect(installCalls).toHaveLength(1);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).not.toContain("already-current");
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
@@ -896,6 +1049,78 @@ describe("update-cli", () => {
         }),
       }),
     );
+  });
+
+  it("refreshes package installs even when the current version already matches the target", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-current-"));
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    readPackageVersion.mockResolvedValue("2026.4.23");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.4.23",
+    });
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.23" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      const absolutePath = path.join(pkgRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+    await writePackageDistInventory(pkgRoot);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "doctor", "--non-interactive"],
+      expect.any(Object),
+    );
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).not.toContain("already-current");
   });
 
   it("uses the owning npm binary for package updates when PATH npm points elsewhere", async () => {
@@ -1161,6 +1386,65 @@ describe("update-cli", () => {
       | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
+  });
+
+  it("uses source config and plugin index records for post-update plugin sync", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const pluginInstallRecords = {
+      "lossless-claw": {
+        source: "npm",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "/tmp/lossless-claw",
+      },
+    } as const;
+    const sourceConfig = {
+      plugins: {},
+    } as OpenClawConfig;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig,
+      config: {
+        ...sourceConfig,
+        gateway: { auth: { mode: "token", token: "runtime" } },
+        plugins: {
+          ...sourceConfig.plugins,
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: { provider: "firecrawl" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    syncPluginsForUpdateChannel.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      outcomes: [],
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
+      | OpenClawConfig
+      | undefined;
+    expect(syncConfig?.plugins?.installs).toEqual(pluginInstallRecords);
+    expect(syncConfig?.update?.channel).toBe("beta");
+    expect(syncConfig?.gateway?.auth).toBeUndefined();
+    expect(syncConfig?.plugins?.entries).toBeUndefined();
   });
 
   it("skips plugin sync in the old process after switching from package to git", async () => {

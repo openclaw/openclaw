@@ -1,14 +1,12 @@
 ---
-title: "Plugin Runtime Helpers"
-sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
+title: "Plugin runtime helpers"
+sidebarTitle: "Runtime Helpers"
 read_when:
-  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent)
+  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
-
-# Plugin Runtime Helpers
 
 Reference for the `api.runtime` object injected into every plugin during
 registration. Use these helpers instead of importing host internals directly.
@@ -120,6 +118,29 @@ await api.runtime.subagent.deleteSession({
   `plugins.entries.<id>.subagent.allowModelOverride: true` in config.
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
+
+### `api.runtime.nodes`
+
+List connected nodes and invoke a node-host command from Gateway-loaded plugin
+code or from plugin CLI commands. Use this when a plugin owns local work on a
+paired device, for example a browser or audio bridge on another Mac.
+
+```typescript
+const { nodes } = await api.runtime.nodes.list({ connected: true });
+
+const result = await api.runtime.nodes.invoke({
+  nodeId: "mac-studio",
+  command: "my-plugin.command",
+  params: { action: "start" },
+  timeoutMs: 30000,
+});
+```
+
+Inside the Gateway this runtime is in-process. In plugin CLI commands it calls
+the configured Gateway over RPC, so commands such as `openclaw googlemeet
+recover-tab` can inspect paired nodes from the terminal. Node commands still go
+through normal Gateway node pairing, command allowlists, and node-local command
+handling.
 
 ### `api.runtime.taskFlow`
 
@@ -258,6 +279,18 @@ const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
 const isVoice = api.runtime.media.isVoiceCompatibleAudio(filePath);
 const metadata = await api.runtime.media.getImageMetadata(filePath);
 const resized = await api.runtime.media.resizeToJpeg(buffer, { maxWidth: 800 });
+const terminalQr = await api.runtime.media.renderQrTerminal("https://openclaw.ai");
+const pngQr = await api.runtime.media.renderQrPngBase64("https://openclaw.ai", {
+  scale: 6, // 1-12
+  marginModules: 4, // 0-16
+});
+const pngQrDataUrl = await api.runtime.media.renderQrPngDataUrl("https://openclaw.ai");
+const tmpRoot = resolvePreferredOpenClawTmpDir();
+const pngQrFile = await api.runtime.media.writeQrPngTempFile("https://openclaw.ai", {
+  tmpRoot,
+  dirPrefix: "my-plugin-qr-",
+  fileName: "qr.png",
+});
 ```
 
 ### `api.runtime.config`
@@ -429,6 +462,6 @@ Beyond `api.runtime`, the API object also provides:
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) -- subpath reference
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` options
-- [Plugin Internals](/plugins/architecture) -- capability model and registry
+- [SDK overview](/plugins/sdk-overview) — subpath reference
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` options
+- [Plugin internals](/plugins/architecture) — capability model and registry

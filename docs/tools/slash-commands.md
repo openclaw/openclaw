@@ -3,13 +3,16 @@ summary: "Slash commands: text vs native, config, and supported commands"
 read_when:
   - Using or configuring chat commands
   - Debugging command routing or permissions
-title: "Slash Commands"
+title: "Slash commands"
 ---
-
-# Slash commands
 
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
+
+When a conversation or thread is bound to an ACP session, normal follow-up text
+routes to that ACP harness. Gateway management commands still stay local:
+`/acp ...` always reaches the OpenClaw ACP command handler, and `/status` plus
+`/unfocus` stay local whenever command handling is enabled for the surface.
 
 There are two related systems:
 
@@ -108,10 +111,12 @@ Built-in commands available today:
 - `/help` shows the short help summary.
 - `/commands` shows the generated command catalog.
 - `/tools [compact|verbose]` shows what the current agent can use right now.
-- `/status` shows runtime status, including provider usage/quota when available.
+- `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
+- `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
+- `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
 - `/whoami` shows your sender id. Alias: `/id`.
 - `/skill <name> [input]` runs a skill by name.
 - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
@@ -129,7 +134,7 @@ Built-in commands available today:
 - `/plugins list|inspect|show|get|install|enable|disable` inspects or mutates plugin state. `/plugin` is an alias. Owner-only for writes. Requires `commands.plugins: true`.
 - `/debug show|set|unset|reset` manages runtime-only config overrides. Owner-only. Requires `commands.debug: true`.
 - `/usage off|tokens|full|cost` controls the per-response usage footer or prints a local cost summary.
-- `/tts on|off|status|provider|limit|summary|audio|help` controls TTS. See [/tools/tts](/tools/tts).
+- `/tts on|off|status|chat|latest|provider|limit|summary|audio|help` controls TTS. See [/tools/tts](/tools/tts).
 - `/restart` restarts OpenClaw when enabled. Default: enabled; set `commands.restart: false` to disable it.
 - `/activation mention|always` sets group activation mode.
 - `/send on|off|inherit` sets send policy. Owner-only.
@@ -182,7 +187,7 @@ Notes:
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
 - `/plugins enable|disable` updates plugin config and may prompt for a restart.
-- Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).
+- Discord-only native command: `/vc join|leave|status` controls voice channels (not available as text). `join` requires a guild and selected voice/stage channel. Requires `channels.discord.voice` and native commands.
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
@@ -195,6 +200,9 @@ Notes:
 - If the agent is idle, the next run uses it right away.
 - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
 - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+- In the local TUI, `/crestodian [request]` returns from the normal agent TUI to
+  Crestodian. This is separate from message-channel rescue mode and does not
+  grant remote config authority.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
@@ -206,7 +214,7 @@ Notes:
   - By default, skill commands are forwarded to the model as a normal request.
   - Skills may optionally declare `command-dispatch: tool` to route the command directly to a tool (deterministic, no model).
   - Example: `/prose` (OpenProse plugin) — see [OpenProse](/prose).
-- **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
+- **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg. Dynamic choices are resolved against the target session model, so model-specific options such as `/think` levels follow that session's `/model` override.
 
 ## `/tools`
 
@@ -228,6 +236,7 @@ of treating `/tools` as a static catalog.
 
 - **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
+- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Pi Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
 - **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
@@ -384,3 +393,9 @@ Example:
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX
 details.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Skills config](/tools/skills-config)
+- [Creating skills](/tools/creating-skills)

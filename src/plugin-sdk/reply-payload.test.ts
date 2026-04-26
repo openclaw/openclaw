@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   countOutboundMedia,
+  createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
   hasOutboundMedia,
@@ -8,9 +9,11 @@ import {
   hasOutboundText,
   isReasoningReplyPayload,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
+  sendTextMediaPayload,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
@@ -84,6 +87,143 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(isNumericTargetId("  987  ")).toBe(true);
     expect(isNumericTargetId("ab12")).toBe(false);
     expect(isNumericTargetId("")).toBe(false);
+  });
+});
+
+describe("sendTextMediaPayload", () => {
+  it("uses an implicit single-use reply only for the first text chunk", async () => {
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { text: "abcdef" },
+        replyToId: "reply-1",
+        replyToIdSource: "implicit",
+        replyToMode: "first",
+      },
+      adapter: {
+        textChunkLimit: 2,
+        chunker: (text) => ["ab", "cd", text.slice(4)],
+        sendText,
+      },
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0].replyToId)).toEqual([
+      "reply-1",
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("uses an implicit single-use reply only for the first media fallback send", async () => {
+    const sendMedia = vi.fn(async ({ mediaUrl }) => ({ channel: "test", messageId: mediaUrl }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { text: "caption", mediaUrls: ["https://example.com/1", "https://example.com/2"] },
+        replyToId: "reply-1",
+        replyToIdSource: "implicit",
+        replyToMode: "batched",
+      },
+      adapter: { sendMedia },
+    });
+
+    expect(sendMedia.mock.calls.map((call) => call[0].replyToId)).toEqual(["reply-1", undefined]);
+  });
+
+  it("preserves audioAsVoice on media fallback sends", async () => {
+    const sendMedia = vi.fn(async ({ mediaUrl }) => ({ channel: "test", messageId: mediaUrl }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: {
+          text: "caption",
+          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/next.ogg"],
+          audioAsVoice: true,
+        },
+      },
+      adapter: { sendMedia },
+    });
+
+    expect(sendMedia.mock.calls.map((call) => call[0].audioAsVoice)).toEqual([true, true]);
+  });
+
+  it("keeps explicit reply tags independent from single-use implicit reply modes", async () => {
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: { text: "abcd" },
+        replyToId: "explicit-reply",
+        replyToIdSource: "explicit",
+        replyToMode: "first",
+      },
+      adapter: {
+        textChunkLimit: 2,
+        chunker: () => ["ab", "cd"],
+        sendText,
+      },
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0].replyToId)).toEqual([
+      "explicit-reply",
+      "explicit-reply",
+    ]);
+  });
+});
+
+describe("normalizeOutboundReplyPayload", () => {
+  it("strips internal-only local media trust flags from loose payload objects", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        text: "hello",
+        mediaUrl: "/tmp/reply.opus",
+        trustedLocalMedia: true,
+        sensitiveMedia: true,
+        replyToId: "abc123",
+      }),
+    ).toEqual({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: "abc123",
+    });
+  });
+
+  it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
+    const handler = vi.fn(async () => {});
+    const deliver = createNormalizedOutboundDeliverer(handler);
+
+    await deliver({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: undefined,
+      mediaUrls: undefined,
+    });
   });
 });
 

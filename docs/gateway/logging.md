@@ -3,7 +3,7 @@ summary: "Logging surfaces, file logs, WS log styles, and console formatting"
 read_when:
   - Changing logging output or formats
   - Debugging CLI or gateway output
-title: "Gateway Logging"
+title: "Gateway logging"
 ---
 
 # Logging
@@ -111,3 +111,9 @@ Behavior:
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
+
+## Related
+
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
+- [Diagnostics export](/gateway/diagnostics)

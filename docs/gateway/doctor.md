@@ -6,8 +6,6 @@ read_when:
 title: "Doctor"
 ---
 
-# Doctor
-
 `openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
 config/state, checks health, and provides actionable repair steps.
 
@@ -72,6 +70,7 @@ cat ~/.openclaw/openclaw.json
 - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
+- Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -174,9 +173,11 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.provider: "edge"` and `plugins.entries.voice-call.config.tts.providers.edge` → `provider: "microsoft"` and `providers.microsoft`
 - `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
 - `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
 - `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
@@ -248,7 +249,7 @@ doctor prints platform-specific fix guidance. On macOS with a Homebrew Node, the
 fix is usually `brew postinstall ca-certificates`. With `--deep`, the probe runs
 even if the gateway is healthy.
 
-### 2c) Codex OAuth provider overrides
+### 2e) Codex OAuth provider overrides
 
 If you previously added legacy OpenAI transport settings under
 `models.providers.openai-codex`, they can shadow the built-in Codex OAuth
@@ -257,6 +258,28 @@ those old transport settings alongside Codex OAuth so you can remove or rewrite
 the stale transport override and get the built-in routing/fallback behavior
 back. Custom proxies and header-only overrides are still supported and do not
 trigger this warning.
+
+### 2f) Codex plugin route warnings
+
+When the bundled Codex plugin is enabled, doctor also checks whether
+`openai-codex/*` primary model refs still resolve through the default PI runner.
+That combination is valid when you want Codex OAuth/subscription auth through
+PI, but it is easy to confuse with the native Codex app-server harness. Doctor
+warns and points to the explicit app-server shape:
+`openai/*` plus `embeddedHarness.runtime: "codex"` or
+`OPENCLAW_AGENT_RUNTIME=codex`.
+
+Doctor does not repair this automatically because both routes are valid:
+
+- `openai-codex/*` + PI means "use Codex OAuth/subscription auth through the
+  normal OpenClaw runner."
+- `openai/*` + `runtime: "codex"` means "run the embedded turn through native
+  Codex app-server."
+- `/codex ...` means "control or bind a native Codex conversation from chat."
+- `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
+
+If the warning appears, choose the route you intended and edit config manually.
+Keep the warning as-is when PI Codex OAuth is intentional.
 
 ### 3) Legacy state migrations (disk layout)
 
@@ -316,6 +339,15 @@ the path, PID, whether the PID is still alive, lock age, and whether it is
 considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair`
 mode it removes stale lock files automatically; otherwise it prints a note and
 instructs you to rerun with `--fix`.
+
+### 3d) Session transcript branch repair
+
+Doctor scans agent session JSONL files for the duplicated branch shape created
+by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with
+OpenClaw internal runtime context plus an active sibling containing the same
+visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected
+file next to the original and rewrites the transcript to the active branch so
+gateway history and memory readers no longer see duplicate turns.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 
@@ -389,6 +421,12 @@ are missing, doctor reports the packages and installs them in
 use `openclaw plugins install` / `openclaw plugins update`; doctor does not
 install dependencies for arbitrary plugin paths.
 
+The Gateway and local CLI can also repair active bundled plugin runtime
+dependencies on demand before importing a bundled plugin. These installs are
+scoped to the plugin runtime install root, run with scripts disabled, do not
+write a package lock, and are guarded by an install-root lock so concurrent CLI
+or Gateway starts do not mutate the same `node_modules` tree at the same time.
+
 ### 8) Gateway service migrations and cleanup hints
 
 Doctor detects legacy gateway services (launchd/systemd/schtasks) and
@@ -451,7 +489,7 @@ Doctor prints a summary of the workspace state for the default agent:
 - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
 - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories
   exist alongside the current workspace.
-- **Plugin status**: counts loaded/disabled/errored plugins; lists plugin IDs for any
+- **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any
   errors; reports bundle plugin capabilities.
 - **Plugin compatibility warnings**: flags plugins that have compatibility issues with
   the current runtime.
@@ -575,3 +613,8 @@ if the workspace is not already under git.
 
 See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to
 workspace structure and git backup (recommended private GitHub or GitLab).
+
+## Related
+
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Gateway runbook](/gateway)

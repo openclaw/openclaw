@@ -40,6 +40,10 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
+  function expectRejectedRemoteMediaUrlCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  }
+
   it.each([
     ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
     ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
@@ -61,6 +65,24 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:./foo/../../../etc/shadow",
   ] as const)("rejects traversal and home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
+  });
+
+  it.each([
+    "MEDIA:http://example.com/a.png",
+    "MEDIA:https://intranet/a.png",
+    "MEDIA:https://printer/a.png",
+    "MEDIA:https://localhost/a.png",
+    "MEDIA:https://localhost../a.png",
+    "MEDIA:https://127.0.0.1/a.png",
+    "MEDIA:https://127.0.0.1../a.png",
+    "MEDIA:https://169.254.169.254/latest/meta-data",
+    "MEDIA:https://[::1]/a.png",
+    "MEDIA:https://metadata.google.internal/a.png",
+    "MEDIA:https://metadata.google.internal../a.png",
+    "MEDIA:https://example..com/a.png",
+    "MEDIA:https://media.local/a.png",
+  ] as const)("rejects unsafe remote media URL: %s", (input) => {
+    expectRejectedRemoteMediaUrlCase(input);
   });
 
   it.each([
@@ -102,5 +124,77 @@ describe("splitMediaFromOutput", () => {
       { type: "media", url: "https://example.com/a.png" },
       { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
     ]);
+  });
+
+  it("extracts markdown image urls while keeping surrounding caption text", () => {
+    expectParsedMediaOutputCase("Caption\n\n![chart](https://example.com/chart.png)", {
+      text: "Caption",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("keeps inline caption text around markdown images", () => {
+    expectParsedMediaOutputCase("Look ![chart](https://example.com/chart.png) now", {
+      text: "Look now",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("extracts multiple markdown image urls in order", () => {
+    expectParsedMediaOutputCase(
+      "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",
+      {
+        text: "Before\nMiddle\nAfter",
+        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+      },
+    );
+  });
+
+  it("strips markdown image title suffixes from extracted urls", () => {
+    expectParsedMediaOutputCase(
+      'Caption ![chart](https://example.com/chart.png "Quarterly chart")',
+      {
+        text: "Caption",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+    );
+  });
+
+  it("keeps balanced parentheses inside markdown image urls", () => {
+    expectParsedMediaOutputCase("Chart ![img](https://example.com/a_(1).png) now", {
+      text: "Chart now",
+      mediaUrls: ["https://example.com/a_(1).png"],
+    });
+  });
+
+  it.each([
+    "![x](file:///etc/passwd)",
+    "![x](/var/run/secrets/kubernetes.io/serviceaccount/token)",
+    "![x](C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts)",
+    "![x](http://example.com/a.png)",
+    "![x](https://127.0.0.1/a.png)",
+  ] as const)("does not lift local markdown image target: %s", (input) => {
+    expectParsedMediaOutputCase(input, {
+      text: input,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("does not lift markdown image urls that fail media validation", () => {
+    const longUrl = `![x](https://example.com/${"a".repeat(4097)}.png)`;
+
+    expectParsedMediaOutputCase(longUrl, {
+      text: longUrl,
+      mediaUrls: undefined,
+    });
+  });
+
+  it("leaves very long markdown-image candidate lines as text", () => {
+    const input = `${"prefix ".repeat(3000)}![x](https://example.com/image.png)`;
+
+    expectParsedMediaOutputCase(input, {
+      text: input,
+      mediaUrls: undefined,
+    });
   });
 });
