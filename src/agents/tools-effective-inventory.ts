@@ -25,6 +25,12 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\u0000";
+
+function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
+  return `${pluginId}${PLUGIN_TOOL_METADATA_KEY_SEPARATOR}${toolName}`;
+}
+
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (
@@ -242,13 +248,11 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
-  // Key metadata by `${pluginId} ${toolName}` so we only project metadata that
-  // was registered BY the tool's owning plugin. Without this, plugin-X could
-  // spoof/override the displayName/risk/tags of plugin-Y's (or a core) tool just
-  // by registering metadata with the same toolName.
+  // Key metadata by plugin ownership and tool name so only the owning plugin can
+  // project display/risk metadata for its own tool.
   const pluginToolMetadata = new Map(
     (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      `${entry.pluginId} ${entry.metadata.toolName}`,
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
       entry.metadata,
     ]),
   );
@@ -258,7 +262,7 @@ export function resolveEffectiveToolInventory(
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
         const metadata = source.pluginId
-          ? pluginToolMetadata.get(`${source.pluginId} ${tool.name}`)
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
           : undefined;
         return Object.assign(
           {

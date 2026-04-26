@@ -234,8 +234,8 @@ Non-bundled plugins that need `llm_input`, `llm_output`,
 }
 ```
 
-Prompt-mutating hooks can be disabled per plugin with
-`plugins.entries.<id>.hooks.allowPromptInjection=false`.
+Prompt-mutating hooks and durable next-turn injections can be disabled per plugin
+with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
 
 ### Session extensions and next-turn injections
 
@@ -255,9 +255,10 @@ the model on the next turn but should not become permanent system prompt text.
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
-state and pending next-turn injections, then cleanup callbacks let plugins
-release scheduler jobs, run context, and other out-of-band resources when the
-host tears down the owning lifecycle.
+state and pending next-turn injections for reset/delete/disable; restart keeps
+durable session state while cleanup callbacks let plugins release scheduler
+jobs, run context, and other out-of-band resources for the old runtime
+generation.
 
 ## Message hooks
 

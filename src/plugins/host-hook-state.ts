@@ -31,6 +31,8 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
 const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
+const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
+const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
 
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
@@ -204,6 +206,9 @@ export async function enqueuePluginNextTurnInjection(params: {
   if (!text) {
     return { enqueued: false, id: "", sessionKey };
   }
+  if (text.length > MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH) {
+    return { enqueued: false, id: "", sessionKey };
+  }
   if (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) {
     return { enqueued: false, id: "", sessionKey };
   }
@@ -238,6 +243,11 @@ export async function enqueuePluginNextTurnInjection(params: {
       : undefined;
     if (duplicate) {
       resultId = duplicate.id;
+      injections[params.pluginId] = existing;
+      entry.pluginNextTurnInjections = injections;
+      return;
+    }
+    if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
       return;

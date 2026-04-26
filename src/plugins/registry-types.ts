@@ -297,6 +297,7 @@ export type PluginSessionSchedulerJobRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
+  generation?: number;
   source: string;
   rootDir?: string;
 };

@@ -325,45 +325,46 @@ export async function prepareCliRunContext(
   let systemPrompt = transformedSystemPrompt;
   let preparedPrompt = params.prompt;
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_prompt_build") || hookRunner?.hasHooks("before_agent_start")) {
-    try {
-      const hookResult = await resolvePromptBuildHookResult({
-        prompt: params.prompt,
-        messages: loadOpenClawHistoryMessages(),
-        hookCtx: {
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir,
-          modelProviderId: params.provider,
-          modelId,
-          messageProvider: params.messageProvider,
-          trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider,
-        },
-        hookRunner,
-      });
-      if (hookResult.prependContext) {
-        preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
-      }
-      const hookSystemPrompt = hookResult.systemPrompt?.trim();
-      if (hookSystemPrompt) {
-        systemPrompt = hookSystemPrompt;
-      }
-      systemPrompt =
-        composeSystemPromptWithHookContext({
-          baseSystemPrompt: systemPrompt,
-          prependSystemContext: resolveAttemptPrependSystemContext({
-            sessionKey: params.sessionKey,
-            trigger: params.trigger,
-            hookPrependSystemContext: hookResult.prependSystemContext,
-          }),
-          appendSystemContext: hookResult.appendSystemContext,
-        }) ?? systemPrompt;
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+  try {
+    const hookResult = await resolvePromptBuildHookResult({
+      prompt: params.prompt,
+      messages: loadOpenClawHistoryMessages(),
+      hookCtx: {
+        runId: params.runId,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir,
+        modelProviderId: params.provider,
+        modelId,
+        messageProvider: params.messageProvider,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider,
+      },
+      hookRunner,
+    });
+    if (hookResult.prependContext) {
+      preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
     }
+    if (hookResult.appendContext) {
+      preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+    }
+    const hookSystemPrompt = hookResult.systemPrompt?.trim();
+    if (hookSystemPrompt) {
+      systemPrompt = hookSystemPrompt;
+    }
+    systemPrompt =
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: systemPrompt,
+        prependSystemContext: resolveAttemptPrependSystemContext({
+          sessionKey: params.sessionKey,
+          trigger: params.trigger,
+          hookPrependSystemContext: hookResult.prependSystemContext,
+        }),
+        appendSystemContext: hookResult.appendSystemContext,
+      }) ?? systemPrompt;
+  } catch (error) {
+    cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined

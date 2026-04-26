@@ -141,7 +141,8 @@ The contracts intentionally split authority:
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
-  and prompt fields from legacy `before_agent_start`.
+  prompt fields from legacy `before_agent_start`, and
+  `enqueueNextTurnInjection`.
 
 Examples of non-Plan consumers:
 

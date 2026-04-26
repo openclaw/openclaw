@@ -9,6 +9,7 @@ import type {
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareResult,
+  PluginNextTurnInjectionPlacement,
   PluginNextTurnInjectionRecord,
 } from "./host-hook-turn-types.js";
 
@@ -154,16 +155,29 @@ export function normalizePluginHostHookId(value: string | undefined): string {
   return (value ?? "").trim();
 }
 
+function normalizeQueuedInjectionText(
+  entry: PluginNextTurnInjectionRecord,
+  placement: PluginNextTurnInjectionPlacement,
+): string | undefined {
+  const candidate = entry as {
+    placement?: unknown;
+    text?: unknown;
+  };
+  if (candidate.placement !== placement || typeof candidate.text !== "string") {
+    return undefined;
+  }
+  const text = candidate.text.trim();
+  return text || undefined;
+}
+
 export function buildPluginAgentTurnPrepareContext(params: {
   queuedInjections: PluginNextTurnInjectionRecord[];
 }): PluginAgentTurnPrepareResult {
   const prepend = params.queuedInjections
-    .filter((entry) => entry.placement === "prepend_context")
-    .map((entry) => entry.text.trim())
+    .map((entry) => normalizeQueuedInjectionText(entry, "prepend_context"))
     .filter(Boolean);
   const append = params.queuedInjections
-    .filter((entry) => entry.placement === "append_context")
-    .map((entry) => entry.text.trim())
+    .map((entry) => normalizeQueuedInjectionText(entry, "append_context"))
     .filter(Boolean);
   return {
     ...(prepend.length > 0 ? { prependContext: prepend.join("\n\n") } : {}),

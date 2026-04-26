@@ -50,7 +50,7 @@ let pluginAgentEventUnsubscribe: (() => void) | undefined;
 function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
   pluginAgentEventUnsubscribe?.();
   pluginAgentEventUnsubscribe = undefined;
-  if (!registry || (registry.agentEventSubscriptions ?? []).length === 0) {
+  if (!registry) {
     return;
   }
   pluginAgentEventUnsubscribe = onAgentEvent((event) => {

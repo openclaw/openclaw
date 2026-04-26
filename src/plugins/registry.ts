@@ -53,6 +53,7 @@ import {
 import {
   clearPluginRunContext,
   getPluginRunContext,
+  getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "./host-hook-runtime.js";
@@ -1752,6 +1753,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
+      generation: getPluginSessionSchedulerJobGeneration({
+        pluginId: record.id,
+        jobId: handle.id,
+        sessionKey: handle.sessionKey,
+      }),
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -2020,12 +2026,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerAgentToolResultMiddleware(record, handler, options);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
-              enqueueNextTurnInjection: (injection) =>
-                enqueuePluginNextTurnInjection({
+              enqueueNextTurnInjection: (injection) => {
+                if (params.hookPolicy?.allowPromptInjection === false) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                  });
+                  return Promise.resolve({
+                    enqueued: false,
+                    id: "",
+                    sessionKey: injection.sessionKey,
+                  });
+                }
+                return enqueuePluginNextTurnInjection({
                   pluginId: record.id,
                   pluginName: record.name,
                   injection,
-                }),
+                });
+              },
               registerTrustedToolPolicy: (policy) => registerTrustedToolPolicy(record, policy),
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>

@@ -20,20 +20,28 @@ type SchedulerJobRecord = {
   pluginId: string;
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
+  generation: number;
 };
 
 type PluginHostRuntimeState = {
   runContextByRunId: Map<string, PluginRunContextByPlugin>;
   schedulerJobsByPlugin: Map<string, Map<string, SchedulerJobRecord>>;
+  nextSchedulerJobGeneration: number;
+  pendingAgentEventHandlersByRunId: Map<string, Set<Promise<void>>>;
+  closedRunIds: Set<string>;
 };
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
+const CLOSED_RUN_IDS_MAX = 512;
 const log = createSubsystemLogger("plugins/host-hooks");
 
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
   return resolveGlobalSingleton<PluginHostRuntimeState>(PLUGIN_HOST_RUNTIME_STATE_KEY, () => ({
     runContextByRunId: new Map(),
     schedulerJobsByPlugin: new Map(),
+    nextSchedulerJobGeneration: 1,
+    pendingAgentEventHandlersByRunId: new Map(),
+    closedRunIds: new Set(),
   }));
 }
 
@@ -43,6 +51,36 @@ function normalizeNamespace(value: string | undefined): string {
 
 function copyJsonValue(value: PluginJsonValue): PluginJsonValue {
   return structuredClone(value);
+}
+
+function markPluginRunClosed(runId: string): void {
+  const state = getPluginHostRuntimeState();
+  state.closedRunIds.delete(runId);
+  state.closedRunIds.add(runId);
+  while (state.closedRunIds.size > CLOSED_RUN_IDS_MAX) {
+    const oldest = state.closedRunIds.values().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    state.closedRunIds.delete(oldest);
+  }
+}
+
+function isPluginRunClosed(runId: string): boolean {
+  return getPluginHostRuntimeState().closedRunIds.has(runId);
+}
+
+function trackAgentEventHandler(runId: string, pending: Promise<void>): void {
+  const state = getPluginHostRuntimeState();
+  const handlers = state.pendingAgentEventHandlersByRunId.get(runId) ?? new Set();
+  handlers.add(pending);
+  state.pendingAgentEventHandlersByRunId.set(runId, handlers);
+  void pending.finally(() => {
+    handlers.delete(pending);
+    if (handlers.size === 0) {
+      state.pendingAgentEventHandlersByRunId.delete(runId);
+    }
+  });
 }
 
 function getPluginRunContextNamespaces(params: {
@@ -74,6 +112,9 @@ export function setPluginRunContext(params: {
   const runId = normalizeOptionalString(params.patch.runId);
   const namespace = normalizeNamespace(params.patch.namespace);
   if (!runId || !namespace) {
+    return false;
+  }
+  if (isPluginRunClosed(runId)) {
     return false;
   }
   // Only an explicit `unset: true` deletes the run-context entry — silently
@@ -163,6 +204,9 @@ export function clearPluginRunContext(params: {
       state.runContextByRunId.delete(runId);
     }
   }
+  if (params.runId && !params.pluginId && namespaceFilter === undefined) {
+    state.pendingAgentEventHandlersByRunId.delete(params.runId);
+  }
 }
 
 function isTerminalAgentRunEvent(event: AgentEventPayload): boolean {
@@ -214,6 +258,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
           error,
         });
       });
+      trackAgentEventHandler(runId, pending);
       pendingHandlers.push(pending);
     } catch (error) {
       logAgentEventSubscriptionFailure({
@@ -224,7 +269,11 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     }
   }
   if (isTerminalAgentRunEvent(params.event)) {
-    void Promise.allSettled(pendingHandlers).then(() => {
+    markPluginRunClosed(params.event.runId);
+    const pendingForRun =
+      getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
+      new Set(pendingHandlers);
+    void Promise.allSettled(pendingForRun).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });
   }
@@ -243,10 +292,12 @@ export function registerPluginSessionSchedulerJob(params: {
   }
   const state = getPluginHostRuntimeState();
   const jobs = state.schedulerJobsByPlugin.get(params.pluginId) ?? new Map();
+  const generation = state.nextSchedulerJobGeneration++;
   jobs.set(id, {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     job: { ...params.job, id, sessionKey, kind },
+    generation,
   });
   state.schedulerJobsByPlugin.set(params.pluginId, jobs);
   return { id, pluginId: params.pluginId, sessionKey, kind };
@@ -256,6 +307,7 @@ function deletePluginSessionSchedulerJob(params: {
   pluginId: string;
   jobId: string;
   sessionKey?: string;
+  expectedGeneration?: number;
 }): void {
   const state = getPluginHostRuntimeState();
   const jobs = state.schedulerJobsByPlugin.get(params.pluginId);
@@ -264,6 +316,9 @@ function deletePluginSessionSchedulerJob(params: {
     return;
   }
   if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+    return;
+  }
+  if (params.expectedGeneration !== undefined && record.generation !== params.expectedGeneration) {
     return;
   }
   jobs.delete(params.jobId);
@@ -276,13 +331,33 @@ function hasPluginSessionSchedulerJob(params: {
   pluginId: string;
   jobId: string;
   sessionKey?: string;
+  generation?: number;
 }): boolean {
   const state = getPluginHostRuntimeState();
   const record = state.schedulerJobsByPlugin.get(params.pluginId)?.get(params.jobId);
   if (!record) {
     return false;
   }
-  return !params.sessionKey || record.job.sessionKey === params.sessionKey;
+  if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+    return false;
+  }
+  return params.generation === undefined || record.generation === params.generation;
+}
+
+export function getPluginSessionSchedulerJobGeneration(params: {
+  pluginId: string;
+  jobId: string;
+  sessionKey?: string;
+}): number | undefined {
+  const state = getPluginHostRuntimeState();
+  const record = state.schedulerJobsByPlugin.get(params.pluginId)?.get(params.jobId);
+  if (!record) {
+    return undefined;
+  }
+  if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+    return undefined;
+  }
+  return record.generation;
 }
 
 export async function cleanupPluginSessionSchedulerJobs(params: {
@@ -293,6 +368,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     pluginId: string;
     pluginName?: string;
     job: PluginSessionSchedulerJobRegistration;
+    generation?: number;
   }[];
   preserveJobIds?: ReadonlySet<string>;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
@@ -311,19 +387,34 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && sessionKey !== params.sessionKey) {
         continue;
       }
-      const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
-      if (preserveJob) {
+      const liveGeneration = getPluginSessionSchedulerJobGeneration({
+        pluginId: record.pluginId,
+        jobId,
+        sessionKey,
+      });
+      if (record.generation !== undefined && liveGeneration === undefined) {
         continue;
       }
       if (
+        record.generation === undefined &&
         !hasPluginSessionSchedulerJob({
           pluginId: record.pluginId,
           jobId,
-          sessionKey: params.sessionKey,
+          sessionKey,
         })
       ) {
         continue;
       }
+      const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
+      if (
+        preserveJob &&
+        (record.generation === undefined || liveGeneration === record.generation)
+      ) {
+        continue;
+      }
+      // A newer generation may already own this id. The old cleanup callback can
+      // still release plugin-owned resources, while deletion below is generation
+      // matched so it cannot remove the newer live record.
       try {
         await record.job.cleanup?.({
           reason: params.reason,
@@ -341,7 +432,8 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       deletePluginSessionSchedulerJob({
         pluginId: record.pluginId,
         jobId,
-        sessionKey: params.sessionKey,
+        sessionKey,
+        expectedGeneration: record.generation,
       });
     }
     return failures;
@@ -384,7 +476,10 @@ export function clearPluginHostRuntimeState(params?: { pluginId?: string; runId?
   if (params?.pluginId) {
     getPluginHostRuntimeState().schedulerJobsByPlugin.delete(params.pluginId);
   } else if (!params?.runId) {
-    getPluginHostRuntimeState().schedulerJobsByPlugin.clear();
+    const state = getPluginHostRuntimeState();
+    state.schedulerJobsByPlugin.clear();
+    state.pendingAgentEventHandlersByRunId.clear();
+    state.closedRunIds.clear();
   }
 }
 

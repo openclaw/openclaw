@@ -26,6 +26,7 @@ import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
   listPluginSessionSchedulerJobs,
+  setPluginRunContext,
 } from "../host-hook-runtime.js";
 import {
   drainPluginNextTurnInjections,
@@ -181,6 +182,84 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("lets later trusted policy blocks override earlier approval requests", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "approval",
+          description: "approval",
+          evaluate: () => ({
+            requireApproval: {
+              title: "Review",
+              description: "Review the call",
+            },
+          }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "block",
+          description: "block",
+          evaluate: () => ({ block: true, blockReason: "blocked by later policy" }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by later policy",
+    });
+  });
+
+  it("passes adjusted trusted policy params to later trusted policies", async () => {
+    const seenParams: Record<string, unknown>[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "params",
+          description: "params",
+          evaluate: () => ({ params: { command: "patched" } }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenParams.push(event.params);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "exec", params: { command: "original" } },
+        { toolName: "exec" },
+      ),
+    ).resolves.toEqual({ params: { command: "patched" } });
+    expect(seenParams).toEqual([{ command: "patched" }]);
+  });
+
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
     expect(
       isPluginJsonValue({
@@ -193,6 +272,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(isPluginJsonValue({ value: undefined })).toBe(false);
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
+    expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {
@@ -601,6 +681,36 @@ describe("host-hook fixture plugin contract", () => {
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
 
+  it("skips malformed persisted next-turn injection records during prompt assembly", () => {
+    const queuedContext = buildPluginAgentTurnPrepareContext({
+      queuedInjections: [
+        {
+          id: "bad-text",
+          pluginId: "approval-plugin",
+          text: 123,
+          placement: "prepend_context",
+          createdAt: 1,
+        } as never,
+        {
+          id: "bad-placement",
+          pluginId: "approval-plugin",
+          text: "wrong placement",
+          placement: "middle_context",
+          createdAt: 1,
+        } as never,
+        {
+          id: "valid",
+          pluginId: "approval-plugin",
+          text: "  approval workflow resumed  ",
+          placement: "append_context",
+          createdAt: 1,
+        },
+      ],
+    });
+
+    expect(queuedContext).toEqual({ appendContext: "approval workflow resumed" });
+  });
+
   it("reports duplicate next-turn injections as not newly enqueued", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-"),
@@ -974,6 +1084,78 @@ describe("host-hook fixture plugin contract", () => {
     ).toBeUndefined();
   });
 
+  it("clears run context on terminal events even when no plugin subscribes to agent events", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect(
+      setPluginRunContext({
+        pluginId: "context-only-plugin",
+        patch: { runId: "run-no-subscribers", namespace: "state", value: { ok: true } },
+      }),
+    ).toBe(true);
+
+    emitAgentEvent({
+      runId: "run-no-subscribers",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await waitForPluginEventHandlers();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "context-only-plugin",
+        get: { runId: "run-no-subscribers", namespace: "state" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
+    let releaseToolHandler: (() => void) | undefined;
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "delayed-subscription",
+        name: "Delayed Subscription",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "delayed",
+          streams: ["tool"],
+          async handle(_event, ctx) {
+            await new Promise<void>((resolve) => {
+              releaseToolHandler = resolve;
+            });
+            ctx.setRunContext("late", { resurrected: true });
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    emitAgentEvent({
+      runId: "run-delayed-subscription",
+      stream: "tool",
+      data: { name: "approval_fixture_tool" },
+    });
+    await Promise.resolve();
+
+    emitAgentEvent({
+      runId: "run-delayed-subscription",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    releaseToolHandler?.();
+    await waitForPluginEventHandlers();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "delayed-subscription",
+        get: { runId: "run-delayed-subscription", namespace: "late" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("continues agent event dispatch and terminal cleanup when one subscription throws", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -1031,7 +1213,7 @@ describe("host-hook fixture plugin contract", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
-    await Promise.resolve();
+    await waitForPluginEventHandlers();
 
     expect(
       getPluginRunContext({
@@ -1419,6 +1601,70 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("does not let stale scheduler cleanup delete a newer job generation", async () => {
+    let releaseCleanup: (() => void) | undefined;
+    let markCleanupStarted!: () => void;
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      markCleanupStarted = resolve;
+    });
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-race",
+        name: "Scheduler Race",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: async () => {
+            markCleanupStarted();
+            await new Promise<void>((resolve) => {
+              releaseCleanup = resolve;
+            });
+          },
+        });
+      },
+    });
+
+    const cleanupPromise = cleanupReplacedPluginHostRegistry({
+      previousRegistry: previousFixture.registry.registry,
+      nextRegistry: createEmptyPluginRegistry(),
+    });
+    await cleanupStartedPromise;
+
+    const replacementFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: replacementFixture.registry,
+      config: replacementFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-race",
+        name: "Scheduler Race",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+        });
+      },
+    });
+
+    releaseCleanup?.();
+    await expect(cleanupPromise).resolves.toMatchObject({ failures: [] });
+    expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
+      {
+        id: "shared-job",
+        pluginId: "scheduler-race",
+        sessionKey: "agent:main:main",
+        kind: "monitor",
+      },
+    ]);
+  });
+
   it("does not register scheduler jobs globally during non-activating registry loads", () => {
     const registry = createPluginRegistry({
       logger: {
@@ -1562,6 +1808,148 @@ describe("host-hook fixture plugin contract", () => {
               },
             }),
           );
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear unrelated run context during session-scoped cleanup", async () => {
+    const registry = createEmptyPluginRegistry();
+    expect(
+      setPluginRunContext({
+        pluginId: "plugin-a",
+        patch: { runId: "run-a", namespace: "state", value: { keep: "a" } },
+      }),
+    ).toBe(true);
+    expect(
+      setPluginRunContext({
+        pluginId: "plugin-b",
+        patch: { runId: "run-b", namespace: "state", value: { keep: "b" } },
+      }),
+    ).toBe(true);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-run-context-"),
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: path.join(stateDir, "sessions.json") },
+        },
+        run: async () => {
+          await runPluginHostCleanup({
+            registry,
+            reason: "reset",
+            sessionKey: "agent:main:main",
+          });
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+
+    expect(
+      getPluginRunContext({
+        pluginId: "plugin-a",
+        get: { runId: "run-a", namespace: "state" },
+      }),
+    ).toEqual({ keep: "a" });
+    expect(
+      getPluginRunContext({
+        pluginId: "plugin-b",
+        get: { runId: "run-b", namespace: "state" },
+      }),
+    ).toEqual({ keep: "b" });
+  });
+
+  it("preserves durable plugin session state during plugin restart cleanup", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "restart-state-fixture",
+        name: "Restart State Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "restart state test",
+        });
+      },
+    });
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-restart-state-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: {
+          session: { store: storePath },
+        },
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-1",
+              updatedAt: Date.now(),
+              pluginExtensions: {
+                "restart-state-fixture": { workflow: { state: "waiting" } },
+              },
+              pluginNextTurnInjections: {
+                "restart-state-fixture": [
+                  {
+                    id: "resume",
+                    pluginId: "restart-state-fixture",
+                    text: "resume",
+                    placement: "prepend_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            };
+            return undefined;
+          });
+
+          await expect(
+            runPluginHostCleanup({
+              registry: registry.registry,
+              pluginId: "restart-state-fixture",
+              reason: "restart",
+            }),
+          ).resolves.toMatchObject({ failures: [] });
+
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
+            "restart-state-fixture": { workflow: { state: "waiting" } },
+          });
+          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toEqual({
+            "restart-state-fixture": [
+              {
+                id: "resume",
+                pluginId: "restart-state-fixture",
+                text: "resume",
+                placement: "prepend_context",
+                createdAt: 1,
+              },
+            ],
+          });
         },
       });
     } finally {

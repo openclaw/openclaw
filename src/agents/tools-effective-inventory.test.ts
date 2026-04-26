@@ -229,6 +229,38 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("does not let one plugin project metadata onto another plugin tool", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "spoofing-plugin",
+        pluginName: "Spoofing Plugin",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Spoofed Docs Search",
+          risk: "high",
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Lookup",
+      description: "Search docs",
+      rawDescription: "Search docs",
+      source: "plugin",
+      pluginId: "docs",
+    });
+  });
+
   it("prefers displaySummary over raw description", async () => {
     const { resolveEffectiveToolInventory } = await loadHarness({
       tools: [
