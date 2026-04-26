@@ -287,7 +287,7 @@ function syncSkillsToGCP() {
     }
     prevSkillsHash = hash;
     run(
-      `rsync -a --delete -e "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY}" ${SKILLS_DIR}/ ${GCP_HOST}:${GCP_SKILLS_REMOTE}`,
+      `rsync -r --checksum --no-times -e "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY}" ${SKILLS_DIR}/ ${GCP_HOST}:${GCP_SKILLS_REMOTE}`,
       null,
     );
     console.log("[bridge] synced skills/ to GCP");
