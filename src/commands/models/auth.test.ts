@@ -9,10 +9,12 @@ const mocks = vi.hoisted(() => ({
   clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
+  listAgentIds: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
+  resolveKnownAgentId: vi.fn(),
   upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
@@ -75,6 +77,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds: mocks.listAgentIds,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
@@ -94,6 +97,7 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
 
 vi.mock("./shared.js", () => ({
   loadValidConfigOrThrow: mocks.loadValidConfigOrThrow,
+  resolveKnownAgentId: mocks.resolveKnownAgentId,
   updateConfig: mocks.updateConfig,
 }));
 
@@ -267,6 +271,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
 
+    mocks.listAgentIds.mockReturnValue(["main", "coder"]);
+    mocks.resolveKnownAgentId.mockImplementation(
+      ({ rawAgentId }: { rawAgentId?: string | null }) => rawAgentId?.trim() || undefined,
+    );
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
@@ -369,6 +377,42 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    );
+  });
+
+  it("uses the requested agent directory for plugin login", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "coder" }],
+      },
+    };
+    const initialConfig = currentConfig;
+    mocks.resolveAgentDir.mockImplementation((_cfg, agentId: string) =>
+      agentId === "coder" ? "/tmp/openclaw/agents/coder" : "/tmp/openclaw/agents/main",
+    );
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId: string) =>
+      agentId === "coder" ? "/tmp/openclaw/workspace-coder" : "/tmp/openclaw/workspace",
+    );
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(initialConfig, "coder");
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(initialConfig, "coder");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(
+      "/tmp/openclaw/agents/coder",
+    );
+    expect(runProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+        workspaceDir: "/tmp/openclaw/workspace-coder",
+      }),
+    );
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+      }),
     );
   });
 

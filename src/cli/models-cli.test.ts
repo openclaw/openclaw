@@ -134,6 +134,25 @@ describe("models cli", () => {
     );
   });
 
+  it.each([
+    {
+      label: "login",
+      args: ["models", "auth", "--agent", "coder", "login", "--provider", "openai-codex"],
+      expected: { provider: "openai-codex", agent: "coder" },
+    },
+    {
+      label: "login-github-copilot",
+      args: ["models", "auth", "--agent", "coder", "login-github-copilot", "--yes"],
+      expected: { provider: "github-copilot", method: "device", yes: true, agent: "coder" },
+    },
+  ])("passes auth parent --agent to models auth $label", async ({ args, expected }) => {
+    await runModelsCommand(args);
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining(expected),
+      expect.any(Object),
+    );
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();
