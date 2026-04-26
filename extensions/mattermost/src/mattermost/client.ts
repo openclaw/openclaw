@@ -46,6 +46,11 @@ export const MattermostPostSchema = z
     type: z.string().nullable().optional(),
     root_id: z.string().nullable().optional(),
     create_at: z.number().nullable().optional(),
+    // Mattermost server stamps `edit_at` with the edit-revision timestamp
+    // (milliseconds since epoch) on `post_edited` events; remains 0 for the
+    // original `posted` event. Used by the replay guard to distinguish edit
+    // revisions from the original post (#71930).
+    edit_at: z.number().nullable().optional(),
     props: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .passthrough();

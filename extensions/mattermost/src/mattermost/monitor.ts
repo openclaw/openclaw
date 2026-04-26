@@ -159,15 +159,48 @@ export function buildMattermostModelPickerSelectMessageSid(params: {
 function buildMattermostInboundReplayKeys(params: {
   accountId: string;
   messageIds: string[];
+  /**
+   * Per-message edit timestamps from `MattermostPost.edit_at`, aligned by
+   * index with `messageIds`. When a message has been edited (`edit_at > 0`),
+   * the replay key gains an `:edit:<edit_at>` suffix so each edit revision
+   * is treated as a distinct claim — fixes #71930 where a `post_edited`
+   * arriving after the original `posted` (within the 5-minute TTL) was
+   * silently deduped against the original key, dropping mention-by-edit.
+   *
+   * Pure `posted` events (`edit_at == 0` or absent) keep the legacy
+   * `${accountId}:${id}` key so the existing replay-guard semantics for
+   * non-edit traffic are preserved byte-for-byte.
+   */
+  editAts?: ReadonlyArray<number | null | undefined>;
 }): string[] {
-  return [...new Set(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`))].filter(
-    (key) => !key.endsWith(":"),
-  );
+  const editAts = params.editAts ?? [];
+  return [
+    ...new Set(
+      params.messageIds.map((id, idx) => {
+        const trimmed = id.trim();
+        if (!trimmed) {
+          return `${params.accountId}:`;
+        }
+        const editAt = editAts[idx];
+        if (typeof editAt === "number" && editAt > 0) {
+          return `${params.accountId}:${trimmed}:edit:${editAt}`;
+        }
+        return `${params.accountId}:${trimmed}`;
+      }),
+    ),
+  ].filter((key) => !key.endsWith(":"));
 }
 
 export async function processMattermostReplayGuardedPost(params: {
   accountId: string;
   messageIds: string[];
+  /**
+   * Optional per-message edit timestamps (aligned by index with
+   * `messageIds`). When provided, edited revisions get distinct replay
+   * keys; absent values fall back to the legacy id-only key. See
+   * `buildMattermostInboundReplayKeys` and #71930.
+   */
+  editAts?: ReadonlyArray<number | null | undefined>;
   handlePost: () => Promise<void>;
   replayGuard?: ClaimableDedupe;
 }): Promise<"processed" | "duplicate"> {
@@ -175,6 +208,7 @@ export async function processMattermostReplayGuardedPost(params: {
   const replayKeys = buildMattermostInboundReplayKeys({
     accountId: params.accountId,
     messageIds: params.messageIds,
+    editAts: params.editAts,
   });
   if (replayKeys.length === 0) {
     await params.handlePost();
@@ -1189,6 +1223,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     post: MattermostPost,
     payload: MattermostEventPayload,
     messageIds?: string[],
+    /**
+     * Optional per-message edit timestamps aligned with `messageIds`. Carries
+     * `MattermostPost.edit_at` so the replay guard distinguishes a freshly
+     * edited revision from the original `posted` event (#71930).
+     */
+    editAts?: ReadonlyArray<number | null | undefined>,
   ) => {
     const channelId = post.channel_id ?? payload.data?.channel_id ?? payload.broadcast?.channel_id;
     if (!channelId) {
@@ -1201,9 +1241,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
+    // Align edit_at values with allMessageIds. When the caller supplied
+    // explicit batched ids+editAts (debounced multi-post flush), trust them
+    // verbatim. Otherwise fall back to the single post's edit_at so a
+    // direct `post_edited` flow still gets a unique replay key (#71930).
+    const allEditAts: ReadonlyArray<number | null | undefined> = messageIds?.length
+      ? editAts && editAts.length === messageIds.length
+        ? editAts
+        : messageIds.map(() => undefined)
+      : [post.edit_at];
     const replayResult = await processMattermostReplayGuardedPost({
       accountId: account.accountId,
       messageIds: allMessageIds,
+      editAts: allEditAts,
       handlePost: async () => {
         const senderId = post.user_id ?? payload.broadcast?.user_id;
         if (!senderId) {
@@ -1967,8 +2017,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         message: combinedText,
         file_ids: [],
       };
-      const ids = entries.map((entry) => entry.post.id).filter(Boolean);
-      await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
+      // Build (id, edit_at) pairs in lockstep so the replay-guard key for an
+      // edited post in the batch reflects its own revision (#71930).
+      const idEditPairs = entries
+        .map((entry) => [entry.post.id, entry.post.edit_at] as const)
+        .filter(([id]) => Boolean(id));
+      const ids = idEditPairs.map(([id]) => id);
+      const editAts = idEditPairs.map(([, editAt]) => editAt);
+      await handlePost(
+        mergedPost,
+        last.payload,
+        ids.length > 0 ? ids : undefined,
+        ids.length > 0 ? editAts : undefined,
+      );
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);

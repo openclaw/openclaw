@@ -704,6 +704,170 @@ describe("processMattermostReplayGuardedPost", () => {
     expect(handlePost).toHaveBeenCalledTimes(1);
     expect(visibleSideEffect).toHaveBeenCalledTimes(1);
   });
+
+  // Regression: a `post_edited` arriving after the original `posted` event
+  // (within the 5-minute replay TTL) MUST NOT be silently deduped against
+  // the original key. Without per-edit keying the bug from #71930 returns —
+  // a user adding @mention via edit would never wake the agent because the
+  // original key already sits in `recentInboundMessages`.
+  it("treats an edited revision as a fresh claim, not a duplicate of the original posted key", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+
+    // 1. Original `posted` event commits its key.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-edit-1"],
+        editAts: [0],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    // 2. `post_edited` for the same post arrives (same id, edit_at > 0)
+    // — must be treated as a NEW event, not a duplicate.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-edit-1"],
+        editAts: [1700000000000],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    // 3. A second edit (different edit_at) is also fresh.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-edit-1"],
+        editAts: [1700000000999],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    // 4. Re-delivery of the SAME edit revision is correctly deduped.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-edit-1"],
+        editAts: [1700000000999],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves legacy id-only key when editAts is omitted (back-compat)", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["legacy-post"],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    // Same id, no editAts → legacy key collision → duplicate (existing behavior).
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["legacy-post"],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats edit_at=null/undefined as 'not edited' (legacy id key)", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["nullable-post"],
+        editAts: [null],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["nullable-post"],
+        editAts: [undefined],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys batched edits independently per post in a multi-post flush", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+
+    // Two-post batch: first is original posted, second is an edit of a
+    // different post in the same debounce window.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-A", "post-B"],
+        editAts: [0, 1700000000000],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    // Re-deliver the same batch: both keys should now collide → duplicate.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-A", "post-B"],
+        editAts: [0, 1700000000000],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    // But a NEW edit revision of post-B is still fresh, even though post-A
+    // is a known duplicate.
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-A", "post-B"],
+        editAts: [0, 1700000099999],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    expect(handlePost).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("buildMattermostModelPickerSelectMessageSid", () => {

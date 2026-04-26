@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
+import type { MattermostPost } from "./client.js";
 import {
   createMattermostConnectOnce,
+  type MattermostEventPayload,
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
@@ -161,7 +163,7 @@ describe("mattermost websocket monitor", () => {
 
   it("dispatches reaction events to the reaction handler", async () => {
     const socket = new FakeWebSocket();
-    const onPosted = vi.fn(async () => {});
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
     const onReaction = vi.fn(async (payload) => payload);
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -403,5 +405,179 @@ describe("mattermost websocket monitor", () => {
     socket.emitClose(1000);
     await connected;
     vi.useRealTimers();
+  });
+
+  it("dispatches post_edited events through onPosted (regression: #71930)", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "post_edited",
+            data: {
+              post: JSON.stringify({
+                id: "post-edited-1",
+                user_id: "user-9",
+                channel_id: "chan-1",
+                message: "hey @bot please look",
+                edit_at: 1234567890,
+              }),
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    const [post, payload] = onPosted.mock.calls[0];
+    expect(post).toMatchObject({
+      id: "post-edited-1",
+      user_id: "user-9",
+      message: "hey @bot please look",
+    });
+    expect(payload.event).toBe("post_edited");
+    // Surfaces an audit-log breadcrumb so dropped/handled edits are diffable.
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: re-evaluating edited post post-edited-1 (post_edited)",
+    );
+  });
+
+  it("still dispatches plain posted events without the edit log (backward compat)", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-fresh-1",
+                user_id: "user-7",
+                channel_id: "chan-1",
+                message: "hello",
+              }),
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    const logCalls = (runtime.log as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]);
+    expect(logCalls.some((msg) => String(msg).includes("post_edited"))).toBe(false);
+  });
+
+  it("forwards post_edited even when the editor is the bot itself (downstream filters)", async () => {
+    // The websocket layer must not silently drop bot-self edits — the bot-self
+    // filter lives downstream (monitor.ts handlePost). Dropping here would mask
+    // mention-by-edit cases where a non-bot user edits a bot-quoted message.
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "post_edited",
+            data: {
+              post: JSON.stringify({
+                id: "post-bot-edit",
+                user_id: "bot-user-id",
+                channel_id: "chan-1",
+                message: "let me check… done.",
+                edit_at: 999,
+              }),
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    expect(onPosted.mock.calls[0][0]).toMatchObject({
+      id: "post-bot-edit",
+      user_id: "bot-user-id",
+    });
+  });
+
+  it("drops post_edited with a missing/malformed post body without crashing", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      // post_edited with no `data.post` — should be dropped silently.
+      socket.emitMessage(Buffer.from(JSON.stringify({ event: "post_edited", data: {} })));
+      // post_edited with malformed JSON in `data.post` — also dropped.
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "post_edited",
+            data: { post: "{not-json" },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onPosted).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });

@@ -111,10 +111,19 @@ export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (ur
   return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
 };
 
+/**
+ * Mattermost WebSocket events that carry a fresh post body in `data.post`.
+ * `post_edited` is included so an @mention added via edit still wakes the
+ * agent — see issue #71930. The downstream handler keys on `post.id` and
+ * filters self-authored posts, so re-routing edits through the same path
+ * is safe and behavior-preserving for `posted`.
+ */
+const POST_BEARING_EVENTS = new Set(["posted", "post_edited"]);
+
 export function parsePostedPayload(
   payload: MattermostEventPayload,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  if (payload.event !== "posted") {
+  if (!payload.event || !POST_BEARING_EVENTS.has(payload.event)) {
     return null;
   }
   const postData = payload.data?.post;
@@ -301,12 +310,17 @@ export function createMattermostConnectOnce(
             return;
           }
 
-          if (payload.event !== "posted") {
+          if (!payload.event || !POST_BEARING_EVENTS.has(payload.event)) {
             return;
           }
           const parsed = parsePostedPayload(payload);
           if (!parsed) {
             return;
+          }
+          if (payload.event === "post_edited") {
+            opts.runtime.log?.(
+              `mattermost: re-evaluating edited post ${parsed.post.id} (post_edited)`,
+            );
           }
           try {
             await opts.onPosted(parsed.post, parsed.payload);
