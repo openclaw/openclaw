@@ -405,6 +405,58 @@ describe("provider-runtime", () => {
     );
   });
 
+  it("normalizes provider refs in provider hook cache keys", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    };
+
+    expect(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        providerRefs: [" OpenAI ", "anthropic", "openai"],
+      }),
+    ).toBe(
+      providerRuntimeTesting.buildHookProviderCacheKey({
+        ...base,
+        providerRefs: ["anthropic", "openai"],
+      }),
+    );
+  });
+
+  it("normalizes providers in resolved hook plugin cache keys", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    };
+
+    expect(
+      providerRuntimeTesting.buildHookPluginCacheKey({
+        ...base,
+        provider: " OpenAI ",
+      }),
+    ).toBe(
+      providerRuntimeTesting.buildHookPluginCacheKey({
+        ...base,
+        provider: "openai",
+      }),
+    );
+  });
+
+  it("reuses provider hook cache entries for equivalent provider ref scopes", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+      },
+    ]);
+
+    expect(resolveProviderRuntimePlugin({ provider: " OpenAI " })?.id).toBe("openai");
+    expect(resolveProviderRuntimePlugin({ provider: "openai" })?.id).toBe("openai");
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
   it("skips provider runtime loading when no plugin declares external auth hooks", () => {
     expect(
       resolveExternalAuthProfilesWithPlugins({
