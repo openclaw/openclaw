@@ -158,8 +158,20 @@ export type SessionContinuityRestoreBoundaryMarker = {
   boundaryMetadata: SessionCompactionBoundaryMetadata;
 };
 
+export type SessionContinuityNextTurnFreshenedMarker = {
+  boundaryId: string;
+  checkpointId?: string;
+  freshenedAt: number;
+  mismatchCount: number;
+  fallbackKeys?: string[];
+  livePendingDescendants?: boolean;
+  pendingDescendantCount?: number;
+  staleRiskCount?: number;
+};
+
 export type SessionContinuityRestoreState = {
   usedBoundary?: SessionContinuityRestoreBoundaryMarker;
+  nextTurnFreshened?: SessionContinuityNextTurnFreshenedMarker;
 };
 
 export type SessionPluginDebugEntry = {

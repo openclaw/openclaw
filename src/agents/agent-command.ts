@@ -8,13 +8,18 @@ import {
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type {
+  SessionContinuityRestoreBoundaryMarker,
+  SessionEntry,
+} from "../config/sessions/types.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { emitContinuityDiagnostic } from "../infra/continuity-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolvePendingSpawnedChildren } from "../infra/outbound/pending-spawn-query.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -248,6 +253,279 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
+type ContinuityMismatch = {
+  key: string;
+  boundary: unknown;
+  live: unknown;
+};
+
+type BoundaryFreshenCandidate = {
+  marker: SessionContinuityRestoreBoundaryMarker;
+  state: Record<string, unknown>;
+  boundaryId: string;
+};
+
+function isContinuityPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function compactContinuityValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? value.trim() : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function valuesEqualForContinuity(boundaryValue: unknown, liveValue: unknown): boolean {
+  if (boundaryValue === undefined || boundaryValue === null || boundaryValue === "") {
+    return true;
+  }
+  return String(boundaryValue) === String(liveValue ?? "");
+}
+
+function collectContinuityMismatches(
+  boundary: Record<string, unknown>,
+  live: Record<string, unknown>,
+  prefix = "",
+): { mismatches: ContinuityMismatch[]; fallbackKeys: string[] } {
+  const mismatches: ContinuityMismatch[] = [];
+  const fallbackKeys: string[] = [];
+  for (const [key, boundaryValue] of Object.entries(boundary)) {
+    if (boundaryValue === undefined || boundaryValue === null || boundaryValue === "") {
+      continue;
+    }
+    const liveValue = live[key];
+    const qualifiedKey = prefix ? `${prefix}.${key}` : key;
+    if (liveValue === undefined || liveValue === null || liveValue === "") {
+      fallbackKeys.push(qualifiedKey);
+      continue;
+    }
+    if (!valuesEqualForContinuity(boundaryValue, liveValue)) {
+      mismatches.push({
+        key: qualifiedKey,
+        boundary: boundaryValue,
+        live: liveValue,
+      });
+    }
+  }
+  return { mismatches, fallbackKeys };
+}
+
+function resolveBoundaryStaleRiskDiagnostics(state: Record<string, unknown>): Array<{
+  slot: string;
+  status: "missing-seed" | "not-captured";
+  reason?: string;
+}> {
+  const risks: Array<{
+    slot: string;
+    status: "missing-seed" | "not-captured";
+    reason?: string;
+  }> = [];
+  const approval = isContinuityPlainObject(state.approval) ? state.approval : undefined;
+  if (!approval) {
+    risks.push({ slot: "approval", status: "missing-seed" });
+  } else if (approval.captured === false) {
+    risks.push({
+      slot: "approval",
+      status: "not-captured",
+      reason: compactContinuityValue(approval.reason),
+    });
+  }
+  for (const slot of ["acp", "wake"]) {
+    if (!isContinuityPlainObject(state[slot])) {
+      risks.push({ slot, status: "missing-seed" });
+    }
+  }
+  return risks;
+}
+
+function resolveLiveBoundaryPolicy(params: {
+  sessionEntry?: SessionEntry;
+  configuredProvider?: string;
+  configuredModel?: string;
+  thinkOverride?: string;
+  persistedThinking?: string;
+}): Record<string, string | undefined> {
+  return {
+    provider:
+      compactContinuityValue(params.sessionEntry?.providerOverride) ??
+      compactContinuityValue(params.configuredProvider),
+    model:
+      compactContinuityValue(params.sessionEntry?.modelOverride) ??
+      compactContinuityValue(params.configuredModel),
+    thinkingLevel:
+      compactContinuityValue(params.thinkOverride) ??
+      compactContinuityValue(params.sessionEntry?.thinkingLevel) ??
+      compactContinuityValue(params.persistedThinking),
+  };
+}
+
+function resolveBoundaryFreshenMarker(
+  sessionEntry: SessionEntry | undefined,
+): BoundaryFreshenCandidate | undefined {
+  const restore = isContinuityPlainObject(sessionEntry?.continuityRestore)
+    ? sessionEntry.continuityRestore
+    : undefined;
+  const marker = isContinuityPlainObject(restore?.usedBoundary)
+    ? (restore.usedBoundary as SessionContinuityRestoreBoundaryMarker)
+    : undefined;
+  const metadata = isContinuityPlainObject(marker?.boundaryMetadata)
+    ? marker.boundaryMetadata
+    : undefined;
+  const state = isContinuityPlainObject(metadata?.state) ? metadata.state : undefined;
+  if (!marker || !metadata || !state) {
+    return undefined;
+  }
+  const boundaryId =
+    compactContinuityValue(marker.boundaryId) ??
+    compactContinuityValue(metadata.boundaryId) ??
+    compactContinuityValue(marker.checkpointId);
+  if (!boundaryId) {
+    return undefined;
+  }
+  const freshened = isContinuityPlainObject(restore?.nextTurnFreshened)
+    ? restore.nextTurnFreshened
+    : undefined;
+  if (compactContinuityValue(freshened?.boundaryId) === boundaryId) {
+    return undefined;
+  }
+  return {
+    marker,
+    state,
+    boundaryId,
+  };
+}
+
+async function freshenRestoredBoundaryForNextTurn(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionKey?: string;
+  sessionId: string;
+  sessionAgentId: string;
+  runId?: string;
+  configuredProvider?: string;
+  configuredModel?: string;
+  thinkOverride?: string;
+  persistedThinking?: string;
+}): Promise<SessionEntry | undefined> {
+  const restoreMarker = resolveBoundaryFreshenMarker(params.sessionEntry);
+  if (!restoreMarker || !params.sessionKey || !params.sessionStore || !params.storePath) {
+    return params.sessionEntry;
+  }
+  const { state, boundaryId, marker } = restoreMarker;
+  const liveSessionBinding: Record<string, unknown> = {
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.sessionAgentId,
+    channel:
+      compactContinuityValue(params.sessionEntry?.channel) ??
+      compactContinuityValue(params.sessionEntry?.lastChannel),
+    accountId: compactContinuityValue(params.sessionEntry?.lastAccountId),
+    threadId: compactContinuityValue(params.sessionEntry?.lastThreadId),
+  };
+  const sessionBindingResult = collectContinuityMismatches(
+    isContinuityPlainObject(state.sessionBinding) ? state.sessionBinding : {},
+    liveSessionBinding,
+  );
+  const livePendingDescendants = resolvePendingSpawnedChildren(params.sessionKey);
+  const pendingDescendantCount = livePendingDescendants ? 1 : 0;
+  const childMismatches: ContinuityMismatch[] = [];
+  const boundaryChildren = isContinuityPlainObject(state.children) ? state.children : {};
+  if (
+    typeof boundaryChildren.livePendingDescendants === "boolean" &&
+    boundaryChildren.livePendingDescendants !== livePendingDescendants
+  ) {
+    childMismatches.push({
+      key: "children.livePendingDescendants",
+      boundary: boundaryChildren.livePendingDescendants,
+      live: livePendingDescendants,
+    });
+  }
+  const boundaryPolicy = isContinuityPlainObject(state.policy) ? state.policy : {};
+  const livePolicy = resolveLiveBoundaryPolicy(params);
+  const policyResult = collectContinuityMismatches(boundaryPolicy, livePolicy, "policy");
+  const staleRiskDiagnostics = resolveBoundaryStaleRiskDiagnostics(state);
+  const mismatches = [
+    ...sessionBindingResult.mismatches,
+    ...childMismatches,
+    ...policyResult.mismatches,
+  ];
+  const fallbackKeys = [...sessionBindingResult.fallbackKeys, ...policyResult.fallbackKeys];
+  const policyLiveKeys = Object.keys(livePolicy).filter((key) => livePolicy[key] !== undefined);
+  const freshenedAt = Date.now();
+
+  emitContinuityDiagnostic({
+    type: "continuity.restore.boundary_freshened",
+    severity: mismatches.length > 0 ? "warn" : "info",
+    runId: params.runId ?? boundaryId,
+    sessionKey: params.sessionKey,
+    phase: "next_turn_freshen",
+    correlation: {
+      boundaryId,
+      checkpointId: marker.checkpointId,
+    },
+    details: {
+      stateKeys: Object.keys(state),
+      mismatchCount: mismatches.length,
+      mismatches: mismatches.slice(0, 12),
+      fallbackKeys,
+      livePendingDescendants,
+      pendingDescendantCount,
+      policyLiveKeys,
+      staleRiskCount: staleRiskDiagnostics.length,
+    },
+  });
+  if (staleRiskDiagnostics.length > 0) {
+    emitContinuityDiagnostic({
+      type: "continuity.restore.boundary_stale_risk",
+      severity: "info",
+      runId: params.runId ?? boundaryId,
+      sessionKey: params.sessionKey,
+      phase: "next_turn_freshen",
+      correlation: {
+        boundaryId,
+        checkpointId: marker.checkpointId,
+      },
+      details: {
+        risks: staleRiskDiagnostics,
+        stateKeys: Object.keys(state),
+        policyLiveKeys,
+      },
+    });
+  }
+
+  const next: SessionEntry = {
+    ...(params.sessionEntry ?? { sessionId: params.sessionId }),
+    updatedAt: freshenedAt,
+    continuityRestore: {
+      ...(isContinuityPlainObject(params.sessionEntry?.continuityRestore)
+        ? params.sessionEntry.continuityRestore
+        : {}),
+      nextTurnFreshened: {
+        boundaryId,
+        checkpointId: marker.checkpointId,
+        freshenedAt,
+        mismatchCount: mismatches.length,
+        fallbackKeys,
+        livePendingDescendants,
+        pendingDescendantCount,
+        staleRiskCount: staleRiskDiagnostics.length,
+      },
+    },
+  };
+  await persistSessionEntry({
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    entry: next,
+  });
+  return next;
+}
+
 async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
@@ -404,6 +682,8 @@ async function prepareAgentCommandExecution(
     agentDir,
     runId,
     acpManager,
+    configuredProvider: configuredModel.provider,
+    configuredModel: configuredModel.model,
     acpResolution,
   };
 }
@@ -438,6 +718,8 @@ async function agentCommandInternal(
     agentDir,
     runId,
     acpManager,
+    configuredProvider,
+    configuredModel,
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
@@ -459,6 +741,20 @@ async function agentCommandInternal(
     if (acpResolution?.kind === "stale") {
       throw acpResolution.error;
     }
+
+    sessionEntry = await freshenRestoredBoundaryForNextTurn({
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionKey,
+      sessionId,
+      sessionAgentId,
+      runId,
+      configuredProvider,
+      configuredModel,
+      thinkOverride,
+      persistedThinking,
+    });
 
     if (acpResolution?.kind === "ready" && sessionKey) {
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
@@ -1198,4 +1494,8 @@ export async function agentCommandFromIngress(
 export const __testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
+  collectContinuityMismatches,
+  freshenRestoredBoundaryForNextTurn,
+  resolveBoundaryFreshenMarker,
+  resolveBoundaryStaleRiskDiagnostics,
 };
