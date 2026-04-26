@@ -908,7 +908,7 @@ Notes:
 
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
-- `stuckSessionWarnMs`: age threshold in ms for emitting stuck-session warnings while a session remains in processing state.
+- `stuckSessionWarnMs`: no-progress age threshold in ms for emitting stuck-session warnings while a session remains in processing state. Reply, tool, status, and block progress reset the timer; repeated warnings back off while unchanged.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.

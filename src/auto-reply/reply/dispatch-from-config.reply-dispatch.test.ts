@@ -83,6 +83,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
+    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     resetPluginTtsAndThreadMocks();
   });
 

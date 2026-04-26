@@ -149,7 +149,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Stuck Session Warning Threshold (ms)",
             description:
-              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+              "No-progress age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Reply, tool, status, and block progress reset the timer; repeated warnings back off while unchanged.",
           },
           otel: {
             type: "object",
@@ -24002,7 +24002,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.stuckSessionWarnMs": {
       label: "Stuck Session Warning Threshold (ms)",
-      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      help: "No-progress age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Reply, tool, status, and block progress reset the timer; repeated warnings back off while unchanged.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {

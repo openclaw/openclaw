@@ -13,6 +13,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -313,6 +314,18 @@ export async function tryDispatchAcpReply(params: {
   }
   const canonicalSessionKey = acpResolution.sessionKey;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const progressSessionKeys = Array.from(
+    new Set(
+      [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
+        .map((key) => normalizeOptionalString(key))
+        .filter((key): key is string => Boolean(key)),
+    ),
+  );
+  const markAcpProgress = () => {
+    for (const key of progressSessionKeys) {
+      markDiagnosticSessionProgress({ sessionKey: key });
+    }
+  };
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -371,6 +384,7 @@ export async function tryDispatchAcpReply(params: {
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
+    onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,
   });

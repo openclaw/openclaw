@@ -191,6 +191,7 @@ export function logMessageQueued(params: {
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
   if (diag.isEnabled("debug")) {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -269,6 +270,7 @@ export function logSessionStateChange(
   const prevState = state.state;
   state.state = params.state;
   state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
@@ -293,11 +295,22 @@ export function logSessionStateChange(
   markActivity();
 }
 
+export function markDiagnosticSessionProgress(params: SessionRef) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
+  markActivity();
+}
+
 export function logSessionStuck(params: SessionRef & { state: SessionStateValue; ageMs: number }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
   const state = getDiagnosticSessionState(params);
+  state.lastStuckWarnAgeMs = params.ageMs;
   diag.warn(
     `stuck session: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
       state.sessionKey ?? "unknown"
@@ -453,7 +466,11 @@ export function startDiagnosticHeartbeat(
 
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
-      if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
+      const nextWarnAgeMs =
+        state.lastStuckWarnAgeMs === undefined
+          ? stuckSessionWarnMs
+          : Math.max(state.lastStuckWarnAgeMs + stuckSessionWarnMs, state.lastStuckWarnAgeMs * 2);
+      if (state.state === "processing" && ageMs > stuckSessionWarnMs && ageMs >= nextWarnAgeMs) {
         logSessionStuck({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,

@@ -31,6 +31,7 @@ import {
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
+  markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import {
   buildPluginBindingDeclinedText,
@@ -331,17 +332,24 @@ export async function dispatchReplyFromConfig(
       reason,
     });
   };
-
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
-
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
+  const markProgress = () => {
+    if (!canTrackSession || !sessionKey) {
+      return;
+    }
+    markDiagnosticSessionProgress({ sessionKey });
+    if (acpDispatchSessionKey && acpDispatchSessionKey !== sessionKey) {
+      markDiagnosticSessionProgress({ sessionKey: acpDispatchSessionKey });
+    }
+  };
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
@@ -674,7 +682,6 @@ export async function dispatchReplyFromConfig(
   }
 
   markProcessing();
-
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -987,6 +994,7 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    const onReplyStartFromReplyOptions = params.replyOptions?.onReplyStart;
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -994,9 +1002,14 @@ export async function dispatchReplyFromConfig(
       ctx,
       {
         ...params.replyOptions,
+        onReplyStart: async () => {
+          markProgress();
+          await onReplyStartFromReplyOptions?.();
+        },
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
+          markProgress();
           const run = async () => {
             await onToolResultFromReplyOptions?.(payload);
             if (suppressDelivery) {
@@ -1039,6 +1052,7 @@ export async function dispatchReplyFromConfig(
           return run();
         },
         onPlanUpdate: async (payload) => {
+          markProgress();
           await onPlanUpdateFromReplyOptions?.(payload);
           if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
@@ -1046,6 +1060,7 @@ export async function dispatchReplyFromConfig(
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
+          markProgress();
           await onApprovalEventFromReplyOptions?.(payload);
           if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
@@ -1061,6 +1076,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
+          markProgress();
           await onPatchSummaryFromReplyOptions?.(payload);
           if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
@@ -1072,6 +1088,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
+          markProgress();
           const run = async () => {
             if (suppressDelivery) {
               return;
