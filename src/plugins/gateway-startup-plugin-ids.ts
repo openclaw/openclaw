@@ -7,39 +7,49 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
-import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
+import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import {
-  createPluginActivationSource,
-  normalizePluginId,
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-} from "./config-state.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
-import { hasKind } from "./slots.js";
+  createPluginRegistryIdNormalizer,
+  loadPluginRegistrySnapshot,
+  normalizePluginsConfigWithRegistry,
+} from "./plugin-registry.js";
 
-function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
-  return Boolean(
-    plugin.providers.length > 0 ||
-    plugin.cliBackends.length > 0 ||
-    plugin.contracts?.speechProviders?.length ||
-    plugin.contracts?.mediaUnderstandingProviders?.length ||
-    plugin.contracts?.imageGenerationProviders?.length ||
-    plugin.contracts?.videoGenerationProviders?.length ||
-    plugin.contracts?.musicGenerationProviders?.length ||
-    plugin.contracts?.webFetchProviders?.length ||
-    plugin.contracts?.webSearchProviders?.length ||
-    plugin.contracts?.memoryEmbeddingProviders?.length ||
-    hasKind(plugin.kind, "memory"),
+function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return new Set();
+  }
+  return new Set(
+    Object.entries(channels)
+      .filter(([, value]) => {
+        return (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          (value as { enabled?: unknown }).enabled === false
+        );
+      })
+      .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId)),
   );
 }
 
-function isGatewayStartupMemoryPlugin(plugin: PluginManifestRecord): boolean {
-  return hasKind(plugin.kind, "memory");
+function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  const disabled = listDisabledChannelIds(config);
+  return listPotentialConfiguredChannelIds(config, env)
+    .map((id) => normalizeOptionalLowercaseString(id) ?? "")
+    .filter((id) => id && !disabled.has(id));
 }
 
-function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
-  return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
+function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
+  return plugin.startup.memory;
+}
+
+function isGatewayStartupSidecar(plugin: InstalledPluginIndexRecord): boolean {
+  return plugin.startup.sidecar;
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -53,7 +63,10 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
 }
 
-function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {
+function resolveExplicitMemorySlotStartupPluginId(
+  config: OpenClawConfig,
+  normalizePluginId: (pluginId: string) => string,
+): string | undefined {
   const configuredSlot = config.plugins?.slots?.memory?.trim();
   if (!configuredSlot || configuredSlot.toLowerCase() === "none") {
     return undefined;
@@ -62,7 +75,7 @@ function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): strin
 }
 
 function shouldConsiderForGatewayStartup(params: {
-  plugin: PluginManifestRecord;
+  plugin: InstalledPluginIndexRecord;
   startupDreamingPluginIds: ReadonlySet<string>;
   explicitMemorySlotStartupPluginId?: string;
 }): boolean {
@@ -72,37 +85,42 @@ function shouldConsiderForGatewayStartup(params: {
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
     return false;
   }
-  if (params.startupDreamingPluginIds.has(params.plugin.id)) {
+  if (params.startupDreamingPluginIds.has(params.plugin.pluginId)) {
     return true;
   }
-  return params.explicitMemorySlotStartupPluginId === params.plugin.id;
+  return params.explicitMemorySlotStartupPluginId === params.plugin.pluginId;
 }
 
 function hasConfiguredStartupChannel(params: {
-  plugin: PluginManifestRecord;
+  plugin: InstalledPluginIndexRecord;
   configuredChannelIds: ReadonlySet<string>;
 }): boolean {
-  return params.plugin.channels.some((channelId) => params.configuredChannelIds.has(channelId));
+  return params.plugin.contributions.channels.some((channelId) =>
+    params.configuredChannelIds.has(channelId),
+  );
 }
 
 function canStartConfiguredChannelPlugin(params: {
-  plugin: PluginManifestRecord;
+  plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
-  pluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-  activationSource: ReturnType<typeof createPluginActivationSource>;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
 }): boolean {
   if (!params.pluginsConfig.enabled) {
     return false;
   }
-  if (params.pluginsConfig.deny.includes(params.plugin.id)) {
+  if (params.pluginsConfig.deny.includes(params.plugin.pluginId)) {
     return false;
   }
-  if (params.pluginsConfig.entries[params.plugin.id]?.enabled === false) {
+  if (params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false) {
     return false;
   }
   const explicitBundledChannelConfig =
     params.plugin.origin === "bundled" &&
-    params.plugin.channels.some((channelId) =>
+    params.plugin.contributions.channels.some((channelId) =>
       hasExplicitChannelConfig({
         config: params.activationSource.rootConfig ?? params.config,
         channelId,
@@ -110,7 +128,7 @@ function canStartConfiguredChannelPlugin(params: {
     );
   if (
     params.pluginsConfig.allow.length > 0 &&
-    !params.pluginsConfig.allow.includes(params.plugin.id) &&
+    !params.pluginsConfig.allow.includes(params.plugin.pluginId) &&
     !explicitBundledChannelConfig
   ) {
     return false;
@@ -119,7 +137,7 @@ function canStartConfiguredChannelPlugin(params: {
     return true;
   }
   const activationState = resolveEffectivePluginActivationState({
-    id: params.plugin.id,
+    id: params.plugin.pluginId,
     origin: params.plugin.origin,
     config: params.pluginsConfig,
     rootConfig: params.config,
@@ -134,13 +152,14 @@ export function resolveChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  return loadPluginManifestRegistry({
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })
-    .plugins.filter((plugin) => plugin.channels.length > 0)
-    .map((plugin) => plugin.id);
+  });
+  return index.plugins
+    .filter((plugin) => plugin.contributions.channels.length > 0)
+    .map((plugin) => plugin.pluginId);
 }
 
 export function resolveConfiguredDeferredChannelPluginIds(params: {
@@ -148,25 +167,25 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
-  );
+  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   if (configuredChannelIds.size === 0) {
     return [];
   }
-  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
-  const activationSource = createPluginActivationSource({
-    config: params.config,
-  });
-  return loadPluginManifestRegistry({
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })
-    .plugins.filter(
+  });
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
+  const activationSource = {
+    plugins: pluginsConfig,
+    rootConfig: params.config,
+  };
+  return index.plugins
+    .filter(
       (plugin) =>
         hasConfiguredStartupChannel({ plugin, configuredChannelIds }) &&
-        plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen === true &&
+        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
         canStartConfiguredChannelPlugin({
           plugin,
           config: params.config,
@@ -174,7 +193,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
           activationSource,
         }),
     )
-    .map((plugin) => plugin.id);
+    .map((plugin) => plugin.pluginId);
 }
 
 export function resolveGatewayStartupPluginIds(params: {
@@ -183,43 +202,31 @@ export function resolveGatewayStartupPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
-  );
-  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
-  // Startup must classify allowlist exceptions against the raw config snapshot,
-  // not the auto-enabled effective snapshot, or configured-only channels can be
-  // misclassified as explicit enablement.
-  const activationSource = createPluginActivationSource({
-    config: params.activationSourceConfig ?? params.config,
-  });
-  const requiredAgentHarnessPluginIds = new Set(
-    collectConfiguredAgentHarnessRuntimes(
-      params.activationSourceConfig ?? params.config,
-      params.env,
-    ).flatMap((runtime) =>
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "agentHarness",
-          runtime,
-        },
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        cache: true,
-      }),
-    ),
-  );
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
-  const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
-    params.activationSourceConfig ?? params.config,
-  );
-  return loadPluginManifestRegistry({
+  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })
-    .plugins.filter((plugin) => {
+  });
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
+  // Startup must classify allowlist exceptions against the raw config snapshot,
+  // not the auto-enabled effective snapshot, or configured-only channels can be
+  // misclassified as explicit enablement.
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
+  const activationSource = {
+    plugins: normalizePluginsConfigWithRegistry(activationSourceConfig.plugins, index),
+    rootConfig: activationSourceConfig,
+  };
+  const requiredAgentHarnessRuntimes = new Set(
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
+  );
+  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
+  const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
+    activationSourceConfig,
+    createPluginRegistryIdNormalizer(index),
+  );
+  return index.plugins
+    .filter((plugin) => {
       if (hasConfiguredStartupChannel({ plugin, configuredChannelIds })) {
         return canStartConfiguredChannelPlugin({
           plugin,
@@ -228,9 +235,11 @@ export function resolveGatewayStartupPluginIds(params: {
           activationSource,
         });
       }
-      if (requiredAgentHarnessPluginIds.has(plugin.id)) {
+      if (
+        plugin.startup.agentHarnesses.some((runtime) => requiredAgentHarnessRuntimes.has(runtime))
+      ) {
         const activationState = resolveEffectivePluginActivationState({
-          id: plugin.id,
+          id: plugin.pluginId,
           origin: plugin.origin,
           config: pluginsConfig,
           rootConfig: params.config,
@@ -249,7 +258,7 @@ export function resolveGatewayStartupPluginIds(params: {
         return false;
       }
       const activationState = resolveEffectivePluginActivationState({
-        id: plugin.id,
+        id: plugin.pluginId,
         origin: plugin.origin,
         config: pluginsConfig,
         rootConfig: params.config,
@@ -264,5 +273,5 @@ export function resolveGatewayStartupPluginIds(params: {
       }
       return activationState.source === "explicit" || activationState.source === "default";
     })
-    .map((plugin) => plugin.id);
+    .map((plugin) => plugin.pluginId);
 }

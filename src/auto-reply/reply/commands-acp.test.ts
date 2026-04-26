@@ -1911,6 +1911,25 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("next:");
   });
 
+  it("explains when acpx is blocked by plugins.allow", async () => {
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      );
+    });
+
+    const result = await runDiscordAcpCommand("/acp doctor", {
+      ...baseCfg,
+      plugins: { allow: ["discord"] },
+    });
+
+    expect(result?.reply?.text).toContain("pluginActivation: blocked");
+    expect(result?.reply?.text).toContain("acpx");
+    expect(result?.reply?.text).toContain('add "acpx" to plugins.allow');
+  });
+
   it("shows deterministic install instructions via /acp install", async () => {
     const result = await runDiscordAcpCommand("/acp install", baseCfg);
 

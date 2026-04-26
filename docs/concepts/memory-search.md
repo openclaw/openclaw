@@ -1,13 +1,11 @@
 ---
-title: "Memory Search"
 summary: "How memory search finds relevant notes using embeddings and hybrid retrieval"
+title: "Memory search"
 read_when:
   - You want to understand how memory_search works
   - You want to choose an embedding provider
   - You want to tune search quality
 ---
-
-# Memory Search
 
 `memory_search` finds relevant notes from your memory files, even when the
 wording differs from the original text. It works by indexing memory into small
@@ -31,8 +29,8 @@ explicitly:
 }
 ```
 
-For local embeddings with no API key, use `provider: "local"` (requires
-node-llama-cpp).
+For local embeddings with no API key, install the optional `node-llama-cpp`
+runtime package next to OpenClaw and use `provider: "local"`.
 
 ## Supported providers
 
@@ -137,6 +135,11 @@ earlier conversations. This is opt-in via
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
 
+**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
+inline batch timeout by default. If the host is simply slow, set
+`agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
+`openclaw memory index --force`.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 
@@ -145,3 +148,9 @@ earlier conversations. This is opt-in via
 - [Active Memory](/concepts/active-memory) -- sub-agent memory for interactive chat sessions
 - [Memory](/concepts/memory) -- file layout, backends, tools
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Active memory](/concepts/active-memory)
+- [Builtin memory engine](/concepts/memory-builtin)

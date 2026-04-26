@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
@@ -420,7 +421,9 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
-  const pluginInstalls = params.cfg.plugins?.installs ?? {};
+  const pluginInstalls = await loadInstalledPluginIndexInstallRecords({
+    stateDir: params.stateDir,
+  });
   const npmPluginInstalls = Object.entries(pluginInstalls).filter(
     ([, record]) => record?.source === "npm",
   );
@@ -432,8 +435,8 @@ export async function collectPluginsTrustFindings(params: {
       findings.push({
         checkId: "plugins.installs_unpinned_npm_specs",
         severity: "warn",
-        title: "Plugin installs include unpinned npm specs",
-        detail: `Unpinned plugin install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin index includes unpinned npm specs",
+        detail: `Unpinned plugin index install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
       });
@@ -448,8 +451,8 @@ export async function collectPluginsTrustFindings(params: {
       findings.push({
         checkId: "plugins.installs_missing_integrity",
         severity: "warn",
-        title: "Plugin installs are missing integrity metadata",
-        detail: `Plugin install records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin index is missing integrity metadata",
+        detail: `Plugin index records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
       });
@@ -474,7 +477,7 @@ export async function collectPluginsTrustFindings(params: {
       findings.push({
         checkId: "plugins.installs_version_drift",
         severity: "warn",
-        title: "Plugin install records drift from installed package versions",
+        title: "Plugin index records drift from installed package versions",
         detail: `Detected plugin install metadata drift:\n${pluginVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",

@@ -1,13 +1,11 @@
 ---
-title: "Tokenjuice"
 summary: "Compact noisy exec and bash tool results with an optional bundled plugin"
+title: "Tokenjuice"
 read_when:
   - You want shorter `exec` or `bash` tool results in OpenClaw
   - You want to enable the bundled tokenjuice plugin
   - You need to understand what tokenjuice changes and what it leaves raw
 ---
-
-# Tokenjuice
 
 `tokenjuice` is an optional bundled plugin that compacts noisy `exec` and `bash`
 tool results after the command has already run.
@@ -15,8 +13,9 @@ tool results after the command has already run.
 It changes the returned `tool_result`, not the command itself. Tokenjuice does
 not rewrite shell input, rerun commands, or change exit codes.
 
-Today this applies to Pi embedded runs, where tokenjuice hooks the embedded
-`tool_result` path and trims the output that goes back into the session.
+Today this applies to PI embedded runs and OpenClaw dynamic tools in the Codex
+app-server harness. Tokenjuice hooks OpenClaw's tool-result middleware and
+trims the output before it goes back into the active harness session.
 
 ## Enable the plugin
 
@@ -74,3 +73,9 @@ Or:
 ```bash
 openclaw plugins disable tokenjuice
 ```
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Thinking levels](/tools/thinking)
+- [Context engine](/concepts/context-engine)

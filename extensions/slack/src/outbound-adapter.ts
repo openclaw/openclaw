@@ -8,10 +8,8 @@ import {
   type InteractiveReply,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundIdentity,
-} from "openclaw/plugin-sdk/outbound-runtime";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -27,6 +25,7 @@ import {
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackSendIdentity } from "./send.js";
+import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 const SLACK_MAX_BLOCKS = 50;
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
@@ -84,9 +83,13 @@ async function sendSlackOutboundMessage(params: {
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
   const slackIdentity = resolveSlackSendIdentity(params.identity);
+  const threadTs = resolveSlackThreadTsValue({
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+  });
   const result = await send(params.to, params.text, {
     cfg: params.cfg,
-    threadTs: params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined),
+    threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
       ? {

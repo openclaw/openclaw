@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { CodexServiceTier } from "./protocol.js";
+import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexAppServerApprovalsReviewer = "user" | "guardian_subagent";
+export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
+  commandSource?: CodexAppServerCommandSource;
   args: string[];
   url?: string;
   authToken?: string;
@@ -46,6 +48,7 @@ export type CodexPluginConfig = {
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
+    defaultWorkspaceDir?: string;
   };
 };
 
@@ -62,6 +65,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
+  "defaultWorkspaceDir",
 ] as const;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
@@ -73,7 +77,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
   "untrusted",
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
-const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent"]);
+const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexAppServerServiceTierSchema = z.preprocess(
   (value) => (value === null ? null : resolveServiceTier(value)),
   z.enum(["fast", "flex"]).nullable().optional(),
@@ -102,6 +106,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        defaultWorkspaceDir: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -122,8 +127,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const command =
-    readNonEmptyString(config.command) ?? env.OPENCLAW_CODEX_APP_SERVER_BIN ?? "codex";
+  const configCommand = readNonEmptyString(config.command);
+  const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
+  const command = configCommand ?? envCommand ?? "codex";
+  const commandSource: CodexAppServerCommandSource = configCommand
+    ? "config"
+    : envCommand
+      ? "env"
+      : "managed";
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const authToken = readNonEmptyString(config.authToken);
@@ -143,6 +154,7 @@ export function resolveCodexAppServerRuntimeOptions(
     start: {
       transport,
       command,
+      commandSource,
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
@@ -159,15 +171,19 @@ export function resolveCodexAppServerRuntimeOptions(
       (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
-      (policyMode === "guardian" ? "guardian_subagent" : "user"),
+      (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
   };
 }
 
-export function codexAppServerStartOptionsKey(options: CodexAppServerStartOptions): string {
+export function codexAppServerStartOptionsKey(
+  options: CodexAppServerStartOptions,
+  params: { authProfileId?: string } = {},
+): string {
   return JSON.stringify({
     transport: options.transport,
     command: options.command,
+    commandSource: options.commandSource ?? null,
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken),
@@ -176,7 +192,28 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     ),
     env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    authProfileId: params.authProfileId ?? null,
   });
+}
+
+export function codexSandboxPolicyForTurn(
+  mode: CodexAppServerSandboxMode,
+  cwd: string,
+): CodexSandboxPolicy {
+  if (mode === "danger-full-access") {
+    return { type: "dangerFullAccess" };
+  }
+  if (mode === "read-only") {
+    return { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false };
+  }
+  return {
+    type: "workspaceWrite",
+    writableRoots: [cwd],
+    readOnlyAccess: { type: "fullAccess" },
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
 }
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
@@ -203,7 +240,9 @@ function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
 }
 
 function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReviewer | undefined {
-  return value === "guardian_subagent" || value === "user" ? value : undefined;
+  return value === "auto_review" || value === "guardian_subagent" || value === "user"
+    ? value
+    : undefined;
 }
 
 function resolveServiceTier(value: unknown): CodexServiceTier | undefined {
