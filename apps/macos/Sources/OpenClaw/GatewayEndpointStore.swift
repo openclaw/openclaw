@@ -793,7 +793,8 @@ extension GatewayEndpointStore {
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?,
-        tailscaleIP: String?) -> GatewayConnection.Config
+        tailscaleIP: String?,
+        secretResolver: SecretInputResolver = .blocking) -> GatewayConnection.Config
     {
         let port = GatewayEnvironment.gatewayPort()
         let bind = self.resolveGatewayBindMode(root: root, env: env)
@@ -807,12 +808,14 @@ extension GatewayEndpointStore {
             isRemote: false,
             root: root,
             env: env,
-            launchdSnapshot: launchdSnapshot)
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
         let password = self.resolveGatewayPasswordSync(
             isRemote: false,
             root: root,
             env: env,
-            launchdSnapshot: launchdSnapshot)
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
         return (
             url: URL(string: "\(scheme)://\(host):\(port)")!,
             token: token,
@@ -943,13 +946,15 @@ extension GatewayEndpointStore {
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
-        tailscaleIP: String? = nil) -> GatewayConnection.Config
+        tailscaleIP: String? = nil,
+        secretResolver: SecretInputResolver = .stub(nil)) -> GatewayConnection.Config
     {
         self.localConfig(
             root: root,
             env: env,
             launchdSnapshot: launchdSnapshot,
-            tailscaleIP: tailscaleIP)
+            tailscaleIP: tailscaleIP,
+            secretResolver: secretResolver)
     }
 }
 #endif

@@ -398,4 +398,36 @@ struct GatewayEndpointStoreTests {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
         #expect(url == nil)
     }
+
+    @Test func `localConfig resolves SecretRef token and password`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: [:],
+            token: nil,
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": [
+                        "source": "exec",
+                        "provider": "keychain",
+                        "id": "gateway-token",
+                    ],
+                    "password": [
+                        "source": "exec",
+                        "provider": "keychain",
+                        "id": "gateway-password",
+                    ],
+                ],
+            ],
+        ]
+
+        let config = GatewayEndpointStore._testLocalConfig(
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot,
+            secretResolver: .stub("secret-value"))
+
+        #expect(config.token == "secret-value")
+        #expect(config.password == "secret-value")
+    }
 }
