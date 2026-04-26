@@ -506,6 +506,84 @@ describe("speech-core per-agent TTS config", () => {
     });
   });
 
+  it("composes per-agent TTS overrides with active persona bindings", async () => {
+    const cfg = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              model: "base-model",
+              voice: "base-voice",
+            },
+          },
+          persona: "alfred",
+          personas: {
+            alfred: {
+              provider: "mock",
+              providers: {
+                mock: {
+                  voice: "alfred-voice",
+                },
+              },
+            },
+            jarvis: {
+              provider: "mock",
+              providers: {
+                mock: {
+                  style: "jarvis-style",
+                },
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "reader",
+            tts: {
+              persona: "jarvis",
+              providers: {
+                mock: {
+                  voice: "agent-voice",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "This agent reply should use the composed persona config." },
+        cfg,
+        channel: "slack",
+        kind: "final",
+        agentId: "reader",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerConfig: expect.objectContaining({
+            model: "base-model",
+            voice: "agent-voice",
+            style: "jarvis-style",
+          }),
+        }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("ignores prototype-pollution keys in agent TTS overrides", () => {
     const cfg = {
       messages: {
