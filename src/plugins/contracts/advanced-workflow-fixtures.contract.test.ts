@@ -81,7 +81,7 @@ async function callPluginGatewayMethod(params: {
     response = { ok, payload, error };
   };
   await pluginHostHookHandlers[params.method]({
-    req: { id: "test", method: params.method, params: params.body ?? {} },
+    req: { id: "test", type: "req", method: params.method, params: params.body ?? {} },
     params: params.body ?? {},
     client: {
       connId: "test-client",
@@ -94,9 +94,9 @@ async function callPluginGatewayMethod(params: {
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
 
-async function withSessionStore<T>(
-  run: (params: { stateDir: string; storePath: string }) => Promise<T>,
-): Promise<T> {
+async function withSessionStore(
+  run: (params: { stateDir: string; storePath: string }) => Promise<void>,
+): Promise<void> {
   const stateDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workflow-fixture-"),
   );
@@ -104,7 +104,7 @@ async function withSessionStore<T>(
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   try {
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    return await withTempConfig({
+    await withTempConfig({
       cfg: {
         session: { store: storePath },
       },
@@ -289,6 +289,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             content: "continue please",
             channel: "telegram",
             sessionKey: "agent:main:main",
+            isGroup: false,
           },
           {},
         ),
