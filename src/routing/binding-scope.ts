@@ -70,17 +70,6 @@ export function resolveNormalizedRouteBindingMatch(
   };
 }
 
-function scopeIdMatches(params: {
-  constraint: string | null | undefined;
-  exact: string;
-  groupSpace: string;
-}): boolean {
-  if (!params.constraint) {
-    return true;
-  }
-  return params.constraint === params.exact || params.constraint === params.groupSpace;
-}
-
 function hasRoleLookup(
   memberRoleIds: Iterable<string>,
 ): memberRoleIds is Iterable<string> & { has(roleId: string): boolean } {
@@ -101,17 +90,37 @@ function hasAnyRouteBindingRole(
   return roles.some((role) => memberRoleIdSet.has(role));
 }
 
+function routeBindingScopeIdsMatch(
+  constraint: RouteBindingScopeConstraint,
+  scope: RouteBindingScope,
+): boolean {
+  const hasGuildConstraint = Boolean(constraint.guildId);
+  const hasTeamConstraint = Boolean(constraint.teamId);
+  if (!hasGuildConstraint && !hasTeamConstraint) {
+    return true;
+  }
+
+  const groupSpace = normalizeRouteBindingId(scope.groupSpace);
+  if (constraint.guildId) {
+    const guildId = normalizeRouteBindingId(scope.guildId);
+    if (constraint.guildId !== guildId && constraint.guildId !== groupSpace) {
+      return false;
+    }
+  }
+  if (constraint.teamId) {
+    const teamId = normalizeRouteBindingId(scope.teamId);
+    if (constraint.teamId !== teamId && constraint.teamId !== groupSpace) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function routeBindingScopeMatches(
   constraint: RouteBindingScopeConstraint,
   scope: RouteBindingScope,
 ): boolean {
-  const guildId = normalizeRouteBindingId(scope.guildId);
-  const teamId = normalizeRouteBindingId(scope.teamId);
-  const groupSpace = normalizeRouteBindingId(scope.groupSpace);
-  if (!scopeIdMatches({ constraint: constraint.guildId, exact: guildId, groupSpace })) {
-    return false;
-  }
-  if (!scopeIdMatches({ constraint: constraint.teamId, exact: teamId, groupSpace })) {
+  if (!routeBindingScopeIdsMatch(constraint, scope)) {
     return false;
   }
 
