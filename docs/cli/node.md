@@ -104,6 +104,7 @@ Manage the service:
 
 ```bash
 openclaw node status
+openclaw node start
 openclaw node stop
 openclaw node restart
 openclaw node uninstall

@@ -70,6 +70,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/groups: treat clean empty assistant stops as silent `NO_REPLY` only for always-on groups where silent replies are allowed, while keeping direct and mention-gated sessions on the incomplete-turn retry path. Thanks @MagnaAI.
+- macOS/Node: keep native remote app nodes from advertising `browser.proxy`,
+  start browser-capable CLI node services through the restored
+  `openclaw node start` command, and show an actionable browser-control error
+  when the local control service is missing. Fixes #66637.
 - Providers/Z.AI: map OpenClaw thinking controls to Z.AI's `thinking` payload and add opt-in preserved thinking replay via `params.preserveThinking`, so GLM 5.x can keep prior `reasoning_content` when requested. Fixes #58680. Thanks @xuanmingguo.
 - Channels/status: keep read-only channel lists on manifest and package metadata by default, loading setup runtime only for explicit fallback callers. Thanks @shakkernerd.
 - Plugins/onboarding: defer onboarding install-record index writes until the guarded config commit so setup failures cannot leave the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
