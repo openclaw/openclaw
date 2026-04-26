@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/install: refresh loaded gateway service installs when the current service embeds stale gateway auth instead of returning already-installed, avoiding LaunchAgent token-mismatch loops after token rotation. Fixes #70752. Thanks @hyspacex.
 - Update: ignore bundled plugin `.openclaw-install-stage` directories during global install verification and packaged dist pruning so leftover runtime-dep staging files do not turn successful updates into `unexpected packaged dist file` failures. Fixes #71752. Thanks @waynegault.
 - Gateway/plugins: stop persisted WhatsApp auth state from activating bundled channel runtime-dependency repair during startup when `channels.whatsapp` is absent, avoiding npm/git stalls on packaged Linux installs. Fixes #71994. Thanks @xiao398008.
 - Gateway/device tokens: enforce caller-scope containment inside token rotation and revocation so pairing-only sessions cannot mutate higher-scope operator tokens. Fixes #71990. Thanks @coygeek.
