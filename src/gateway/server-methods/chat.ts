@@ -17,10 +17,7 @@ import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import type { LocalMediaRoot } from "../../media/local-media-root.js";
-import {
-  appendLocalMediaParentRootEntries,
-  getAgentScopedMediaLocalRootEntries,
-} from "../../media/local-roots.js";
+import { getAgentScopedMediaLocalRootEntriesForSources } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -50,7 +47,7 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
-  resolveChatRunExpiresAtMs,
+  registerChatAbortController,
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
@@ -2239,15 +2236,20 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const abortController = new AbortController();
-      context.chatAbortControllers.set(clientRunId, {
-        controller: abortController,
+      const activeRunAbort = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: clientRunId,
         sessionId: entry?.sessionId ?? clientRunId,
         sessionKey: rawSessionKey,
-        startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+        timeoutMs,
+        now,
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        kind: "chat-send",
+      });
+      context.addChatRun(clientRunId, {
+        sessionKey,
+        clientRunId,
       });
       const ackPayload = {
         runId: clientRunId,
@@ -2400,10 +2402,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
-        const mediaLocalRoots = appendLocalMediaParentRootEntries(
-          getAgentScopedMediaLocalRootEntries(cfg, agentId),
-          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-        );
+        const mediaLocalRoots = getAgentScopedMediaLocalRootEntriesForSources({
+          cfg,
+          ...(agentId ? { agentId } : {}),
+          ...(resolvedTranscriptPath ? { mediaSources: [resolvedTranscriptPath] } : {}),
+        });
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
           payloads: [payload],
@@ -2503,7 +2506,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         dispatcher,
         replyOptions: {
           runId: clientRunId,
-          abortSignal: abortController.signal,
+          abortSignal: activeRunAbort.controller.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
           onAgentRunStart: (runId) => {
@@ -2572,10 +2575,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                 agentId,
               });
-              const mediaLocalRoots = appendLocalMediaParentRootEntries(
-                getAgentScopedMediaLocalRootEntries(cfg, agentId),
-                resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-              );
+              const mediaLocalRoots = getAgentScopedMediaLocalRootEntriesForSources({
+                cfg,
+                ...(agentId ? { agentId } : {}),
+                ...(resolvedTranscriptPath ? { mediaSources: [resolvedTranscriptPath] } : {}),
+              });
               const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                 sessionKey,
                 payloads: finalPayloads,
@@ -2740,9 +2744,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
-          context.chatAbortControllers.delete(clientRunId);
+          activeRunAbort.cleanup();
+          context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
     } catch (err) {
+      context.chatAbortControllers.delete(clientRunId);
+      context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,

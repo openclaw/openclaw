@@ -2,16 +2,19 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
+  classifyAgentHarnessTerminalOutcome,
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
+  formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
-  formatToolAggregate,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
@@ -150,7 +153,10 @@ export class CodexAppServerEventProjector {
         this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        this.promptError = readString(params, "message") ?? "codex app-server error";
+        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
+          break;
+        }
+        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -192,6 +198,13 @@ export class CodexAppServerEventProjector {
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+    const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
+      assistantTexts,
+      reasoningText,
+      planText,
+      promptError,
+      turnCompleted: Boolean(this.completedTurn),
+    });
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
@@ -201,6 +214,7 @@ export class CodexAppServerEventProjector {
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,
+      ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,
@@ -693,9 +707,23 @@ export class CodexAppServerEventProjector {
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     try {
-      this.params.onAgentEvent?.(event);
-    } catch {
+      emitGlobalAgentEvent({
+        runId: this.params.runId,
+        stream: event.stream,
+        data: event.data,
+        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+    }
+    try {
+      const maybePromise = this.params.onAgentEvent?.(event);
+      void Promise.resolve(maybePromise).catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+      });
+    } catch (error) {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
+      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
   }
 
@@ -817,6 +845,29 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 function readNumber(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = readBoolean(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
+  const error = record.error;
+  if (isJsonObject(error)) {
+    return readString(error, "message") ?? readString(error, "error");
+  }
+  return readString(record, "message");
 }
 
 function readHookOutputEntries(

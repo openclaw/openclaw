@@ -8,9 +8,12 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+import { resolveEffectiveTtsConfig } from "./tts-config.js";
 
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
+const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
+const MAX_STATUS_DETAIL_LENGTH = 96;
 
 type TtsUserPrefs = {
   tts?: {
@@ -25,6 +28,11 @@ type TtsUserPrefs = {
 type TtsStatusSnapshot = {
   autoMode: TtsAutoMode;
   provider: TtsProvider;
+  displayName?: string;
+  model?: string;
+  voice?: string;
+  baseUrl?: string;
+  customBaseUrl?: boolean;
   maxLength: number;
   summarize: boolean;
 };
@@ -77,11 +85,122 @@ function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefin
   return undefined;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeStatusDetail(
+  value: unknown,
+  maxLength = MAX_STATUS_DETAIL_LENGTH,
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
+function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
+  const raw = normalizeStatusDetail(value, 180);
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(raw);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    const sanitized = parsed.toString().replace(/\/+$/, "");
+    return normalizeStatusDetail(sanitized, 120);
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
+function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
+  return baseUrl ? baseUrl.replace(/\/+$/, "") !== DEFAULT_OPENAI_TTS_BASE_URL : false;
+}
+
+function firstStatusDetail(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = normalizeStatusDetail(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolveProviderConfigRecord(
+  raw: TtsConfig,
+  provider: TtsProvider,
+): Record<string, unknown> | undefined {
+  const rawRecord: Record<string, unknown> = isObjectRecord(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+  const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
+  if (provider === "microsoft") {
+    return {
+      ...(isObjectRecord(rawRecord.edge) ? rawRecord.edge : {}),
+      ...(isObjectRecord(rawRecord.microsoft) ? rawRecord.microsoft : {}),
+      ...(isObjectRecord(providers.edge) ? providers.edge : {}),
+      ...(isObjectRecord(providers.microsoft) ? providers.microsoft : {}),
+    };
+  }
+  const direct = rawRecord[provider];
+  const providerScoped = providers[provider];
+  if (isObjectRecord(providerScoped)) {
+    return providerScoped;
+  }
+  if (isObjectRecord(direct)) {
+    return direct;
+  }
+  return rawRecord;
+}
+
+function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
+  if (provider === "auto") {
+    return {};
+  }
+  const record = resolveProviderConfigRecord(raw, provider);
+  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
+  const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
+  const details: Partial<TtsStatusSnapshot> = {};
+  const displayName = firstStatusDetail(record, ["displayName"]);
+  if (displayName) {
+    details.displayName = displayName;
+  }
+  const model = firstStatusDetail(record, ["model", "modelId"]);
+  if (model) {
+    details.model = model;
+  }
+  const voice = firstStatusDetail(record, ["voice", "voiceId", "voiceName"]);
+  if (voice) {
+    details.voice = voice;
+  }
+  if (sanitizedBaseUrl && (provider !== "openai" || customBaseUrl)) {
+    details.baseUrl = sanitizedBaseUrl;
+    details.customBaseUrl = customBaseUrl;
+  }
+  return details;
+}
+
 export function resolveStatusTtsSnapshot(params: {
   cfg: OpenClawConfig;
   sessionAuto?: string;
+  agentId?: string;
 }): TtsStatusSnapshot | null {
-  const raw: TtsConfig = params.cfg.messages?.tts ?? {};
+  const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
   const prefs = readPrefs(prefsPath);
   const autoMode =
@@ -93,12 +212,15 @@ export function resolveStatusTtsSnapshot(params: {
     return null;
   }
 
+  const provider =
+    normalizeConfiguredSpeechProviderId(prefs.tts?.provider) ??
+    normalizeConfiguredSpeechProviderId(raw.provider) ??
+    "auto";
+
   return {
     autoMode,
-    provider:
-      normalizeConfiguredSpeechProviderId(prefs.tts?.provider) ??
-      normalizeConfiguredSpeechProviderId(raw.provider) ??
-      "auto",
+    provider,
+    ...resolveStatusProviderDetails(raw, provider),
     maxLength: prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH,
     summarize: prefs.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE,
   };

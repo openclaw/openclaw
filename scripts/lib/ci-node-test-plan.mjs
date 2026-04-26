@@ -66,10 +66,8 @@ function createAutoReplyReplySplitShards() {
   }
 
   const mergedGroups = {
-    "auto-reply-reply-agent-dispatch": [
-      ...groups["auto-reply-reply-agent-runner"],
-      ...groups["auto-reply-reply-dispatch"],
-    ],
+    "auto-reply-reply-agent-runner": groups["auto-reply-reply-agent-runner"],
+    "auto-reply-reply-dispatch": groups["auto-reply-reply-dispatch"],
     "auto-reply-reply-commands-state-routing": [
       ...groups["auto-reply-reply-commands"],
       ...groups["auto-reply-reply-state-routing"],
@@ -131,6 +129,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
         shardName: "core-runtime-media-ui",
@@ -177,6 +176,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "agentic-control-plane",
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
         shardName: "agentic-commands",
@@ -248,6 +248,7 @@ export function createNodeTestShards() {
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(splitShard.runner ? { runner: splitShard.runner } : {}),
             requiresDist: splitShard.requiresDist,
           },
         ];

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,8 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailabl
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
+const ACP_BACKEND_READY_POLL_MS = 50;
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -59,6 +62,33 @@ function isConfiguredCliBackendPrimary(params: {
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
   return hasInternalHookListeners("gateway", "startup");
+}
+
+async function waitForAcpRuntimeBackendReady(params: {
+  backendId?: string;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<boolean> {
+  const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
+  const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
+  const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  do {
+    const backend = getAcpRuntimeBackend(params.backendId);
+    if (backend) {
+      try {
+        if (!backend.healthy || backend.healthy()) {
+          return true;
+        }
+      } catch {
+        // Treat transient backend health probe errors like "not ready yet".
+      }
+    }
+    await sleep(pollMs, undefined, { ref: false });
+  } while (Date.now() < deadline);
+
+  return false;
 }
 
 async function prewarmConfiguredPrimaryModel(params: {
@@ -157,12 +187,20 @@ export async function startGatewaySidecars(params: {
       const stateDir = resolveStateDir(process.env);
       const sessionDirs = await resolveAgentSessionDirs(stateDir);
       for (const sessionsDir of sessionDirs) {
-        await cleanStaleLockFiles({
+        const result = await cleanStaleLockFiles({
           sessionsDir,
           staleMs: SESSION_LOCK_STALE_MS,
           removeStale: true,
           log: { warn: (message) => params.log.warn(message) },
         });
+        if (result.cleaned.length > 0) {
+          const { markRestartAbortedMainSessionsFromLocks } =
+            await import("../agents/main-session-restart-recovery.js");
+          await markRestartAbortedMainSessionsFromLocks({
+            sessionsDir,
+            cleanedLocks: result.cleaned,
+          });
+        }
       }
     } catch (err) {
       params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
@@ -297,22 +335,25 @@ export async function startGatewaySidecars(params: {
   });
 
   if (params.cfg.acp?.enabled) {
-    const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] = await Promise.all(
-      [import("../acp/control-plane/manager.js"), import("../acp/runtime/session-identifiers.js")],
-    );
-    void getAcpSessionManager()
-      .reconcilePendingSessionIdentities({ cfg: params.cfg })
-      .then((result) => {
-        if (result.checked === 0) {
-          return;
-        }
-        params.log.warn(
-          `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
-        );
-      })
-      .catch((err) => {
-        params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
+    void (async () => {
+      await waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend });
+      const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
+        await Promise.all([
+          import("../acp/control-plane/manager.js"),
+          import("../acp/runtime/session-identifiers.js"),
+        ]);
+      const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
+        cfg: params.cfg,
       });
+      if (result.checked === 0) {
+        return;
+      }
+      params.log.warn(
+        `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
+      );
+    })().catch((err) => {
+      params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
+    });
   }
 
   await measureStartup(params.startupTrace, "sidecars.memory", async () => {
@@ -352,6 +393,12 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
     const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
     scheduleSubagentOrphanRecovery();
+  });
+
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    const { scheduleRestartAbortedMainSessionRecovery } =
+      await import("../agents/main-session-restart-recovery.js");
+    scheduleRestartAbortedMainSessionRecovery();
   });
 
   return { pluginServices };
@@ -420,7 +467,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
-    awaitSidecars?: boolean;
+    deferSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -520,7 +567,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.awaitSidecars === true) {
+  if (params.deferSidecars !== true) {
     const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
       stopGatewayUpdateCheckPromise,
       tailscaleCleanupPromise,

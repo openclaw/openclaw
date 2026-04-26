@@ -3,6 +3,8 @@ import path from "node:path";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
 import { type LocalMediaRoot, resolveLocalMediaRoot } from "./local-media-root.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
+import { resolveInboundMediaReference } from "./media-reference.js";
+
 export type { LocalMediaRoot } from "./local-media-root.js";
 
 export type LocalMediaAccessErrorCode =
@@ -34,6 +36,10 @@ export async function assertLocalMediaAllowed(
   localRoots: readonly LocalMediaRoot[] | "any" | undefined,
 ): Promise<void> {
   if (localRoots === "any") {
+    return;
+  }
+  const inboundReference = await resolveInboundMediaReference(mediaPath).catch(() => null);
+  if (inboundReference) {
     return;
   }
   try {

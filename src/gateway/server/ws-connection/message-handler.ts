@@ -67,7 +67,12 @@ import {
   resolveClientIp,
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import {
+  resolveNodePairingClientIpSource,
+  shouldAutoApproveNodePairingFromTrustedCidrs,
+} from "../../node-pairing-auto-approve.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -279,6 +284,12 @@ export function attachGatewayWsMessageHandler(params: {
       : clientIp && !isLoopbackAddress(clientIp)
         ? clientIp
         : undefined;
+  const reportedClientIpSource = resolveNodePairingClientIpSource({
+    reportedClientIp,
+    hasProxyHeaders,
+    remoteIsTrustedProxy,
+    remoteIsLoopback: isLoopbackAddress(remoteAddr),
+  });
 
   if (hasUntrustedProxyHeaders) {
     logWsControl.warn(
@@ -470,6 +481,11 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = isOperatorUiClient(connectParams.client);
         const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
         const isWebchat = isWebchatConnect(connectParams);
+        const isNativeAppUi =
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.UI &&
+          (connectParams.client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+            connectParams.client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+            connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP);
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -921,8 +937,23 @@ export function attachGatewayWsMessageHandler(params: {
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
+              isNativeAppUi,
               reason,
             });
+            const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs(
+              {
+                existingPairedDevice: Boolean(existingPairedDevice),
+                role,
+                reason,
+                scopes,
+                hasBrowserOriginHeader,
+                isControlUi,
+                isWebchat,
+                reportedClientIpSource,
+                reportedClientIp,
+                autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
+              },
+            );
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
@@ -944,7 +975,9 @@ export function attachGatewayWsMessageHandler(params: {
               silent:
                 reason === "scope-upgrade"
                   ? false
-                  : allowSilentLocalPairing || allowSilentBootstrapPairing,
+                  : allowSilentLocalPairing ||
+                    allowSilentBootstrapPairing ||
+                    allowSilentTrustedCidrsNodePairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1085,9 +1118,19 @@ export function attachGatewayWsMessageHandler(params: {
             });
             const { platformMismatch, deviceFamilyMismatch } = metadataPinning;
             if (platformMismatch || deviceFamilyMismatch) {
-              logGateway.warn(
-                `security audit: device metadata upgrade requested reason=metadata-upgrade device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} payload=${deviceAuthPayloadVersion ?? "unknown"} claimedPlatform=${claimedPlatform ?? "<none>"} pinnedPlatform=${pairedPlatform ?? "<none>"} claimedDeviceFamily=${claimedDeviceFamily ?? "<none>"} pinnedDeviceFamily=${pairedDeviceFamily ?? "<none>"} client=${connectParams.client.id} conn=${connId}`,
-              );
+              const allowSilentMetadataUpgrade = shouldAllowSilentLocalPairing({
+                locality: pairingLocality,
+                hasBrowserOriginHeader,
+                isControlUi,
+                isWebchat,
+                isNativeAppUi,
+                reason: "metadata-upgrade",
+              });
+              if (!allowSilentMetadataUpgrade) {
+                logGateway.warn(
+                  `security audit: device metadata upgrade requested reason=metadata-upgrade device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} payload=${deviceAuthPayloadVersion ?? "unknown"} claimedPlatform=${claimedPlatform ?? "<none>"} pinnedPlatform=${pairedPlatform ?? "<none>"} claimedDeviceFamily=${claimedDeviceFamily ?? "<none>"} pinnedDeviceFamily=${pairedDeviceFamily ?? "<none>"} client=${connectParams.client.id} conn=${connId}`,
+                );
+              }
               const ok = await requirePairing("metadata-upgrade", paired);
               if (!ok) {
                 return;

@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -78,7 +79,12 @@ async function createProjectorWithAssistantHooks() {
   return { onAssistantMessageStart, onPartialReply, projector };
 }
 
+beforeEach(() => {
+  resetAgentEventsForTest();
+});
+
 afterEach(async () => {
+  resetAgentEventsForTest();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
@@ -121,6 +127,17 @@ function forCurrentTurn(
 
 function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotification {
   return forCurrentTurn("item/agentMessage/delta", { itemId, delta });
+}
+
+function appServerError(params: { message: string; willRetry: boolean }): ProjectorNotification {
+  return forCurrentTurn("error", {
+    error: {
+      message: params.message,
+      codexErrorInfo: null,
+      additionalDetails: null,
+    },
+    willRetry: params.willRetry,
+  });
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
@@ -227,6 +244,40 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual(["OK from raw"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
+  it("does not fail a completed reply after a retryable app-server error notification", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("still working"));
+    await projector.handleNotification(
+      appServerError({ message: "stream disconnected", willRetry: true }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["final answer"]);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastAssistant?.stopReason).toBe("stop");
+    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+  });
+
+  it("uses nested app-server error messages for terminal errors", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      appServerError({ message: "stream failed permanently", willRetry: false }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toBe("stream failed permanently");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastAssistant).toBeUndefined();
   });
 
   it("normalizes snake_case current token usage fields", async () => {

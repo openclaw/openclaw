@@ -114,5 +114,6 @@ This keeps existing file logs stable while making interactive output scannable.
 
 ## Related
 
-- [Logging overview](/logging)
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
 - [Diagnostics export](/gateway/diagnostics)

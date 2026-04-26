@@ -71,13 +71,40 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
     defaults: {
       imageGenerationModel: {
         primary: "openrouter/google/gemini-3.1-flash-image-preview",
+        timeoutMs: 180_000,
       },
     },
   },
 }
 ```
 
-OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`.
+OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
+
+## Text-to-speech
+
+OpenRouter can also be used as a TTS provider through its OpenAI-compatible
+`/audio/speech` endpoint.
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "openrouter",
+      providers: {
+        openrouter: {
+          model: "hexgrad/kokoro-82m",
+          voice: "af_alloy",
+          responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+
+If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
+`models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
 
 ## Authentication and headers
 

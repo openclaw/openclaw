@@ -20,6 +20,7 @@ import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
+import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
 
@@ -187,14 +188,13 @@ export async function runAgentHarnessAttemptWithFallback(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
+  const v2Harness = adaptAgentHarnessToV2(harness);
   if (harness.id === "pi") {
-    const result = await harness.runAttempt(params);
-    return applyHarnessResultClassification(harness, result, params);
+    return await runAgentHarnessV2LifecycleAttempt(v2Harness, params);
   }
 
   try {
-    const result = await harness.runAttempt(params);
-    return applyHarnessResultClassification(harness, result, params);
+    return await runAgentHarnessV2LifecycleAttempt(v2Harness, params);
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
       harnessId: harness.id,
@@ -263,25 +263,12 @@ function logAgentHarnessSelection(
   });
 }
 
-function applyHarnessResultClassification(
-  harness: AgentHarness,
-  result: EmbeddedRunAttemptResult,
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptResult {
-  const classification = harness.classify?.(result, params);
-  if (!classification || classification === "ok") {
-    return { ...result, agentHarnessId: harness.id };
-  }
-  return {
-    ...result,
-    agentHarnessId: harness.id,
-    agentHarnessResultClassification: classification,
-  };
-}
-
 function resolvePinnedAgentHarnessPolicy(
   agentHarnessId: string | undefined,
 ): AgentHarnessPolicy | undefined {
+  if (!agentHarnessId?.trim()) {
+    return undefined;
+  }
   const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
   if (runtime === "auto") {
     return undefined;
@@ -333,10 +320,43 @@ export function resolveAgentHarnessPolicy(params: {
     : normalizeEmbeddedAgentRuntime(agentPolicy?.runtime ?? defaultsPolicy?.runtime);
   return {
     runtime,
-    fallback:
-      resolveEmbeddedAgentHarnessFallback(env) ??
-      normalizeAgentHarnessFallback(agentPolicy?.fallback ?? defaultsPolicy?.fallback),
+    fallback: resolveAgentHarnessFallbackPolicy({
+      env,
+      runtime,
+      agentPolicy,
+      defaultsPolicy,
+    }),
   };
+}
+
+function resolveAgentHarnessFallbackPolicy(params: {
+  env: NodeJS.ProcessEnv;
+  runtime: EmbeddedAgentRuntime;
+  agentPolicy?: AgentEmbeddedHarnessConfig;
+  defaultsPolicy?: AgentEmbeddedHarnessConfig;
+}): EmbeddedAgentHarnessFallback {
+  const envFallback = resolveEmbeddedAgentHarnessFallback(params.env);
+  if (envFallback) {
+    return envFallback;
+  }
+
+  const envRuntime = params.env.OPENCLAW_AGENT_RUNTIME?.trim();
+  if (envRuntime && isPluginAgentRuntime(params.runtime)) {
+    return normalizeAgentHarnessFallback(undefined, params.runtime);
+  }
+
+  if (params.agentPolicy?.runtime) {
+    return normalizeAgentHarnessFallback(params.agentPolicy.fallback, params.runtime);
+  }
+
+  return normalizeAgentHarnessFallback(
+    params.agentPolicy?.fallback ?? params.defaultsPolicy?.fallback,
+    params.runtime,
+  );
+}
+
+function isPluginAgentRuntime(runtime: EmbeddedAgentRuntime): boolean {
+  return runtime !== "auto" && runtime !== "pi";
 }
 
 function resolveAgentEmbeddedHarnessConfig(
@@ -357,8 +377,12 @@ function resolveAgentEmbeddedHarnessConfig(
 
 function normalizeAgentHarnessFallback(
   value: AgentEmbeddedHarnessConfig["fallback"] | undefined,
+  runtime: EmbeddedAgentRuntime,
 ): EmbeddedAgentHarnessFallback {
-  return value === "none" ? "none" : "pi";
+  if (value) {
+    return value === "none" ? "none" : "pi";
+  }
+  return runtime === "auto" ? "pi" : "none";
 }
 
 function formatProviderModel(params: { provider: string; modelId?: string }): string {

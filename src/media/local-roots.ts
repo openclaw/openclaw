@@ -21,6 +21,13 @@ type AgentScopedMediaRootsOptions = {
   ignoreConfiguredRoots?: boolean;
 };
 
+type AgentScopedMediaRootsForSourcesParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  mediaSources?: readonly string[];
+  ignoreConfiguredRoots?: boolean;
+};
+
 let cachedPreferredTmpDir: string | undefined;
 const DATA_URL_RE = /^data:/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
@@ -170,16 +177,13 @@ export function appendLocalMediaParentRootEntries(
   return appended;
 }
 
-export function getAgentScopedMediaLocalRootsForSources(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  mediaSources?: readonly string[];
-  ignoreConfiguredRoots?: boolean;
-}): readonly string[] {
+export function getAgentScopedMediaLocalRootEntriesForSources(
+  params: AgentScopedMediaRootsForSourcesParams,
+): readonly LocalMediaRoot[] {
   const fsConfig = resolveToolFsConfig({ cfg: params.cfg, agentId: params.agentId });
   const roots = getAgentScopedMediaLocalRootsInternal(params.cfg, params.agentId, {
     ignoreConfiguredRoots: params.ignoreConfiguredRoots,
-  }).map(resolveLocalMediaRootPath);
+  });
   if (fsConfig.roots !== undefined && !params.ignoreConfiguredRoots) {
     return roots;
   }
@@ -190,5 +194,11 @@ export function getAgentScopedMediaLocalRootsForSources(params: {
   if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {
     return fallbackRoots;
   }
-  return appendLocalMediaParentRoots(fallbackRoots, params.mediaSources);
+  return appendLocalMediaParentRootEntries(fallbackRoots, params.mediaSources);
+}
+
+export function getAgentScopedMediaLocalRootsForSources(
+  params: AgentScopedMediaRootsForSourcesParams,
+): readonly string[] {
+  return getAgentScopedMediaLocalRootEntriesForSources(params).map(resolveLocalMediaRootPath);
 }

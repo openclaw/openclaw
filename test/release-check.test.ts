@@ -1,16 +1,18 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectForbiddenPackContentPaths,
   collectInstalledBundledPluginRuntimeDepErrors,
+  bundledRuntimeDependencySentinelCandidates,
   collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
@@ -77,6 +79,7 @@ describe("packed CLI smoke", () => {
           SystemRoot: "C:\\Windows",
           GITHUB_TOKEN: "redacted",
           OPENAI_API_KEY: "real-secret",
+          OPENCLAW_CONFIG_PATH: "/tmp/leaky-config.json",
         },
         { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
       ),
@@ -271,6 +274,62 @@ describe("bundled plugin root runtime mirrors", () => {
       });
 
       expect([...mirrors.keys()]).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require root deps for root chunks sourced from the owning installed plugin", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "package.json"),
+        `{"name":"openclaw","dependencies":{}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still requires root deps for root-owned installed chunks", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "package.json"),
+        `{"name":"openclaw","dependencies":{}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(tempRoot, "dist", "root-runtime.js"),
+        `import("@lancedb/lancedb");\n`,
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -612,6 +671,39 @@ describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bundledRuntimeDependencySentinelCandidates", () => {
+  it("checks canonical external runtime-deps roots for packed installs", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-runtime-candidates-"));
+    const packageRoot = join(root, "package");
+    const aliasRoot = join(root, "package-alias");
+    const homeRoot = join(root, "home");
+    try {
+      mkdirSync(join(packageRoot, "dist", "extensions", "browser"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.4.25-beta.1" }, null, 2),
+      );
+      symlinkSync(packageRoot, aliasRoot, "dir");
+
+      const candidates = bundledRuntimeDependencySentinelCandidates(
+        aliasRoot,
+        "browser",
+        "playwright-core",
+        { HOME: homeRoot } as NodeJS.ProcessEnv,
+      );
+      const externalCandidates = candidates.filter(
+        (candidate) =>
+          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
+          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
+      );
+
+      expect(externalCandidates.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

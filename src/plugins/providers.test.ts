@@ -164,7 +164,7 @@ function expectLastRuntimeRegistryLoad(params?: {
 }) {
   expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      cache: false,
+      cache: true,
       activate: false,
       ...(params?.env ? { env: params.env } : {}),
       ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
@@ -311,6 +311,13 @@ describe("resolvePluginProviders", () => {
       resolveManifestContractPluginIds: (...args: Parameters<ResolveManifestContractPluginIds>) =>
         resolveManifestContractPluginIdsMock(...args),
     }));
+    vi.doMock("./installed-plugin-index-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+      return {
+        ...actual,
+        readPersistedInstalledPluginIndexSync: () => null,
+      };
+    });
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
@@ -401,7 +408,7 @@ describe("resolvePluginProviders", () => {
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
         env,
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );
@@ -764,7 +771,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/runtime",
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );
@@ -790,7 +797,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/runtime",
-        cache: false,
+        cache: true,
         activate: false,
       }),
     );
@@ -1312,6 +1319,52 @@ describe("resolvePluginProviders", () => {
     ]);
 
     expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
+  });
+
+  it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "lmstudio",
+        providerIds: ["lmstudio"],
+        modelSupport: {
+          modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
+        },
+      }),
+    ]);
+    const provider: ProviderPlugin = {
+      id: "lmstudio",
+      label: "LM Studio",
+      auth: [],
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({ pluginId: "lmstudio", provider, source: "bundled" });
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+
+    expectModelOwningPluginIds("qwen3.6-27b@iq3_xxs", ["lmstudio"]);
+    expectModelOwningPluginIds("qwen3.6-27b", undefined);
+
+    const providers = resolvePluginProviders({
+      config: {},
+      modelRefs: ["qwen3.6-27b@iq3_xxs"],
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedProviders(providers, [
+      { id: "lmstudio", label: "LM Studio", auth: [], pluginId: "lmstudio" },
+    ]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["lmstudio"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["lmstudio"],
+            entries: {
+              lmstudio: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
   });
 
   it("auto-loads a model-owned provider plugin from shorthand model refs", () => {

@@ -8,9 +8,9 @@ import {
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "../media.js";
 import {
-  normalizeWhatsAppLoadedMedia,
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
+  prepareWhatsAppOutboundMedia,
   sendWhatsAppOutboundWithRetry,
 } from "../outbound-media-contract.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
@@ -121,7 +121,7 @@ export async function deliverWebReply(params: {
     mediaUrls: mediaList,
     caption: leadingCaption,
     send: async ({ mediaUrl, caption }) => {
-      const media = normalizeWhatsAppLoadedMedia(
+      const media = await prepareWhatsAppOutboundMedia(
         await loadWebMedia(mediaUrl, {
           maxBytes: maxMediaBytes,
           localRoots: params.mediaLocalRoots,
@@ -158,12 +158,14 @@ export async function deliverWebReply(params: {
                 audio: media.buffer,
                 ptt: true,
                 mimetype: media.mimetype,
-                caption,
               },
               quote,
             ),
           "media:audio",
         );
+        if (caption) {
+          await sendWithRetry(() => msg.reply(caption, quote), "media:audio-text");
+        }
       } else if (media.kind === "video") {
         const quote = getQuote();
         await sendWithRetry(

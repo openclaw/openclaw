@@ -7,10 +7,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
@@ -51,9 +49,10 @@ export function resolvePluginSkillDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir,
     config: params.config,
+    includeDisabled: true,
   });
   if (registry.plugins.length === 0) {
     return [];
@@ -77,6 +76,7 @@ export function resolvePluginSkillDirs(params: {
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
+      enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
       continue;

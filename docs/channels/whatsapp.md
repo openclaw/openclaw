@@ -152,6 +152,46 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 
+## Plugin hooks and privacy
+
+WhatsApp inbound messages can contain personal message content, phone numbers,
+group identifiers, sender names, and session correlation fields. For that reason,
+WhatsApp does not broadcast inbound `message_received` hook payloads to plugins
+unless you explicitly opt in:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        messageReceived: true,
+      },
+    },
+  },
+}
+```
+
+You can scope the opt-in to one account:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Only enable this for plugins you trust to receive inbound WhatsApp message
+content and identifiers.
+
 ## Access control and activation
 
 <Tabs>
@@ -321,9 +361,13 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
-    - `audio/ogg` is rewritten to `audio/ogg; codecs=opus` for voice-note compatibility
+    - audio media is sent through the Baileys `audio` payload with `ptt: true`, so WhatsApp clients render it as a push-to-talk voice note
+    - reply payloads preserve `audioAsVoice`; TTS voice-note output for WhatsApp stays on this PTT path even when the provider returns MP3 or WebM
+    - native Ogg/Opus audio is sent as `audio/ogg; codecs=opus` for voice-note compatibility
+    - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
+    - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current WhatsApp chat
     - animated GIF playback is supported via `gifPlayback: true` on video sends
-    - captions are applied to the first media item when sending multi-media reply payloads
+    - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
   </Accordion>
 
@@ -340,19 +384,20 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
 WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
 
-| Value    | Behavior                                                                           |
-| -------- | ---------------------------------------------------------------------------------- |
-| `"auto"` | Quote the inbound message when the provider supports it; skip quoting otherwise    |
-| `"on"`   | Always quote the inbound message; fall back to a plain send if quoting is rejected |
-| `"off"`  | Never quote; send as a plain message                                               |
+| Value       | Behavior                                                              |
+| ----------- | --------------------------------------------------------------------- |
+| `"off"`     | Never quote; send as a plain message                                  |
+| `"first"`   | Quote only the first outbound reply chunk                             |
+| `"all"`     | Quote every outbound reply chunk                                      |
+| `"batched"` | Quote queued batched replies while leaving immediate replies unquoted |
 
-Default is `"auto"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
+Default is `"off"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
 
 ```json5
 {
   channels: {
     whatsapp: {
-      replyToMode: "on",
+      replyToMode: "first",
     },
   },
 }
@@ -500,15 +545,15 @@ Resolution hierarchy for group messages:
 
 The effective `groups` map is determined first: if the account defines its own `groups`, it fully replaces the root `groups` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used if the specific group entry defines a `systemPrompt`.
-2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent or defines no `systemPrompt`.
+1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Resolution hierarchy for direct messages:
 
 The effective `direct` map is determined first: if the account defines its own `direct`, it fully replaces the root `direct` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used if the specific peer entry defines a `systemPrompt`.
-2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent or defines no `systemPrompt`.
+1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
 

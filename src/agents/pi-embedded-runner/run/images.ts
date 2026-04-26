@@ -4,7 +4,6 @@ import type { FsRoot } from "../../../config/types.tools.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -13,7 +12,6 @@ import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "../../sandbox-media-paths.js";
-import { assertSandboxPath } from "../../sandbox-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
@@ -355,44 +353,6 @@ export async function loadImageFromRef(
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
-  // Handle Gateway claim-check URIs (media://inbound/<id>).
-  // These are written by the Gateway's offload path and point to files that
-  // the Gateway has already validated and persisted. They are intentionally
-  // exempt from workspaceOnly checks because they live in the media store
-  // managed by the Gateway, not in the agent workspace.
-  if (ref.type === "media-uri") {
-    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
-    if (!uriMatch) {
-      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
-      return null;
-    }
-    const mediaId = uriMatch[1];
-    try {
-      // resolveMediaBufferPath accepts the media ID (with optional extension
-      // and original-filename prefix) and returns the absolute path of the
-      // persisted file. It applies its own guards against path traversal,
-      // symlinks, and null bytes.
-      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-      const media = await loadWebMedia(physicalPath, {
-        maxBytes: options?.maxBytes,
-        localRoots: [getMediaDir()],
-      });
-      if (media.kind !== "image") {
-        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
-        return null;
-      }
-      const mimeType = media.contentType ?? "image/jpeg";
-      const data = media.buffer.toString("base64");
-      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-      return { type: "image", data, mimeType };
-    } catch (err) {
-      log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
-      );
-      return null;
-    }
-  }
-
   try {
     let targetPath = ref.resolved;
 
@@ -416,14 +376,6 @@ export async function loadImageFromRef(
       }
     } else if (!path.isAbsolute(targetPath)) {
       targetPath = path.resolve(workspaceDir, targetPath);
-    }
-    if (options?.workspaceOnly && !options?.sandbox && !options?.roots?.length) {
-      const root = options?.sandbox?.root ?? workspaceDir;
-      await assertSandboxPath({
-        filePath: targetPath,
-        cwd: root,
-        root,
-      });
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)

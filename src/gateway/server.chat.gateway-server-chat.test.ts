@@ -108,7 +108,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   };
 

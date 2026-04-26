@@ -5,6 +5,7 @@ import {
   appendLocalMediaParentRoots,
   buildMediaLocalRoots,
   getAgentScopedMediaLocalRootEntries,
+  getAgentScopedMediaLocalRootEntriesForSources,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
   getDefaultMediaLocalRoots,
@@ -13,6 +14,11 @@ import {
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
+
+function normalizeRootEntryPaths(roots: readonly (string | { path: string })[]): string[] {
+  return roots.map((root) => normalizeHostPath(typeof root === "string" ? root : root.path));
+}
+
 describe("local media roots", () => {
   function withStateDir<T>(stateDir: string, run: () => T): T {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -301,6 +307,27 @@ describe("local media roots", () => {
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/Users/peter/Pictures"));
   });
 
+  it("uses configured fs root entries for media sources instead of widening by source parent", () => {
+    const roots = getAgentScopedMediaLocalRootEntriesForSources({
+      cfg: {
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared/file.txt", kind: "file", access: "ro" }],
+          },
+        },
+      },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/.openclaw/sessions/transcript.json"],
+    });
+
+    expect(roots).toEqual([
+      { path: normalizeHostPath("/packs/shared/file.txt"), kind: "file", access: "ro" },
+    ]);
+    expect(normalizeRootEntryPaths(roots)).not.toContain(
+      normalizeHostPath("/Users/peter/.openclaw/sessions"),
+    );
+  });
+
   it("preserves empty fs roots as deny-all for outbound media sources", () => {
     const roots = getAgentScopedMediaLocalRootsForSources({
       cfg: {
@@ -312,6 +339,22 @@ describe("local media roots", () => {
       },
       agentId: "ops",
       mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(roots).toEqual([]);
+  });
+
+  it("preserves empty fs root entries as deny-all for media sources", () => {
+    const roots = getAgentScopedMediaLocalRootEntriesForSources({
+      cfg: {
+        tools: {
+          fs: {
+            roots: [],
+          },
+        },
+      },
+      agentId: "ops",
+      mediaSources: ["/Users/peter/.openclaw/sessions/transcript.json"],
     });
 
     expect(roots).toEqual([]);

@@ -2,6 +2,7 @@ import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FsRoot } from "../../config/types.tools.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { LocalMediaRoot } from "../../media/local-media-access.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
@@ -97,6 +98,12 @@ export function readGenerationTimeoutMs(args: Record<string, unknown>): number |
     throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
   }
   return timeoutMs;
+}
+
+export function resolveRemoteMediaSsrfPolicy(
+  cfg: OpenClawConfig | undefined,
+): SsrFPolicy | undefined {
+  return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
 function applyAgentDefaultModelConfig(
@@ -427,7 +434,9 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId);
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
+    allowPluginNormalization: false,
+  });
   let model = params.modelRegistry.find(
     resolvedRef.provider,
     resolvedRef.model,

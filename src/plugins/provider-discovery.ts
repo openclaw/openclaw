@@ -1,6 +1,12 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  listPluginContributionIds,
+  loadPluginRegistrySnapshot,
+  type LoadPluginRegistryParams,
+  type PluginRegistrySnapshot,
+} from "./plugin-registry.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -28,7 +34,7 @@ function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
-export async function resolvePluginDiscoveryProviders(params: {
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -36,10 +42,47 @@ export async function resolvePluginDiscoveryProviders(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-}): Promise<ProviderPlugin[]> {
+};
+
+export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
+  index?: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+};
+
+function sortedValues(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveInstalledPluginProviderContributionIds(
+  params: ResolveInstalledPluginProviderContributionIdsParams = {},
+): string[] {
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
+  return sortedValues(
+    listPluginContributionIds({
+      index,
+      contribution: "providers",
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
+}
+
+export async function resolveRuntimePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
+}
+
+export async function resolvePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
+  return resolveRuntimePluginDiscoveryProviders(params);
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

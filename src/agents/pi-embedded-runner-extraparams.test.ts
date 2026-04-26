@@ -492,6 +492,7 @@ describe("applyExtraParamsToAgent", () => {
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
+    thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -505,6 +506,7 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
+      params.thinkingLevel,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
@@ -750,6 +752,264 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("strips store from proxied openai-completions payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "openai-completions",
+        provider: "google",
+        id: "gemini-2.5-pro",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+        store: false,
+      },
+    });
+
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("keeps store untouched for native openai-completions payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-4.1",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-4.1",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+        store: false,
+      },
+    });
+
+    expect(payload.store).toBe(false);
+  });
+
+  it("merges extra_body into openai-completions payloads before proxy store stripping", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  extraBody: {
+                    google: { thinking_config: { thinking_budget: 0 } },
+                    store: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "google",
+        id: "gemini-2.5-pro",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+    });
+
+    expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/nemotron-3-super": {
+                params: {
+                  chat_template_kwargs: {
+                    enable_thinking: false,
+                    force_nonempty_content: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      force_nonempty_content: true,
+    });
+  });
+
+  it("injects vLLM Nemotron chat_template_kwargs when thinking is off", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "off",
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      force_nonempty_content: true,
+    });
+  });
+
+  it("does not inject vLLM Nemotron chat_template_kwargs when thinking is enabled", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "low",
+    });
+
+    expect(payload).not.toHaveProperty("chat_template_kwargs");
+  });
+
+  it("lets extra_body override generated vLLM Nemotron chat_template_kwargs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "nemotron-3-super",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/nemotron-3-super": {
+                params: {
+                  extra_body: {
+                    chat_template_kwargs: {
+                      enable_thinking: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+      thinkingLevel: "off",
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: true,
+    });
+  });
+
+  it("warns and skips invalid chat_template_kwargs params", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "vllm",
+        applyModelId: "nemotron-3-super",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "vllm/nemotron-3-super": {
+                  params: { chat_template_kwargs: "not-an-object" },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "nemotron-3-super",
+          baseUrl: "http://127.0.0.1:8000/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+        },
+      });
+
+      expect(payload).not.toHaveProperty("chat_template_kwargs");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "ignoring invalid chat_template_kwargs param: not-an-object",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns and skips invalid extra_body params", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "google",
+        applyModelId: "gemini-2.5-pro",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google/gemini-2.5-pro": {
+                  params: { extra_body: "not-an-object" },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "google",
+          id: "gemini-2.5-pro",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        } as Model<"openai-completions">,
+      });
+
+      expect(payload).not.toHaveProperty("extra_body");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid extra_body param: not-an-object");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
