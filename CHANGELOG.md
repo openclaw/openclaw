@@ -74,6 +74,8 @@ Docs: https://docs.openclaw.ai
 - Channels/status: keep read-only channel lists on manifest and package metadata by default, loading setup runtime only for explicit fallback callers. Thanks @shakkernerd.
 - Plugins/onboarding: defer onboarding install-record index writes until the guarded config commit so setup failures cannot leave the plugin index ahead of `openclaw.json`. Thanks @shakkernerd.
 - Plugins/registry: resolve web provider ownership from the installed plugin index instead of broad manifest scans on secret, tool, and pricing paths. Thanks @shakkernerd.
+- Config/providers: accept `video` and `audio` in configured model `input` values and
+  preserve them in provider catalog entries. Fixes #20721. Thanks @alvinttang.
 - TTS: strip model-emitted TTS directives from streamed block text before channel
   delivery, including directives split across adjacent blocks, while preserving
   the accumulated raw reply for final-mode synthesis. Fixes #38937.

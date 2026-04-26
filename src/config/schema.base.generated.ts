@@ -2908,6 +2908,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               type: "string",
                               const: "image",
                             },
+                            {
+                              type: "string",
+                              const: "video",
+                            },
+                            {
+                              type: "string",
+                              const: "audio",
+                            },
                           ],
                         },
                       },
