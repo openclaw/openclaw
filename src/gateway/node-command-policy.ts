@@ -115,7 +115,17 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
-  windows: [...SYSTEM_COMMANDS],
+  // Windows tray companion can declare the same "safe" canvas/camera/location/screen
+  // surface as other desktop companions; it still must list commands on the node and
+  // pass the declared-command gate. See #71876.
+  windows: [
+    ...CANVAS_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...LOCATION_COMMANDS,
+    ...SCREEN_COMMANDS,
+    ...DEVICE_COMMANDS,
+    ...SYSTEM_COMMANDS,
+  ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
