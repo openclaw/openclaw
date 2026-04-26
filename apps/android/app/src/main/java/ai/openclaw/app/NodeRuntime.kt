@@ -146,7 +146,7 @@ class NodeRuntime(
     prefs = prefs,
     cameraEnabled = { cameraEnabled.value },
     locationMode = { locationMode.value },
-    voiceWakeMode = { VoiceWakeMode.Off },
+    voiceWakeMode = { prefs.voiceWakeMode.value },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
@@ -765,6 +765,16 @@ class NodeRuntime(
       stopManualVoiceSession()
     }
     // Don't re-enable on active=true; mic toggle drives that
+  }
+
+  fun setBuddyModeActive(active: Boolean) {
+    prefs.setVoiceWakeMode(if (active) VoiceWakeMode.Always else VoiceWakeMode.Off)
+  }
+
+  fun requestBuddyCameraSnap() {
+    scope.launch {
+      cameraHandler.handleSnap("""{"facing":"front","format":"jpg","maxWidth":1280,"quality":0.82}""")
+    }
   }
 
   fun setMicEnabled(value: Boolean) {

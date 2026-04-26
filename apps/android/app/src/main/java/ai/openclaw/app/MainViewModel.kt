@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import ai.openclaw.app.buddy.BuddyAction
+import ai.openclaw.app.buddy.BuddySnapshot
+import ai.openclaw.app.buddy.BuddySnapshotBuilder
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -17,9 +20,18 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+
+private data class BuddyActivityInputs(
+  val connected: Boolean,
+  val micListening: Boolean,
+  val micSending: Boolean,
+  val talkSpeaking: Boolean,
+  val pendingRunCount: Int,
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -127,6 +139,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+
+  private val buddyActivityInputs: StateFlow<BuddyActivityInputs> =
+    combine(
+      isConnected,
+      micIsListening,
+      micIsSending,
+      talkModeSpeaking,
+      pendingRunCount,
+    ) { connected, micListening, micSending, talkSpeaking, runs ->
+      BuddyActivityInputs(
+        connected = connected,
+        micListening = micListening,
+        micSending = micSending,
+        talkSpeaking = talkSpeaking,
+        pendingRunCount = runs,
+      )
+    }.stateIn(
+      viewModelScope,
+      SharingStarted.Eagerly,
+      BuddyActivityInputs(
+        connected = false,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+      ),
+    )
+
+  val buddySnapshot: StateFlow<BuddySnapshot> =
+    combine(
+      buddyActivityInputs,
+      chatPendingToolCalls,
+      cameraHud,
+      cameraEnabled,
+    ) { activity, toolCalls, hud, cameraEnabled ->
+      BuddySnapshotBuilder.build(
+        connected = activity.connected,
+        micListening = activity.micListening,
+        micSending = activity.micSending,
+        talkSpeaking = activity.talkSpeaking,
+        pendingRunCount = activity.pendingRunCount,
+        pendingToolCallCount = toolCalls.size,
+        cameraHudText = hud?.message,
+        cameraEnabled = cameraEnabled,
+        recordAudioGranted = true,
+      )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, BuddySnapshot.listening())
 
   init {
     if (prefs.onboardingCompleted.value) {
@@ -259,6 +318,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
+  }
+
+  fun setBuddyModeActive(active: Boolean) {
+    ensureRuntime().setBuddyModeActive(active)
+  }
+
+  fun requestHomeDestination(destination: HomeDestination) {
+    _requestedHomeDestination.value = destination
+  }
+
+  fun handleBuddyAction(action: BuddyAction) {
+    when (action) {
+      BuddyAction.StartVisionScan -> requestBuddyCameraSnap()
+      BuddyAction.StartShortListening -> {
+        requestHomeDestination(HomeDestination.Voice)
+        setMicEnabled(true)
+      }
+      BuddyAction.RepeatLastResponse -> Unit
+      BuddyAction.OpenSettings -> requestHomeDestination(HomeDestination.Settings)
+      BuddyAction.Play -> Unit
+    }
+  }
+
+  private fun requestBuddyCameraSnap() {
+    ensureRuntime().requestBuddyCameraSnap()
   }
 
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
