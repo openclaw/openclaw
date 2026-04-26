@@ -37,7 +37,12 @@ import {
 /** TTS provider interface — injected from the outer layer. */
 export interface TTSProvider {
   /** Framework TTS: text → audio file path. */
-  textToSpeech(params: { text: string; cfg: unknown; channel: string }): Promise<{
+  textToSpeech(params: {
+    text: string;
+    cfg: unknown;
+    channel: string;
+    accountId?: string;
+  }): Promise<{
     success: boolean;
     audioPath?: string;
     provider?: string;
@@ -406,6 +411,7 @@ export async function sendTextAsVoiceReply(
       text: ttsText,
       cfg,
       channel: "qqbot",
+      accountId: account.accountId,
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
       log?.error(`TTS failed: ${ttsResult.error ?? "unknown"}`);

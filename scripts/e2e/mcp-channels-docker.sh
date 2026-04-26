@@ -26,6 +26,8 @@ docker run --rm \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
   -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
   -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
@@ -49,11 +51,22 @@ docker run --rm \
     node --import tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/mcp-channels-gateway.log 2>&1 &
     gateway_pid=\$!
+    stop_process() {
+      pid=\"\$1\"
+      kill \"\$pid\" >/dev/null 2>&1 || true
+      for _ in \$(seq 1 40); do
+        if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+          wait \"\$pid\" >/dev/null 2>&1 || true
+          return
+        fi
+        sleep 0.25
+      done
+      kill -9 \"\$pid\" >/dev/null 2>&1 || true
+      wait \"\$pid\" >/dev/null 2>&1 || true
+    }
     cleanup_inner() {
-      kill \"\$gateway_pid\" >/dev/null 2>&1 || true
-      wait \"\$gateway_pid\" >/dev/null 2>&1 || true
-      kill \"\$mock_pid\" >/dev/null 2>&1 || true
-      wait \"\$mock_pid\" >/dev/null 2>&1 || true
+      stop_process \"\$gateway_pid\"
+      stop_process \"\$mock_pid\"
     }
     dump_gateway_log_on_error() {
       status=\$?
@@ -75,19 +88,6 @@ docker run --rm \
     done
     if [ \"\$gateway_ready\" -ne 1 ]; then
       echo \"Gateway did not become ready\"
-      tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
-      exit 1
-    fi
-    acpx_ready=0
-    for _ in \$(seq 1 2400); do
-      if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
-        acpx_ready=1
-        break
-      fi
-      sleep 0.25
-    done
-    if [ \"\$acpx_ready\" -ne 1 ]; then
-      echo \"Embedded ACPX runtime did not become ready\"
       tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
       exit 1
     fi

@@ -83,6 +83,24 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  createPluginRegistryIdNormalizer: () => (id: string) => id,
+  loadPluginRegistrySnapshot: () => ({
+    diagnostics: [],
+    plugins: [{ pluginId: "discord" }],
+  }),
+}));
+
+vi.mock("../config/commands.js", () => ({
+  resolveNativeSkillsEnabled: ({
+    globalSetting,
+    providerSetting,
+  }: {
+    globalSetting?: boolean | "auto";
+    providerSetting?: boolean | "auto";
+  }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
+}));
+
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => mockChannelPlugins,
 }));

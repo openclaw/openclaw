@@ -122,7 +122,13 @@ async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
   if (
-    !shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto, agentId: params.agentId })
+    !shouldAttemptTtsPayload({
+      cfg: params.cfg,
+      ttsAuto: params.ttsAuto,
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    })
   ) {
     return params.payload;
   }
@@ -426,26 +432,38 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg,
-    sessionKey: acpDispatchSessionKey,
-    workspaceDir,
-    messageProvider: deliveryChannel,
-    accountId: replyRoute.accountId,
-    groupId,
-    groupChannel: ctx.GroupChannel,
-    groupSpace: ctx.GroupSpace,
-    requesterSenderId: ctx.SenderId,
-    requesterSenderName: ctx.SenderName,
-    requesterSenderUsername: ctx.SenderUsername,
-    requesterSenderE164: ctx.SenderE164,
-  });
+  let normalizeReplyMediaPaths:
+    | ReturnType<
+        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
+      >
+    | undefined;
+  const getNormalizeReplyMediaPaths = async () => {
+    if (normalizeReplyMediaPaths) {
+      return normalizeReplyMediaPaths;
+    }
+    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+      cfg,
+      sessionKey: acpDispatchSessionKey,
+      workspaceDir,
+      messageProvider: deliveryChannel,
+      accountId: replyRoute.accountId,
+      groupId,
+      groupChannel: ctx.GroupChannel,
+      groupSpace: ctx.GroupSpace,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+    });
+    return normalizeReplyMediaPaths;
+  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    return await normalizeReplyMediaPaths(payload);
+    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
+    return await normalizeReplyMediaPayloadPaths(payload);
   };
 
   const routeReplyToOriginating = async (
@@ -734,6 +752,7 @@ export async function dispatchReplyFromConfig(
         inboundAudio,
         ttsAuto: sessionTtsAuto,
         agentId: sessionAgentId,
+        accountId: replyRoute.accountId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
@@ -939,6 +958,8 @@ export async function dispatchReplyFromConfig(
       cfg,
       ttsAuto: sessionTtsAuto,
       agentId: sessionAgentId,
+      channelId: deliveryChannel,
+      accountId: replyRoute.accountId,
     })
       ? createTtsDirectiveTextStreamCleaner()
       : undefined;
@@ -1010,6 +1031,7 @@ export async function dispatchReplyFromConfig(
               inboundAudio,
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
@@ -1128,6 +1150,7 @@ export async function dispatchReplyFromConfig(
               inboundAudio,
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
@@ -1198,7 +1221,11 @@ export async function dispatchReplyFromConfig(
         routedFinalCount += finalReply.routedFinalCount;
       }
 
-      const ttsMode = resolveConfiguredTtsMode(cfg, sessionAgentId);
+      const ttsMode = resolveConfiguredTtsMode(cfg, {
+        agentId: sessionAgentId,
+        channelId: deliveryChannel,
+        accountId: replyRoute.accountId,
+      });
       // Generate TTS-only reply after block streaming completes (when there's no final reply).
       // This handles the case where block streaming succeeds and drops final payloads,
       // but we still want TTS audio to be generated from the accumulated block content.
@@ -1217,6 +1244,7 @@ export async function dispatchReplyFromConfig(
             inboundAudio,
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
+            accountId: replyRoute.accountId,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {

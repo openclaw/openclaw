@@ -286,6 +286,72 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(result.conflicts).toEqual([]);
   });
 
+  it("does not report allowlist-excluded default-enabled bundled plugin deps", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "openai", "package.json"), {
+      dependencies: {
+        "openai-only": "1.0.0",
+      },
+    });
+    writeJson(path.join(root, "dist", "extensions", "openai", "openclaw.plugin.json"), {
+      id: "openai",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true, allow: ["browser"] },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("lets explicit bundled channel enablement bypass runtime-deps allowlist gating", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true, allow: ["browser"] },
+        channels: {
+          telegram: { enabled: true },
+        },
+      },
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "telegram-only@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not let doctor channel recovery bypass restrictive plugin allowlists", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true, allow: ["browser"] },
+        channels: {
+          telegram: { botToken: "123:abc" },
+        },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
   it("repairs missing deps during non-interactive doctor", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });

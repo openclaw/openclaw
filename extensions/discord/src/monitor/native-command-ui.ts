@@ -196,6 +196,12 @@ function buildDiscordModelPickerCurrentModel(
   return `${defaultProvider}/${defaultModel}`;
 }
 
+function resolveConfiguredAgentRuntimeId(value: {
+  agentRuntime?: { id?: unknown };
+}): string | undefined {
+  return normalizeOptionalString(value.agentRuntime?.id);
+}
+
 function buildDiscordModelPickerAllowedModelRefs(
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
 ): Set<string> {
@@ -386,15 +392,15 @@ function resolveDiscordModelPickerCurrentRuntime(params: {
     // Fall through to configured defaults when the session store is unavailable.
   }
 
-  const agentRuntime = normalizeOptionalString(
+  const agentRuntime = resolveConfiguredAgentRuntimeId(
     params.cfg.agents?.list?.find(
       (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
-    )?.embeddedHarness?.runtime,
+    ) ?? {},
   );
   if (agentRuntime) {
     return agentRuntime;
   }
-  return normalizeOptionalString(params.cfg.agents?.defaults?.embeddedHarness?.runtime) ?? "auto";
+  return resolveConfiguredAgentRuntimeId(params.cfg.agents?.defaults ?? {}) ?? "auto";
 }
 
 export async function replyWithDiscordModelPickerProviders(params: {

@@ -1415,6 +1415,9 @@ ensure_default_node_active_shell() {
 
 load_nvm_for_node_detection() {
     local nvm_dir="${NVM_DIR:-}"
+    if [[ -n "$nvm_dir" && ! -s "$nvm_dir/nvm.sh" ]]; then
+        nvm_dir=""
+    fi
     if [[ -z "$nvm_dir" && -s "$HOME/.nvm/nvm.sh" ]]; then
         nvm_dir="$HOME/.nvm"
     fi
@@ -2664,7 +2667,7 @@ main() {
         ui_section "Source install details"
         ui_kv "Checkout" "$final_git_dir"
         ui_kv "Wrapper" "$HOME/.local/bin/openclaw"
-        ui_kv "Update command" "openclaw update --restart"
+        ui_kv "Update command" "openclaw update"
         ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
     elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"

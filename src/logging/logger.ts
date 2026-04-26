@@ -55,7 +55,8 @@ export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legac
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
-const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
+const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_ROTATED_LOG_FILES = 5;
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -397,39 +398,45 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     return logger;
   }
 
-  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+  const rollingFile = isRollingPath(settings.file);
+  let activeFile = resolveActiveLogFile(settings.file);
+  fs.mkdirSync(path.dirname(activeFile), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
-  if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
+  if (rollingFile) {
+    pruneOldRollingLogs(path.dirname(activeFile));
   }
-  let currentFileBytes = getCurrentLogFileBytes(settings.file);
-  let warnedAboutSizeCap = false;
+  let currentFileBytes = getCurrentLogFileBytes(activeFile);
+  let warnedAboutRotationFailure = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      const nextActiveFile = resolveActiveLogFile(settings.file);
+      if (nextActiveFile !== activeFile) {
+        activeFile = nextActiveFile;
+        fs.mkdirSync(path.dirname(activeFile), { recursive: true });
+        if (rollingFile) {
+          pruneOldRollingLogs(path.dirname(activeFile));
+        }
+        currentFileBytes = getCurrentLogFileBytes(activeFile);
+      }
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const line = redactSensitiveText(JSON.stringify({ ...logObj, time }));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
-      if (nextBytes > settings.maxFileBytes) {
-        if (!warnedAboutSizeCap) {
-          warnedAboutSizeCap = true;
-          const warningLine = JSON.stringify({
-            time: formatTimestamp(new Date(), { style: "long" }),
-            level: "warn",
-            subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
-          });
-          appendLogLine(settings.file, `${warningLine}\n`);
+      if (currentFileBytes > 0 && nextBytes > settings.maxFileBytes) {
+        if (rotateLogFile(activeFile)) {
+          currentFileBytes = getCurrentLogFileBytes(activeFile);
+          warnedAboutRotationFailure = false;
+        } else if (!warnedAboutRotationFailure) {
+          warnedAboutRotationFailure = true;
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
-        return;
       }
-      if (appendLogLine(settings.file, payload)) {
-        currentFileBytes = nextBytes;
+      if (appendLogLine(activeFile, payload)) {
+        currentFileBytes += payloadBytes;
       }
     } catch {
       // never block on logging failures
@@ -554,8 +561,19 @@ function formatLocalDate(date: Date): string {
 }
 
 function defaultRollingPathForToday(): string {
-  const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  return rollingPathForDate(DEFAULT_LOG_DIR, new Date());
+}
+
+function rollingPathForDate(dir: string, date: Date): string {
+  const today = formatLocalDate(date);
+  return path.join(dir, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+}
+
+function resolveActiveLogFile(file: string): string {
+  if (!isRollingPath(file)) {
+    return file;
+  }
+  return rollingPathForDate(path.dirname(file), new Date());
 }
 
 function isRollingPath(file: string): boolean {
@@ -590,5 +608,31 @@ function pruneOldRollingLogs(dir: string): void {
     }
   } catch {
     // ignore missing dir or read errors
+  }
+}
+
+function rotatedLogPath(file: string, index: number): string {
+  const ext = path.extname(file);
+  const base = file.slice(0, file.length - ext.length);
+  return `${base}.${index}${ext}`;
+}
+
+function rotateLogFile(file: string): boolean {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.rmSync(rotatedLogPath(file, MAX_ROTATED_LOG_FILES), { force: true });
+    for (let index = MAX_ROTATED_LOG_FILES - 1; index >= 1; index -= 1) {
+      const from = rotatedLogPath(file, index);
+      if (!fs.existsSync(from)) {
+        continue;
+      }
+      fs.renameSync(from, rotatedLogPath(file, index + 1));
+    }
+    if (fs.existsSync(file)) {
+      fs.renameSync(file, rotatedLogPath(file, 1));
+    }
+    return true;
+  } catch {
+    return false;
   }
 }

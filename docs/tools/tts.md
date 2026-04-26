@@ -403,8 +403,41 @@ Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 
 1. `messages.tts`
 2. active `agents.list[].tts`
-3. local `/tts` preferences for this host
-4. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+3. channel override, when the channel supports `channels.<channel>.tts`
+4. account override, when the channel passes `channels.<channel>.accounts.<id>.tts`
+5. local `/tts` preferences for this host
+6. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+
+Channel and account overrides use the same shape as `messages.tts` and
+deep-merge over the earlier layers, so shared provider credentials can stay in
+`messages.tts` while a channel or bot account changes only voice, model, persona,
+or auto mode:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      providers: {
+        openai: { apiKey: "${OPENAI_API_KEY}", model: "gpt-4o-mini-tts" },
+      },
+    },
+  },
+  channels: {
+    feishu: {
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ## Personas
 
@@ -645,6 +678,44 @@ or `messages.tts.prefsPath`.
 
 These override the effective config from `messages.tts` plus the active
 `agents.list[].tts` block for that host.
+
+## Output formats (fixed)
+
+TTS voice delivery is channel-capability driven. Channel plugins advertise
+whether voice-style TTS should ask providers for a native `voice-note` target or
+keep normal `audio-file` synthesis and only mark compatible output for voice
+delivery.
+
+- **Voice-note capable channels**: voice-note replies prefer Opus (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+  - 48kHz / 64kbps is a good voice message tradeoff.
+- **Feishu / WhatsApp**: when a voice-note reply is produced as MP3/WebM/WAV/M4A
+  or another likely audio file, the channel plugin transcodes it to 48kHz
+  Ogg/Opus with `ffmpeg` before sending the native voice message. WhatsApp sends
+  the result through the Baileys `audio` payload with `ptt: true` and
+  `audio/ogg; codecs=opus`. If conversion fails, Feishu receives the original
+  file as an attachment; WhatsApp send fails rather than posting an incompatible
+  PTT payload.
+- **BlueBubbles**: keeps provider synthesis on the normal audio-file path; MP3
+  and CAF outputs are marked for iMessage voice memo delivery.
+- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
+  - 44.1kHz / 128kbps is the default balance for speech clarity.
+- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For channel-advertised voice-note targets, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery when the channel advertises transcoding.
+- **Xiaomi MiMo**: MP3 by default, or WAV when configured. For channel-advertised voice-note targets, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery when the channel advertises transcoding.
+- **Local CLI**: uses the configured `outputFormat`. Voice-note targets are
+  converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM
+  with `ffmpeg`.
+- **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
+- **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
+- **Inworld**: MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
+- **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.
+- **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
+  - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
+  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
+    guaranteed Opus voice messages.
+  - If the configured Microsoft output format fails, OpenClaw retries with MP3.
+
+OpenAI/ElevenLabs output formats are fixed per channel (see above).
 
 ## Auto-TTS behavior
 

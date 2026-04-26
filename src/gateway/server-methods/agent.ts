@@ -425,6 +425,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
+      modelRun?: boolean;
+      promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       internalEvents?: AgentInternalEvent[];
@@ -1170,6 +1172,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           runId,
           lane: request.lane,
           cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
+          modelRun: request.modelRun === true,
+          promptMode: request.promptMode,
           extraSystemPrompt: request.extraSystemPrompt,
           bootstrapContextMode: request.bootstrapContextMode,
           bootstrapContextRunKind: request.bootstrapContextRunKind,

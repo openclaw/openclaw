@@ -142,7 +142,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 The bundled Codex plugin follows this pattern:
 
 - preferred user model refs: `openai/gpt-5.5` plus
-  `embeddedHarness.runtime: "codex"`
+  `agentRuntime.id: "codex"`
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
@@ -153,7 +153,7 @@ The bundled Codex plugin follows this pattern:
 
 The Codex plugin is additive. Plain `openai/gpt-*` refs continue to use the
 normal OpenClaw provider path unless you force the Codex harness with
-`embeddedHarness.runtime: "codex"`. Older `codex/gpt-*` refs still select the
+`agentRuntime.id: "codex"`. Older `codex/gpt-*` refs still select the
 Codex provider and harness for compatibility.
 
 For operator setup, model prefix examples, and Codex-only configs, see
@@ -194,14 +194,14 @@ intentional silent replies such as `NO_REPLY` unclassified.
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
 `plugins.allow` if your config uses a restrictive allowlist. Native app-server
-configs should use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`.
+configs should use `openai/gpt-*` with `agentRuntime.id: "codex"`.
 Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
 model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use `embeddedHarness.runtime: "codex"` without a `fallback` override
+selection. Use `agentRuntime.id: "codex"` without a `fallback` override
 when you need to prove that only the Codex app-server path can claim the run.
 Explicit plugin runtimes already fail closed by default. Set `fallback: "pi"`
 only when you intentionally want PI to handle missing harness selection. Codex
@@ -209,8 +209,8 @@ app-server failures already fail directly instead of retrying through PI.
 
 ## Disable PI fallback
 
-By default, OpenClaw runs embedded agents with `agents.defaults.embeddedHarness`
-set to `{ runtime: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
+By default, OpenClaw runs embedded agents with `agents.defaults.agentRuntime`
+set to `{ id: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
 harnesses can claim a provider/model pair. If none match, OpenClaw falls back
 to PI.
 
@@ -228,8 +228,8 @@ For Codex-only embedded runs:
   "agents": {
     "defaults": {
       "model": "openai/gpt-5.5",
-      "embeddedHarness": {
-        "runtime": "codex"
+      "agentRuntime": {
+        "id": "codex"
       }
     }
   }
@@ -244,8 +244,8 @@ the fallback:
 {
   "agents": {
     "defaults": {
-      "embeddedHarness": {
-        "runtime": "auto",
+      "agentRuntime": {
+        "id": "auto",
         "fallback": "none"
       }
     }
@@ -259,8 +259,8 @@ Per-agent overrides use the same shape:
 {
   "agents": {
     "defaults": {
-      "embeddedHarness": {
-        "runtime": "auto",
+      "agentRuntime": {
+        "id": "auto",
         "fallback": "pi"
       }
     },
@@ -268,8 +268,8 @@ Per-agent overrides use the same shape:
       {
         "id": "codex-only",
         "model": "openai/gpt-5.5",
-        "embeddedHarness": {
-          "runtime": "codex",
+        "agentRuntime": {
+          "id": "codex",
           "fallback": "none"
         }
       }

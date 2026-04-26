@@ -114,6 +114,12 @@ Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
+The node host retries Gateway restart and network closes in-process. If the
+Gateway reports a terminal token/password/bootstrap auth pause, the node host
+logs the close detail and exits non-zero so launchd/systemd can restart it with
+fresh config and credentials. Pairing-required pauses stay in the foreground
+flow so the pending request can be approved.
+
 ## Pairing
 
 The first connection creates a pending device pairing request (`role: node`) on the Gateway.

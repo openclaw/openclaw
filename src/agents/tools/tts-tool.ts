@@ -58,6 +58,7 @@ export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
   agentId?: string;
+  agentAccountId?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -77,6 +78,7 @@ export function createTtsTool(opts?: {
         channel: channel ?? opts?.agentChannel,
         timeoutMs,
         agentId: opts?.agentId,
+        accountId: opts?.agentAccountId,
       });
 
       if (result.success && result.audioPath) {
