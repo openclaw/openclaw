@@ -17,5 +17,5 @@
     "src/video-generation/types.ts",
     "src/types/**/*.d.ts"
   ],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.test-helpers.ts"]
 }
