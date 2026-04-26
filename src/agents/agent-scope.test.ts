@@ -493,6 +493,22 @@ describe("resolveAgentConfig", () => {
     expect(workspace).toBe(path.resolve("/shared-ws/main"));
   });
 
+  it("non-default agent does not nest under the default main workspace", () => {
+    const home = path.join(path.sep, "tmp", "test-home");
+    const stateDir = path.join(home, ".openclaw");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: path.join(stateDir, "workspace") },
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    };
+
+    const workspace = resolveAgentWorkspaceDir(cfg, "work");
+    expect(workspace).toBe(path.join(stateDir, "workspace-work"));
+  });
+
   it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
     const cfg: OpenClawConfig = {
       agents: {
