@@ -23,6 +23,7 @@ import {
 } from "./diagnostic-stability.js";
 import {
   logSessionStateChange,
+  markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
@@ -158,6 +159,57 @@ describe("stuck session diagnostics threshold", () => {
       ageMs: expect.any(Number),
       queueDepth: 0,
     });
+  });
+
+  it("does not warn while a processing session continues reporting progress", () => {
+    const events: Array<{ type: string }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push({ type: event.type });
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(45_000);
+      markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
+      vi.advanceTimersByTime(16_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+  });
+
+  it("backs off repeated stuck warnings while a session remains unchanged", () => {
+    const events: Array<{ type: string; ageMs?: number }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.stuck") {
+        events.push({ type: event.type, ageMs: event.ageMs });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(91_000);
+
+      expect(events).toHaveLength(1);
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.ageMs)).toEqual([60_000, 120_000]);
   });
 
   it("starts and stops the stability recorder with the heartbeat lifecycle", () => {

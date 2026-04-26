@@ -44,6 +44,7 @@ import {
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
+  markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import {
   buildPluginBindingDeclinedText,
@@ -354,7 +355,6 @@ export async function dispatchReplyFromConfig(
       reason,
     });
   };
-
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
@@ -374,6 +374,15 @@ export async function dispatchReplyFromConfig(
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
+  const markProgress = () => {
+    if (!canTrackSession || !sessionKey) {
+      return;
+    }
+    markDiagnosticSessionProgress({ sessionKey });
+    if (acpDispatchSessionKey && acpDispatchSessionKey !== sessionKey) {
+      markDiagnosticSessionProgress({ sessionKey: acpDispatchSessionKey });
+    }
+  };
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
@@ -813,7 +822,6 @@ export async function dispatchReplyFromConfig(
   }
 
   markProcessing();
-
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -1141,6 +1149,17 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    const wrapProgressCallback = <Args extends unknown[]>(
+      callback: ((...args: Args) => Promise<void> | void) | undefined,
+    ): ((...args: Args) => Promise<void>) | undefined => {
+      if (suppressAutomaticSourceDelivery || !callback) {
+        return undefined;
+      }
+      return async (...args: Args) => {
+        markProgress();
+        await callback(...args);
+      };
+    };
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -1154,33 +1173,18 @@ export async function dispatchReplyFromConfig(
         sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
-        onPartialReply: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onPartialReply,
-        onReasoningStream: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onReasoningStream,
-        onReasoningEnd: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onReasoningEnd,
-        onAssistantMessageStart: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onAssistantMessageStart,
-        onBlockReplyQueued: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onBlockReplyQueued,
-        onToolStart: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onToolStart,
-        onItemEvent: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onItemEvent,
-        onCommandOutput: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onCommandOutput,
-        onCompactionStart: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onCompactionStart,
-        onCompactionEnd: suppressAutomaticSourceDelivery
-          ? undefined
-          : params.replyOptions?.onCompactionEnd,
+        onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
+        onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
+        onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
+        onAssistantMessageStart: wrapProgressCallback(params.replyOptions?.onAssistantMessageStart),
+        onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
+        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart),
+        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent),
+        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput),
+        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart),
+        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd),
         onToolResult: (payload: ReplyPayload) => {
+          markProgress();
           const run = async () => {
             markInboundDedupeReplayUnsafe();
             if (!suppressAutomaticSourceDelivery) {
@@ -1228,6 +1232,7 @@ export async function dispatchReplyFromConfig(
           return run();
         },
         onPlanUpdate: async (payload) => {
+          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
@@ -1238,6 +1243,7 @@ export async function dispatchReplyFromConfig(
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
+          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
@@ -1256,6 +1262,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
+          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
@@ -1270,6 +1277,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
+          markProgress();
           const run = async () => {
             if (
               payload.isReasoning !== true &&
