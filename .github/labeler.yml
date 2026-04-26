@@ -363,6 +363,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: portkey":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/portkey/**"
+          - "docs/providers/portkey.md"
 "extensions: qianfan":
   - changed-files:
       - any-glob-to-any-file:

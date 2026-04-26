@@ -1,0 +1,32 @@
+{
+  "id": "portkey",
+  "enabledByDefault": true,
+  "providers": ["portkey"],
+  "providerAuthEnvVars": {
+    "portkey": ["PORTKEY_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "portkey",
+      "method": "api-key",
+      "choiceId": "portkey-api-key",
+      "choiceLabel": "Portkey API key",
+      "choiceHint": "AI gateway for 250+ LLM providers",
+      "groupId": "portkey",
+      "groupLabel": "Portkey",
+      "groupHint": "AI gateway with observability and routing (250+ providers)",
+      "optionKey": "portkeyApiKey",
+      "cliFlag": "--portkey-api-key",
+      "cliOption": "--portkey-api-key <key>",
+      "cliDescription": "Portkey API key"
+    }
+  ],
+  "contracts": {
+    "imageGenerationProviders": ["portkey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
