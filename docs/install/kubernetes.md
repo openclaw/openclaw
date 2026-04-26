@@ -177,6 +177,113 @@ This deletes the namespace and all resources in it, including the PVC.
 - If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings
 - Secrets are generated in a temp directory and applied directly to the cluster — no secret material is written to the repo checkout
 
+## Azure Kubernetes Service (AKS)
+
+The generic manifests work on AKS with no changes. This section covers
+AKS-specific additions like cluster creation, ACR integration, and ingress.
+
+### Prerequisites
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) (`az`) installed and authenticated
+- A subscription with permission to create AKS clusters
+
+### Create an AKS cluster
+
+Skip this if you already have a cluster.
+
+```bash
+az group create -n openclaw-rg -l southeastasia
+az aks create -g openclaw-rg -n openclaw-aks \
+  --node-count 1 --node-vm-size Standard_B2s \
+  --enable-managed-identity --generate-ssh-keys
+az aks get-credentials -g openclaw-rg -n openclaw-aks
+```
+
+`Standard_B2s` (2 vCPU, 4 GiB RAM, ~\$30/month in Southeast Asia) is
+sufficient for a personal gateway. Scale up for multiple agents or heavier
+workloads.
+
+### Deploy
+
+```bash
+export OPENAI_API_KEY="..."   # or any provider key
+./scripts/k8s/deploy.sh
+```
+
+Verify:
+
+```bash
+kubectl get pods -n openclaw
+kubectl port-forward svc/openclaw 18789:18789 -n openclaw
+```
+
+### Expose via Ingress (optional)
+
+> **Important:** The default manifests bind the gateway to loopback inside the
+> pod. Before setting up an Ingress, change the gateway bind in
+> `scripts/k8s/manifests/configmap.yaml` from `loopback` to a non-loopback
+> address. See [Expose beyond port-forward](#expose-beyond-port-forward)
+> above for details.
+
+Install the NGINX ingress controller:
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  -n ingress-nginx --create-namespace
+```
+
+Create an Ingress resource:
+
+```yaml
+# openclaw-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw
+  namespace: openclaw
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [openclaw.example.com]
+      secretName: openclaw-tls
+  rules:
+    - host: openclaw.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openclaw
+                port:
+                  number: 18789
+```
+
+```bash
+kubectl apply -f openclaw-ingress.yaml
+```
+
+For automatic TLS, pair with [cert-manager](https://cert-manager.io/) and
+an Azure DNS solver.
+
+### Use Azure Container Registry (optional)
+
+Build and push a custom OpenClaw image:
+
+```bash
+az acr create -g openclaw-rg -n myocr --sku Basic
+az aks update -g openclaw-rg -n openclaw-aks --attach-acr myocr
+az acr build -r myocr -t openclaw:latest .
+```
+
+Then update `image` in `scripts/k8s/manifests/deployment.yaml` to
+`myocr.azurecr.io/openclaw:latest`.
+
 ## File structure
 
 ```
