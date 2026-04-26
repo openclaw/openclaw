@@ -94,37 +94,19 @@ const PluginSecretRefSchema = z
       ),
     id: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => !sourceIsBuiltIn(value.source),
+    'Source matches a built-in name; use the built-in SecretRef schema for "env", "file", or "exec".',
+  );
 
-const BuiltInSecretRefSchema = z.discriminatedUnion("source", [
-  EnvSecretRefSchema,
-  FileSecretRefSchema,
-  ExecSecretRefSchema,
+// Order matters: built-in discriminated arm first so its richer per-source
+// errors are picked by the validation.ts union flattener (see
+// extractFlattenedUnionIssue) when the user supplies a built-in source.
+export const SecretRefSchema = z.union([
+  z.discriminatedUnion("source", [EnvSecretRefSchema, FileSecretRefSchema, ExecSecretRefSchema]),
+  PluginSecretRefSchema,
 ]);
-
-// Route by `source` discriminator: built-in sources go through the strict
-// per-source schemas (which produce the precise error messages downstream
-// validation expects); anything else goes through the plugin schema. Using
-// superRefine instead of z.union preserves the single-arm error reporting
-// shape that validation.ts:mapZodIssueToConfigIssue depends on.
-export const SecretRefSchema: z.ZodTypeAny = z.unknown().superRefine((value, ctx) => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    ctx.addIssue({ code: "custom", message: "Secret reference must be an object." });
-    return;
-  }
-  const source = (value as { source?: unknown }).source;
-  const schema = sourceIsBuiltIn(source) ? BuiltInSecretRefSchema : PluginSecretRefSchema;
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    for (const issue of result.error.issues) {
-      ctx.addIssue({
-        code: "custom",
-        message: issue.message,
-        path: issue.path as PropertyKey[],
-      });
-    }
-  }
-});
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
@@ -190,37 +172,26 @@ const SecretsExecProviderSchema = z
 
 /**
  * Plugin-owned secret-provider config. The plugin's own SecretProviderPlugin.validateConfig
- * enforces vendor-specific shape; core only validates that source is a non-empty string.
+ * enforces vendor-specific shape; core only validates that source is a non-empty string
+ * that does not collide with the built-in names.
  */
-const SecretsPluginProviderSchema = z.object({ source: z.string().min(1) }).catchall(z.unknown());
+const SecretsPluginProviderSchema = z
+  .object({ source: z.string().min(1) })
+  .catchall(z.unknown())
+  .refine(
+    (value) => !sourceIsBuiltIn(value.source),
+    'Source matches a built-in name; use the built-in provider schema for "env", "file", or "exec".',
+  );
 
-const BuiltInSecretProviderSchema = z.discriminatedUnion("source", [
-  SecretsEnvProviderSchema,
-  SecretsFileProviderSchema,
-  SecretsExecProviderSchema,
+// See SecretRefSchema for ordering rationale.
+export const SecretProviderSchema = z.union([
+  z.discriminatedUnion("source", [
+    SecretsEnvProviderSchema,
+    SecretsFileProviderSchema,
+    SecretsExecProviderSchema,
+  ]),
+  SecretsPluginProviderSchema,
 ]);
-
-// Route by `source` discriminator (see SecretRefSchema for rationale).
-export const SecretProviderSchema: z.ZodTypeAny = z.unknown().superRefine((value, ctx) => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    ctx.addIssue({ code: "custom", message: "Secret provider config must be an object." });
-    return;
-  }
-  const source = (value as { source?: unknown }).source;
-  const schema = sourceIsBuiltIn(source)
-    ? BuiltInSecretProviderSchema
-    : SecretsPluginProviderSchema;
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    for (const issue of result.error.issues) {
-      ctx.addIssue({
-        code: "custom",
-        message: issue.message,
-        path: issue.path as PropertyKey[],
-      });
-    }
-  }
-});
 
 export const SecretsConfigSchema = z
   .object({

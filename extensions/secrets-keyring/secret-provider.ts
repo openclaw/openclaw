@@ -67,11 +67,7 @@ async function resolveDarwinSecret(params: {
   }
 }
 
-type ResolutionFailure =
-  | { kind: "tool_missing"; cause: unknown }
-  | { kind: "not_found"; cause: unknown };
-
-function classifyLinuxError(err: unknown): ResolutionFailure {
+function classifyLinuxError(err: unknown): { kind: "tool_missing" | "not_found" } {
   const msg = err instanceof Error ? err.message : String(err);
   if (
     msg.includes("ENOENT") ||
@@ -79,9 +75,9 @@ function classifyLinuxError(err: unknown): ResolutionFailure {
     msg.toLowerCase().includes("command not found") ||
     msg.toLowerCase().includes("no such file")
   ) {
-    return { kind: "tool_missing", cause: err };
+    return { kind: "tool_missing" };
   }
-  return { kind: "not_found", cause: err };
+  return { kind: "not_found" };
 }
 
 async function resolveLinuxSecret(params: {
@@ -108,16 +104,15 @@ async function resolveLinuxSecret(params: {
     if (err instanceof Error && err.message.startsWith("Keyring secret ")) {
       throw err;
     }
-    const failure = classifyLinuxError(err);
-    if (failure.kind === "tool_missing") {
+    if (classifyLinuxError(err).kind === "tool_missing") {
       throw new Error(
         `Keyring provider requires the libsecret \`secret-tool\` CLI on Linux but it was not found on PATH. Install libsecret-tools (Debian/Ubuntu) or libsecret (Fedora/Arch) and try again.`,
-        { cause: failure.cause },
+        { cause: err },
       );
     }
     throw new Error(
       `Keyring secret "${params.refId}" lookup failed (provider: ${params.providerName}, service: ${params.service}): ${err instanceof Error ? err.message : String(err)}`,
-      { cause: failure.cause },
+      { cause: err },
     );
   }
 }
