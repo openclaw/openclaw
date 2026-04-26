@@ -167,14 +167,16 @@ file log levels.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+OpenClaw can redact sensitive tokens before they hit console output, file logs,
+OTLP log records, or persisted session transcript text:
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set
 
-Redaction applies at the logging sinks for **console output**, **stderr-routed
-console diagnostics**, and **file logs**. File logs stay JSONL, but matching
-secret values are masked before the line is written to disk.
+File logs and session transcripts stay JSONL, but matching secret values are
+masked before the line or message is written to disk. Redaction is best-effort:
+it applies to text-bearing message content and log strings, not every
+identifier or binary payload field.
 
 ## Diagnostics and OpenTelemetry
 
