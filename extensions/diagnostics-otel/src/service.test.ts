@@ -1141,6 +1141,28 @@ describe("diagnostics-otel service", () => {
       },
     });
     emitDiagnosticEvent({
+      type: "harness.run.completed",
+      runId: "run-1",
+      sessionKey: "session-key",
+      sessionId: "session-1",
+      provider: "codex",
+      model: "gpt-5.4",
+      channel: "qa",
+      harnessId: "codex",
+      pluginId: "codex-plugin",
+      outcome: "completed",
+      durationMs: 90,
+      resultClassification: "reasoning-only",
+      yieldDetected: true,
+      itemLifecycle: { startedCount: 3, completedCount: 2, activeCount: 1 },
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitDiagnosticEvent({
       type: "tool.execution.error",
       runId: "run-1",
       toolName: "read",
@@ -1160,7 +1182,12 @@ describe("diagnostics-otel service", () => {
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toEqual(
-      expect.arrayContaining(["openclaw.run", "openclaw.model.call", "openclaw.tool.execution"]),
+      expect.arrayContaining([
+        "openclaw.run",
+        "openclaw.model.call",
+        "openclaw.harness.run",
+        "openclaw.tool.execution",
+      ]),
     );
 
     const runCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -1207,6 +1234,36 @@ describe("diagnostics-otel service", () => {
     });
     expect(modelCall?.[2]).toBeUndefined();
 
+    const harnessCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.harness.run",
+    );
+    expect(harnessCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.harness.id": "codex",
+        "openclaw.harness.plugin": "codex-plugin",
+        "openclaw.outcome": "completed",
+        "openclaw.provider": "codex",
+        "openclaw.model": "gpt-5.4",
+        "openclaw.channel": "qa",
+        "openclaw.harness.result_classification": "reasoning-only",
+        "openclaw.harness.yield_detected": true,
+        "openclaw.harness.items.started": 3,
+        "openclaw.harness.items.completed": 2,
+        "openclaw.harness.items.active": 1,
+      },
+      startTime: expect.any(Number),
+    });
+    expect(harnessCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.runId": expect.anything(),
+        "openclaw.sessionId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+        "openclaw.traceId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(harnessCall?.[2]).toBeUndefined();
+
     const toolCall = telemetryState.tracer.startSpan.mock.calls.find(
       (call) => call[0] === "openclaw.tool.execution",
     );
@@ -1242,6 +1299,25 @@ describe("diagnostics-otel service", () => {
       100,
       expect.not.objectContaining({
         "openclaw.runId": expect.anything(),
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.harness.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      90,
+      expect.objectContaining({
+        "openclaw.harness.id": "codex",
+        "openclaw.harness.plugin": "codex-plugin",
+        "openclaw.outcome": "completed",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.harness.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      90,
+      expect.not.objectContaining({
+        "openclaw.runId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
       }),
     );
     expect(
