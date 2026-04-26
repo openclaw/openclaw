@@ -1,9 +1,7 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractOwnerPluginId,
-} from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { resolveManifestContractOwnerPluginId } from "../../../plugins/plugin-registry.js";
 import {
   cloneRecord,
   ensureRecord,
