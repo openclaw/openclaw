@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -287,6 +288,20 @@ describe("update-cli", () => {
       expect.any(Object),
     );
   };
+
+  const statfsFixture = (params: {
+    bavail: number;
+    bsize?: number;
+    blocks?: number;
+  }): ReturnType<typeof fsSync.statfsSync> => ({
+    type: 0,
+    bsize: params.bsize ?? 1024,
+    blocks: params.blocks ?? 2_000_000,
+    bfree: params.bavail,
+    bavail: params.bavail,
+    files: 0,
+    ffree: 0,
+  });
 
   const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult =>
     ({
@@ -909,6 +924,28 @@ describe("update-cli", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logs.join("\n")).not.toContain("already-current");
+  });
+
+  it("warns but still runs package updates when disk space looks low", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      statfsFixture({
+        bavail: 256,
+        bsize: 1024 * 1024,
+      }),
+    );
+
+    await updateCommand({ yes: true });
+
+    expectPackageInstallSpec("openclaw@latest");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain("Low disk space near");
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {

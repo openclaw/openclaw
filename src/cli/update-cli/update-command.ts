@@ -18,6 +18,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -352,6 +353,7 @@ async function runPackageInstallUpdate(params: {
   timeoutMs: number;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
+  jsonMode: boolean;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -382,6 +384,18 @@ async function runPackageInstallUpdate(params: {
       globalRoot: path.dirname(pkgRoot),
       packageName,
     });
+  }
+
+  const diskWarning = createLowDiskSpaceWarning({
+    targetPath: pkgRoot ? path.dirname(pkgRoot) : params.root,
+    purpose: "global package update",
+  });
+  if (diskWarning) {
+    if (params.jsonMode) {
+      defaultRuntime.error(`Warning: ${diskWarning}`);
+    } else {
+      defaultRuntime.log(theme.warn(diskWarning));
+    }
   }
 
   const updateStep = await runUpdateStep({
@@ -1277,6 +1291,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           timeoutMs: timeoutMs ?? 20 * 60_000,
           startedAt,
           progress,
+          jsonMode: Boolean(opts.json),
         })
       : await runGitUpdate({
           root,

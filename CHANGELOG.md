@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
   `openclaw node start` command, and show an actionable browser-control error
   when the local control service is missing. Fixes #66637.
 - Gateway/update: fail package updates when the restarted managed gateway reports the wrong version, including fallback restarts and JSON mode, avoiding false-success mixed-version restarts after macOS LaunchAgent updates. Fixes #71835. Thanks @abhinas90 and @jsompis.
+- Gateway/update: warn before package updates and bundled plugin runtime-dependency repairs when the target volume appears low on disk space, without blocking installs on best-effort filesystem checks. Fixes #71835. Thanks @abhinas90 and @jsompis.
 - Plugins/runtime deps: surface activated plugin load failures in health and fail package-update restart verification or doctor repair when bundled runtime deps still cannot load, avoiding false-success repairs. (#71883) Thanks @Solvely-Colin.
 - Gateway/Linux: include fnm `aliases/default/bin` in generated service PATHs and let doctor accept either modern fnm aliases or the legacy `current/bin` symlink, avoiding false PATH repair prompts. Fixes #68169. Thanks @richard-scott.
 - Installer/Linux: run apt installs with noninteractive dpkg and needrestart settings so fresh Ubuntu 24.04 `curl | bash` installs do not hang while installing Node.js, Git, or build tools. Fixes #41146. Thanks @iht76, @alexcarv318, @cs3gallery, @firofame, and @cgdusek.

@@ -92,6 +92,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
       installSpecs,
       env: params.env ?? process.env,
       installDeps: params.installDeps,
+      warn: (message) => params.runtime.log(message),
     });
     note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
