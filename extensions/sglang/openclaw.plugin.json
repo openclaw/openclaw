@@ -2,6 +2,23 @@
   "id": "sglang",
   "enabledByDefault": true,
   "providers": ["sglang"],
+  "providerRequest": {
+    "providers": {
+      "sglang": {
+        "family": "sglang",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "sglang": {
+        "external": false
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "sglang": ["SGLANG_API_KEY"]
   },

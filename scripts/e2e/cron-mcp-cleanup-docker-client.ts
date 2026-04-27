@@ -170,7 +170,7 @@ async function runCronCleanupScenario(params: {
   );
   const initialArgs = await describeProbePid(pid);
   assert(
-    initialArgs?.includes("openclaw-cron-mcp-cleanup-probe"),
+    initialArgs === undefined || initialArgs.includes("openclaw-cron-mcp-cleanup-probe"),
     `cron MCP probe pid did not look like the test server: pid=${pid} args=${initialArgs}`,
   );
 

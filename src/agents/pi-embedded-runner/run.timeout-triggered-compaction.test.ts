@@ -118,15 +118,30 @@ describe("timeout-triggered compaction", () => {
         summary: "compacted for timeout",
         tokensBefore: 160000,
         tokensAfter: 60000,
+        sessionId: "timeout-rotated-session",
+        sessionFile: "/tmp/timeout-rotated-session.json",
       }),
     );
     // Second attempt succeeds
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: "timeout-rotated-session",
+        sessionFileUsed: "/tmp/timeout-rotated-session.json",
+      }),
+    );
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     // Verify the loop continued (retry happened)
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: "timeout-rotated-session",
+        sessionFile: "/tmp/timeout-rotated-session.json",
+      }),
+    );
     expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
     expect(result.meta.error).toBeUndefined();
   });
@@ -222,7 +237,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("points idle-timeout errors at the LLM idle timeout config key", async () => {
+  it("points idle-timeout errors at the provider timeout config key", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -237,7 +252,7 @@ describe("timeout-triggered compaction", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
+    expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
   });
 

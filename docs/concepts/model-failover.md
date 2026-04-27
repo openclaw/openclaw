@@ -33,7 +33,7 @@ For a normal text run, OpenClaw evaluates candidates in this order:
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
   </Step>
   <Step title="Persist fallback override">
-    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use.
+    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use. The persisted model override is marked `modelOverrideSource: "auto"`.
   </Step>
   <Step title="Roll back narrowly on failure">
     If the fallback candidate fails, roll back only the fallback-owned session override fields when they still match that failed candidate.
@@ -47,6 +47,7 @@ This is intentionally narrower than "save and restore the whole session". The re
 
 - `providerOverride`
 - `modelOverride`
+- `modelOverrideSource`
 - `authProfileOverride`
 - `authProfileOverrideSource`
 - `authProfileOverrideCompactionCount`
@@ -264,7 +265,10 @@ That means fallback retries have to coordinate with live model switching:
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
+- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides and return the session to the configured default.
+- `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
+- If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
 - If the fallback attempt fails, the runner rolls back only the override fields it wrote, and only if they still match that failed candidate.
 
 This prevents the classic race:

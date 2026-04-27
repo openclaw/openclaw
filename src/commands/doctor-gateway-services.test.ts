@@ -68,6 +68,8 @@ vi.mock("../daemon/service-audit.js", () => ({
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
+    gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
 
@@ -282,6 +284,43 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        TAVILY_API_KEY: "old-inline-value",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-managed-env-embedded",
+          message: "Gateway service embeds managed environment values that should load at runtime.",
+          detail: "inline keys: TAVILY_API_KEY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedManagedServiceEnvKeys: new Set(["TAVILY_API_KEY"]),
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
       setupGatewayTokenRepairScenario();
@@ -360,6 +399,49 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.note).not.toHaveBeenCalledWith(
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps wrapper-managed gateway services aligned during entrypoint drift checks", async () => {
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [wrapperPath, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_WRAPPER: wrapperPath,
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ env }) => ({
+      programArguments: [env.OPENCLAW_WRAPPER, "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_WRAPPER: env.OPENCLAW_WRAPPER,
+      },
+    }));
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+        existingEnvironment: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+      }),
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Gateway service invokes OPENCLAW_WRAPPER: /usr/local/bin/openclaw-doppler",
+      "Gateway",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();

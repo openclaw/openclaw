@@ -5,6 +5,42 @@
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
+  "modelPricing": {
+    "providers": {
+      "openai-codex": {
+        "openRouter": {
+          "provider": "openai"
+        },
+        "liteLLM": {
+          "provider": "openai"
+        }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openai-public",
+      "hosts": ["api.openai.com"]
+    },
+    {
+      "endpointClass": "openai-codex",
+      "hosts": ["chatgpt.com"]
+    },
+    {
+      "endpointClass": "azure-openai",
+      "hostSuffixes": [".openai.azure.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "openai": {
+        "family": "openai-family"
+      },
+      "openai-codex": {
+        "family": "openai-family"
+      }
+    }
+  },
   "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
