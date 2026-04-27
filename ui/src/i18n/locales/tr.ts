@@ -63,6 +63,7 @@ export const tr: TranslationMap = {
     relink: "Yeniden bağla",
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -702,6 +703,7 @@ export const tr: TranslationMap = {
     showCronSessions: "Cron oturumlarını göster",
     showCronSessionsHidden: "Cron oturumlarını göster ({count} gizli)",
     onboardingDisabled: "Kurulum sırasında devre dışı",
+    settings: "Chat settings",
   },
   languages: {
     en: "İngilizce",
@@ -931,6 +933,26 @@ export const tr: TranslationMap = {
       systemEventTextRequired: "Sistem olayı metni gerekli.",
       agentMessageRequiredShort: "Aracı mesajı gerekli.",
       nameRequiredShort: "Ad gerekli.",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

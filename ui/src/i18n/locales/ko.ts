@@ -63,6 +63,7 @@ export const ko: TranslationMap = {
     relink: "다시 연결",
     waitForScan: "스캔 대기",
     logout: "로그아웃",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -693,6 +694,7 @@ export const ko: TranslationMap = {
     showCronSessions: "Cron 세션 표시",
     showCronSessionsHidden: "Cron 세션 표시({count}개 숨김)",
     onboardingDisabled: "설정 중에는 비활성화됨",
+    settings: "Chat settings",
   },
   languages: {
     en: "영어",
@@ -916,6 +918,26 @@ export const ko: TranslationMap = {
       systemEventTextRequired: "시스템 이벤트 텍스트가 필요합니다.",
       agentMessageRequiredShort: "에이전트 메시지가 필요합니다.",
       nameRequiredShort: "이름이 필요합니다.",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

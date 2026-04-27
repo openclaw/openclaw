@@ -154,8 +154,9 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${hiddenCount > 0
-        ? html`<span
+      ${
+        hiddenCount > 0
+          ? html`<span
             style="
               position: absolute;
               top: -5px;
@@ -170,7 +171,8 @@ function renderCronFilterIcon(hiddenCount: number) {
             "
             >${hiddenCount}</span
           >`
-        : ""}
+          : ""
+      }
     </span>
   `;
 }
@@ -420,8 +422,8 @@ export function renderChatMobileToggle(state: AppViewState) {
             }
           }
         }}
-        title="Chat settings"
-        aria-label="Chat settings"
+        title=${t("chat.settings")}
+        aria-label=${t("chat.settings")}
       >
         <svg
           width="18"
@@ -565,12 +567,16 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
   return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
-type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+type ThemeModeOption = { id: ThemeMode; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", label: "System", short: "SYS" },
-  { id: "light", label: "Light", short: "LIGHT" },
-  { id: "dark", label: "Dark", short: "DARK" },
+  { id: "system", short: "SYS" },
+  { id: "light", short: "LIGHT" },
+  { id: "dark", short: "DARK" },
 ];
+
+function themeModeLabel(mode: ThemeMode): string {
+  return t(`theme.modes.${mode}`);
+}
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
   const modeIcon = (mode: ThemeMode) => {
@@ -591,23 +597,24 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   };
 
   return html`
-    <div class="topbar-theme-mode" role="group" aria-label="Color mode">
-      ${THEME_MODE_OPTIONS.map(
-        (opt) => html`
+    <div class="topbar-theme-mode" role="group" aria-label=${t("shell.colorMode")}>
+      ${THEME_MODE_OPTIONS.map((opt) => {
+        const label = themeModeLabel(opt.id);
+        return html`
           <button
             type="button"
-            class="topbar-theme-mode__btn ${opt.id === state.themeMode
-              ? "topbar-theme-mode__btn--active"
-              : ""}"
-            title=${opt.label}
-            aria-label="Color mode: ${opt.label}"
+            class="topbar-theme-mode__btn ${
+              opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""
+            }"
+            title=${label}
+            aria-label=${t("shell.colorModeCurrent", { mode: label })}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >
             ${modeIcon(opt.id)}
           </button>
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -623,8 +630,8 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
       class="sidebar-version__status ${toneClass}"
       role="img"
       aria-live="polite"
-      aria-label="Gateway status: ${label}"
-      title="Gateway status: ${label}"
+      aria-label=${t("shell.gatewayStatus", { status: label })}
+      title=${t("shell.gatewayStatus", { status: label })}
     ></span>
   `;
 }

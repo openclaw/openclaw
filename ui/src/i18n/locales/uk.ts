@@ -63,6 +63,7 @@ export const uk: TranslationMap = {
     relink: "Пов’язати знову",
     waitForScan: "Очікування сканування",
     logout: "Вийти",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -701,6 +702,7 @@ export const uk: TranslationMap = {
     showCronSessions: "Показати сеанси Cron",
     showCronSessionsHidden: "Показати сеанси Cron ({count} приховано)",
     onboardingDisabled: "Вимкнено під час налаштування",
+    settings: "Chat settings",
   },
   languages: {
     en: "Англійська",
@@ -931,6 +933,26 @@ export const uk: TranslationMap = {
       systemEventTextRequired: "Потрібен текст системної події.",
       agentMessageRequiredShort: "Потрібне повідомлення агента.",
       nameRequiredShort: "Потрібна назва.",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

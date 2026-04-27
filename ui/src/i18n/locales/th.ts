@@ -63,6 +63,7 @@ export const th: TranslationMap = {
     relink: "เชื่อมโยงใหม่",
     waitForScan: "รอการสแกน",
     logout: "ออกจากระบบ",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -685,6 +686,7 @@ export const th: TranslationMap = {
     showCronSessions: "แสดงเซสชัน cron",
     showCronSessionsHidden: "แสดงเซสชัน cron (ซ่อนอยู่ {count})",
     onboardingDisabled: "ปิดใช้งานระหว่างการตั้งค่า",
+    settings: "Chat settings",
   },
   languages: {
     en: "อังกฤษ",
@@ -908,6 +910,26 @@ export const th: TranslationMap = {
       systemEventTextRequired: "ต้องระบุข้อความเหตุการณ์ของระบบ",
       agentMessageRequiredShort: "ต้องระบุข้อความของเอเจนต์",
       nameRequiredShort: "ต้องระบุชื่อ",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

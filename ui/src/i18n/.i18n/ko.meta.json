@@ -1,11 +1,27 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-27T07:37:21.771Z",
+  "fallbackKeys": [
+    "chat.settings",
+    "shell.colorMode",
+    "shell.colorModeCurrent",
+    "shell.dismissUpdateBanner",
+    "shell.docsNewTab",
+    "shell.gatewayStatus",
+    "shell.openCommandPalette",
+    "shell.runningVersion",
+    "shell.searchJump",
+    "shell.updateAvailable",
+    "shell.updateNow",
+    "shell.updating",
+    "theme.modes.dark",
+    "theme.modes.light",
+    "theme.modes.system"
+  ],
+  "generatedAt": "2026-04-27T12:03:56.280Z",
   "locale": "ko",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "802e1bbb6a0e64584ec06cab4c61b65808c23669206a3a216646cf1a558ba657",
-  "totalKeys": 758,
-  "translatedKeys": 758,
+  "sourceHash": "5d4baf870c6da3aca14ec740cf921ef91de8412eb233434b3d509461be71a7ed",
+  "totalKeys": 774,
+  "translatedKeys": 759,
   "workflow": 1
 }

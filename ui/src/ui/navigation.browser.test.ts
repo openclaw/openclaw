@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
 
-afterEach(() => {
+afterEach(async () => {
+  await i18n.setLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -323,6 +325,22 @@ describe("control UI routing", () => {
     expect(version).not.toBeNull();
     expect(statusDot).not.toBeNull();
     expect(statusDot?.getAttribute("aria-label")).toContain("Online");
+
+    await i18n.setLocale("zh-CN");
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const shortcut = app.querySelector<HTMLElement>(".topbar-search__kbd")?.textContent ?? "";
+    const searchButton = app.querySelector<HTMLButtonElement>(".topbar-search");
+    const themeMode = app.querySelector<HTMLElement>(".topbar-theme-mode");
+    const activeThemeModeButton = app.querySelector<HTMLElement>(
+      ".topbar-theme-mode__btn[aria-pressed='true']",
+    );
+    expect(searchButton?.getAttribute("title")).toBe(`搜索或跳转… (${shortcut})`);
+    expect(searchButton?.getAttribute("aria-label")).toBe("打开命令面板");
+    expect(themeMode?.getAttribute("aria-label")).toBe("颜色模式");
+    expect(activeThemeModeButton?.getAttribute("aria-label")).toContain("颜色模式：");
+    expect(statusDot?.getAttribute("aria-label")).toContain("网关状态：在线");
 
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;
