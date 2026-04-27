@@ -3,24 +3,34 @@ import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+  buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
+  withTrustedEnvProxyGuardedFetchModeMock,
 } = vi.hoisted(() => ({
+  buildProviderRequestDispatcherPolicyMock: vi.fn<
+    (_request?: unknown) => { mode: "direct" } | undefined
+  >(() => undefined),
   fetchWithSsrFGuardMock: vi.fn(),
   mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
     ...current,
     ...overrides,
   })),
   resolveProviderRequestPolicyConfigMock: vi.fn(() => ({ allowPrivateNetwork: false })),
+  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
+    ...params,
+    mode: "trusted_env_proxy",
+  })),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  withTrustedEnvProxyGuardedFetchMode: withTrustedEnvProxyGuardedFetchModeMock,
 }));
 
 vi.mock("./provider-request-config.js", () => ({
-  buildProviderRequestDispatcherPolicy: vi.fn(() => ({ mode: "direct" })),
+  buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -33,6 +43,8 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
+    buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
+    withTrustedEnvProxyGuardedFetchModeMock.mockClear();
     mergeModelProviderRequestOverridesMock.mockClear();
     resolveProviderRequestPolicyConfigMock
       .mockClear()
@@ -40,10 +52,22 @@ describe("buildGuardedModelFetch", () => {
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_URL;
     delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
   });
 
   afterEach(() => {
     delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
   });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
@@ -111,6 +135,55 @@ describe("buildGuardedModelFetch", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         timeoutMs: 300_000,
+      }),
+    );
+  });
+
+  it("uses trusted env-proxy mode for provider calls when no explicit dispatcher policy is configured", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:3128";
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+    expect(withTrustedEnvProxyGuardedFetchModeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/responses",
+        dispatcherPolicy: undefined,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/responses",
+        mode: "trusted_env_proxy",
+      }),
+    );
+  });
+
+  it("keeps explicit provider dispatcher policies in strict guarded-fetch mode", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:3128";
+    buildProviderRequestDispatcherPolicyMock.mockReturnValue({ mode: "direct" });
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+    expect(withTrustedEnvProxyGuardedFetchModeMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: { mode: "direct" },
       }),
     );
   });

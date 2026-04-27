@@ -1,5 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -288,7 +292,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const result = await fetchWithSsrFGuard({
+    const guardedFetchOptions = {
       url,
       init: requestInit ?? init,
       capture: {
@@ -304,7 +308,12 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
-    });
+    };
+    const result = await fetchWithSsrFGuard(
+      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions,
+    );
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
