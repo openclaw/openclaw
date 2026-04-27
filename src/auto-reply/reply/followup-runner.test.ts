@@ -26,6 +26,7 @@ let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let getReplyPayloadMetadata: typeof import("openclaw/plugin-sdk/reply-payload").getReplyPayloadMetadata;
+let setReplyPayloadMetadata: typeof import("openclaw/plugin-sdk/reply-payload").setReplyPayloadMetadata;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
@@ -346,7 +347,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
-  ({ getReplyPayloadMetadata } = await import("openclaw/plugin-sdk/reply-payload"));
+  ({ getReplyPayloadMetadata, setReplyPayloadMetadata } =
+    await import("openclaw/plugin-sdk/reply-payload"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
 }
@@ -1396,6 +1398,31 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const payload = onBlockReply.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
     expect(getReplyPayloadMetadata(payload)).toBeUndefined();
+  });
+
+  it("preserves payload metadata while normalizing queued followup text", async () => {
+    const sourcePayload = setReplyPayloadMetadata(
+      { text: "[warmly] hello there" },
+      { assistantMessageIndex: 7 },
+    );
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [sourcePayload] },
+      queued: createQueuedRun({
+        run: { emotionMode: "on" },
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      }),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = onBlockReply.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      assistantMessageIndex: 7,
+      ttsSourceText: "[warmly] hello there",
+      ttsPlainText: "hello there",
+    });
   });
 
   it("lets provider followup route hooks force dispatcher delivery", async () => {

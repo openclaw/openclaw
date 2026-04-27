@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  cloneReplyPayloadMetadata,
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
   setReplyPayloadMetadata,
@@ -68,16 +69,16 @@ function normalizeFollowupPayloadForDelivery(
       return [];
     }
     text = stripped.text;
-    nextPayload = { ...payload, text };
+    nextPayload = cloneReplyPayloadMetadata(payload, { ...payload, text });
   }
 
   const normalizedEmotionMode = emotionMode ?? "off";
   const rawEmotionTtsText = isEmotionModeEnabled(normalizedEmotionMode) ? text : undefined;
   const emotionSanitized = sanitizeEmotionTagsForMode(text, normalizedEmotionMode);
-  nextPayload = {
+  nextPayload = cloneReplyPayloadMetadata(nextPayload, {
     ...nextPayload,
     text: emotionSanitized.text,
-  };
+  });
 
   if (typeof rawEmotionTtsText === "string" && rawEmotionTtsText.trim().length > 0) {
     nextPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY] = rawEmotionTtsText;
