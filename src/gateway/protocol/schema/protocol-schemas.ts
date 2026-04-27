@@ -11,6 +11,8 @@ import {
   WakeParamsSchema,
 } from "./agent.js";
 import {
+  AgentCapabilitiesParamsSchema,
+  AgentCapabilitiesResultSchema,
   AgentSummarySchema,
   AgentsCreateParamsSchema,
   AgentsCreateResultSchema,
@@ -329,6 +331,8 @@ export const ProtocolSchemas = {
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
   AgentsListParams: AgentsListParamsSchema,
   AgentsListResult: AgentsListResultSchema,
+  AgentCapabilitiesParams: AgentCapabilitiesParamsSchema,
+  AgentCapabilitiesResult: AgentCapabilitiesResultSchema,
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,

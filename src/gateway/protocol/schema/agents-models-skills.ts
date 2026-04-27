@@ -445,3 +445,42 @@ export const ToolsEffectiveResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const AgentCapabilitiesParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentCapabilitiesResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+    model: Type.Object(
+      {
+        primary: Type.Optional(NonEmptyString),
+        fallbacks: Type.Optional(Type.Array(NonEmptyString)),
+      },
+      { additionalProperties: false },
+    ),
+    tools: Type.Object(
+      {
+        count: Type.Integer({ minimum: 0 }),
+        sources: Type.Object(
+          {
+            core: Type.Integer({ minimum: 0 }),
+            plugin: Type.Integer({ minimum: 0 }),
+          },
+          { additionalProperties: false },
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    mcpServers: Type.Array(NonEmptyString),
+    skills: Type.Array(Type.String()),
+    channels: Type.Array(NonEmptyString),
+    sessionCount: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);

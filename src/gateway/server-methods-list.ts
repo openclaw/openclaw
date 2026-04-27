@@ -142,6 +142,7 @@ const BASE_METHODS = [
   "send",
   "agent",
   "agent.identity.get",
+  "agent.capabilities",
   "agent.wait",
   // WebChat WebSocket-native chat methods
   "chat.history",
