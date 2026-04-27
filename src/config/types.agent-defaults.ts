@@ -408,8 +408,10 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
+    /** Gateway timeout in ms for direct sub-agent completion announce attempts (default: min(announceTimeoutMs, 30000)). */
+    completionAnnounceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };

@@ -5498,6 +5498,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  completionAnnounceTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   requireAgentId: {
                     type: "boolean",
                   },
