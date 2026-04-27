@@ -11,8 +11,8 @@ const PROJECT_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 
 // Secret resource id grammar:
 // https://cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets/create#path-parameters
-// Permitted chars: A-Z, a-z, 0-9, underscore; 1–255 chars.
-const SECRET_ID_PATTERN = /^[A-Za-z0-9_]{1,255}$/;
+// Permitted chars: A-Z, a-z, 0-9, underscore, hyphen; 1–255 chars.
+const SECRET_ID_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
 
 // Version suffix: "latest" or a positive integer.
 const VERSION_PATTERN = /^(latest|[1-9][0-9]*)$/;

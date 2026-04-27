@@ -81,6 +81,29 @@ describe("secrets-gcp createGcpSecretProvider", () => {
     );
   });
 
+  it("resolve() accepts hyphenated GCP secret names (per GCP grammar)", async () => {
+    vi.resetModules();
+    let receivedName = "";
+    vi.doMock("@google-cloud/secret-manager", () => ({
+      SecretManagerServiceClient: class {
+        async accessSecretVersion({ name }: { name: string }) {
+          receivedName = name;
+          return [{ payload: { data: "ok" } }];
+        }
+      },
+    }));
+    const { createGcpSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    const out = await provider.resolve({
+      refs: [{ source: "gcp", provider: "myGcp", id: "openclaw-gateway-token" }],
+      providerName: "myGcp",
+      providerConfig: { source: "gcp", project: "my-project" },
+      env: process.env,
+    });
+    expect(receivedName).toBe("projects/my-project/secrets/openclaw-gateway-token/versions/latest");
+    expect(out.get("openclaw-gateway-token")).toBe("ok");
+  });
+
   it("resolve() rejects ref ids with disallowed characters before spawning client", async () => {
     vi.resetModules();
     let clientCreated = false;
