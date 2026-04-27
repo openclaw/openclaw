@@ -4,7 +4,7 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
@@ -28,6 +28,7 @@ import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
   listPluginSessionSchedulerJobs,
+  PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
@@ -1676,6 +1677,68 @@ describe("host-hook fixture plugin contract", () => {
     ).toBeUndefined();
   });
 
+  it("bounds terminal event wait before clearing run context", async () => {
+    vi.useFakeTimers();
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "hung-terminal-subscription",
+        name: "Hung Terminal Subscription",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "hung",
+          streams: ["tool", "lifecycle"],
+          async handle(event, ctx) {
+            if (event.stream === "tool") {
+              ctx.setRunContext("seen", { runId: event.runId });
+              return;
+            }
+            if (event.data?.phase === "end") {
+              await new Promise<void>(() => {});
+            }
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    try {
+      emitAgentEvent({
+        runId: "run-hung-terminal",
+        stream: "tool",
+        data: { name: "approval_fixture_tool" },
+      });
+      await Promise.resolve();
+
+      emitAgentEvent({
+        runId: "run-hung-terminal",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+      await Promise.resolve();
+
+      expect(
+        getPluginRunContext({
+          pluginId: "hung-terminal-subscription",
+          get: { runId: "run-hung-terminal", namespace: "seen" },
+        }),
+      ).toEqual({ runId: "run-hung-terminal" });
+
+      await vi.advanceTimersByTimeAsync(PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
+      expect(
+        getPluginRunContext({
+          pluginId: "hung-terminal-subscription",
+          get: { runId: "run-hung-terminal", namespace: "seen" },
+        }),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("covers the non-Plan plugin archetypes promised by the host-hook fixture", () => {
     const archetypes = [
       {
@@ -2146,6 +2209,51 @@ describe("host-hook fixture plugin contract", () => {
       }),
     ]);
     expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toEqual([]);
+  });
+
+  it("does not schedule real session turns during non-activating registry loads", async () => {
+    const registry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const config = {};
+    let handle:
+      | {
+          id: string;
+          pluginId: string;
+          sessionKey: string;
+          kind: string;
+        }
+      | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "snapshot-scheduler-fixture",
+        name: "Snapshot Scheduler Fixture",
+      }),
+      register(api) {
+        void api
+          .scheduleSessionTurn({
+            sessionKey: "agent:main:main",
+            message: "wake up",
+            delayMs: 1_000,
+          })
+          .then((result) => {
+            handle = result;
+          });
+      },
+    });
+    await Promise.resolve();
+
+    expect(handle).toBeUndefined();
+    expect(listPluginSessionSchedulerJobs("snapshot-scheduler-fixture")).toEqual([]);
   });
 
   it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {
