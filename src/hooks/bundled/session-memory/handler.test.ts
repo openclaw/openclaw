@@ -268,7 +268,7 @@ describe("session-memory hook", () => {
       // (LLM and fallback) to guarantee uniqueness; the timestamp portion
       // is what we assert here.
       expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^2025-12-31-2330-[0-9a-f]{4}\.md$/);
+      expect(files[0]).toMatch(/^2025-12-31-2330-[0-9a-f]{8}\.md$/);
       expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
     });
@@ -328,6 +328,42 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("tool_use");
     expect(memoryContent).not.toContain("tool_result");
     expect(memoryContent).not.toContain("search");
+  });
+
+  it("survives malformed content blocks (null/non-object entries) without dropping the message", async () => {
+    // Codex review on PR #38162: the inline content-block parser used
+    // to read .type without a typeof-object guard; a null/undefined or
+    // non-object entry before the text block would throw, the per-line
+    // catch would swallow, and the whole message would be silently
+    // dropped from the memory transcript. Defensive guard added.
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            null, // malformed entry
+            { type: "image", source: "x" }, // no .text
+            { type: "text", text: "actual user prompt" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            "raw-string-not-object", // non-object entry
+            { type: "text", text: "assistant reply" },
+          ],
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    // Both messages should make it through despite the malformed blocks.
+    expect(memoryContent).toContain("user: actual user prompt");
+    expect(memoryContent).toContain("assistant: assistant reply");
   });
 
   it("filters out inter-session user messages", async () => {

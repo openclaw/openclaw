@@ -156,10 +156,19 @@ async function getRecentSessionContent(
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
-            // Extract text content
+            // Extract text content. Guard each array item against null/
+            // non-object entries before reading .type — malformed or
+            // partially-written JSONL messages can include falsy block
+            // entries, and accessing .type on null throws a TypeError
+            // that the outer catch silently swallows, dropping the whole
+            // message. The shared transcript.ts helper handles this
+            // defensively; the inlined copy must too.
+            // (Codex review on PR #38162.)
             const text = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find((c: any) => c.type === "text")?.text
+                msg.content.find(
+                  (c: any) => c && typeof c === "object" && c.type === "text",
+                )?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
@@ -432,17 +441,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
         slug = localTimestamp.timeSlug;
         log.debug("Using fallback timestamp slug", { slug });
       }
-      // Append a short random suffix to guarantee filename uniqueness on
-      // ALL paths (LLM-generated slug AND timestamp fallback). LLM slugs
-      // are descriptive but not unique — two similar sessions on the same
-      // day can produce identical slugs, causing the second write to
-      // silently overwrite the first. crypto.randomUUID is used (rather
-      // than Math.random) because Math.random can emit "" at the exact
-      // value 0 (vanishingly rare but a real correctness gap), producing
-      // a trailing-dash filename. 16 bits of entropy from a CSPRNG makes
-      // collisions vanishingly unlikely even under rapid automated /new
-      // or multi-channel workloads.
-      const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+      // Append a random suffix to guarantee filename uniqueness on ALL
+      // paths (LLM-generated slug AND timestamp fallback). LLM slugs
+      // are descriptive but not unique — two similar sessions on the
+      // same day can produce identical slugs, causing the second write
+      // to silently overwrite the first. crypto.randomUUID is used
+      // (rather than Math.random) because Math.random can emit "" at
+      // the exact value 0 (vanishingly rare but a real correctness gap),
+      // producing a trailing-dash filename.
+      //
+      // 8 hex chars (32 bits = ~4.3B possibilities). Realistic same-day
+      // same-slug saves (a few dozen at most) have birthday-paradox
+      // collision probability < 1 in 1e8. The earlier 4-char (16-bit)
+      // suffix gave only ~65k possibilities, where collision probability
+      // for 256 same-day same-slug saves was ~50% — inadequate for the
+      // rapid-/new + multi-channel workloads this is meant to protect
+      // against. (Codex review on PR #38161.)
+      const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
       filename = `${dateStr}-${slug}-${uniqueSuffix}.md`;
     }
 
