@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -531,10 +532,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (codeSpans.isInside(idx)) {
         continue;
       }
+      const isClose = match[1] === "/";
       if (!inThinking) {
+        if (isClose) {
+          const afterIndex = idx + match[0].length;
+          const before = text.slice(lastIndex, idx);
+          const after = text.slice(afterIndex);
+          if (hasOrphanReasoningCloseBoundary({ before, after })) {
+            processed = "";
+          } else {
+            processed += before;
+          }
+          lastIndex = afterIndex;
+          continue;
+        }
         processed += text.slice(lastIndex, idx);
       }
-      const isClose = match[1] === "/";
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }

@@ -491,7 +491,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger,
@@ -616,7 +616,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger: {
@@ -739,7 +739,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger: {
@@ -964,7 +964,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger: {
@@ -1100,7 +1100,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger: {
@@ -1225,7 +1225,7 @@ describe("memory plugin e2e", () => {
         },
         runtime: {
           config: {
-            loadConfig: () => configFile,
+            current: () => configFile,
           },
         },
         logger: {

@@ -18,6 +18,7 @@ let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGat
 
 vi.mock("./config.js", () => {
   return {
+    getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   };

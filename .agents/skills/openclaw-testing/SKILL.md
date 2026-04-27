@@ -131,6 +131,12 @@ If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
 
+The child-dispatch jobs record the child run ids. The final
+`Verify full validation` job re-queries those child runs and is the canonical
+parent gate. If a child workflow failed but was later rerun successfully, rerun
+only the failed parent verifier job; do not dispatch a new full umbrella unless
+the release evidence is stale.
+
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
@@ -170,8 +176,10 @@ that private workflow manually with the full-validation run id.
 `OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
 workflow. It is broader than normal CI but narrower than the umbrella because it
 does not dispatch the separate full normal CI child. It runs Package Acceptance
-with `telegram_mode=mock-openai`, so the release package tarball also goes
-through Telegram package QA. Use it when release-path validation is needed
+with artifact-native delta lanes and `telegram_mode=mock-openai`, so the release
+package tarball also goes through offline plugin proof, bundled-channel compat,
+and Telegram package QA. The Docker release-path chunks cover the overlapping
+package/update/plugin lanes. Use it when release-path validation is needed
 without rerunning the entire umbrella.
 
 ```bash
@@ -289,7 +297,11 @@ and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
 The bundled-channel runtime-dependency coverage inside `plugins-integrations`
 uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
 than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
-reruns for the exact channel/update scenario.
+reruns for the exact channel/update scenario. The bundled plugin
+install/uninstall sweep is also split into
+`bundled-plugin-install-uninstall-0` through
+`bundled-plugin-install-uninstall-7`; selecting the legacy
+`bundled-plugin-install-uninstall` lane expands to all eight shards.
 
 ## Package Acceptance
 

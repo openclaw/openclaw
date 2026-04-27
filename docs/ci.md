@@ -14,7 +14,10 @@ manual `CI` workflow with that target, and dispatches `OpenClaw Release Checks`
 for install smoke, package acceptance, Docker release-path suites, live/E2E,
 OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. It can also run the
 post-publish `NPM Telegram Beta E2E` workflow when a published package spec is
-provided.
+provided. The umbrella records the dispatched child run ids, and the final
+`Verify full validation` job re-checks the current child run conclusions. If a
+child workflow is rerun and turns green, rerun only the parent verifier job to
+refresh the umbrella result.
 
 `Package Acceptance` is the side-run workflow for validating a package artifact
 without blocking the release workflow. It resolves one candidate from a
@@ -88,9 +91,12 @@ Profiles map to Docker coverage:
 
 Release checks call Package Acceptance with `source=ref`,
 `package_ref=<release-ref>`, `workflow_ref=<release workflow ref>`,
-`suite_profile=package`, and `telegram_mode=mock-openai`. That profile is the
-GitHub-native replacement for most Parallels package/update validation, with
-Telegram proving the same package artifact through the QA live transport.
+`suite_profile=custom`,
+`docker_lanes='bundled-channel-deps-compat plugins-offline'`, and
+`telegram_mode=mock-openai`. The release-path Docker
+chunks cover the overlapping package/update/plugin lanes, while Package
+Acceptance keeps the artifact-native bundled-channel compat, offline plugin, and
+Telegram proof against the same resolved package tarball.
 Cross-OS release checks still cover OS-specific onboarding, installer, and
 platform behavior; package/update product validation should start with Package
 Acceptance. The Windows packaged and installer fresh lanes also verify that an
@@ -228,7 +234,7 @@ gh workflow run duplicate-after-merge.yml \
 | `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                   | Manual CI dispatch for releases    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                | Docs changed                       |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                       | Python-skill-relevant changes      |
-| `checks-windows`                 | Windows-specific test lanes                                                                  | Windows-relevant changes           |
+| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions         | Windows-relevant changes           |
 | `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                  | macOS-relevant changes             |
 | `macos-swift`                    | Swift lint, build, and tests for the macOS app                                               | macOS-relevant changes             |
 | `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes           |

@@ -132,13 +132,41 @@ export function createPayloadPatchStreamWrapper(
   patchPayload: (params: {
     payload: Record<string, unknown>;
     model: Parameters<StreamFn>[0];
+    context: Parameters<StreamFn>[1];
+    options: Parameters<StreamFn>[2];
   }) => void,
+  wrapperOptions?: {
+    shouldPatch?: (params: {
+      model: Parameters<StreamFn>[0];
+      context: Parameters<StreamFn>[1];
+      options: Parameters<StreamFn>[2];
+    }) => boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payload) =>
-      patchPayload({ payload, model }),
+  return (model, context, options) => {
+    if (wrapperOptions?.shouldPatch && !wrapperOptions.shouldPatch({ model, context, options })) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
+      patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+
+export function isOpenAICompatibleThinkingEnabled(params: {
+  thinkingLevel: OpenAICompatibleThinkingLevel;
+  options: Parameters<StreamFn>[2];
+}): boolean {
+  const options = (params.options ?? {}) as { reasoningEffort?: unknown; reasoning?: unknown };
+  const raw = options.reasoningEffort ?? options.reasoning ?? params.thinkingLevel ?? "high";
+  if (typeof raw !== "string") {
+    return true;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "off" && normalized !== "none";
 }
 
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];

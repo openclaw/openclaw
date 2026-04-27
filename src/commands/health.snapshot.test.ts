@@ -27,6 +27,7 @@ type TelegramHealthAccount = {
 
 async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/config.js", () => ({
+    getRuntimeConfig: () => testConfig,
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({

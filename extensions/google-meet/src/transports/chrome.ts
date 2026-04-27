@@ -1,5 +1,5 @@
-import { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "../config.js";

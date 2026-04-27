@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
@@ -447,7 +447,10 @@ export async function maybeRepairGatewayServiceConfig(
       },
     };
     try {
-      await writeConfigFile(nextCfg);
+      await replaceConfigFile({
+        nextConfig: nextCfg,
+        afterWrite: { mode: "auto" },
+      });
       cfgForServiceInstall = nextCfg;
       note(
         expectedGatewayToken

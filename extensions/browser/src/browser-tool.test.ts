@@ -142,7 +142,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   );
   return {
     ...actual,
-    loadConfig: configMocks.loadConfig,
+    getRuntimeConfig: configMocks.loadConfig,
   };
 });
 
@@ -193,6 +193,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     ...configMocks,
     ...gatewayMocks,
     ...sessionTabRegistryMocks,
+    getRuntimeConfig: configMocks.loadConfig,
     applyBrowserProxyPaths: vi.fn(),
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
@@ -269,7 +270,7 @@ function resetBrowserToolMocks() {
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-    loadConfig: configMocks.loadConfig as never,
+    getRuntimeConfig: configMocks.loadConfig as never,
     listNodes: nodesUtilsMocks.listNodes as never,
     callGatewayTool: gatewayMocks.callGatewayTool as never,
     trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
@@ -280,7 +281,7 @@ function resetBrowserToolMocks() {
     browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
     browserSnapshot: browserClientMocks.browserSnapshot as never,
     browserTabs: browserClientMocks.browserTabs as never,
-    loadConfig: configMocks.loadConfig as never,
+    getRuntimeConfig: configMocks.loadConfig as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
   });
 }

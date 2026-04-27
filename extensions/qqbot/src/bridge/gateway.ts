@@ -50,8 +50,11 @@ registerApproveRuntimeGetter(() => {
   const rt = getQQBotRuntime();
   return {
     config: rt.config as {
-      loadConfig: () => Record<string, unknown>;
-      writeConfigFile: (cfg: unknown) => Promise<void>;
+      current: () => Record<string, unknown>;
+      replaceConfigFile: (params: {
+        nextConfig: Record<string, unknown>;
+        afterWrite: { mode: "auto" };
+      }) => Promise<unknown>;
     },
   };
 });

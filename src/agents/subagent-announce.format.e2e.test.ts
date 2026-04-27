@@ -158,6 +158,55 @@ const defaultOutcomeAnnounce = {
   outcome: { status: "ok" } as const,
 };
 
+const announceFormatChannelPlugins = [
+  {
+    pluginId: "discord",
+    plugin: createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+    source: "test",
+  },
+  {
+    pluginId: "slack",
+    plugin: {
+      ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+      messaging: {
+        resolveDeliveryTarget: (params: {
+          conversationId: string;
+          parentConversationId?: string;
+        }) => ({
+          to: `channel:${params.parentConversationId || params.conversationId}`,
+          ...(params.parentConversationId ? { threadId: params.conversationId } : {}),
+        }),
+      },
+    },
+    source: "test",
+  },
+  {
+    pluginId: "matrix",
+    plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+    source: "test",
+  },
+  {
+    pluginId: "telegram",
+    plugin: createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+    source: "test",
+  },
+  {
+    pluginId: "whatsapp",
+    plugin: createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
+    source: "test",
+  },
+  {
+    pluginId: "bluebubbles",
+    plugin: createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
+    source: "test",
+  },
+  {
+    pluginId: "webchat",
+    plugin: createChannelTestPluginBase({ id: "webchat", label: "Web Chat" }),
+    source: "test",
+  },
+];
+
 function setConfigOverride(next: OpenClawConfig): void {
   configOverride = next;
   setRuntimeConfigSnapshot(configOverride);
@@ -226,10 +275,12 @@ describe("subagent announce formatting", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetAnnounceQueuesForTests();
   });
 
   beforeEach(() => {
+    vi.useRealTimers();
     resetAnnounceQueuesForTests();
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
@@ -267,7 +318,7 @@ describe("subagent announce formatting", () => {
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
-      loadConfig: () => configOverride,
+      getRuntimeConfig: () => configOverride,
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = loadSessionStoreFixture()[requesterSessionKey];
         const sessionId = entry?.sessionId;
@@ -283,7 +334,7 @@ describe("subagent announce formatting", () => {
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
-      loadConfig: () => configOverride,
+      getRuntimeConfig: () => configOverride,
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -355,15 +406,7 @@ describe("subagent announce formatting", () => {
     });
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-          source: "test",
-        },
-      ]),
-    );
+    setActivePluginRegistry(createTestRegistry(announceFormatChannelPlugins));
     setConfigOverride({
       session: {
         mainKey: "main",

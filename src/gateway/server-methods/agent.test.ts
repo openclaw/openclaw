@@ -77,7 +77,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   };
 });
 
@@ -154,6 +154,7 @@ const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -405,6 +406,94 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
+    const sessionKey = "agent:main:dreaming-narrative-light-workspace-1";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "write a narrative",
+        sessionKey,
+        idempotencyKey: "plugin-runtime-owner",
+      },
+      {
+        client: {
+          internal: {
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        } as never,
+      },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.pluginOwnerId).toBe("memory-core");
+  });
+
+  it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
+    const sessionKey = "agent:main:existing-user-session";
+    const existingEntry = {
+      sessionId: "stale-session",
+      updatedAt: 1,
+      pluginOwnerId: "other-plugin",
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "write a narrative",
+        sessionKey,
+        idempotencyKey: "plugin-runtime-existing-owner",
+      },
+      {
+        client: {
+          internal: {
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        } as never,
+      },
+    );
+
+    expect(capturedEntry?.pluginOwnerId).toBe("other-plugin");
+  });
+
   it("forwards provider and model overrides for admin-scoped callers", async () => {
     primeMainAgentRun();
 
@@ -585,6 +674,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -666,6 +756,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -807,6 +898,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: logInfo, error: vi.fn() },
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );

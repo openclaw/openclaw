@@ -472,7 +472,7 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { CONFIG_PATH, writeConfigFile } = await import("../config/config.js");
+  const { CONFIG_PATH, replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const shouldWriteConfig =
@@ -483,7 +483,10 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    await writeConfigFile(ctx.cfg);
+    await replaceConfigFile({
+      nextConfig: ctx.cfg,
+      afterWrite: { mode: "auto" },
+    });
     logConfigUpdated(ctx.runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
     if (fs.existsSync(backupPath)) {

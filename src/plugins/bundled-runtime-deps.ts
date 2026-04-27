@@ -10,6 +10,7 @@ import { createLowDiskSpaceWarning } from "../infra/disk-space.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { satisfies, validRange, validSemver } from "./semver.runtime.js";
@@ -65,6 +66,7 @@ const BUNDLED_RUNTIME_DEPS_LOCK_WAIT_MS = 100;
 const BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS = 5 * 60_000;
 const BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
+const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
 const BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 const BUNDLED_RUNTIME_MIRROR_PLUGIN_REGION_RE = /(?:^|\n)\/\/#region extensions\/[^/\s]+(?:\/|$)/u;
 const MIRRORED_PACKAGE_RUNTIME_DEP_NAMES = ["tslog"] as const;
@@ -1587,13 +1589,58 @@ function formatBundledRuntimeDepsInstallError(result: {
   return output || "npm install failed";
 }
 
+function formatBundledRuntimeDepsInstallElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function emitBundledRuntimeDepsOutputProgress(
+  chunk: Buffer,
+  stream: "stdout" | "stderr",
+  onProgress: ((message: string) => void) | undefined,
+): void {
+  if (!onProgress) {
+    return;
+  }
+  const lines = chunk
+    .toString("utf8")
+    .split(/\r\n|\n|\r/u)
+    .map((line) => sanitizeTerminalText(line).trim())
+    .filter((line) => line.length > 0)
+    .slice(-3);
+  for (const line of lines) {
+    onProgress(`npm ${stream}: ${line}`);
+  }
+}
+
 async function spawnBundledRuntimeDepsInstall(params: {
   command: string;
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onProgress?: (message: string) => void;
 }): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    const startedAtMs = Date.now();
+    const heartbeat =
+      params.onProgress &&
+      setInterval(() => {
+        params.onProgress?.(
+          `npm install still running (${formatBundledRuntimeDepsInstallElapsed(Date.now() - startedAtMs)} elapsed)`,
+        );
+      }, BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS);
+    heartbeat?.unref?.();
+    const settle = (fn: () => void) => {
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
+      fn();
+    };
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
       env: params.env,
@@ -1602,24 +1649,32 @@ async function spawnBundledRuntimeDepsInstall(params: {
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+      emitBundledRuntimeDepsOutputProgress(chunk, "stdout", params.onProgress);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+      emitBundledRuntimeDepsOutputProgress(chunk, "stderr", params.onProgress);
+    });
     child.on("error", (error) => {
-      reject(new Error(formatBundledRuntimeDepsInstallError({ error })));
+      settle(() => reject(new Error(formatBundledRuntimeDepsInstallError({ error }))));
     });
     child.on("close", (status, signal) => {
       if (status === 0 && !signal) {
-        resolve();
+        settle(resolve);
         return;
       }
-      reject(
-        new Error(
-          formatBundledRuntimeDepsInstallError({
-            status,
-            signal,
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-          }),
+      settle(() =>
+        reject(
+          new Error(
+            formatBundledRuntimeDepsInstallError({
+              status,
+              signal,
+              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: Buffer.concat(stderr).toString("utf8"),
+            }),
+          ),
         ),
       );
     });
@@ -1703,6 +1758,7 @@ export async function installBundledRuntimeDepsAsync(params: {
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
+  onProgress?: (message: string) => void;
 }): Promise<void> {
   const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
   const isolatedExecutionRoot =
@@ -1731,11 +1787,15 @@ export async function installBundledRuntimeDepsAsync(params: {
       env: installEnv,
       npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
     });
+    params.onProgress?.(
+      `Starting npm install for bundled plugin runtime deps: ${params.missingSpecs.join(", ")}`,
+    );
     await spawnBundledRuntimeDepsInstall({
       command: npmRunner.command,
       args: npmRunner.args,
       cwd: installExecutionRoot,
       env: npmRunner.env ?? installEnv,
+      onProgress: params.onProgress,
     });
     assertBundledRuntimeDepsInstalled(installExecutionRoot, params.missingSpecs);
     if (isolatedExecutionRoot) {
@@ -1858,6 +1918,7 @@ export async function repairBundledRuntimeDepsInstallRootAsync(params: {
   env: NodeJS.ProcessEnv;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => Promise<void>;
   warn?: (message: string) => void;
+  onProgress?: (message: string) => void;
 }): Promise<{ installSpecs: string[] }> {
   return await withBundledRuntimeDepsInstallRootLockAsync(params.installRoot, async () => {
     const retainedManifestSpecs = readRetainedRuntimeDepsManifest(params.installRoot);
@@ -1872,6 +1933,7 @@ export async function repairBundledRuntimeDepsInstallRootAsync(params: {
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           env: params.env,
           warn: params.warn,
+          onProgress: params.onProgress,
         }));
     const finishActivity = beginBundledRuntimeDepsInstall({
       installRoot: params.installRoot,

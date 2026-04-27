@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -360,7 +360,7 @@ async function deliverReplies(params: {
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,

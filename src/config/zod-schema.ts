@@ -219,6 +219,7 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
     headers: z
       .record(
         z.string(),

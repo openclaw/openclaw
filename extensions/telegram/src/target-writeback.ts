@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   readConfigFileSnapshotForWrite,
-  writeConfigFile,
+  replaceConfigFile,
 } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadCronStore,
@@ -179,7 +179,12 @@ export async function maybePersistResolvedTelegramTarget(params: {
       resolvedTarget,
     });
     if (configChanged) {
-      await writeConfigFile(nextConfig, writeOptions);
+      await replaceConfigFile({
+        nextConfig,
+        snapshot,
+        writeOptions,
+        afterWrite: { mode: "auto" },
+      });
       if (params.verbose) {
         writebackLogger.warn(`resolved Telegram defaultTo target ${raw} -> ${resolvedTarget}`);
       }

@@ -452,6 +452,14 @@
     "target": "从 Hermes 迁移"
   },
   {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
     "source": "Migration",
     "target": "迁移"
   },

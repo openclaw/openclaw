@@ -256,6 +256,62 @@ describe("auditGatewayServiceConfig", () => {
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(true);
   });
+
+  it("flags inline proxy environment values embedded in the service", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+        NO_PROXY: "localhost,127.0.0.1",
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    );
+    expect(issue?.detail).toContain("HTTP_PROXY");
+    expect(issue?.detail).toContain("HTTPS_PROXY");
+    expect(issue?.detail).toContain("NO_PROXY");
+  });
+
+  it("flags lowercase inline proxy environment values using portable key names", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        https_proxy: "https://proxy.local:7890",
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    );
+    expect(issue?.detail).toContain("HTTPS_PROXY");
+  });
+
+  it("does not flag proxy values loaded only from EnvironmentFile", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+      },
+      environmentValueSources: {
+        HTTP_PROXY: "file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(false);
+  });
+
+  it("flags proxy values present inline even when an EnvironmentFile overrides them", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+      },
+      environmentValueSources: {
+        HTTP_PROXY: "inline-and-file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
+  });
 });
 
 describe("checkTokenDrift", () => {

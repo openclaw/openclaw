@@ -4,7 +4,7 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -250,7 +250,7 @@ export async function runGatewayLoop(params: {
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = (): RestartDrainTimeoutMs => {
     try {
-      const timeoutMs = loadConfig().gateway?.reload?.deferralTimeoutMs;
+      const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
       return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
         ? timeoutMs
         : undefined;

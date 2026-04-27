@@ -32,7 +32,7 @@ import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
@@ -1063,7 +1063,7 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const requesterInternalKey = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,

@@ -428,6 +428,42 @@ describe("plugin registry facade", () => {
     ]);
   });
 
+  it("falls back to the derived registry when persisted bundled roots point at another checkout", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const staleBundledRootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    createCandidate(staleBundledRootDir);
+    await writePersistedInstalledPluginIndex(
+      createIndex("persisted", {
+        plugins: [
+          {
+            ...createIndex("persisted").plugins[0],
+            manifestPath: path.join(staleBundledRootDir, "openclaw.plugin.json"),
+            source: path.join(staleBundledRootDir, "index.ts"),
+            rootDir: staleBundledRootDir,
+            origin: "bundled",
+          },
+        ],
+      }),
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      env: hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: rootDir }),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    ]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
+    ]);
+  });
+
   it("falls back to the derived registry when persisted policy is stale", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();

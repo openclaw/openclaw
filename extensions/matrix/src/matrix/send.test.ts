@@ -53,7 +53,7 @@ vi.mock("./client-bootstrap.js", () => ({
 
 const runtimeStub = {
   config: {
-    loadConfig: () => loadConfigMock(),
+    current: () => loadConfigMock(),
   },
   media: {
     loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),

@@ -9,7 +9,10 @@
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import OpenAI from "openai";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveLivePluginConfigObject,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
@@ -381,7 +384,9 @@ export default definePluginEntry({
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "memory-lancedb",
         api.pluginConfig as Record<string, unknown>,
       );

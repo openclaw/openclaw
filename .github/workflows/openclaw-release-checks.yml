@@ -228,7 +228,8 @@ jobs:
       workflow_ref: ${{ github.ref_name }}
       source: ref
       package_ref: ${{ needs.resolve_target.outputs.ref }}
-      suite_profile: package
+      suite_profile: custom
+      docker_lanes: bundled-channel-deps-compat plugins-offline
       telegram_mode: mock-openai
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

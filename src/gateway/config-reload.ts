@@ -7,7 +7,10 @@ import type {
   ConfigWriteNotification,
   GatewayReloadMode,
 } from "../config/config.js";
-import { shouldAttemptLastKnownGoodRecovery } from "../config/config.js";
+import {
+  resolveConfigWriteFollowUp,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import {
@@ -157,6 +160,7 @@ export function startGatewayConfigReloader(opts: {
     config: OpenClawConfig;
     compareConfig: OpenClawConfig;
     persistedHash: string;
+    afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
 
@@ -249,7 +253,11 @@ export function startGatewayConfigReloader(opts: {
     return nextSnapshot;
   };
 
-  const applySnapshot = async (nextConfig: OpenClawConfig, nextCompareConfig: OpenClawConfig) => {
+  const applySnapshot = async (
+    nextConfig: OpenClawConfig,
+    nextCompareConfig: OpenClawConfig,
+    afterWrite?: ConfigWriteNotification["afterWrite"],
+  ) => {
     const changedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
     const pluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
@@ -276,16 +284,32 @@ export function startGatewayConfigReloader(opts: {
       opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
+    const followUp = resolveConfigWriteFollowUp(afterWrite);
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    if (followUp.mode === "none") {
+      opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
+      return;
+    }
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
-    if (isNoopReloadPlan(plan)) {
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       return;
     }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
+      return;
+    }
+    if (followUp.requiresRestart) {
+      queueRestart(
+        {
+          ...plan,
+          restartGateway: true,
+          restartReasons: [...plan.restartReasons, followUp.reason],
+        },
+        nextConfig,
+      );
       return;
     }
     if (settings.mode === "restart") {
@@ -352,7 +376,11 @@ export function startGatewayConfigReloader(opts: {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(pendingWrite.config, pendingWrite.compareConfig);
+        await applySnapshot(
+          pendingWrite.config,
+          pendingWrite.compareConfig,
+          pendingWrite.afterWrite,
+        );
         await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
@@ -406,6 +434,7 @@ export function startGatewayConfigReloader(opts: {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
+        afterWrite: event.afterWrite,
       };
       lastAppliedWriteHash = event.persistedHash;
       scheduleAfter(0);

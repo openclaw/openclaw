@@ -49,7 +49,7 @@ export type TelegramMessageContextRuntimeOverrides = Partial<
     typeof import("./bot-message-context.runtime.js"),
     | "createStatusReactionController"
     | "ensureConfiguredBindingRouteReady"
-    | "loadConfig"
+    | "getRuntimeConfig"
     | "recordChannelActivity"
   >
 >;

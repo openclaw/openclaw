@@ -17,6 +17,7 @@ import {
   createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  installBundledRuntimeDepsAsync,
   isWritableDirectory,
   materializeBundledRuntimeMirrorDistFile,
   repairBundledRuntimeDepsInstallRootAsync,
@@ -364,6 +365,74 @@ describe("installBundledRuntimeDeps", () => {
         windowsHide: true,
       }),
     );
+  });
+
+  it("reports async npm output as install progress", async () => {
+    const installRoot = makeTempDir();
+    const progress: string[] = [];
+    spawnMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      queueMicrotask(() => {
+        child.stdout?.emit("data", Buffer.from("added 1 package\n"));
+        child.stderr?.emit("data", Buffer.from("\u001b[31mnpm notice\u001b[39m\r"));
+        writeInstalledPackage(cwd, "acpx", "0.5.3");
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    await installBundledRuntimeDepsAsync({
+      installRoot,
+      missingSpecs: ["acpx@0.5.3"],
+      env: {},
+      onProgress: (message) => progress.push(message),
+    });
+
+    expect(progress).toContain("Starting npm install for bundled plugin runtime deps: acpx@0.5.3");
+    expect(progress).toContain("npm stdout: added 1 package");
+    expect(progress).toContain("npm stderr: npm notice");
+  });
+
+  it("emits heartbeat progress while async npm is silent", async () => {
+    vi.useFakeTimers();
+    try {
+      const installRoot = makeTempDir();
+      const progress: string[] = [];
+      let closeChild!: () => void;
+      spawnMock.mockImplementation((_command, _args, options) => {
+        const cwd = String(options?.cwd ?? "");
+        const child = new EventEmitter() as ReturnType<typeof spawn>;
+        Object.assign(child, {
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+        });
+        closeChild = () => {
+          writeInstalledPackage(cwd, "acpx", "0.5.3");
+          child.emit("close", 0, null);
+        };
+        return child;
+      });
+
+      const install = installBundledRuntimeDepsAsync({
+        installRoot,
+        missingSpecs: ["acpx@0.5.3"],
+        env: {},
+        onProgress: (message) => progress.push(message),
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(progress).toContain("npm install still running (5s elapsed)");
+
+      closeChild();
+      await expect(install).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("anchors non-isolated external install roots with a package manifest", () => {

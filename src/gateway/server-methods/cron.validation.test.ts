@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 
-const loadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig));
+const getRuntimeConfig = vi.hoisted(() =>
+  vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
+);
 
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig,
+    getRuntimeConfig,
   };
 });
 
@@ -26,6 +28,7 @@ function createCronContext(currentJob?: CronJob) {
     logGateway: {
       info: vi.fn(),
     },
+    getRuntimeConfig: () => getRuntimeConfig(),
   };
 }
 
@@ -76,11 +79,11 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
 
 describe("cron method validation", () => {
   beforeEach(() => {
-    loadConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
   });
 
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       session: {
         mainKey: "main",
       },
@@ -122,7 +125,7 @@ describe("cron method validation", () => {
   });
 
   it("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       session: {
         mainKey: "main",
       },
@@ -164,7 +167,7 @@ describe("cron method validation", () => {
   });
 
   it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       session: {
         mainKey: "main",
       },

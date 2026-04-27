@@ -133,7 +133,7 @@ let getTelegramAbortFenceSizeForTests: typeof import("./bot-message-dispatch.js"
 let resetTelegramAbortFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramAbortFenceForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
-  loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
+  getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
   loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:

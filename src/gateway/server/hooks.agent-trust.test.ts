@@ -19,7 +19,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: loadConfigMock,
+  getRuntimeConfig: loadConfigMock,
 }));
 
 let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;

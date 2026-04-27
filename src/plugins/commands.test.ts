@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -250,6 +251,19 @@ describe("registerPluginCommand", () => {
         error: "Command description must be a string",
       },
     },
+    {
+      name: "rejects invalid agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: "use /demo" as unknown as string[],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance must be an array of strings",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
@@ -258,6 +272,7 @@ describe("registerPluginCommand", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
+      agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -276,6 +291,7 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {

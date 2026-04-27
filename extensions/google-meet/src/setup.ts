@@ -104,7 +104,7 @@ export function getGoogleMeetSetupStatus(
     message: config.chrome.audioBridgeCommand
       ? "Chrome audio bridge command configured"
       : config.chrome.audioInputCommand && config.chrome.audioOutputCommand
-        ? "Chrome command-pair realtime audio bridge configured"
+        ? `Chrome command-pair realtime audio bridge configured (${config.chrome.audioFormat})`
         : "Chrome realtime audio bridge not configured",
   });
 

@@ -19,7 +19,7 @@ const mockState = vi.hoisted(() => ({
   buildTeamsFileInfoCard: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/msteams", () => ({
+vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 

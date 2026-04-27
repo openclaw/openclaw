@@ -704,10 +704,56 @@ describe("gateway bonjour advertiser", () => {
     });
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(gatewayCall?.[0]?.name).toBe("openclaw (OpenClaw)");
+    expect(gatewayCall?.[0]?.name).toBe("Mac (OpenClaw)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
+    expect(gatewayCall?.[0]?.hostname).toBe("Mac");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
+
+    await started.stop();
+  });
+
+  it("falls back to openclaw when system hostname is invalid for DNS", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
+
+    await started.stop();
+  });
+
+  it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("Lobster");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    expect(gatewayCall?.[0]?.hostname).toBe("Lobster");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Lobster.local");
 
     await started.stop();
   });
