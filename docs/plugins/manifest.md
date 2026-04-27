@@ -655,6 +655,7 @@ Each list is optional:
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                           |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                        |
+| `secretProviders`                | `string[]` | SecretRef source ids this plugin owns (for example `gcp`, `keyring`).                               |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process. |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                  |
 
