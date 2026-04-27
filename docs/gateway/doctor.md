@@ -102,6 +102,7 @@ cat ~/.openclaw/openclaw.json
     - Gateway runtime checks (service installed but not running; cached launchd label).
     - Channel status warnings (probed from the running gateway).
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
+    - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
     - Gateway port collision diagnostics (default `18789`).
   </Accordion>

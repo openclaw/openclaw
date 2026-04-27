@@ -69,6 +69,7 @@ vi.mock("../daemon/service-audit.js", () => ({
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
@@ -319,6 +320,44 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }),
     );
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs gateway services with embedded proxy environment values", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-proxy-env-embedded",
+          message: "Gateway service embeds proxy environment values that should not be persisted.",
+          detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: expect.not.objectContaining({
+          HTTP_PROXY: expect.any(String),
+          HTTPS_PROXY: expect.any(String),
+        }),
+      }),
+    );
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
