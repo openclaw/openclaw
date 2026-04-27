@@ -5,6 +5,7 @@ import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import { normalizeEmotionMode } from "../emotion-mode.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -62,8 +63,8 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
-  const emotion = entry?.emotionMode;
-  if (typeof emotion === "string" && emotion.length > 0) {
+  const emotion = normalizeEmotionMode(entry?.emotionMode);
+  if (emotion) {
     flags.push(`emotions:${emotion}`);
   }
   const reasoning = entry?.reasoningLevel;

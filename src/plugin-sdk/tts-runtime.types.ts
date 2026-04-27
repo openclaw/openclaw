@@ -80,6 +80,8 @@ export type TtsRequestParams = {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  resolveText?: (provider: TtsProvider, providerConfig?: SpeechProviderConfig) => string;
+  minTextLength?: number;
   disableFallback?: boolean;
   timeoutMs?: number;
   agentId?: string;

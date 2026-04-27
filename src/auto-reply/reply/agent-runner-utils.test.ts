@@ -97,7 +97,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, emotionMode: "full" });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -127,6 +127,7 @@ describe("agent-runner-utils", () => {
       authProfileIdSource: "user",
       thinkLevel: run.thinkLevel,
       verboseLevel: run.verboseLevel,
+      emotionMode: "full",
       reasoningLevel: run.reasoningLevel,
       execOverrides: run.execOverrides,
       bashElevated: run.bashElevated,

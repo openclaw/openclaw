@@ -223,6 +223,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,
+    emotionMode: params.run.emotionMode,
     reasoningLevel: params.run.reasoningLevel,
     execOverrides: params.run.execOverrides,
     bashElevated: params.run.bashElevated,
