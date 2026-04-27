@@ -17,6 +17,8 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
 
 Local and LAN Ollama hosts do not need a real bearer token; OpenClaw uses the local `ollama-local` marker only for loopback, private-network, `.local`, and bare-hostname Ollama base URLs. Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
 
+Custom provider ids that set `api: "ollama"` use the same auth rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential.
+
 When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared. A provider-level key is sent only to that provider's Ollama host; `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host; and a pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention rather than being sent to local/self-hosted hosts by default.
 
 ## Getting started
