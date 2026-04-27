@@ -1094,6 +1094,7 @@ function resolveTtsRequestSetup(params: {
   agentId?: string;
   channelId?: string;
   accountId?: string;
+  allowOversizeSourceText?: boolean;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -1109,7 +1110,7 @@ function resolveTtsRequestSetup(params: {
     accountId: params.accountId,
   });
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-  if (params.text.length > config.maxTextLength) {
+  if (!params.allowOversizeSourceText && params.text.length > config.maxTextLength) {
     return {
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
@@ -1200,6 +1201,7 @@ export async function synthesizeSpeech(params: {
     agentId: params.agentId,
     channelId: params.channel,
     accountId: params.accountId,
+    allowOversizeSourceText: typeof params.resolveText === "function",
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };

@@ -544,6 +544,33 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("allows long source text when provider-routed text is within the hard max length", async () => {
+    const synthesize = vi.fn(synthesizeMock);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesize,
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "x".repeat(100),
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            maxTextLength: 20,
+          },
+        },
+      },
+      resolveText: () => "short speech text",
+      minTextLength: 10,
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesize).toHaveBeenCalledWith(expect.objectContaining({ text: "short speech text" }));
+  });
+
   it("preserves expressive source text for tag-aware providers when ttsSourceText metadata is present", async () => {
     const elevenSynthesize = vi.fn(synthesizeMock);
     const eleven = createMockSpeechProvider("elevenlabs", {
