@@ -756,6 +756,9 @@ enum ExecApprovalsSocketPathGuard {
                 let isConfiguredStateSymlink = self.isStateDirectoryPrefix(
                     rawURL.path,
                     stateDirURL: stateDirURL)
+                let isStateBoundary = self.isStateDirectoryBoundary(
+                    rawURL.path,
+                    stateDirURL: stateDirURL)
                 let isDefaultStateSymlink = stateDirURL == nil
                     && component == ".openclaw"
                     && !acceptedDefaultStateSymlink
@@ -767,9 +770,16 @@ enum ExecApprovalsSocketPathGuard {
                 if isDefaultStateSymlink {
                     acceptedDefaultStateSymlink = true
                 }
-                hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
+                if !isStateBoundary,
+                   !isDefaultStateSymlink,
+                   try self.isTrustedSystemSymlink(at: rawURL.path)
+                {
+                    hardenedURL = try self.trustedSystemParentSymlinkTarget(for: rawURL)
+                } else {
+                    hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
+                }
                 if hardenFromURL == nil,
-                   self.isStateDirectoryBoundary(rawURL.path, stateDirURL: stateDirURL)
+                   isStateBoundary
                     || (stateDirURL == nil && component == ".openclaw")
                 {
                     hardenFromURL = hardenedURL
@@ -798,6 +808,22 @@ enum ExecApprovalsSocketPathGuard {
         }
         let candidatePath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
         return stateDirPath == candidatePath
+    }
+
+    private static func trustedSystemParentSymlinkTarget(for parentURL: URL) throws -> URL {
+        let parentPath = parentURL.path
+        try self.validateStableSymlinkHopLocation(at: parentPath, reportedPath: parentPath)
+        let targetURL = parentURL.resolvingSymlinksInPath()
+        switch try self.pathKind(at: targetURL.path) {
+        case .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "resolved system symlink target kind is \(kind)")
+        }
+        try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
+        return targetURL
     }
 
     private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {

@@ -101,6 +101,23 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `ensure file accepts state directory below system tmp symlink`() async throws {
+        let stateDir = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            _ = ExecApprovalsStore.ensureFile()
+
+            let approvalsURL = stateDir.appendingPathComponent("exec-approvals.json")
+            #expect(FileManager().fileExists(atPath: approvalsURL.path))
+            let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
+            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            #expect(permissions & 0o777 == 0o700)
+        }
+    }
+
+    @Test
     func `ensure file refuses unsafe symlinked state directory`() async throws {
         let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

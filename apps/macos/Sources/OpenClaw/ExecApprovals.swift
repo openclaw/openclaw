@@ -342,18 +342,14 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func saveFile(_ file: ExecApprovalsFile) {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(file)
-            let url = self.fileURL()
-            try self.hardenStateFilePath()
-            try data.write(to: url, options: [.atomic])
-            try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
-            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    static func saveFile(_ file: ExecApprovalsFile) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(file)
+        let url = self.fileURL()
+        try self.hardenStateFilePath()
+        try data.write(to: url, options: [.atomic])
+        try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     static func ensureFile() -> ExecApprovalsFile {
@@ -380,7 +376,12 @@ enum ExecApprovalsStore {
         }
         if file.agents == nil { file.agents = [:] }
         if !existed || loadedHash != self.hashFile(file) {
-            self.saveFile(file)
+            do {
+                try self.saveFile(file)
+            } catch {
+                self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+                return self.emptyFile()
+            }
         }
         return file
     }
@@ -552,7 +553,11 @@ enum ExecApprovalsStore {
     private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
         var file = self.ensureFile()
         mutate(&file)
-        self.saveFile(file)
+        do {
+            try self.saveFile(file)
+        } catch {
+            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func emptyFile() -> ExecApprovalsFile {
