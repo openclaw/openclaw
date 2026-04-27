@@ -274,8 +274,12 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
-function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean {
-  const nonEmptyTexts = assistantTexts.filter((text) => text.trim().length > 0);
+function joinAssistantTexts(assistantTexts?: readonly string[]): string {
+  return (assistantTexts ?? []).join("\n\n").trim();
+}
+
+function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolean {
+  const nonEmptyTexts = (assistantTexts ?? []).filter((text) => text.trim().length > 0);
   return (
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
@@ -342,12 +346,12 @@ export function resolveSilentToolResultReplyPayload(params: {
     params.payloadCount !== 0 ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.toolMetas.length === 0 ||
+    (params.attempt.toolMetas?.length ?? 0) === 0 ||
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.attempt.messagesSnapshot.length === 0
+    (params.attempt.messagesSnapshot?.length ?? 0) === 0
   ) {
     return null;
   }
@@ -411,7 +415,7 @@ function isEmptyResponseAssistantTurn(params: {
   if (params.payloadCount !== 0) {
     return false;
   }
-  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -446,7 +450,7 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   if (params.payloadCount !== 0) {
     return false;
   }
-  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -522,7 +526,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return null;
   }
   if (assistant?.stopReason === "error") {
@@ -557,6 +561,16 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
+  if (
+    assistant?.stopReason === "stop" &&
+    OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    )
+  ) {
+    return null;
+  }
+
   if (
     shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
@@ -566,9 +580,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     // Keep the generic zero-usage stop retry for providers that expose a
     // provider-neutral "nothing was generated" signal, even outside the
     // provider allowlist above.
-    isZeroUsageEmptyStopAssistantTurn(
-      params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null,
-    )
+    isZeroUsageEmptyStopAssistantTurn(assistant)
   ) {
     return EMPTY_RESPONSE_RETRY_INSTRUCTION;
   }
@@ -717,20 +729,28 @@ export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDe
   };
 }
 
-function countPlanOnlyToolMetas(toolMetas: PlanningOnlyAttempt["toolMetas"]): number {
-  return toolMetas.filter((entry) => entry.toolName === "update_plan").length;
+function normalizePlanningToolMetas(
+  toolMetas?: PlanningOnlyAttempt["toolMetas"],
+): PlanningOnlyAttempt["toolMetas"] {
+  return toolMetas ?? [];
 }
 
-function countNonPlanToolCalls(toolMetas: PlanningOnlyAttempt["toolMetas"]): number {
-  return toolMetas.filter((entry) => entry.toolName !== "update_plan").length;
+function countPlanOnlyToolMetas(toolMetas?: PlanningOnlyAttempt["toolMetas"]): number {
+  return normalizePlanningToolMetas(toolMetas).filter((entry) => entry.toolName === "update_plan")
+    .length;
 }
 
-function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
-  return toolMetas.some((entry) => entry.toolName !== "update_plan");
+function countNonPlanToolCalls(toolMetas?: PlanningOnlyAttempt["toolMetas"]): number {
+  return normalizePlanningToolMetas(toolMetas).filter((entry) => entry.toolName !== "update_plan")
+    .length;
 }
 
-function hasSingleRetrySafeNonPlanTool(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
-  const nonPlanToolNames = toolMetas
+function hasNonPlanToolActivity(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
+  return normalizePlanningToolMetas(toolMetas).some((entry) => entry.toolName !== "update_plan");
+}
+
+function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
+  const nonPlanToolNames = normalizePlanningToolMetas(toolMetas)
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.toolName))
     .filter((toolName) => toolName && toolName !== "update_plan");
   return (
@@ -746,14 +766,14 @@ function hasSingleRetrySafeNonPlanTool(toolMetas: PlanningOnlyAttempt["toolMetas
  * call path, which still counts as real multi-step progress.
  */
 function isSingleActionThenNarrativePattern(params: {
-  toolMetas: PlanningOnlyAttempt["toolMetas"];
-  assistantTexts: readonly string[];
+  toolMetas?: PlanningOnlyAttempt["toolMetas"];
+  assistantTexts?: readonly string[];
 }): boolean {
   const nonPlanCount = countNonPlanToolCalls(params.toolMetas);
   if (nonPlanCount !== 1) {
     return false;
   }
-  const text = params.assistantTexts.join("\n\n").trim();
+  const text = (params.assistantTexts ?? []).join("\n\n").trim();
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
     return false;
   }
@@ -805,7 +825,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
-    (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
+    ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
       !allowSingleActionRetryBypass) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
@@ -817,7 +837,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     return null;
   }
 
-  const text = params.attempt.assistantTexts.join("\n\n").trim();
+  const text = (params.attempt.assistantTexts ?? []).join("\n\n").trim();
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
     return null;
   }
