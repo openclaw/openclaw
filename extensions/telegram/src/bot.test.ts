@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import { rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginInteractiveHandlers,
@@ -1426,6 +1429,179 @@ describe("createTelegramBot", () => {
       'Could not resolve model "shared-model".',
     );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
+  });
+
+  it("routes poll_answer events into the originating session", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bot-poll-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    fs.mkdirSync(path.join(stateDir, "telegram"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "telegram", "poll-registry-default.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          polls: [
+            {
+              pollId: "poll-1",
+              chatId: "-1001234567890",
+              messageThreadId: 99,
+              question: "Ready?",
+              options: ["Yes", "No"],
+              createdAt: Date.now(),
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-1",
+          option_ids: [1],
+          user: {
+            id: 9,
+            first_name: "Ada",
+            last_name: "Lovelace",
+            username: "ada",
+          },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+        'Telegram poll vote: "Ready?" — Ada Lovelace (@ada) voted: No',
+        expect.objectContaining({
+          contextKey: "telegram:poll_answer:poll-1:9:1",
+          sessionKey: expect.stringContaining("telegram:group:-1001234567890:topic:99"),
+        }),
+      );
+      expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores poll_answer events with no registry entry", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bot-poll-missing-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "missing-poll",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks poll_answer events from unauthorized direct senders", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-telegram-bot-poll-unauthorized-dm-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    fs.mkdirSync(path.join(stateDir, "telegram"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "telegram", "poll-registry-default.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          polls: [
+            {
+              pollId: "poll-2",
+              chatId: "1234",
+              question: "Ready?",
+              options: ["Yes", "No"],
+              createdAt: Date.now(),
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["12345"],
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-2",
+          option_ids: [1],
+          user: { id: 9, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("includes sender identity in group envelope headers", async () => {

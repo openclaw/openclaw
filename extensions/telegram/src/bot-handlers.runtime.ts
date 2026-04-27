@@ -103,6 +103,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { findTelegramPollRegistryEntry } from "./poll-registry.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -991,6 +992,122 @@ export const registerTelegramHandlers = ({
       throw err;
     }
   });
+
+  // Routes votes from non-anonymous (public) polls back into the originating session.
+  // Telegram only emits poll_answer for public polls; anonymous polls are unaffected.
+  bot.on("poll_answer", async (ctx) => {
+    try {
+      const pollAnswer = ctx.pollAnswer;
+      if (!pollAnswer) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const pollId = pollAnswer.poll_id;
+      const optionIds: number[] = pollAnswer.option_ids ?? [];
+      const user = pollAnswer.user as
+        | {
+            id?: number;
+            first_name?: string;
+            last_name?: string;
+            username?: string;
+            is_bot?: boolean;
+          }
+        | undefined;
+
+      const entry = await findTelegramPollRegistryEntry({ pollId, accountId });
+      if (!entry) {
+        logVerbose(
+          `telegram: poll_answer for poll ${pollId} — no registry entry, skipping (anonymous poll or sent before routing was enabled)`,
+        );
+        return;
+      }
+
+      const chatId = Number(entry.chatId);
+      const isGroup = entry.chatId.startsWith("-");
+      const isForum = isGroup
+        ? await resolveTelegramForumFlag({
+            chatId,
+            chatType: "supergroup",
+            isGroup,
+            getChat,
+          })
+        : false;
+      const senderId = user?.id != null ? String(user.id) : "";
+      const senderUsername = user?.username ?? "";
+      if (user?.is_bot) {
+        return;
+      }
+      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        chatId,
+        isGroup,
+        isForum,
+        messageThreadId: entry.messageThreadId,
+      });
+      const senderAuthorization = authorizeTelegramEventSender({
+        chatId,
+        isGroup,
+        senderId,
+        senderUsername,
+        mode: "reaction",
+        context: eventAuthContext,
+      });
+      if (!senderAuthorization.allowed) {
+        return;
+      }
+      if (!isGroup) {
+        const requireTopic = (
+          eventAuthContext.groupConfig as { requireTopic?: boolean } | undefined
+        )?.requireTopic;
+        if (requireTopic === true && eventAuthContext.dmThreadId == null) {
+          logVerbose(
+            `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
+          );
+          return;
+        }
+      }
+
+      const senderName = user
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
+        : undefined;
+      const senderUsernameLabel = user?.username ? `@${user.username}` : undefined;
+      let senderLabel = senderName;
+      if (senderName && senderUsernameLabel) {
+        senderLabel = `${senderName} (${senderUsernameLabel})`;
+      } else if (!senderName && senderUsernameLabel) {
+        senderLabel = senderUsernameLabel;
+      }
+      if (!senderLabel && user?.id) {
+        senderLabel = `id:${user.id}`;
+      }
+      senderLabel = senderLabel || "unknown";
+
+      const optionLabels = optionIds.map((i) => entry.options[i] ?? `option ${i}`).join(", ");
+      const text = `Telegram poll vote: "${entry.question}" \u2014 ${senderLabel} voted: ${optionLabels}`;
+
+      const resolvedThreadId = eventAuthContext.resolvedThreadId;
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      const route = resolveAgentRoute({
+        cfg: telegramDeps.getRuntimeConfig(),
+        channel: "telegram",
+        accountId,
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
+      });
+
+      telegramDeps.enqueueSystemEvent(text, {
+        sessionKey: route.sessionKey,
+        contextKey: `telegram:poll_answer:${pollId}:${user?.id ?? "anon"}:${optionIds.join("-")}`,
+      });
+      logVerbose(`telegram: poll_answer event enqueued for poll ${pollId} by ${senderLabel}`);
+    } catch (err) {
+      runtime.error?.(danger(`telegram poll_answer handler failed: ${String(err)}`));
+      throw err;
+    }
+  });
+
   const processInboundMessage = async (params: {
     ctx: TelegramContext;
     msg: Message;
