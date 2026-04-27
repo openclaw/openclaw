@@ -410,4 +410,50 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       "bundledRuntimeDepsInstaller",
     );
   });
+
+  it("bypasses plugin lookup and runtime-deps staging when plugins are globally disabled", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        enabled: false,
+        allow: ["telegram"],
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await expect(
+      prepareGatewayPluginBootstrap({
+        cfgAtStart: cfg,
+        startupRuntimeConfig: cfg,
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toMatchObject({
+      startupPluginIds: [],
+      deferredConfiguredChannelPluginIds: [],
+      pluginLookUpTable: undefined,
+      baseGatewayMethods: ["ping"],
+    });
+
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
+    expect(scanBundledPluginRuntimeDeps).not.toHaveBeenCalled();
+    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        pluginIds: [],
+        pluginLookUpTable: undefined,
+        preferSetupRuntimeForChannelPlugins: false,
+        suppressPluginInfoLogs: false,
+      }),
+    );
+  });
 });
