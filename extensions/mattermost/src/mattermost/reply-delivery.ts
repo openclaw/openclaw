@@ -1,14 +1,11 @@
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   deliverTextOrMediaReply,
   isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  getAgentScopedMediaLocalRoots,
-  type OpenClawConfig,
-  type PluginRuntime,
-  type ReplyPayload,
-} from "./runtime-api.js";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -16,7 +13,7 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
-    cfg?: OpenClawConfig;
+    cfg: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];

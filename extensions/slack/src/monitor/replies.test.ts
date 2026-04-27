@@ -7,11 +7,15 @@ vi.mock("../send.js", () => ({
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
+let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+
 function baseParams(overrides?: Record<string, unknown>) {
   return {
+    cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
     token: "xoxb-test",
@@ -24,8 +28,12 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
-      await import("./replies.js"));
+    ({
+      createSlackReplyDeliveryPlan,
+      deliverReplies,
+      resolveDeliveredSlackReplyThreadTs,
+      resolveSlackThreadTs,
+    } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -165,6 +173,41 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ),
     ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+});
+
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  beforeAll(async () => {
+    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
+  });
+
+  it("prefers explicit reply targets when reply tags are enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("explicit-thread");
+  });
+
+  it("ignores explicit reply tags when replyToMode is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+
+  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "batched",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
   });
 });
 

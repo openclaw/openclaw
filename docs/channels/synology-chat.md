@@ -6,8 +6,6 @@ read_when:
 title: "Synology Chat"
 ---
 
-# Synology Chat
-
 Status: bundled plugin direct-message channel using Synology Chat webhooks.
 The plugin accepts inbound messages from Synology Chat outgoing webhooks and sends replies
 through a Synology Chat incoming webhook.
@@ -88,6 +86,8 @@ For the default account, you can use env vars:
 - `OPENCLAW_BOT_NAME`
 
 Config values override env vars.
+
+`SYNOLOGY_CHAT_INCOMING_URL` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
 
 ## DM policy and access control
 

@@ -7,8 +7,6 @@ read_when:
 title: "Ollama"
 ---
 
-# Ollama
-
 OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud models and local/self-hosted Ollama servers. You can use Ollama in three modes: `Cloud + Local` through a reachable Ollama host, `Cloud only` against `https://ollama.com`, or `Local only` against a reachable Ollama host.
 
 <Warning>
@@ -320,6 +318,10 @@ Once configured, all your Ollama models are available:
 }
 ```
 
+Custom Ollama provider ids are also supported. When a model ref uses the active
+provider prefix, such as `ollama-spark/qwen3:32b`, OpenClaw strips only that
+prefix before calling Ollama so the server receives `qwen3:32b`.
+
 ## Ollama Web Search
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
@@ -439,7 +441,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Memory embeddings">
     The bundled Ollama plugin registers a memory embedding provider for
     [memory search](/concepts/memory). It uses the configured Ollama base URL
-    and API key.
+    and API key, calls Ollama's current `/api/embed` endpoint, and batches
+    multiple memory chunks into one `input` request when possible.
 
     | Property      | Value               |
     | ------------- | ------------------- |
@@ -462,6 +465,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 
   <Accordion title="Streaming configuration">
     OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
+
+    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false`, while `/think low|medium|high` send the matching top-level `think` effort string. `/think max` maps to Ollama's highest native effort, `think: "high"`.
 
     <Tip>
     If you need to use the OpenAI-compatible endpoint, see the "Legacy OpenAI-compatible mode" section above. Streaming and tool calling may not work simultaneously in that mode.
@@ -521,7 +526,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
   <Card title="Model selection" href="/concepts/models" icon="brain">

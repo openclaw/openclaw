@@ -123,7 +123,15 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     authConfig: ctx.cfg.gateway?.auth,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
   });
-  const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
+  // Modes that don't need a token: password, none, trusted-proxy.
+  // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
+  // Previously, only "password" and "token" (with a token present) were excluded,
+  // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
+  const needsToken =
+    auth.mode !== "password" &&
+    auth.mode !== "none" &&
+    auth.mode !== "trusted-proxy" &&
+    (auth.mode !== "token" || !auth.token);
   if (!needsToken) {
     return;
   }
@@ -215,6 +223,15 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
   });
 }
 
+async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
+  ctx.cfg = await maybeRepairPluginRegistryState({
+    config: ctx.cfg,
+    env: process.env,
+    prompter: ctx.prompter,
+  });
+}
+
 async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairBundledPluginRuntimeDeps } =
     await import("../commands/doctor-bundled-plugin-runtime-deps.js");
@@ -234,6 +251,11 @@ async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<vo
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
+async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
+  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -541,6 +563,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:plugin-registry",
+      label: "Plugin registry",
+      run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
       run: runStateIntegrityHealth,
@@ -549,6 +576,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

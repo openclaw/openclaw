@@ -8,7 +8,7 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
@@ -44,7 +44,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight();
+  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
@@ -166,11 +166,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     for (const staleCleanup of await channelDoctor.collectChannelDoctorStaleConfigMutations(
       candidate,
+      { env: process.env },
     )) {
       if (staleCleanup.changes.length === 0) {
         continue;
       }
-      note(staleCleanup.changes.join("\n"), "Doctor changes");
+      note(sanitizeDoctorNote(staleCleanup.changes.join("\n")), "Doctor changes");
       ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
         state: { cfg, candidate, pendingChanges, fixHints },
         mutation: staleCleanup,
@@ -195,6 +196,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const repairSequence = await runDoctorRepairSequence({
       state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
+      env: process.env,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     emitDoctorNotes({
@@ -209,6 +211,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       warningNotes: await collectDoctorPreviewWarnings({
         cfg: candidate,
         doctorFixCommand,
+        env: process.env,
       }),
     });
   }
@@ -216,10 +219,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const mutableAllowlistWarnings = collectMutableAllowlistWarnings
     ? await collectMutableAllowlistWarnings({
         cfg: candidate,
+        env: process.env,
       })
     : [];
   if (mutableAllowlistWarnings.length > 0) {
-    note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
+    note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const unknownStep = applyUnknownConfigKeyStep({
