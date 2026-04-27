@@ -318,8 +318,12 @@ export async function registerSlashCommands(params: {
 
     const existingCmd = ownedCommands[0];
 
-    // Already registered with the correct callback URL
-    if (existingCmd && existingCmd.url === callbackUrl) {
+    const existingNeedsUpdate = existingCmd
+      ? existingCmd.url !== callbackUrl || existingCmd.method !== MATTERMOST_SLASH_POST_METHOD
+      : false;
+
+    // Already registered with the correct callback URL and method.
+    if (existingCmd && !existingNeedsUpdate) {
       log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
       registered.push({
         id: existingCmd.id,
@@ -332,11 +336,11 @@ export async function registerSlashCommands(params: {
       continue;
     }
 
-    // Exists but points to a different URL: attempt to reconcile by updating
-    // (useful during callback URL migrations).
-    if (existingCmd && existingCmd.url !== callbackUrl) {
+    // Exists but has drifted critical callback fields: attempt to reconcile by
+    // updating (useful during callback URL migrations or method drift).
+    if (existingCmd && existingNeedsUpdate) {
       log?.(
-        `mattermost: command /${spec.trigger} exists with different callback URL; updating (id=${existingCmd.id})`,
+        `mattermost: command /${spec.trigger} exists with different callback settings; updating (id=${existingCmd.id})`,
       );
       try {
         const updated = await updateMattermostCommand(client, {
