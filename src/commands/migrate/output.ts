@@ -1,4 +1,5 @@
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -72,7 +73,7 @@ export function writeApplyResult(
   result: MigrationApplyResult,
 ): void {
   if (opts.json) {
-    writeRuntimeJson(runtime, result);
+    writeRuntimeJson(runtime, redactMigrationPlan(result));
     return;
   }
   runtime.log(formatMigrationPlan(result).join("\n"));

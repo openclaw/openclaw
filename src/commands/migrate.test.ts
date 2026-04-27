@@ -148,7 +148,24 @@ describe("migrateApplyCommand", () => {
       configurable: true,
       value: true,
     });
-    const planned = plan();
+    const planned = plan({
+      items: [
+        {
+          id: "config:mcp-servers",
+          kind: "config",
+          action: "merge",
+          status: "planned",
+          details: {
+            value: {
+              time: {
+                env: { OPENAI_API_KEY: "short-dev-key", SAFE_FLAG: "visible" },
+                headers: { Authorization: "Bearer short-dev-key" },
+              },
+            },
+          },
+        },
+      ],
+    });
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
@@ -168,7 +185,20 @@ describe("migrateApplyCommand", () => {
     expect(JSON.parse(logs[0] ?? "{}")).toMatchObject({
       providerId: "hermes",
       summary: { planned: 1 },
+      items: [
+        {
+          details: {
+            value: {
+              time: {
+                env: { OPENAI_API_KEY: "[redacted]", SAFE_FLAG: "visible" },
+                headers: { Authorization: "[redacted]" },
+              },
+            },
+          },
+        },
+      ],
     });
+    expect(logs[0]).not.toContain("short-dev-key");
     expect(mocks.promptYesNo).not.toHaveBeenCalled();
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
     expect(mocks.provider.apply).not.toHaveBeenCalled();
@@ -231,7 +261,24 @@ describe("migrateApplyCommand", () => {
   });
 
   it("prints only the final result for root apply in JSON mode", async () => {
-    const planned = plan();
+    const planned = plan({
+      items: [
+        {
+          id: "config:mcp-servers",
+          kind: "config",
+          action: "merge",
+          status: "planned",
+          details: {
+            value: {
+              time: {
+                env: { OPENAI_API_KEY: "short-dev-key" },
+                headers: { "x-api-key": "another-short-dev-key" },
+              },
+            },
+          },
+        },
+      ],
+    });
     const applied: MigrationApplyResult = {
       ...planned,
       summary: { ...planned.summary, planned: 0, migrated: 1 },
@@ -253,7 +300,21 @@ describe("migrateApplyCommand", () => {
     expect(JSON.parse(logs[0] ?? "{}")).toMatchObject({
       providerId: "hermes",
       backupPath: "/tmp/openclaw-backup.tgz",
+      items: [
+        {
+          details: {
+            value: {
+              time: {
+                env: { OPENAI_API_KEY: "[redacted]" },
+                headers: { "x-api-key": "[redacted]" },
+              },
+            },
+          },
+        },
+      ],
     });
+    expect(logs[0]).not.toContain("short-dev-key");
+    expect(logs[0]).not.toContain("another-short-dev-key");
     expect(logs[0]).not.toContain("Migration plan");
   });
 

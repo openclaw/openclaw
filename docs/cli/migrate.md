@@ -22,7 +22,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 
 ## Safety model
 
-`openclaw migrate` is preview-first. The provider returns an itemized plan before anything changes, including conflicts, skipped items, and sensitive items.
+`openclaw migrate` is preview-first. The provider returns an itemized plan before anything changes, including conflicts, skipped items, and sensitive items. JSON plans, apply output, and migration reports redact nested secret-looking keys such as API keys, tokens, authorization headers, cookies, and passwords.
 
 `openclaw migrate apply <provider>` previews the plan and prompts before changing state unless `--yes` is set. In non-interactive mode, apply requires `--yes`. With `--json` and no `--yes`, apply prints the JSON plan and does not mutate state.
 

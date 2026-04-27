@@ -1,5 +1,6 @@
 import { promptYesNo } from "../cli/prompt.js";
 import { loadConfig } from "../config/config.js";
+import { redactMigrationPlan } from "../plugin-sdk/migration.js";
 import { resolvePluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -50,7 +51,7 @@ export async function migratePlanCommand(
   }
   const plan = await createMigrationPlan(runtime, { ...opts, provider: providerId });
   if (opts.json) {
-    writeRuntimeJson(runtime, plan);
+    writeRuntimeJson(runtime, redactMigrationPlan(plan));
   } else {
     runtime.log(formatMigrationPlan(plan).join("\n"));
   }

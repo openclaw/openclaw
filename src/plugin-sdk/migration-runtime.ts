@@ -9,6 +9,7 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
   markMigrationItemConflict,
   markMigrationItemError,
+  redactMigrationPlan,
 } from "./migration.js";
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
@@ -162,7 +163,7 @@ export async function writeMigrationReport(
   await fs.mkdir(result.reportDir, { recursive: true });
   await fs.writeFile(
     path.join(result.reportDir, "report.json"),
-    `${JSON.stringify(result, null, 2)}\n`,
+    `${JSON.stringify(redactMigrationPlan(result), null, 2)}\n`,
     "utf8",
   );
   const lines = [

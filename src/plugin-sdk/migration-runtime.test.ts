@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyMigrationFileItem } from "./migration-runtime.js";
+import { copyMigrationFileItem, writeMigrationReport } from "./migration-runtime.js";
 import { createMigrationItem } from "./migration.js";
 
 async function writeFile(filePath: string, contents: string): Promise<void> {
@@ -61,5 +61,63 @@ describe("copyMigrationFileItem", () => {
     expect(firstBackup).not.toBe(secondBackup);
     await expect(fs.readFile(firstBackup as string, "utf8")).resolves.toBe("old one");
     await expect(fs.readFile(secondBackup as string, "utf8")).resolves.toBe("old two");
+  });
+});
+
+describe("writeMigrationReport", () => {
+  it("redacts nested secret-looking config values in JSON reports", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-report-"));
+    const reportDir = path.join(root, "report");
+
+    await writeMigrationReport({
+      providerId: "hermes",
+      source: path.join(root, "hermes"),
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        createMigrationItem({
+          id: "config:mcp-servers",
+          kind: "config",
+          action: "merge",
+          status: "migrated",
+          details: {
+            value: {
+              mcp: {
+                env: {
+                  OPENAI_API_KEY: "short-dev-key",
+                  SAFE_FLAG: "visible",
+                },
+                headers: {
+                  Authorization: "Bearer short-dev-key",
+                  "x-api-key": "another-short-dev-key",
+                },
+              },
+            },
+          },
+        }),
+      ],
+      reportDir,
+    });
+
+    const report = await fs.readFile(path.join(reportDir, "report.json"), "utf8");
+    expect(report).not.toContain("short-dev-key");
+    expect(report).not.toContain("another-short-dev-key");
+    expect(JSON.parse(report).items[0].details.value.mcp).toEqual({
+      env: {
+        OPENAI_API_KEY: "[redacted]",
+        SAFE_FLAG: "visible",
+      },
+      headers: {
+        Authorization: "[redacted]",
+        "x-api-key": "[redacted]",
+      },
+    });
   });
 });
