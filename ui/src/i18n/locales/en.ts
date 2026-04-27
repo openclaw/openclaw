@@ -271,6 +271,8 @@ export const en: TranslationMap = {
       tailscaleDocsLink: "Docs: Tailscale Serve",
       insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
       insecureHttpDocsLink: "Docs: Insecure HTTP",
+      copyCommand: "Copy command",
+      copyCommandAria: "Copy command: {command}",
     },
     cards: {
       cost: "Cost",
@@ -306,6 +308,30 @@ export const en: TranslationMap = {
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
+      categories: {
+        search: "Search",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Overview",
+        sessions: "Sessions",
+        scheduled: "Scheduled",
+        skills: "Skills",
+        settings: "Settings",
+        agents: "Agents",
+        shellCommand: "Shell Command",
+        debugMode: "Debug Mode",
+      },
+      descriptions: {
+        shellCommand: "Run shell",
+        debugMode: "Toggle debug",
+      },
+      footer: {
+        navigate: "navigate",
+        select: "select",
+        close: "close",
+      },
     },
   },
   dreaming: {
@@ -535,7 +561,8 @@ export const en: TranslationMap = {
       errorHint: "Error rate = errors / total messages. Lower is better.",
       avgSession: "avg session",
       cacheHitRate: "Cache Hit Rate",
-      cacheHint: "Cache hit rate = cache read / (input + cache read). Higher is better.",
+      cacheHint:
+        "Cache hit rate = cache read / (input + cache read + cache write). Higher is better.",
       cached: "cached",
       prompt: "prompt",
       calls: "calls",
@@ -670,6 +697,7 @@ export const en: TranslationMap = {
     uk: "Українська (Ukrainian)",
     id: "Bahasa Indonesia (Indonesian)",
     pl: "Polski (Polish)",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

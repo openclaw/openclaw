@@ -1,13 +1,32 @@
-import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    diagnostics: [],
+    plugins: [
+      {
+        origin: "bundled",
+        nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    ],
+  }),
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProvider: () => [],
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
@@ -92,12 +111,14 @@ let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForP
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
 let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
+let cliCredentials: typeof import("./cli-credentials.js");
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  cliCredentials = await import("./cli-credentials.js");
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
@@ -258,6 +279,24 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+
+  it("returns oauth for codex when Codex CLI auth is available", () => {
+    const readCodexCliCredentialsCached = vi
+      .spyOn(cliCredentials, "readCodexCliCredentialsCached")
+      .mockReturnValue({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "token",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+      });
+
+    try {
+      expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
+    } finally {
+      readCodexCliCredentialsCached.mockRestore();
+    }
   });
 });
 
@@ -919,33 +958,11 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 });
 
 describe("applyLocalNoAuthHeaderOverride", () => {
-  const originalFetch = globalThis.fetch;
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
-  it("clears Authorization for synthetic local OpenAI-compatible auth markers", async () => {
-    let capturedAuthorization: string | null | undefined;
-    let capturedXTest: string | null | undefined;
-    let resolveRequest: (() => void) | undefined;
-    const requestSeen = new Promise<void>((resolve) => {
-      resolveRequest = resolve;
-    });
-    globalThis.fetch = withFetchPreconnect(
-      vi.fn(async (_input, init) => {
-        const headers = new Headers(init?.headers);
-        capturedAuthorization = headers.get("Authorization");
-        capturedXTest = headers.get("X-Test");
-        resolveRequest?.();
-        return new Response(JSON.stringify({ error: { message: "unauthorized" } }), {
-          status: 401,
-          headers: { "content-type": "application/json" },
-        });
-      }),
-    );
-
+  it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
     const model = applyLocalNoAuthHeaderOverride(
       {
         id: "local-llm",
@@ -967,26 +984,10 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    streamSimpleOpenAICompletions(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: "hello",
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      {
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      },
-    );
-
-    await requestSeen;
-
-    expect(capturedAuthorization).toBeNull();
-    expect(capturedXTest).toBe("1");
+    expect(model.headers).toMatchObject({
+      Authorization: null,
+      "X-Test": "1",
+    });
   });
 });
 

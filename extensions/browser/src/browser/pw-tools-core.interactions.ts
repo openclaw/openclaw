@@ -505,6 +505,7 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -514,6 +515,36 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const previousUrl = page.url();
+  const signal = opts.signal;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    void abortPromise.catch(() => {});
+    const disconnect = () => {
+      void forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        reason: "click aborted",
+      }).catch(() => {});
+    };
+    if (signal.aborted) {
+      disconnect();
+      throw signal.reason ?? new Error("aborted");
+    }
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
+  }
   try {
     await assertInteractionNavigationCompletedSafely({
       action: async () => {
@@ -523,22 +554,28 @@ export async function clickViaPlaywright(opts: {
           ACT_MAX_CLICK_DELAY_MS,
         );
         if (delayMs > 0) {
-          await locator.hover({ timeout });
+          await awaitActionWithAbort(locator.hover({ timeout }), abortPromise);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         if (opts.doubleClick) {
-          await locator.dblclick({
+          await awaitActionWithAbort(
+            locator.dblclick({
+              timeout,
+              button: opts.button,
+              modifiers: opts.modifiers,
+            }),
+            abortPromise,
+          );
+          return;
+        }
+        await awaitActionWithAbort(
+          locator.click({
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
-          });
-          return;
-        }
-        await locator.click({
-          timeout,
-          button: opts.button,
-          modifiers: opts.modifiers,
-        });
+          }),
+          abortPromise,
+        );
       },
       cdpUrl: opts.cdpUrl,
       page,
@@ -548,7 +585,40 @@ export async function clickViaPlaywright(opts: {
     });
   } catch (err) {
     throw toAIFriendlyError(err, label);
+  } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
+}
+
+export async function clickCoordsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  doubleClick?: boolean;
+  button?: "left" | "right" | "middle";
+  delayMs?: number;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await page.mouse.click(opts.x, opts.y, {
+        button: opts.button,
+        clickCount: opts.doubleClick ? 2 : 1,
+        delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
+      });
+    },
+    cdpUrl: opts.cdpUrl,
+    page,
+    previousUrl,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
 }
 
 export async function hoverViaPlaywright(opts: {
@@ -964,6 +1034,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -974,7 +1045,7 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   if (opts.element) {
@@ -982,12 +1053,13 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   const buffer = await page.screenshot({
     type,
     fullPage: Boolean(opts.fullPage),
+    timeout: opts.timeoutMs,
   });
   return { buffer };
 }
@@ -998,6 +1070,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1107,7 +1180,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
       }, boxes);
     }
 
-    const buffer = await page.screenshot({ type });
+    const buffer = await page.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer, labels: boxes.length, skipped };
   } finally {
     await page
@@ -1195,6 +1268,19 @@ async function executeSingleAction(
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
+        delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+      });
+      break;
+    case "clickCoords":
+      await clickCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        doubleClick: action.doubleClick,
+        button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,

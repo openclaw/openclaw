@@ -10,7 +10,7 @@ import {
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../plugins/plugin-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
@@ -40,7 +40,7 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
-const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   "google-gemini-cli": "google",
@@ -655,10 +655,17 @@ export function startGatewayModelPricingRefresh(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
 }): () => void {
-  void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-    log.warn(`pricing bootstrap failed: ${String(error)}`);
+  let stopped = false;
+  queueMicrotask(() => {
+    if (stopped) {
+      return;
+    }
+    void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
+      log.warn(`pricing bootstrap failed: ${String(error)}`);
+    });
   });
   return () => {
+    stopped = true;
     clearRefreshTimer();
   };
 }

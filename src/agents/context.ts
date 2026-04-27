@@ -25,6 +25,7 @@ type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined
 type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -41,12 +42,15 @@ export function applyDiscoveredContextWindows(params: {
     if (!model?.id) {
       continue;
     }
-    const contextTokens =
+    const discoveredContextTokens =
       typeof model.contextTokens === "number"
         ? Math.trunc(model.contextTokens)
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
+    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model.id)
+      ? ANTHROPIC_CONTEXT_1M_TOKENS
+      : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
       continue;
     }
@@ -126,9 +130,22 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
+function hasHelpOrVersionFlag(argv: string[]): boolean {
+  for (const arg of argv.slice(2)) {
+    if (arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") {
+      return true;
+    }
+  }
+  return false;
+}
+
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "agent",
   "backup",
+  "browser",
   "completion",
   "config",
   "directory",
@@ -138,14 +155,16 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "models",
+  "pairing",
   "plugins",
   "secrets",
+  "sessions",
   "status",
   "update",
   "webhooks",
 ]);
 
-function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
+export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
   // Keep this gate tied to the real OpenClaw CLI entrypoints.
   //
   // This module can also land inside shared dist chunks that are imported from
@@ -154,6 +173,9 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
   // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
   // plugin discovery and breaks dist/source singleton assumptions.
   if (!isLikelyOpenClawCliProcess(argv)) {
+    return false;
+  }
+  if (hasHelpOrVersionFlag(argv)) {
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);
@@ -371,14 +393,44 @@ function resolveConfiguredProviderContextTokens(
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
+  if (provider !== "anthropic" && provider !== "claude-cli") {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(model);
-  const modelId = normalized.includes("/")
-    ? (normalized.split("/").at(-1) ?? normalized)
-    : normalized;
+  const modelId = resolveModelFamilyId(model);
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+}
+
+function shouldUseAnthropicOpus47ContextWindow(params: {
+  provider?: string;
+  model: string;
+}): boolean {
+  const provider = params.provider ? normalizeProviderId(params.provider) : "";
+  return (
+    (provider === "anthropic" || provider === "claude-cli") && isClaudeOpus47Model(params.model)
+  );
+}
+
+function shouldUseDiscoveredAnthropicOpus47ContextWindow(modelId: string): boolean {
+  if (!isClaudeOpus47Model(modelId)) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  const slash = normalized.indexOf("/");
+  if (slash < 0) {
+    return false;
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slash));
+  return provider === "claude-cli";
+}
+
+function resolveModelFamilyId(modelId: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
+}
+
+function isClaudeOpus47Model(model: string): boolean {
+  const modelId = resolveModelFamilyId(model);
+  return CLAUDE_OPUS_47_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
 export function resolveContextTokensForModel(params: {
@@ -420,6 +472,10 @@ export function resolveContextTokensForModel(params: {
         return configuredWindow;
       }
     }
+  }
+
+  if (explicitProvider && ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),

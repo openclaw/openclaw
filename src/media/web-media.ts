@@ -19,6 +19,7 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
+import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   detectMime,
   extensionForMime,
@@ -55,6 +56,20 @@ type WebMediaOptions = {
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
 };
+
+async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
+  if (!/^media:\/\//i.test(mediaUrl)) {
+    return null;
+  }
+  try {
+    return (await resolveInboundMediaReference(mediaUrl))?.physicalPath ?? null;
+  } catch (err) {
+    if (err instanceof MediaReferenceError) {
+      throw new LocalMediaAccessError(err.code, err.message, { cause: err });
+    }
+    throw err;
+  }
+}
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
@@ -356,7 +371,10 @@ async function loadWebMediaInternal(
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  if (!/^\s*media:\/\//i.test(mediaUrl)) {
+    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  }
+  mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {

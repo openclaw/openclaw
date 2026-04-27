@@ -7,10 +7,36 @@ import {
   formatUncaughtError,
   readErrorName,
 } from "./errors.js";
+import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
-const handlers = new Set<UnhandledRejectionHandler>();
+// Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
+// `node_modules`, which loads a separate copy of this module. To keep registry
+// state shared across instances, anchor the handlers Set on globalThis.
+const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
+const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
+const handlers: Set<UnhandledRejectionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
+  const existing = g[HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UnhandledRejectionHandler>();
+  g[HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
+const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
+  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UncaughtExceptionHandler>();
+  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -336,8 +362,34 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  exceptionHandlers.add(handler);
+  return () => {
+    exceptionHandlers.delete(handler);
+  };
+}
+
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of exceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (err) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
+    }
+  }
+  return false;
+}
+
 export function installUnhandledRejectionHandler(): void {
-  const exitWithTerminalRestore = (reason: string) => {
+  const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
+    for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
     process.exit(1);
   };
@@ -356,13 +408,13 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      exitWithTerminalRestore("fatal unhandled rejection");
+      exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      exitWithTerminalRestore("configuration error");
+      exitWithTerminalRestore("configuration error", reason, "configuration_error");
       return;
     }
 
@@ -375,6 +427,6 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    exitWithTerminalRestore("unhandled rejection");
+    exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
   });
 }
