@@ -103,6 +103,11 @@ describe("cli program (nodes basics)", () => {
               connected: false,
             },
             {
+              nodeId: "effective-only-unknown",
+              displayName: "Effective Only Unknown",
+              connected: true,
+            },
+            {
               nodeId: "unpaired-live",
               displayName: "Unpaired Live",
               paired: false,
@@ -143,6 +148,7 @@ describe("cli program (nodes basics)", () => {
     expect(JSON.stringify(runtime.writeJson.mock.calls[0]?.[0])).not.toContain("pair-only-token");
     const output = getRuntimeOutput();
     expect(output).toContain("Pending: 1 · Paired: 3");
+    expect(output).not.toContain("Effective Only Unknown");
     expect(output).not.toContain("unpaired-live");
   });
 

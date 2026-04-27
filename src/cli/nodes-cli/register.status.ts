@@ -146,7 +146,7 @@ function mergePairedNodesWithEffectiveNodes(
   const rows: PairedNodeListRow[] = [];
   for (const effective of effectiveNodes) {
     const pairedNode = pairedById.get(effective.nodeId);
-    if (!pairedNode && effective.paired === false) {
+    if (!pairedNode && effective.paired !== true) {
       continue;
     }
     seen.add(effective.nodeId);
@@ -168,9 +168,7 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   }
 }
 
-function sanitizePairedNodeForListJson(
-  node: PairedNodeListRow,
-): Omit<PairedNodeListRow, "token"> {
+function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
   const copy: Record<string, unknown> = { ...node };
   delete copy.token;
   return copy as Omit<PairedNodeListRow, "token">;
