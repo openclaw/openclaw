@@ -12,6 +12,7 @@ import { createConfigIO, resolveGatewayPort, writeConfigFile } from "../config/c
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MigrationProviderId } from "../migrations/types.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -27,6 +28,8 @@ import {
   SECURITY_NOTE_TITLE,
 } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+
+type SetupFlowChoice = WizardFlow | "import";
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
@@ -170,6 +173,85 @@ async function requireRiskAcknowledgement(params: {
   }
 }
 
+async function runSetupMigrationImport(params: {
+  opts: OnboardOptions;
+  baseConfig: OpenClawConfig;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+}) {
+  const [
+    { applyMigrationPlan },
+    { buildMigrationPlan },
+    { detectMigrationSources },
+    { formatMigrationPlanText },
+  ] = await Promise.all([
+    import("../migrations/apply.js"),
+    import("../migrations/plan.js"),
+    import("../migrations/registry.js"),
+    import("../migrations/report.js"),
+  ]);
+  const onboardHelpers = await import("../commands/onboard-helpers.js");
+  const detections = await detectMigrationSources();
+  const providerId =
+    params.opts.importFrom ??
+    ((await params.prompter.select({
+      message: "Import source",
+      options: detections.length
+        ? detections.map((detection) => ({
+            value: detection.providerId,
+            label: detection.label,
+            hint: detection.sourceDir,
+          }))
+        : [
+            {
+              value: "hermes",
+              label: "Hermes",
+              hint: "No detected home; enter a source path next.",
+            },
+          ],
+      initialValue: detections[0]?.providerId ?? "hermes",
+    })) as string);
+  const sourceDir =
+    params.opts.importSource ??
+    detections.find((detection) => detection.providerId === providerId)?.sourceDir ??
+    (await params.prompter.text({
+      message: "Source agent home",
+      initialValue: "~/.hermes",
+    }));
+  const workspaceInput =
+    params.opts.workspace ??
+    params.baseConfig.agents?.defaults?.workspace ??
+    onboardHelpers.DEFAULT_WORKSPACE;
+  const targetWorkspaceDir = resolveUserPath(workspaceInput);
+  const plan = await buildMigrationPlan({
+    providerId: providerId as MigrationProviderId,
+    sourceDir,
+    targetWorkspaceDir,
+    migrateSecrets: params.opts.importMigrateSecrets === true,
+  });
+  await params.prompter.note(formatMigrationPlanText(plan), "Import preview");
+  const confirmed =
+    params.opts.nonInteractive === true
+      ? true
+      : await params.prompter.confirm({
+          message: "Apply this import into a fresh OpenClaw setup?",
+          initialValue: false,
+        });
+  if (!confirmed) {
+    throw new WizardCancelledError("import cancelled");
+  }
+  const result = await applyMigrationPlan({
+    plan,
+    yes: true,
+    allowExisting: false,
+    baseConfig: params.baseConfig,
+  });
+  await params.prompter.note(`Report: ${result.reportDir}`, "Import complete");
+  await params.prompter.outro(
+    "Import complete. Run openclaw configure when you want to tune channels, search, or gateway details.",
+  );
+}
+
 export async function runSetupWizard(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -234,23 +316,27 @@ export async function runSetupWizard(
   if (
     normalizedExplicitFlow &&
     normalizedExplicitFlow !== "quickstart" &&
-    normalizedExplicitFlow !== "advanced"
+    normalizedExplicitFlow !== "advanced" &&
+    normalizedExplicitFlow !== "import"
   ) {
-    runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
+    runtime.error("Invalid --flow (use quickstart, manual, advanced, or import).");
     runtime.exit(1);
     return;
   }
-  const explicitFlow: WizardFlow | undefined =
-    normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
+  const explicitFlow: SetupFlowChoice | undefined =
+    normalizedExplicitFlow === "quickstart" ||
+    normalizedExplicitFlow === "advanced" ||
+    normalizedExplicitFlow === "import"
       ? normalizedExplicitFlow
       : undefined;
-  let flow: WizardFlow =
+  let flow: SetupFlowChoice =
     explicitFlow ??
     (await prompter.select({
       message: "Setup mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
+        { value: "import", label: "Import from another agent", hint: "Fresh setup only" },
       ],
       initialValue: "quickstart",
     }));
@@ -299,6 +385,12 @@ export async function runSetupWizard(
       baseConfig = {};
     }
   }
+
+  if (opts.importFrom || flow === "import") {
+    await runSetupMigrationImport({ opts, baseConfig, prompter, runtime });
+    return;
+  }
+  const wizardFlow = flow;
 
   const quickstartGateway: QuickstartGatewayDefaults = (() => {
     const hasExisting =
@@ -351,7 +443,7 @@ export async function runSetupWizard(
     };
   })();
 
-  if (flow === "quickstart") {
+  if (wizardFlow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
       if (value === "loopback") {
         return "Loopback (127.0.0.1)";
@@ -482,7 +574,7 @@ export async function runSetupWizard(
 
   const mode =
     opts.mode ??
-    (flow === "quickstart"
+    (wizardFlow === "quickstart"
       ? "local"
       : ((await prompter.select({
           message: "What do you want to set up?",
@@ -525,7 +617,7 @@ export async function runSetupWizard(
 
   const workspaceInput =
     opts.workspace ??
-    (flow === "quickstart"
+    (wizardFlow === "quickstart"
       ? (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
           message: "Workspace directory",
@@ -669,7 +761,7 @@ export async function runSetupWizard(
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
-    flow,
+    flow: wizardFlow,
     baseConfig,
     nextConfig,
     localPort,

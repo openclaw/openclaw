@@ -436,6 +436,14 @@
     "target": "设置"
   },
   {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "CLI reference",
+    "target": "CLI 参考"
+  },
+  {
     "source": "Channel Plugin SDK",
     "target": "渠道插件 SDK"
   },

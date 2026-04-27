@@ -25,6 +25,9 @@ export function registerSetupCommand(program: Command) {
     .option("--mode <mode>", "Onboard mode: local|remote")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--import-from <provider>", "Import from another agent home during onboarding")
+    .option("--import-source <path>", "Source agent home for --import-from")
+    .option("--import-migrate-secrets", "Import recognized secrets during onboarding import", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const hasWizardFlags = hasExplicitOptions(command, [
@@ -33,6 +36,9 @@ export function registerSetupCommand(program: Command) {
           "mode",
           "remoteUrl",
           "remoteToken",
+          "importFrom",
+          "importSource",
+          "importMigrateSecrets",
         ]);
         if (opts.wizard || hasWizardFlags) {
           await setupWizardCommand(
@@ -42,6 +48,9 @@ export function registerSetupCommand(program: Command) {
               mode: opts.mode as "local" | "remote" | undefined,
               remoteUrl: opts.remoteUrl as string | undefined,
               remoteToken: opts.remoteToken as string | undefined,
+              importFrom: opts.importFrom as string | undefined,
+              importSource: opts.importSource as string | undefined,
+              importMigrateSecrets: Boolean(opts.importMigrateSecrets),
             },
             defaultRuntime,
           );

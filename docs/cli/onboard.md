@@ -36,6 +36,8 @@ openclaw onboard
 openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --flow import
+openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
@@ -176,6 +178,7 @@ openclaw onboard --non-interactive \
   <Accordion title="Flow types">
     - `quickstart`: minimal prompts, auto-generates a gateway token.
     - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
+    - `import`: imports from another agent home into a fresh OpenClaw setup.
   </Accordion>
   <Accordion title="Provider prefiltering">
     When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
@@ -194,6 +197,7 @@ openclaw onboard --non-interactive \
     - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
     - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
     - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
+    - Imports are fresh-setup only by default. Use [Migrate](/cli/migrate) for dry-run plans, reports, and exact Hermes mappings.
   </Accordion>
 </AccordionGroup>
 

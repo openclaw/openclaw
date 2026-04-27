@@ -1545,6 +1545,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",

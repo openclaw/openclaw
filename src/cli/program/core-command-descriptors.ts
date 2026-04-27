@@ -36,6 +36,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "migrate",
+    description: "Import state from other agent homes into a fresh OpenClaw setup",
+    hasSubcommands: true,
+  },
+  {
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
