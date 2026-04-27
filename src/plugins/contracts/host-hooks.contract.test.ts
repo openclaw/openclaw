@@ -11,6 +11,8 @@ import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../gateway/protocol/index.js";
+import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
+import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -50,6 +52,28 @@ async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+async function callPluginSessionActionForTest(params: {
+  body: Record<string, unknown>;
+  scopes?: string[];
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
+  let response: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
+  const respond: RespondFn = (ok, payload, error) => {
+    response = { ok, payload, error };
+  };
+  await pluginHostHookHandlers["plugins.sessionAction"]({
+    req: { id: "test", type: "req", method: "plugins.sessionAction", params: params.body },
+    params: params.body,
+    client: {
+      connId: "test-client",
+      connect: { scopes: params.scopes ?? [] },
+    } as GatewayClient,
+    isWebchatConnect: () => false,
+    respond,
+    context: {} as never,
+  });
+  return response ?? { ok: false, error: new Error("handler did not respond") };
 }
 
 describe("host-hook fixture plugin contract", () => {
@@ -549,6 +573,85 @@ describe("host-hook fixture plugin contract", () => {
         }),
       ]),
     );
+  });
+
+  it("validates plugin session action results before returning gateway payloads", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "session-action-validation-fixture",
+        name: "Session Action Validation Fixture",
+      }),
+      register(api) {
+        api.registerSessionAction({
+          id: "bad-data",
+          handler: () => ({ data: 1n as never }),
+        });
+        api.registerSessionAction({
+          id: "bad-reply",
+          handler: () => ({ reply: { text: "ok", extra: () => undefined } as never }),
+        });
+        api.registerSessionAction({
+          id: "typed-error",
+          handler: () => ({
+            ok: false,
+            error: "needs operator input",
+            code: "needs_input",
+            details: { field: "version" },
+          }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "bad-data",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action result must be JSON-compatible",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "bad-reply",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action reply must be JSON-compatible",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "typed-error",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "needs operator input",
+        details: {
+          code: "needs_input",
+          details: { field: "version" },
+        },
+      },
+    });
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
