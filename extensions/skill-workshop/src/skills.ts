@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isPathInside, isPathInsideWithRealpath } from "openclaw/plugin-sdk/security-runtime";
 import {
   buildSyntheticWorkspaceSkillEntryForPreview,

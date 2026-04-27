@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveDefaultAgentId } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
