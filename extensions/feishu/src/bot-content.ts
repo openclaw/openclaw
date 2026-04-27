@@ -249,9 +249,6 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((mention) => mention.id.open_id === botOpenId);
