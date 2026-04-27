@@ -140,7 +140,9 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
 }
 
 function mockConfig(home: string, storePath: string) {
-  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
+  const cfg = createAcpEnabledConfig(home, storePath);
+  loadConfigSpy.mockReturnValue(cfg);
+  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
 function mockConfigWithAcpOverrides(
@@ -154,6 +156,7 @@ function mockConfigWithAcpOverrides(
     ...acpOverrides,
   };
   loadConfigSpy.mockReturnValue(cfg);
+  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
 function writeAcpSessionStore(storePath: string, agent = "codex") {

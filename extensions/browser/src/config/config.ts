@@ -1,8 +1,7 @@
 export {
-  createConfigIO,
+  getRuntimeConfig,
   getRuntimeConfigSnapshot,
-  loadConfig,
-  writeConfigFile,
+  replaceConfigFile,
   type BrowserConfig,
   type BrowserProfileConfig,
   type OpenClawConfig,

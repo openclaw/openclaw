@@ -22,6 +22,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean;
   }) {
@@ -38,6 +39,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean,
   ) {
@@ -64,6 +66,10 @@ describe("plugin contract registry", () => {
     {
       name: "does not duplicate bundled web search provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
+    },
+    {
+      name: "does not duplicate bundled migration provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.migrationProviderIds),
     },
     {
       name: "does not duplicate bundled media provider ids",
@@ -199,5 +205,15 @@ describe("plugin contract registry", () => {
           .map((entry) => entry.pluginId),
       ),
     ).toEqual(bundledWebSearchPluginIds);
+  });
+
+  it("covers every bundled migration provider plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.migrationProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.migrationProviders?.length ?? 0) > 0,
+    });
   });
 });

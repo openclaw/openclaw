@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderQaMarkdownReport } from "../../report.js";
 import { __testing as liveTesting } from "./runtime.js";
@@ -491,11 +491,14 @@ describe("matrix live qa runtime", () => {
     expect(report).toContain("observed events: /tmp/observed.json");
   });
 
-  it("keeps Matrix scenario execution in catalog order across config changes", () => {
+  it("groups Matrix scenario execution by gateway config while preserving tail scenarios", () => {
     const scenarios = liveTesting.findMatrixQaScenarios([
+      "matrix-thread-follow-up",
       "matrix-e2ee-cli-encryption-setup-multi-account",
+      "matrix-thread-isolation",
       "matrix-e2ee-cli-setup-then-gateway-reply",
       "matrix-e2ee-cli-self-verification",
+      "matrix-e2ee-wrong-account-recovery-key",
     ]);
 
     expect(
@@ -503,9 +506,12 @@ describe("matrix live qa runtime", () => {
         .scheduleMatrixQaScenariosInCatalogOrder(scenarios)
         .map(({ scenario }) => scenario.id),
     ).toEqual([
+      "matrix-thread-follow-up",
+      "matrix-thread-isolation",
+      "matrix-e2ee-cli-self-verification",
       "matrix-e2ee-cli-encryption-setup-multi-account",
       "matrix-e2ee-cli-setup-then-gateway-reply",
-      "matrix-e2ee-cli-self-verification",
+      "matrix-e2ee-wrong-account-recovery-key",
     ]);
   });
 

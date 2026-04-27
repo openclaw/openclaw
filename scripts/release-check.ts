@@ -23,6 +23,7 @@ import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRoot,
 } from "../src/plugins/bundled-runtime-deps.ts";
+import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -110,6 +111,8 @@ const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
+  ["onboard", "--help"],
+  ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
@@ -807,6 +810,11 @@ async function checkPluginSdkExports() {
 
 async function main() {
   checkAppcastSparkleVersions();
+  checkCliBootstrapExternalImports({
+    logger: {
+      error: (message: string) => console.error(`release-check: ${message}`),
+    },
+  });
   await checkPluginSdkExports();
   checkBundledExtensionMetadata();
   await writePackageDistInventory(process.cwd());

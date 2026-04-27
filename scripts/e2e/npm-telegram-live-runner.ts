@@ -1,4 +1,3 @@
-#!/usr/bin/env -S node --import tsx
 // Telegram package Docker harness.
 // Runs QA live transport code against the package candidate installed in Docker.
 

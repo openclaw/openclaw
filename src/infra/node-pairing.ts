@@ -287,6 +287,22 @@ export async function rejectNodePairing(
   });
 }
 
+export async function removePairedNode(
+  nodeId: string,
+  baseDir?: string,
+): Promise<{ nodeId: string } | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    if (!normalized || !state.pairedByNodeId[normalized]) {
+      return null;
+    }
+    delete state.pairedByNodeId[normalized];
+    await persistState(state, baseDir);
+    return { nodeId: normalized };
+  });
+}
+
 export async function verifyNodeToken(
   nodeId: string,
   token: string,

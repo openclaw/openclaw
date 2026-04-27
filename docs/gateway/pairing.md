@@ -39,6 +39,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 openclaw nodes reject <requestId>
 openclaw nodes status
+openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
@@ -57,6 +58,7 @@ Methods:
 - `node.pair.list` — list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` — approve a pending request (issues token).
 - `node.pair.reject` — reject a pending request.
+- `node.pair.remove` — remove a stale paired node entry.
 - `node.pair.verify` — verify `{ nodeId, token }`.
 
 Notes:
@@ -75,15 +77,12 @@ Notes:
   - `system.run` / `system.run.prepare` / `system.which` request:
     `operator.pairing` + `operator.admin`
 
-Important:
+<Warning>
+Node pairing is a trust and identity flow plus token issuance. It does **not** pin the live node command surface per node.
 
-- Node pairing is a trust/identity flow plus token issuance.
-- It does **not** pin the live node command surface per node.
-- Live node commands come from what the node declares on connect after the
-  gateway's global node command policy (`gateway.nodes.allowCommands` /
-  `denyCommands`) is applied.
-- Per-node `system.run` allow/ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
+- Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
+  </Warning>
 
 ## Node command gating (2026.3.31+)
 

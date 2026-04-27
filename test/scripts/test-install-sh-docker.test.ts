@@ -64,6 +64,7 @@ describe("test-install-sh-docker", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
     expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
+    expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
     expect(workflow).toContain("repository-branch-history");
     expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");

@@ -118,6 +118,8 @@ to `"enforce"` for automatic cleanup:
 }
 ```
 
+For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. This avoids running full store cleanup on every isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
+
 Preview with `openclaw sessions cleanup --dry-run`.
 
 ## Inspecting sessions

@@ -717,8 +717,11 @@ registerCommand({
 let _runtimeGetter:
   | (() => {
       config: {
-        loadConfig: () => Record<string, unknown>;
-        writeConfigFile: (cfg: unknown) => Promise<void>;
+        current: () => Record<string, unknown>;
+        replaceConfigFile: (params: {
+          nextConfig: Record<string, unknown>;
+          afterWrite: { mode: "auto" };
+        }) => Promise<unknown>;
       };
     })
   | null = null;
@@ -727,8 +730,11 @@ let _runtimeGetter:
 export function registerApproveRuntimeGetter(
   getter: () => {
     config: {
-      loadConfig: () => Record<string, unknown>;
-      writeConfigFile: (cfg: unknown) => Promise<void>;
+      current: () => Record<string, unknown>;
+      replaceConfigFile: (params: {
+        nextConfig: Record<string, unknown>;
+        afterWrite: { mode: "auto" };
+      }) => Promise<unknown>;
     };
   },
 ): void {
@@ -786,7 +792,7 @@ registerCommand({
     const configApi = runtime.config;
 
     const loadExecConfig = () => {
-      const cfg = configApi.loadConfig();
+      const cfg = configApi.current();
       const tools = (cfg.tools ?? {}) as Record<string, unknown>;
       const exec = (tools.exec ?? {}) as Record<string, unknown>;
       const security = typeof exec.security === "string" ? exec.security : "deny";
@@ -795,14 +801,17 @@ registerCommand({
     };
 
     const writeExecConfig = async (security: string, ask: string) => {
-      const cfg = structuredClone(configApi.loadConfig());
+      const cfg = structuredClone(configApi.current());
       const tools = (cfg.tools ?? {}) as Record<string, unknown>;
       const exec = (tools.exec ?? {}) as Record<string, unknown>;
       exec.security = security;
       exec.ask = ask;
       tools.exec = exec;
       cfg.tools = tools;
-      await configApi.writeConfigFile(cfg);
+      await configApi.replaceConfigFile({
+        nextConfig: cfg,
+        afterWrite: { mode: "auto" },
+      });
     };
 
     const formatStatus = (security: string, ask: string) => {
@@ -906,7 +915,7 @@ registerCommand({
     // reset: 删除配置，恢复框架默认值
     if (arg === "reset") {
       try {
-        const cfg = structuredClone(configApi.loadConfig());
+        const cfg = structuredClone(configApi.current());
         const tools = (cfg.tools ?? {}) as Record<string, unknown>;
         const exec = (tools.exec ?? {}) as Record<string, unknown>;
         delete exec.security;
@@ -921,7 +930,10 @@ registerCommand({
         } else {
           cfg.tools = tools;
         }
-        await configApi.writeConfigFile(cfg);
+        await configApi.replaceConfigFile({
+          nextConfig: cfg,
+          afterWrite: { mode: "auto" },
+        });
         return [
           `✅ 审批配置已重置`,
           ``,

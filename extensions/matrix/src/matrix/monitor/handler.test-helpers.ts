@@ -128,7 +128,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        loadConfig: () => cfgForHandler,
+        current: () => cfgForHandler,
       },
       channel: {
         pairing: {

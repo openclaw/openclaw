@@ -166,6 +166,7 @@ async function recordLoopOutcome(args: {
       result: args.result,
       error: args.error,
       config: args.ctx.loopDetection,
+      ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
@@ -190,7 +191,14 @@ export async function runBeforeToolCallHook(args: {
       sessionId: args.ctx?.agentId,
     });
 
-    const loopResult = detectToolCallLoop(sessionState, toolName, params, args.ctx.loopDetection);
+    const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
+    const loopResult = detectToolCallLoop(
+      sessionState,
+      toolName,
+      params,
+      args.ctx.loopDetection,
+      loopScope,
+    );
 
     if (loopResult.stuck) {
       if (loopResult.level === "critical") {
@@ -211,7 +219,8 @@ export async function runBeforeToolCallHook(args: {
           reason: loopResult.message,
         };
       }
-      const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+      const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+      const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
       if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
         log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
         logToolLoopAction({
@@ -228,7 +237,14 @@ export async function runBeforeToolCallHook(args: {
       }
     }
 
-    recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+    recordToolCall(
+      sessionState,
+      toolName,
+      params,
+      args.toolCallId,
+      args.ctx.loopDetection,
+      loopScope,
+    );
   }
 
   const hookRunner = getGlobalHookRunner();

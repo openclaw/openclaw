@@ -10,6 +10,7 @@ import {
   QWEN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildQwenProvider } from "./provider-catalog.js";
+import { wrapQwenProviderStream } from "./stream.js";
 import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "qwen";
@@ -44,6 +45,22 @@ function isQwen36PlusUnsupportedForConfig(params: {
   baseUrl?: string;
 }): boolean {
   return isQwenCodingPlanBaseUrl(params.baseUrl ?? resolveConfiguredQwenBaseUrl(params.config));
+}
+
+function hasExactForeignApiOwner(params: {
+  provider: string;
+  config: { models?: { providers?: Record<string, { api?: string } | undefined> } } | undefined;
+}): boolean {
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return false;
+  }
+  const provider = normalizeProviderId(params.provider);
+  const exact = Object.entries(providers).find(
+    ([providerId]) => normalizeProviderId(providerId) === provider,
+  )?.[1];
+  const api = normalizeProviderId(exact?.api ?? "");
+  return !!api && api !== PROVIDER_ID && api !== LEGACY_PROVIDER_ID;
 }
 
 export default defineSingleProviderPluginEntry({
@@ -165,6 +182,7 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
+    wrapStreamFn: wrapQwenProviderStream,
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
         return undefined;
@@ -178,6 +196,7 @@ export default defineSingleProviderPluginEntry({
       const provider = normalizeProviderId(ctx.provider);
       if (
         (provider !== PROVIDER_ID && provider !== LEGACY_PROVIDER_ID) ||
+        hasExactForeignApiOwner({ provider: ctx.provider, config: ctx.config }) ||
         ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
         !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
       ) {

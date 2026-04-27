@@ -1,7 +1,34 @@
 {
   "id": "qwen",
   "enabledByDefault": true,
-  "providers": ["qwen"],
+  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "modelstudio-native",
+      "baseUrls": [
+        "https://coding-intl.dashscope.aliyuncs.com/v1",
+        "https://coding.dashscope.aliyuncs.com/v1",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      ]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "qwen": {
+        "family": "modelstudio"
+      },
+      "qwencloud": {
+        "family": "modelstudio"
+      },
+      "modelstudio": {
+        "family": "modelstudio"
+      },
+      "dashscope": {
+        "family": "modelstudio"
+      }
+    }
+  },
   "contracts": {
     "mediaUnderstandingProviders": ["qwen"],
     "videoGenerationProviders": ["qwen"]

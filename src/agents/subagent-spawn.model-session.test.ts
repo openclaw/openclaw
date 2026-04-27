@@ -19,7 +19,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock,
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),

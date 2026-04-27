@@ -32,6 +32,7 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 
 describe("speech provider registry", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({
       getSpeechProvider,
       listSpeechProviders,
