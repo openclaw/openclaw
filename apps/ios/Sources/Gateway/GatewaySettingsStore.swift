@@ -456,6 +456,7 @@ enum GatewayDiagnostics {
     private static let keepLogBytes: Int64 = 256 * 1024
     private static let logSizeCheckEveryWrites = 50
     private static let logWritesSinceCheck = OSAllocatedUnfairLock(initialState: 0)
+
     private static func isoTimestamp() -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

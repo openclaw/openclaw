@@ -18,6 +18,8 @@ struct RootCanvas: View {
     @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
     @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
+    @AppStorage(OpenTalkModeIntent.pendingTalkModeKey) private var pendingTalkMode: Bool = false
+    @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @State private var presentedSheet: PresentedSheet?
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
@@ -195,6 +197,15 @@ struct RootCanvas: View {
         .onChange(of: self.appModel.openChatRequestID) { _, _ in
             self.presentedSheet = .chat
         }
+        .onAppear {
+            // Handle cold-launch: Action Button intent may have set the flag before UI rendered.
+            self.consumePendingTalkMode()
+        }
+        .onChange(of: self.pendingTalkMode) { _, isPending in
+            // Handle warm-launch: flag changed while the app is already running.
+            guard isPending else { return }
+            self.consumePendingTalkMode()
+        }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -223,6 +234,15 @@ struct RootCanvas: View {
 
     private var gatewayStatus: StatusPill.GatewayState {
         GatewayStatusBuilder.build(appModel: self.appModel)
+    }
+
+    private func consumePendingTalkMode() {
+        guard self.pendingTalkMode else { return }
+        self.pendingTalkMode = false
+        // Enable Talk Mode (voice) — not just the chat sheet.
+        self.talkEnabled = true
+        self.appModel.setTalkEnabled(true)
+        self.presentedSheet = .chat
     }
 
     private func updateIdleTimer() {

@@ -95,7 +95,7 @@ struct StatusPill: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Connection Status")
         .accessibilityValue(self.accessibilityValue)
-        .accessibilityHint("Double tap to open settings")
+        .accessibilityHint(self.gateway == .connected ? "Double tap for connection options" : "Double tap to open settings")
         .onAppear { self.updatePulse(for: self.gateway, scenePhase: self.scenePhase, reduceMotion: self.reduceMotion) }
         .onDisappear { self.pulse = false }
         .onChange(of: self.gateway) { _, newValue in
