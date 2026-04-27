@@ -5,6 +5,7 @@ import {
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   loadConfig,
+  removeConfigFormValue,
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
@@ -474,6 +475,42 @@ describe("agent config helpers", () => {
     expect(state.configForm).toEqual({
       agents: {
         list: [{ id: "main" }],
+      },
+    });
+  });
+
+  it("sets default via agents.list[].default instead of agents.defaultId", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }, { id: "beta" }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const list = (
+      (state.configForm ?? state.configSnapshot?.config) as {
+        agents?: { list?: Array<{ id: string }> };
+      }
+    )?.agents?.list;
+    if (Array.isArray(list)) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i]!.id === "beta") {
+          updateConfigFormValue(state, ["agents", "list", i, "default"], true);
+        } else {
+          removeConfigFormValue(state, ["agents", "list", i, "default"]);
+        }
+      }
+    }
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [{ id: "alpha" }, { id: "beta", default: true }],
       },
     });
   });
