@@ -163,6 +163,26 @@
       "cliDescription": "DeepInfra API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["deepinfra"],
+    "memoryEmbeddingProviders": ["deepinfra"],
+    "imageGenerationProviders": ["deepinfra"],
+    "speechProviders": ["deepinfra"],
+    "videoGenerationProviders": ["deepinfra"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "deepinfra": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "moonshotai/Kimi-K2.5",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "image": 45,
+        "audio": 45
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

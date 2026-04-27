@@ -41,6 +41,25 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
 }
 ```
 
+## Supported OpenClaw surfaces
+
+The bundled plugin registers all DeepInfra surfaces that match current
+OpenClaw provider contracts:
+
+| Surface                  | Default model                      | OpenClaw config/tool                                     |
+| ------------------------ | ---------------------------------- | -------------------------------------------------------- |
+| Chat / model provider    | `deepseek-ai/DeepSeek-V3.2`        | `agents.defaults.model`                                  |
+| Image generation/editing | `black-forest-labs/FLUX-1-schnell` | `image_generate`, `agents.defaults.imageGenerationModel` |
+| Media understanding      | `moonshotai/Kimi-K2.5` for images  | inbound image understanding                              |
+| Speech-to-text           | `openai/whisper-large-v3-turbo`    | inbound audio transcription                              |
+| Text-to-speech           | `hexgrad/Kokoro-82M`               | `messages.tts.provider: "deepinfra"`                     |
+| Video generation         | `Pixverse/Pixverse-T2V`            | `video_generate`, `agents.defaults.videoGenerationModel` |
+| Memory embeddings        | `BAAI/bge-m3`                      | `agents.defaults.memorySearch.provider: "deepinfra"`     |
+
+DeepInfra also exposes reranking, classification, object-detection, and other
+native model types. OpenClaw does not currently have first-class provider
+contracts for those categories, so this plugin does not register them yet.
+
 ## Available models
 
 OpenClaw dynamically discovers available DeepInfra models at startup. Use
@@ -61,3 +80,4 @@ deepinfra/zai-org/GLM-5.1
 - Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/Qwen/Qwen3-Max`).
 - Default model: `deepinfra/deepseek-ai/DeepSeek-V3.2`
 - Base URL: `https://api.deepinfra.com/v1/openai`
+- Native video generation uses `https://api.deepinfra.com/v1/inference/<model>`.

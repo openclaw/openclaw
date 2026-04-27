@@ -6,9 +6,14 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
+import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
+import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { deepinfraMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyDeepInfraConfig } from "./onboard.js";
 import { buildDeepInfraProvider, buildStaticDeepInfraProvider } from "./provider-catalog.js";
 import { DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-models.js";
+import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
+import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "deepinfra";
 
@@ -68,5 +73,12 @@ export default defineSingleProviderPluginEntry({
     },
     isModernModelRef: () => true,
     isCacheTtlEligible: (ctx) => ctx.modelId.toLowerCase().startsWith("anthropic/"),
+  },
+  register(api) {
+    api.registerImageGenerationProvider(buildDeepInfraImageGenerationProvider());
+    api.registerMediaUnderstandingProvider(deepinfraMediaUnderstandingProvider);
+    api.registerMemoryEmbeddingProvider(deepinfraMemoryEmbeddingProviderAdapter);
+    api.registerSpeechProvider(buildDeepInfraSpeechProvider());
+    api.registerVideoGenerationProvider(buildDeepInfraVideoGenerationProvider());
   },
 });

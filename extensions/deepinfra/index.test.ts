@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import deepinfraPlugin from "./index.js";
 
@@ -44,6 +45,22 @@ describe("deepinfra augmentModelCatalog", () => {
         contextWindow: 202752,
       },
     ]);
+  });
+});
+
+describe("deepinfra capability registration", () => {
+  it("registers all DeepInfra-backed OpenClaw provider surfaces", () => {
+    const captured = createCapturedPluginRegistration();
+    deepinfraPlugin.register(captured.api);
+
+    expect(captured.providers.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.imageGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.mediaUnderstandingProviders.map((provider) => provider.id)).toEqual([
+      "deepinfra",
+    ]);
+    expect(captured.memoryEmbeddingProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.speechProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
   });
 });
 

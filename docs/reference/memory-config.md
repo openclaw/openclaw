@@ -46,12 +46,12 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                   |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                          |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
+| Key        | Type      | Default          | Description                                                                                                                |
+| ---------- | --------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                       |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                 |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                            |
 
 ### Auto-detection order
 
@@ -76,6 +76,9 @@ When `provider` is not set, OpenClaw selects the first available:
   <Step title="mistral">
     Selected if a Mistral key can be resolved.
   </Step>
+  <Step title="deepinfra">
+    Selected if a DeepInfra key can be resolved.
+  </Step>
   <Step title="bedrock">
     Selected if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
   </Step>
@@ -87,15 +90,16 @@ When `provider` is not set, OpenClaw selects the first available:
 
 Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys).
 
-| Provider       | Env var                                            | Config key                        |
-| -------------- | -------------------------------------------------- | --------------------------------- |
-| Bedrock        | AWS credential chain                               | No API key needed                 |
-| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
-| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
-| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
-| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
-| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
+| Provider       | Env var                                            | Config key                          |
+| -------------- | -------------------------------------------------- | ----------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                   |
+| DeepInfra      | `DEEPINFRA_API_KEY`                                | `models.providers.deepinfra.apiKey` |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`    |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login       |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey`   |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                  |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`    |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`    |
 
 <Note>
 Codex OAuth covers chat/completions only and does not satisfy embedding requests.
