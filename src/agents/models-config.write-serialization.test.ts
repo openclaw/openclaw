@@ -113,6 +113,29 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("does not reuse scoped startup discovery cache for a different provider scope", async () => {
+    await withModelsTempHome(async (home) => {
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "skip" }));
+      const agentDir = path.join(home, "agent");
+      await ensureOpenClawModelsJson({}, agentDir, {
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+      });
+      await ensureOpenClawModelsJson({}, agentDir, {
+        providerDiscoveryProviderIds: ["anthropic"],
+        providerDiscoveryTimeoutMs: 5000,
+      });
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+      expect(planOpenClawModelsJsonMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          providerDiscoveryProviderIds: ["anthropic"],
+          providerDiscoveryTimeoutMs: 5000,
+        }),
+      );
+    });
+  });
+
   it("serializes concurrent models.json writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);

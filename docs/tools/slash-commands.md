@@ -195,6 +195,8 @@ Dock commands are generated from channel plugins with native-command support. Cu
 - `/dock-slack` (alias: `/dock_slack`)
 - `/dock-telegram` (alias: `/dock_telegram`)
 
+Use dock commands from a direct chat to switch the current session's reply route to another linked channel. The source sender and target peer must be in the same `session.identityLinks` group, for example `["telegram:123", "discord:456"]`.
+
 ### Bundled plugin commands
 
 Bundled plugins can add more slash commands. Current bundled commands in this repo:

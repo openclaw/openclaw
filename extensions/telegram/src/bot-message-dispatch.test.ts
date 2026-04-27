@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {

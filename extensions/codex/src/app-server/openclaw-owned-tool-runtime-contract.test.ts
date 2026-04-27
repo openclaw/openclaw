@@ -1,6 +1,6 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
+import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "../../../../src/agents/pi-tools.before-tool-call.js";
 import {
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,

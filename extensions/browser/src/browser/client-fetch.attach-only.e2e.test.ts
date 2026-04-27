@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { createTempHomeEnv } from "../../test-support.js";
 import { stopBrowserControlService } from "../control-service.js";
 import { fetchBrowserJson } from "./client-fetch.js";

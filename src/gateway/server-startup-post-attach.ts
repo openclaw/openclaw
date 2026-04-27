@@ -22,6 +22,7 @@ const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
+const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -146,7 +147,10 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   const agentDir = resolveOpenClawAgentDir();
   try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir);
+    await ensureOpenClawModelsJson(params.cfg, agentDir, {
+      providerDiscoveryProviderIds: [provider],
+      providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
+    });
     const resolved = resolveModel(provider, model, agentDir, params.cfg, {
       skipProviderRuntimeHooks: true,
     });
@@ -318,11 +322,15 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        await prewarmConfiguredPrimaryModelWithTimeout({
-          cfg: params.cfg,
-          log: params.log,
-        });
-        await params.startChannels();
+        await measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
+          prewarmConfiguredPrimaryModelWithTimeout({
+            cfg: params.cfg,
+            log: params.log,
+          }),
+        );
+        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
+          params.startChannels(),
+        );
       } catch (err) {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }

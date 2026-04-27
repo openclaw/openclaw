@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
   listMemoryEmbeddingProviders as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";

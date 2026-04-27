@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   DEFAULT_FIRECRAWL_MAX_AGE_MS,

@@ -257,7 +257,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
-    | `plugin-sdk/testing` | Public extension test helpers including `installCommonResolveTargetErrorCases`, `shouldAckReaction`, `writeSkill`, `createTestRegistry`, and live generation env loading |
+    | `plugin-sdk/testing` | Public extension test helpers including plugin registry/runtime mocks, schema/media/live-test helpers, `installCommonResolveTargetErrorCases`, `writeSkill`, `createTestRegistry`, and live generation env loading |
   </Accordion>
 
   <Accordion title="Memory subpaths">

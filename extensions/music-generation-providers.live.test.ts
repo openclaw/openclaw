@@ -1,20 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
-import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
+import {
+  resolveApiKeyForProvider,
+  resolveOpenClawAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
+  collectProviderApiKeys,
+  encodePngRgba,
+  fillPixel,
+  getShellEnvAppliedKeys,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  isTruthyEnvValue,
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
-} from "../src/music-generation/live-test-helpers.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

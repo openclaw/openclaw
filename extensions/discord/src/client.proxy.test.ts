@@ -1,7 +1,7 @@
 import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { fetch as undiciFetch } from "undici";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createDiscordRestClient } from "./client.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 

@@ -16,7 +16,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/commands: make generated `/dock-*` commands switch the active session reply route through `session.identityLinks` instead of falling through to normal chat. Fixes #69206; carries forward #73033. Thanks @clawbones and @michaelatamuk.
 - Providers/Cloudflare AI Gateway: strip assistant prefill turns from Anthropic Messages payloads when thinking is enabled, so Claude requests through Cloudflare AI Gateway no longer fail Anthropic conversation-ending validation. Fixes #72905; carries forward #73005. Thanks @AaronFaby and @sahilsatralkar.
+- Gateway/startup: scope primary-model provider discovery during channel prewarm to the configured provider owner and add split startup trace timings, so boot avoids staging unrelated bundled provider dependencies while setup discovery remains broad. Fixes #73002. Thanks @Schnup03.
+- Channels/Microsoft Teams: unwrap staged CommonJS JWT runtime dependencies before Bot Connector token validation so inbound Teams messages no longer 401 after the bundled runtime-deps move. Fixes #73026. Thanks @kbrown10000.
 - Channels/sessions: prevent guarded inbound session recording from creating route-only phantom sessions while still allowing last-route updates for sessions that already exist. Carries forward #73009. Thanks @jzakirov.
 - Cron: accept `delivery.threadId` in Gateway cron add/update schemas so scheduled announce delivery can target Telegram forum topics and other threaded channel destinations through the documented delivery path. Fixes #73017. Thanks @coachsootz.
 - Plugins/runtime deps: stage bundled plugin dependencies imported by mirrored root dist chunks, so packaged memory and status commands do not miss `chokidar` or similar root-chunk dependencies after update. Fixes #72882 and #72970; carries forward #72992. Thanks @shrimpy8, @colin-chang, and @Schnup03.
@@ -26,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/startup: parse strict JSON plugin manifests with native JSON first and keep JSON5 as the compatibility fallback, reducing manifest registry CPU during Gateway boot and CLI startup. Fixes #73011. Thanks @jasonftl.
 - CLI/models: keep route-first `models status --json` stdout reserved for the JSON payload by routing auth-profile and startup diagnostics to stderr. Fixes #72962. Thanks @vishutdhar.
 - Gateway/runtime: keep dirty-tree status calls from rebuilding live `dist`, clear stale task and restart state across in-process restarts, retry transient Discord lazy imports, and let channel startup continue after slow model warmup so browser, Discord, and voice-call sidecars come online. Thanks @vincentkoc.
+- Security/CodeQL: replace file SecretRef id gateway schema regex validation with segment-aligned predicates and set empty permissions on release summary/backfill jobs so the narrowed CodeQL profile stays clean. Thanks @vincentkoc.
 - Sessions: ignore future-dated session activity timestamps during reset freshness checks and cap future `updatedAt` values at the merge boundary so clock-skewed messages cannot keep stale sessions alive forever. Fixes #72989. Thanks @martingarramon.
 - Sessions: apply search, activity filters, and limits before gateway row enrichment so bounded session lists avoid scanning discarded transcripts. Carries forward #72978. Thanks @yeager.
 - Sessions: remove trajectory runtime and pointer sidecars when session maintenance prunes, caps, or disk-evicts their owning session, while preserving sidecars still referenced by live rows. Fixes #73000. Thanks @jared-rebel.

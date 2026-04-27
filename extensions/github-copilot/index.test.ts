@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
-} from "../../src/agents/auth-profiles.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
