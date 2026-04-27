@@ -160,7 +160,7 @@ function isEmotionTagBoundary(char: string | undefined, side: "before" | "after"
   }
   // `[` is added to the "after" boundary so back-to-back tags `[a][b]` strip
   // (the first tag's "after" is the next `[`).
-  return /[\s.,!?;:)\]}>\/\[\\"'`-]/u.test(char);
+  return /[-\s.,!?;:)\]}>/["'`\\]/u.test(char);
 }
 
 function emotionTagWordsFromBody(body: string): string[] {
