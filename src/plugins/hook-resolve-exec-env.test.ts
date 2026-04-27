@@ -77,4 +77,18 @@ describe("resolve_exec_env hook", () => {
     const result = await runner.runResolveExecEnv({ sessionKey: "test", toolName: "exec" }, {});
     expect(result).toEqual({ ASYNC_KEY: "value" });
   });
+
+  it("isolates handler errors — other plugins still contribute env vars", async () => {
+    const throwingHandler = vi.fn().mockRejectedValue(new Error("plugin crash"));
+    const goodHandler = vi.fn().mockResolvedValue({ GOOD_KEY: "ok" });
+    const runner = createHookRunner(
+      createTestRegistry([
+        { pluginId: "crasher", hookName: "resolve_exec_env", handler: throwingHandler },
+        { pluginId: "good-plugin", hookName: "resolve_exec_env", handler: goodHandler },
+      ]),
+      { catchErrors: true },
+    );
+    const result = await runner.runResolveExecEnv({ sessionKey: "test", toolName: "exec" }, {});
+    expect(result).toEqual({ GOOD_KEY: "ok" });
+  });
 });

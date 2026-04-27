@@ -71,6 +71,7 @@ import type {
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvEvent,
+  PluginHookResolveExecEnvContext,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -134,6 +135,7 @@ export type {
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvEvent,
+  PluginHookResolveExecEnvContext,
 };
 
 export type HookRunnerLogger = {
