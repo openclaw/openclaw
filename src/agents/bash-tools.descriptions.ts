@@ -16,7 +16,7 @@ function deriveExecShortName(fullPath: string): string {
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
     "Execute shell commands with background continuation for work that starts now.",
-    "Use yieldMs/background to continue later via process tool; backgrounded commands still use the exec timeout, so set timeout=0 for intentionally long-lived servers, agents, or PTYs.",
+    "Use yieldMs/background to continue later via process tool; backgrounded commands still use the exec timeout, so set timeout=0 for intentionally long-lived local/gateway servers, agents, or PTYs, and use a large positive timeout for host=node.",
     "For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."

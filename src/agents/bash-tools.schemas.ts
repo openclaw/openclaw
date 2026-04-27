@@ -12,7 +12,8 @@ export const execSchema = Type.Object({
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (default 1800; use 0 to disable for this exec call)",
+      description:
+        "Timeout in seconds (default 1800; use 0 to disable local/gateway timeout; use a large positive timeout for host=node)",
     }),
   ),
   pty: Type.Optional(
