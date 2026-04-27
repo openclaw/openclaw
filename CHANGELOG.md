@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- ACP/runtime: add an opt-in bundled Coven backend extension that routes ACP coding sessions through a local Coven daemon when `acp.backend="coven"`, while preserving the existing ACPX backend as the default fallback path.
+
 ## 2026.4.26
 
 ### Changes
