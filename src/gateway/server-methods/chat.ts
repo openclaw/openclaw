@@ -58,7 +58,7 @@ import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
@@ -1046,15 +1046,12 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
-export function computeHistoryCursor(params: {
-  start: number;
-  slicedLength: number;
-  boundedLength: number;
-}): { cursor: number; hasMore: boolean } {
-  const { start, slicedLength, boundedLength } = params;
-  const droppedFromFront = boundedLength > 0 ? slicedLength - boundedLength : 0;
-  const cursor = start + droppedFromFront;
-  return { cursor, hasMore: cursor > 0 };
+export function computeHistoryCursor(params: { firstRawIndex: number }): {
+  cursor: number;
+  hasMore: boolean;
+} {
+  const { firstRawIndex } = params;
+  return { cursor: firstRawIndex, hasMore: firstRawIndex > 0 };
 }
 
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
@@ -1526,8 +1523,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     const end =
       typeof before === "number" ? Math.min(before, rawMessages.length) : rawMessages.length;
     const start = Math.max(0, end - max);
-    const sliced = rawMessages.slice(start, end);
-    const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
         maxChars: effectiveMaxChars,
@@ -1543,10 +1538,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const firstBounded = bounded.messages[0];
+    const rawIdx =
+      firstBounded != null
+        ? rawMessages.indexOf(firstBounded as (typeof rawMessages)[number], start)
+        : -1;
     const { cursor, hasMore } = computeHistoryCursor({
-      start,
-      slicedLength: sliced.length,
-      boundedLength: bounded.messages.length,
+      firstRawIndex: rawIdx >= 0 ? rawIdx : start,
     });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {

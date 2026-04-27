@@ -2,51 +2,31 @@ import { describe, expect, it } from "vitest";
 import { computeHistoryCursor, enforceChatHistoryFinalBudget } from "./chat.js";
 
 describe("computeHistoryCursor", () => {
-  it("returns cursor=0 and hasMore=false when start=0 and no capping occurred", () => {
-    expect(computeHistoryCursor({ start: 0, slicedLength: 5, boundedLength: 5 })).toEqual({
+  it("returns cursor=0 and hasMore=false when firstRawIndex=0", () => {
+    expect(computeHistoryCursor({ firstRawIndex: 0 })).toEqual({
       cursor: 0,
       hasMore: false,
     });
   });
 
-  it("returns cursor=start and hasMore=true when start>0 and no capping occurred", () => {
-    expect(computeHistoryCursor({ start: 10, slicedLength: 5, boundedLength: 5 })).toEqual({
+  it("returns cursor=firstRawIndex and hasMore=true when firstRawIndex>0", () => {
+    expect(computeHistoryCursor({ firstRawIndex: 10 })).toEqual({
       cursor: 10,
       hasMore: true,
     });
   });
 
-  it("accounts for items dropped from front by byte-capping", () => {
-    // sliced had 5 items, capping kept only last 3 → dropped 2 from front
-    expect(computeHistoryCursor({ start: 0, slicedLength: 5, boundedLength: 3 })).toEqual({
-      cursor: 2,
+  it("reflects the raw index of the first surviving message after byte-capping", () => {
+    // First surviving message is at raw index 3 (two NO_REPLY messages dropped before it)
+    expect(computeHistoryCursor({ firstRawIndex: 3 })).toEqual({
+      cursor: 3,
       hasMore: true,
-    });
-  });
-
-  it("combines start offset with front-dropped items", () => {
-    // start=10, sliced 5 items, capping kept 3 → cursor = 10 + 2 = 12
-    expect(computeHistoryCursor({ start: 10, slicedLength: 5, boundedLength: 3 })).toEqual({
-      cursor: 12,
-      hasMore: true,
-    });
-  });
-
-  it("treats boundedLength=0 as droppedFromFront=0 (extreme fallback kept no messages)", () => {
-    // When bounded is empty the cursor should point to start, not start+slicedLength.
-    expect(computeHistoryCursor({ start: 0, slicedLength: 5, boundedLength: 0 })).toEqual({
-      cursor: 0,
-      hasMore: false,
     });
   });
 
   it("returns hasMore=false only when cursor is exactly 0", () => {
-    expect(computeHistoryCursor({ start: 1, slicedLength: 5, boundedLength: 5 }).hasMore).toBe(
-      true,
-    );
-    expect(computeHistoryCursor({ start: 0, slicedLength: 5, boundedLength: 5 }).hasMore).toBe(
-      false,
-    );
+    expect(computeHistoryCursor({ firstRawIndex: 1 }).hasMore).toBe(true);
+    expect(computeHistoryCursor({ firstRawIndex: 0 }).hasMore).toBe(false);
   });
 });
 
