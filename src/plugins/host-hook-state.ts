@@ -32,6 +32,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 const log = createSubsystemLogger("plugins/host-hook-state");
 const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
 const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
+const MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH = 512;
 const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
 
 function isStorePathTemplate(store?: string): boolean {
@@ -46,14 +47,37 @@ function copyJsonValue(value: PluginJsonValue): PluginJsonValue {
   return structuredClone(value);
 }
 
-function isExpired(entry: Pick<PluginNextTurnInjectionRecord, "createdAt" | "ttlMs">, now: number) {
-  return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
-}
-
 function isPluginNextTurnInjectionPlacement(
   value: unknown,
 ): value is PluginNextTurnInjectionRecord["placement"] {
   return value === "prepend_context" || value === "append_context";
+}
+
+function isPluginNextTurnInjectionRecord(value: unknown): value is PluginNextTurnInjectionRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<PluginNextTurnInjectionRecord>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.pluginId === "string" &&
+    typeof candidate.text === "string" &&
+    typeof candidate.createdAt === "number" &&
+    Number.isFinite(candidate.createdAt) &&
+    isPluginNextTurnInjectionPlacement(candidate.placement) &&
+    (candidate.ttlMs === undefined ||
+      (typeof candidate.ttlMs === "number" &&
+        Number.isFinite(candidate.ttlMs) &&
+        candidate.ttlMs >= 0)) &&
+    (candidate.idempotencyKey === undefined || typeof candidate.idempotencyKey === "string")
+  );
+}
+
+function isExpired(entry: unknown, now: number) {
+  if (!isPluginNextTurnInjectionRecord(entry)) {
+    return true;
+  }
+  return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
 }
 
 function findStoreKeysIgnoreCase(store: Record<string, unknown>, targetKey: string): string[] {
@@ -230,6 +254,15 @@ export async function enqueuePluginNextTurnInjection(params: {
     return { enqueued: false, id: "", sessionKey };
   }
   if (
+    params.injection.idempotencyKey !== undefined &&
+    (typeof params.injection.idempotencyKey !== "string" ||
+      params.injection.idempotencyKey.trim().length === 0 ||
+      params.injection.idempotencyKey.length >
+        MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH)
+  ) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  if (
     params.injection.placement !== undefined &&
     !isPluginNextTurnInjectionPlacement(params.injection.placement)
   ) {
@@ -265,7 +298,7 @@ export async function enqueuePluginNextTurnInjection(params: {
     // here would crash the spread/filter and break the whole session's enqueue.
     const rawExisting = injections[params.pluginId];
     const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
-      (candidate) => !isExpired(candidate, now),
+      (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
     );
     const duplicate = record.idempotencyKey
       ? existing.find((candidate) => candidate.idempotencyKey === record.idempotencyKey)
@@ -332,7 +365,9 @@ export async function drainPluginNextTurnInjections(params: {
       if (!Array.isArray(entries)) {
         continue;
       }
-      const liveEntries = entries.filter((candidate) => !isExpired(candidate, now));
+      const liveEntries = entries.filter(
+        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
+      );
       drained.push(...liveEntries);
     }
     drained.sort((left, right) => left.createdAt - right.createdAt);
