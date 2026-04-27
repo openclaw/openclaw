@@ -44,7 +44,7 @@ export async function executeNodeHostCommand(
       hostSecurity,
       hostAsk,
       strictInlineEval: params.strictInlineEval,
-      workdir: params.workdir,
+      workdirExplicit: params.workdirExplicit,
     })
   ) {
     return await invokeNodeSystemRunDirect({ request: params, target });
