@@ -179,13 +179,24 @@ export function createTelegramBotCore(
     : undefined;
 
   // Wrap fetch so polling requests cannot hang indefinitely on a wedged network path,
-  // and so shutdown still aborts in-flight Telegram API requests immediately.
+  // and so shutdown still aborts in-flight Telegram API requests immediately unless the
+  // caller narrows aborts to specific Bot API methods (polling restarts use this to avoid
+  // killing in-flight sendMessage replies while aborting a stuck getUpdates request).
   let finalFetch: TelegramCompatFetch | undefined = shouldProvideFetch ? fetchForClient : undefined;
   if (finalFetch || opts.fetchAbortSignal) {
     const baseFetch = finalFetch ?? asTelegramCompatFetch(asTelegramClientFetch(globalThis.fetch));
     // Cast baseFetch to global fetch to avoid node-fetch ↔ global-fetch type divergence;
     // they are runtime-compatible (the codebase already casts at every fetch boundary).
     const callFetch = baseFetch;
+    const abortMethodAllowList = opts.fetchAbortMethods
+      ? new Set(
+          opts.fetchAbortMethods
+            .map((method) => normalizeOptionalLowercaseString(method))
+            .filter((method): method is string => Boolean(method)),
+        )
+      : null;
+    const shouldHonorFetchAbortSignal = (method: string | null) =>
+      abortMethodAllowList === null || (method !== null && abortMethodAllowList.has(method));
     // Use manual event forwarding instead of AbortSignal.any() to avoid the cross-realm
     // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
     // causing "signals[0] must be an instance of AbortSignal" errors).
@@ -196,19 +207,20 @@ export function createTelegramBotCore(
       const shutdownSignal = isTelegramAbortSignalLike(opts.fetchAbortSignal)
         ? opts.fetchAbortSignal
         : undefined;
+      const method = extractTelegramApiMethod(input);
+      const honorShutdownAbort = shouldHonorFetchAbortSignal(method);
       const onShutdown = () => {
         if (shutdownSignal) {
           abortWith(shutdownSignal);
         }
       };
-      const method = extractTelegramApiMethod(input);
       const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
       const requestSignal = isTelegramAbortSignalLike(init?.signal) ? init.signal : undefined;
-      if (shutdownSignal?.aborted) {
+      if (honorShutdownAbort && shutdownSignal?.aborted) {
         abortWith(shutdownSignal);
-      } else if (shutdownSignal) {
+      } else if (honorShutdownAbort && shutdownSignal) {
         shutdownSignal.addEventListener("abort", onShutdown, { once: true });
       }
       if (requestSignal) {
@@ -232,7 +244,9 @@ export function createTelegramBotCore(
         if (requestTimeout) {
           clearTimeout(requestTimeout);
         }
-        shutdownSignal?.removeEventListener("abort", onShutdown);
+        if (honorShutdownAbort) {
+          shutdownSignal?.removeEventListener("abort", onShutdown);
+        }
         if (requestSignal && onRequestAbort) {
           requestSignal.removeEventListener("abort", onRequestAbort);
         }
