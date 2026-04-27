@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/chat: accept dropped or selected image files when the browser leaves the MIME type empty by using the image extension fallback only for missing MIME types, and preserve the resolved MIME through attachment previews and send serialization. Fixes #62371; carries forward #62392. Thanks @hy0235.
 - Control UI/Agents: redact tool-call args, partial/final results, derived exec output, and configured custom secret patterns before streaming tool events to the Control UI, so tool output cannot expose provider or channel credentials. Fixes #72283. (#72319) Thanks @volcano303 and @BunsDev.
 - Models/fallbacks: treat user-selected session models as exact choices, so `/model ollama/...` and model-picker switches fail visibly when the selected provider is unreachable instead of answering from an unrelated configured fallback. Fixes #73023. Thanks @pavelyortho-cyber.
 - CLI/model probes: fail local `infer model run` probes when the provider returns no text output, so unreachable local providers and empty completions no longer look like successful smoke tests. Refs #73023. Thanks @pavelyortho-cyber.

@@ -204,10 +204,14 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function normalizeAttachmentDataUrl(dataUrl: string, mimeType: string): string {
+  return dataUrl.replace(/^data:(;base64,)/, `data:${mimeType}$1`);
+}
+
 function chatAttachmentFromFile(file: File, dataUrl: string, mimeType: string): ChatAttachment {
   return {
     id: generateAttachmentId(),
-    dataUrl,
+    dataUrl: normalizeAttachmentDataUrl(dataUrl, mimeType),
     mimeType,
     fileName: file.name || undefined,
   };
