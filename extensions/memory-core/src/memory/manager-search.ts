@@ -259,7 +259,9 @@ export function searchChunksByEmbedding(params: {
     };
     if (topResults.length < params.limit) {
       topResults.push(result);
-      topResults.sort((a, b) => b.score - a.score);
+      if (topResults.length === params.limit) {
+        topResults.sort((a, b) => b.score - a.score);
+      }
       continue;
     }
     const lowest = topResults.at(-1);
@@ -268,59 +270,8 @@ export function searchChunksByEmbedding(params: {
       topResults.sort((a, b) => b.score - a.score);
     }
   }
+  topResults.sort((a, b) => b.score - a.score);
   return topResults;
-}
-
-export function listChunks(params: {
-  db: DatabaseSync;
-  providerModel: string;
-  sourceFilter: { sql: string; params: SearchSource[] };
-}): Array<{
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  text: string;
-  embedding: number[];
-  source: SearchSource;
-}> {
-  const rows = params.db
-    .prepare(
-      `SELECT id, path, start_line, end_line, text, embedding, source\n` +
-        `  FROM chunks\n` +
-        ` WHERE model = ?${params.sourceFilter.sql}`,
-    )
-    .iterate(params.providerModel, ...params.sourceFilter.params) as IterableIterator<{
-    id: string;
-    path: string;
-    start_line: number;
-    end_line: number;
-    text: string;
-    embedding: string;
-    source: SearchSource;
-  }>;
-
-  const chunks: Array<{
-    id: string;
-    path: string;
-    startLine: number;
-    endLine: number;
-    text: string;
-    embedding: number[];
-    source: SearchSource;
-  }> = [];
-  for (const row of rows) {
-    chunks.push({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      text: row.text,
-      embedding: parseEmbedding(row.embedding),
-      source: row.source,
-    });
-  }
-  return chunks;
 }
 
 export async function searchKeyword(params: {
