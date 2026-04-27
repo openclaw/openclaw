@@ -88,7 +88,7 @@ function createRegisteredCommand(params?: {
 }
 
 function createCommandLookupClient(params: {
-  command?: MattermostCommandResponse | null;
+  command?: MattermostCommandResponse | null | (() => MattermostCommandResponse | null);
   commandLookupError?: Error;
   listLookupError?: Error;
   listCommands?: MattermostCommandResponse[];
@@ -104,8 +104,9 @@ function createCommandLookupClient(params: {
         if (params.commandLookupError) {
           throw params.commandLookupError;
         }
-        if (params.command) {
-          return params.command as T;
+        const command = typeof params.command === "function" ? params.command() : params.command;
+        if (command) {
+          return command as T;
         }
         throw new Error("not found");
       }
@@ -113,7 +114,8 @@ function createCommandLookupClient(params: {
         if (params.listLookupError) {
           throw params.listLookupError;
         }
-        return (params.listCommands ?? (params.command ? [params.command] : [])) as T;
+        const command = typeof params.command === "function" ? params.command() : params.command;
+        return (params.listCommands ?? (command ? [command] : [])) as T;
       }
       throw new Error(`unexpected request path: ${path}`);
     },
@@ -221,7 +223,7 @@ describe("slash-http", () => {
     expect(response.getBody()).toBe("Request body timeout");
   });
 
-  it("rejects a cached token when Mattermost has rotated the current command token", async () => {
+  it("rejects the startup token when Mattermost has rotated the current command token", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const client = createCommandLookupClient({
       command: {
@@ -255,7 +257,7 @@ describe("slash-http", () => {
     expect(registeredCommand.token).toBe("old-token");
   });
 
-  it("accepts a cached token while the current Mattermost command still matches", async () => {
+  it("accepts the startup token while the current Mattermost command still matches", async () => {
     const registeredCommand = createRegisteredCommand({ token: "valid-token" });
     const client = createCommandLookupClient({
       command: {
@@ -287,19 +289,20 @@ describe("slash-http", () => {
     ).resolves.toBe(true);
   });
 
-  it("briefly caches matching current command validation", async () => {
+  it("rechecks matching current commands so startup tokens are not accepted after rotation", async () => {
     const registeredCommand = createRegisteredCommand({ token: "valid-token" });
+    let command = {
+      id: "cmd-1",
+      token: "valid-token",
+      team_id: "t1",
+      trigger: "oc_status",
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: "https://gateway.example.com/slash",
+      auto_complete: true,
+      delete_at: 0,
+    };
     const client = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: () => command,
     });
     const payload = {
       token: "valid-token",
@@ -318,6 +321,10 @@ describe("slash-http", () => {
         payload,
       }),
     ).resolves.toBe(true);
+    command = {
+      ...command,
+      token: "new-token",
+    };
     await expect(
       validateMattermostSlashCommandToken({
         accountId: "default",
@@ -325,12 +332,12 @@ describe("slash-http", () => {
         registeredCommand,
         payload,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
 
-    expect(client.requests).toEqual(["/commands/cmd-1"]);
+    expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
   });
 
-  it("briefly caches failed current command validation", async () => {
+  it("briefly caches failed current command validation without accepting stale tokens", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const client = createCommandLookupClient({
       command: {
@@ -512,6 +519,48 @@ describe("slash-http", () => {
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
+  it("logs when command lookup by id returns a deleted command before fallback", async () => {
+    const registeredCommand = createRegisteredCommand();
+    const command = {
+      id: "cmd-1\r\nspoofed",
+      token: "valid-token",
+      team_id: "t1",
+      trigger: "oc_status",
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: "https://gateway.example.com/slash",
+      auto_complete: true,
+      delete_at: 123,
+    };
+    const client = createCommandLookupClient({
+      command,
+      listCommands: [],
+    });
+    const log = vi.fn();
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload: {
+          token: "valid-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+        log,
+      }),
+    ).resolves.toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const message = log.mock.calls[0]?.[0] ?? "";
+    expect(message).not.toMatch(/[\r\n\t]/u);
+    expect(message).toContain("deleted command cmd-1  spoofed");
+    expect(message).toContain("using team list fallback");
+  });
+
   it("rejects current commands with a mismatched method or callback URL", async () => {
     const registeredCommand = createRegisteredCommand();
 
@@ -537,6 +586,7 @@ describe("slash-http", () => {
         delete_at: 0,
       },
     ]) {
+      resetMattermostSlashCommandValidationCacheForTests();
       const client = createCommandLookupClient({ command });
 
       await expect(

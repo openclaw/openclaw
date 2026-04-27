@@ -69,18 +69,14 @@ type SlashHttpHandlerParams = {
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
-const COMMAND_LOOKUP_CACHE_SUCCESS_MS = 5_000;
-const COMMAND_LOOKUP_CACHE_FAILURE_MS = 5_000;
-const COMMAND_LOOKUP_CACHE_MAX_KEYS = 2_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MS = 5_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS = 2_000;
 type CommandLookupInflightEntry = {
   accountId: string;
   promise: Promise<MattermostCommandResponse | null>;
 };
 const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
-const commandLookupCache = new Map<
-  string,
-  { accountId: string; command: MattermostCommandResponse | null; expiresAt: number }
->();
+const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
 
 /**
  * Read the full request body as a string.
@@ -162,13 +158,13 @@ function commandLookupKey(
 
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
   commandLookupInflight.clear();
-  commandLookupCache.clear();
+  commandValidationFailureCache.clear();
 }
 
 export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
-  for (const [key, entry] of commandLookupCache) {
+  for (const [key, entry] of commandValidationFailureCache) {
     if (entry.accountId === accountId) {
-      commandLookupCache.delete(key);
+      commandValidationFailureCache.delete(key);
     }
   }
   for (const [key, entry] of commandLookupInflight) {
@@ -178,19 +174,40 @@ export function clearMattermostSlashCommandValidationCacheForAccount(accountId: 
   }
 }
 
-function sweepCommandLookupCache(now = Date.now()): void {
-  for (const [key, entry] of commandLookupCache) {
+function sweepCommandValidationFailureCache(now = Date.now()): void {
+  for (const [key, entry] of commandValidationFailureCache) {
     if (entry.expiresAt <= now) {
-      commandLookupCache.delete(key);
+      commandValidationFailureCache.delete(key);
     }
   }
-  while (commandLookupCache.size > COMMAND_LOOKUP_CACHE_MAX_KEYS) {
-    const oldestKey = commandLookupCache.keys().next().value;
+  while (commandValidationFailureCache.size > COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS) {
+    const oldestKey = commandValidationFailureCache.keys().next().value;
     if (!oldestKey) {
       break;
     }
-    commandLookupCache.delete(oldestKey);
+    commandValidationFailureCache.delete(oldestKey);
   }
+}
+
+function hasCachedCommandValidationFailure(key: string, now = Date.now()): boolean {
+  sweepCommandValidationFailureCache(now);
+  const cached = commandValidationFailureCache.get(key);
+  if (!cached) {
+    return false;
+  }
+  if (cached.expiresAt > now) {
+    return true;
+  }
+  commandValidationFailureCache.delete(key);
+  return false;
+}
+
+function cacheCommandValidationFailure(key: string, accountId: string): void {
+  sweepCommandValidationFailureCache();
+  commandValidationFailureCache.set(key, {
+    accountId,
+    expiresAt: Date.now() + COMMAND_VALIDATION_FAILURE_CACHE_MS,
+  });
 }
 
 async function fetchCurrentMattermostCommandUncached(params: {
@@ -200,6 +217,7 @@ async function fetchCurrentMattermostCommandUncached(params: {
 }): Promise<MattermostCommandResponse | null> {
   let commandLookupResult: MattermostCommandResponse | null = null;
   let commandLookupError: unknown;
+  let commandLookupFallbackDetail: string | undefined;
   try {
     commandLookupResult = await withCommandLookupTimeout((signal) =>
       getMattermostCommand(params.client, params.registered.id, { signal }),
@@ -207,6 +225,7 @@ async function fetchCurrentMattermostCommandUncached(params: {
     if (!isDeletedMattermostCommand(commandLookupResult)) {
       return commandLookupResult;
     }
+    commandLookupFallbackDetail = `command lookup by id returned deleted command ${sanitizeMattermostLogValue(commandLookupResult.id)}`;
   } catch (err) {
     commandLookupError = err;
     // Older Mattermost servers may not expose GET /commands/{id}; fall back to
@@ -221,12 +240,18 @@ async function fetchCurrentMattermostCommandUncached(params: {
       params.log?.(
         `mattermost: slash command lookup by id failed for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback: ${sanitizeCommandLookupError(commandLookupError)}`,
       );
+    } else if (commandLookupFallbackDetail) {
+      params.log?.(
+        `mattermost: slash ${commandLookupFallbackDetail} for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback`,
+      );
     }
     return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
   } catch (err) {
     const primaryDetail = commandLookupError
       ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
-      : "";
+      : commandLookupFallbackDetail
+        ? `; command lookup: ${commandLookupFallbackDetail}`
+        : "";
     params.log?.(
       `mattermost: slash command registration check failed for /${sanitizeMattermostLogValue(params.registered.trigger)}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
     );
@@ -241,35 +266,14 @@ async function fetchCurrentMattermostCommand(params: {
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
   const key = commandLookupKey(params.client, params.registered, params.accountId);
-  sweepCommandLookupCache();
-  const cached = commandLookupCache.get(key);
-  if (cached) {
-    if (cached.expiresAt > Date.now()) {
-      return cached.command;
-    }
-    commandLookupCache.delete(key);
-  }
-
   const existing = commandLookupInflight.get(key);
   if (existing) {
     return await existing.promise;
   }
 
-  const lookup = fetchCurrentMattermostCommandUncached(params)
-    .then((command) => {
-      sweepCommandLookupCache();
-      commandLookupCache.set(key, {
-        accountId: params.accountId,
-        command,
-        expiresAt:
-          Date.now() +
-          (command ? COMMAND_LOOKUP_CACHE_SUCCESS_MS : COMMAND_LOOKUP_CACHE_FAILURE_MS),
-      });
-      return command;
-    })
-    .finally(() => {
-      commandLookupInflight.delete(key);
-    });
+  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
+    commandLookupInflight.delete(key);
+  });
   commandLookupInflight.set(key, { accountId: params.accountId, promise: lookup });
   return await lookup;
 }
@@ -281,6 +285,10 @@ export async function validateMattermostSlashCommandToken(params: {
   payload: MattermostSlashCommandPayload;
   log?: (msg: string) => void;
 }): Promise<boolean> {
+  const lookupKey = commandLookupKey(params.client, params.registeredCommand, params.accountId);
+  if (hasCachedCommandValidationFailure(lookupKey)) {
+    return false;
+  }
   const current = await fetchCurrentMattermostCommand({
     accountId: params.accountId,
     client: params.client,
@@ -288,6 +296,7 @@ export async function validateMattermostSlashCommandToken(params: {
     log: params.log,
   });
   if (!current || isDeletedMattermostCommand(current)) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
     return false;
   }
   if (
@@ -297,11 +306,14 @@ export async function validateMattermostSlashCommandToken(params: {
     current.method !== MATTERMOST_SLASH_POST_METHOD ||
     current.url !== params.registeredCommand.url
   ) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
     return false;
   }
   if (!current.token || !safeEqualSecret(params.payload.token, current.token)) {
+    cacheCommandValidationFailure(lookupKey, params.accountId);
     return false;
   }
+  commandValidationFailureCache.delete(lookupKey);
   return true;
 }
 
