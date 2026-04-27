@@ -1091,6 +1091,7 @@
                 "group": "Fundamentals",
                 "pages": [
                   "concepts/architecture",
+                  "concepts/architecture-guide",
                   "concepts/agent",
                   "concepts/agent-loop",
                   "concepts/agent-runtimes",

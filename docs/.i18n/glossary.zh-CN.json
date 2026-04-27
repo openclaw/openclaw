@@ -28,6 +28,58 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Architecture Guide",
+    "target": "架构指南"
+  },
+  {
+    "source": "Gateway Architecture",
+    "target": "Gateway 架构"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Session Management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Command Queue",
+    "target": "命令队列"
+  },
+  {
+    "source": "Memory Overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Compaction",
+    "target": "压缩"
+  },
+  {
+    "source": "Tools and Plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Plugin Internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
+  },
+  {
+    "source": "Gateway Logging",
+    "target": "Gateway 日志"
+  },
+  {
+    "source": "Diagnostics Export",
+    "target": "诊断导出"
+  },
+  {
+    "source": "Tests",
+    "target": "测试"
+  },
+  {
     "source": "Pi",
     "target": "Pi"
   },
