@@ -52,8 +52,9 @@ OpenClaw has three public release lanes:
 - Run the manual `CI` workflow before release approval when you need full normal
   CI coverage for the release candidate. Manual CI dispatches bypass changed
   scoping and force the Linux Node shards, bundled-plugin shards, channel
-  contracts, `check`, `check-additional`, build smoke, docs checks, Python
-  skills, Windows, macOS, Android, and Control UI i18n lanes.
+  contracts, Node 22 compatibility, `check`, `check-additional`, build smoke,
+  docs checks, Python skills, Windows, macOS, Android, and Control UI i18n
+  lanes.
   Example: `gh workflow run ci.yml --ref release/YYYY.M.D`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies the exported trace

@@ -15,6 +15,8 @@ import {
 } from "../infra/exec-inline-eval.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -26,6 +28,7 @@ export type NodeExecutionTarget = {
   argv: string[];
   env: Record<string, string> | undefined;
   invokeTimeoutMs: number;
+  supportsSystemRunPrepare: boolean;
 };
 
 export type PreparedNodeRun = {
@@ -113,9 +116,8 @@ export async function resolveNodeExecutionTarget(
     throw err;
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-  const supportsSystemRun = Array.isArray(nodeInfo?.commands)
-    ? nodeInfo?.commands?.includes("system.run")
-    : false;
+  const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
+  const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {
     throw new Error(
       "exec host=node requires a node that supports system.run (companion app or node host).",
@@ -133,6 +135,7 @@ export async function resolveNodeExecutionTarget(
         1000 +
         5_000,
     ),
+    supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
 }
 
@@ -199,6 +202,10 @@ export async function prepareNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
 }): Promise<PreparedNodeRun> {
+  if (!params.target.supportsSystemRunPrepare) {
+    return buildLocalPreparedNodeRun(params);
+  }
+
   const prepareRaw = await callGatewayTool(
     "node.invoke",
     { timeoutMs: 15_000 },
@@ -226,6 +233,41 @@ export async function prepareNodeSystemRun(params: {
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
+  };
+}
+
+function buildLocalPreparedNodeRun(params: {
+  request: ExecuteNodeHostCommandParams;
+  target: NodeExecutionTarget;
+}): PreparedNodeRun {
+  const command = resolveSystemRunCommandRequest({
+    command: params.target.argv,
+    rawCommand: params.request.command,
+  });
+  if (!command.ok) {
+    throw new Error(command.message);
+  }
+  if (command.argv.length === 0) {
+    throw new Error("command required");
+  }
+  const commandText = formatExecCommand(command.argv);
+  const previewText = command.previewText?.trim();
+  const commandPreview = previewText && previewText !== commandText ? previewText : null;
+  const plan = {
+    argv: [...command.argv],
+    cwd: normalizeNullableString(params.request.workdir),
+    commandText,
+    commandPreview,
+    agentId: normalizeNullableString(params.request.agentId),
+    sessionKey: normalizeNullableString(params.request.sessionKey),
+  } satisfies SystemRunApprovalPlan;
+  return {
+    plan,
+    argv: plan.argv,
+    rawCommand: plan.commandText,
+    cwd: plan.cwd ?? params.request.workdir,
+    agentId: plan.agentId ?? params.request.agentId,
+    sessionKey: plan.sessionKey ?? params.request.sessionKey,
   };
 }
 
