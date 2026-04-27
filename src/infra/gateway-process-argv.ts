@@ -39,6 +39,15 @@ export function parseWindowsCmdline(raw: string): string[] {
 
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {
   const normalized = args.map(normalizeProcArg);
+  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
+  const isGatewayBinary =
+    opts?.allowGatewayBinary === true &&
+    (exe.endsWith("/openclaw-gateway") || exe === "openclaw-gateway");
+
+  if (isGatewayBinary) {
+    return true;
+  }
+
   if (!normalized.includes("gateway")) {
     return false;
   }
@@ -55,10 +64,5 @@ export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: bool
     return true;
   }
 
-  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  return (
-    exe.endsWith("/openclaw") ||
-    exe === "openclaw" ||
-    (opts?.allowGatewayBinary === true && exe.endsWith("/openclaw-gateway"))
-  );
+  return exe.endsWith("/openclaw") || exe === "openclaw";
 }

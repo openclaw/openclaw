@@ -95,6 +95,27 @@ function loadGatewayProbeAuthModule() {
   return gatewayProbeAuthModulePromise;
 }
 
+export async function resolveDaemonProbeAuth(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  explicitAuth?: { token?: string; password?: string };
+}): Promise<{ auth?: { token?: string; password?: string }; warning?: string }> {
+  const probeMode = params.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+    ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
+      resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: params.cfg,
+        mode: probeMode,
+        env: params.env,
+        explicitAuth: params.explicitAuth,
+      }),
+  );
+  return {
+    auth: probeAuthResolution.auth,
+    warning: probeAuthResolution.warning,
+  };
+}
+
 function loadDaemonInspectModule() {
   daemonInspectModulePromise ??= import("../../daemon/inspect.js");
   return daemonInspectModulePromise;
@@ -490,19 +511,14 @@ export async function gatherDaemonStatus(
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   if (opts.probe) {
-    const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-    const probeAuthResolution = await loadGatewayProbeAuthModule().then(
-      ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
-        resolveGatewayProbeAuthSafeWithSecretInputs({
-          cfg: daemonCfg,
-          mode: probeMode,
-          env: mergedDaemonEnv as NodeJS.ProcessEnv,
-          explicitAuth: {
-            token: opts.rpc.token,
-            password: opts.rpc.password,
-          },
-        }),
-    );
+    const probeAuthResolution = await resolveDaemonProbeAuth({
+      cfg: daemonCfg,
+      env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      explicitAuth: {
+        token: opts.rpc.token,
+        password: opts.rpc.password,
+      },
+    });
     daemonProbeAuth = probeAuthResolution.auth;
     rpcAuthWarning = probeAuthResolution.warning;
   }

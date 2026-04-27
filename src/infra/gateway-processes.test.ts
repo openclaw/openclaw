@@ -157,6 +157,21 @@ describe("gateway-processes", () => {
     );
   });
 
+  it("accepts bare openclaw-gateway process titles when gateway binary verification is enabled", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("openclaw-gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["openclaw-gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    signalVerifiedGatewayPidSync(700, "SIGUSR1");
+
+    expect(isGatewayArgvMock).toHaveBeenCalledWith(["openclaw-gateway"], {
+      allowGatewayBinary: true,
+    });
+    expect(killSpy).toHaveBeenCalledWith(700, "SIGUSR1");
+  });
+
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);

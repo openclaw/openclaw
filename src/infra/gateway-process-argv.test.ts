@@ -64,6 +64,12 @@ describe("isGatewayArgv", () => {
         allowGatewayBinary: true,
       }),
     ).toBe(true);
+    expect(isGatewayArgv(["openclaw-gateway"])).toBe(false);
+    expect(
+      isGatewayArgv(["openclaw-gateway"], {
+        allowGatewayBinary: true,
+      }),
+    ).toBe(true);
   });
 
   it("rejects unknown gateway argv even when the token is present", () => {

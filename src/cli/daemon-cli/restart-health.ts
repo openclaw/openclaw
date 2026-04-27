@@ -204,9 +204,12 @@ function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayResta
 async function confirmGatewayReachable(params: {
   port: number;
   includeHealthDetails?: boolean;
+  auth?: { token?: string; password?: string };
 }): Promise<GatewayReachability> {
-  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
+  const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = normalizeOptionalString(
+    params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+  );
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${params.port}`,
     auth: token || password ? { token, password } : undefined,
@@ -221,7 +224,10 @@ async function confirmGatewayReachable(params: {
   };
 }
 
-async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealthSnapshot> {
+async function inspectGatewayPortHealth(
+  port: number,
+  auth?: { token?: string; password?: string },
+): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(port);
@@ -238,7 +244,7 @@ async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealth
   let healthy = false;
   if (portUsage.status === "busy") {
     try {
-      healthy = (await confirmGatewayReachable({ port })).reachable;
+      healthy = (await confirmGatewayReachable({ port, auth })).reachable;
     } catch {
       // best-effort probe
     }
@@ -503,18 +509,19 @@ export async function waitForGatewayHealthyListener(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  auth?: { token?: string; password?: string };
 }): Promise<GatewayPortHealthSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-  let snapshot = await inspectGatewayPortHealth(params.port);
+  let snapshot = await inspectGatewayPortHealth(params.port, params.auth);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
       return snapshot;
     }
     await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth(params.port);
+    snapshot = await inspectGatewayPortHealth(params.port, params.auth);
   }
 
   return snapshot;

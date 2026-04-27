@@ -109,6 +109,26 @@ async function waitForStoppedFreeGatewayRestart() {
   });
 }
 
+async function waitForGatewayHealthyListenerWithAuth(params: {
+  auth?: { token?: string; password?: string };
+  probeResult: Awaited<ReturnType<typeof probeGateway>>;
+}) {
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+    hints: [],
+  });
+  probeGateway.mockResolvedValue(params.probeResult);
+  const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+  return waitForGatewayHealthyListener({
+    port: 18789,
+    attempts: 1,
+    delayMs: 1,
+    auth: params.auth,
+  });
+}
+
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
@@ -248,6 +268,24 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
+  });
+
+  it("forwards explicit auth into listener health probes", async () => {
+    const snapshot = await waitForGatewayHealthyListenerWithAuth({
+      auth: { token: "resolved-token" },
+      probeResult: {
+        ok: false,
+        close: { code: 1008, reason: "auth required" },
+      },
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        auth: { token: "resolved-token", password: undefined },
+      }),
+    );
   });
 
   it("requires the expected gateway version when provided", async () => {

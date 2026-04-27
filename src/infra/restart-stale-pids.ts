@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isGatewayArgv } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import {
   readWindowsListeningPidsOnPortSync,
@@ -164,6 +164,185 @@ function getSelfAndAncestorPidsSync(): Set<number> {
   return pids;
 }
 
+function parseLinuxListeningSocketInodes(stdout: string, port: number): Set<string> {
+  const inodes = new Set<string>();
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("sl")) {
+      continue;
+    }
+    const parts = line.split(/\s+/);
+    const localAddress = parts[1];
+    const state = parts[3];
+    const inode = parts[9];
+    if (!localAddress || !state || !inode || state.toUpperCase() !== "0A") {
+      continue;
+    }
+    const sep = localAddress.lastIndexOf(":");
+    if (sep < 0) {
+      continue;
+    }
+    const parsedPort = Number.parseInt(localAddress.slice(sep + 1), 16);
+    if (parsedPort === port) {
+      inodes.add(inode);
+    }
+  }
+  return inodes;
+}
+
+function readLinuxListeningSocketInodesSync(port: number): Set<string> | null {
+  let readAny = false;
+  const inodes = new Set<string>();
+  for (const pathname of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    try {
+      const content = readFileSync(pathname, "utf8");
+      readAny = true;
+      for (const inode of parseLinuxListeningSocketInodes(content, port)) {
+        inodes.add(inode);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return readAny ? inodes : null;
+}
+
+function readLinuxProcessArgsSync(pid: number): string[] | null {
+  try {
+    return parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function findGatewayPidsViaLinuxProcSync(
+  port: number,
+): { pids: number[]; definitive: boolean } | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  const inodes = readLinuxListeningSocketInodesSync(port);
+  if (inodes == null) {
+    return null;
+  }
+  if (inodes.size === 0) {
+    return { pids: [], definitive: true };
+  }
+
+  let procEntries: string[];
+  try {
+    procEntries = readdirSync("/proc");
+  } catch {
+    return null;
+  }
+
+  const excluded = getSelfAndAncestorPidsSync();
+  const candidatePids = new Set<number>();
+  for (const entry of procEntries) {
+    const pid = Number.parseInt(entry, 10);
+    if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
+      continue;
+    }
+
+    let fds: string[];
+    try {
+      fds = readdirSync(`/proc/${pid}/fd`);
+    } catch {
+      continue;
+    }
+
+    for (const fd of fds) {
+      try {
+        const target = readlinkSync(`/proc/${pid}/fd/${fd}`);
+        const match = target.match(/^socket:\[(\d+)\]$/);
+        if (match?.[1] && inodes.has(match[1])) {
+          candidatePids.add(pid);
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  if (candidatePids.size === 0) {
+    return { pids: [], definitive: false };
+  }
+
+  const verified: number[] = [];
+  for (const pid of candidatePids) {
+    const args = readLinuxProcessArgsSync(pid);
+    if (args != null && isGatewayArgv(args, { allowGatewayBinary: true })) {
+      verified.push(pid);
+    }
+  }
+  return { pids: [...new Set(verified)], definitive: verified.length > 0 };
+}
+
+function parsePidsFromSsOutput(stdout: string, port: number): number[] {
+  const excluded = getSelfAndAncestorPidsSync();
+  const pids = new Set<number>();
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || !line.includes("LISTEN") || !line.includes(`:${port}`)) {
+      continue;
+    }
+    const command = normalizeLowercaseStringOrEmpty(line.match(/users:\(\("([^"]+)"/)?.[1] ?? "");
+    const pidMatches = line.matchAll(/pid=(\d+)/g);
+    for (const match of pidMatches) {
+      const pid = Number.parseInt(match[1] ?? "", 10);
+      if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
+        continue;
+      }
+      const args = readLinuxProcessArgsSync(pid);
+      if (args != null) {
+        if (isGatewayArgv(args, { allowGatewayBinary: true })) {
+          pids.add(pid);
+        }
+        continue;
+      }
+      if (command.includes("openclaw")) {
+        pids.add(pid);
+      }
+    }
+  }
+  return [...pids];
+}
+
+function findGatewayPidsViaSsSync(port: number, spawnTimeoutMs: number): number[] | null {
+  const res = spawnSync("ss", ["-H", "-ltnp", `sport = :${port}`], {
+    encoding: "utf8",
+    timeout: spawnTimeoutMs,
+  });
+  if (res.error) {
+    return null;
+  }
+  const stderr = res.stderr?.trim() ?? "";
+  const stdout = res.stdout?.trim() ?? "";
+  if (res.status === 0 || (res.status === 1 && !stderr && !stdout)) {
+    return stdout ? parsePidsFromSsOutput(res.stdout, port) : [];
+  }
+  return null;
+}
+
+function pollPortOnceViaSs(port: number): PollResult {
+  const ss = spawnSync("ss", ["-H", "-ltn", `sport = :${port}`], {
+    encoding: "utf8",
+    timeout: POLL_SPAWN_TIMEOUT_MS,
+  });
+  if (ss.error) {
+    const code = (ss.error as NodeJS.ErrnoException).code;
+    const permanent = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+    return { free: null, permanent };
+  }
+  const stderr = ss.stderr?.trim() ?? "";
+  const stdout = ss.stdout?.trim() ?? "";
+  if (ss.status === 0 || (ss.status === 1 && !stderr && !stdout)) {
+    return stdout ? { free: false } : { free: true };
+  }
+  return { free: null, permanent: false };
+}
+
 /**
  * Parse openclaw gateway PIDs from lsof -Fpc stdout, excluding the current
  * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
@@ -272,7 +451,22 @@ export function findGatewayPidsOnPortSync(
     // command-line verification to find only openclaw gateway processes.
     return findVerifiedWindowsGatewayPidsOnPortSync(port);
   }
-  const lsof = resolveLsofCommandSync();
+  const procResult = findGatewayPidsViaLinuxProcSync(port);
+  if (procResult && (procResult.definitive || procResult.pids.length > 0)) {
+    return procResult.pids;
+  }
+
+  let lsof: string;
+  try {
+    lsof = resolveLsofCommandSync();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    restartLog.warn(
+      `lsof resolution failed during initial stale-pid scan for port ${port}: ${detail}`,
+    );
+    return findGatewayPidsViaSsSync(port, spawnTimeoutMs) ?? [];
+  }
+
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
     encoding: "utf8",
     timeout: spawnTimeoutMs,
@@ -286,37 +480,38 @@ export function findGatewayPidsOnPortSync(
           ? res.error.message
           : "unknown error";
     restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
-    return [];
+    return findGatewayPidsViaSsSync(port, spawnTimeoutMs) ?? [];
   }
   if (res.status === 1) {
-    return [];
+    const pids = res.stdout ? parsePidsFromLsofOutput(res.stdout) : [];
+    return pids.length > 0 ? pids : [];
   }
   if (res.status !== 0) {
     restartLog.warn(
       `lsof exited with status ${res.status} during initial stale-pid scan for port ${port}; skipping stale pid check`,
     );
-    return [];
+    return findGatewayPidsViaSsSync(port, spawnTimeoutMs) ?? [];
   }
   return parsePidsFromLsofOutput(res.stdout);
 }
 
 /**
- * Attempt a single lsof poll for the given port.
+ * Attempt a single Linux/Unix port poll for the given port.
  *
  * Returns a discriminated union with four possible states:
  *
  *   { free: true }                      — port confirmed free
  *   { free: false }                     — port confirmed busy
  *   { free: null; permanent: false }    — transient error, keep retrying
- *   { free: null; permanent: true }     — lsof unavailable (ENOENT / EACCES),
+ *   { free: null; permanent: true }     — listener backends unavailable (ENOENT / EACCES),
  *                                         no point retrying
  *
  * Separating transient from permanent errors is critical so that:
- *  1. A slow/timed-out lsof call (transient) does not abort the polling loop —
+ *  1. A slow/timed-out listener probe (transient) does not abort polling —
  *     the caller retries until the wall-clock budget expires.
  *  2. Non-zero lsof exits from runtime/permission failures (status > 1) are
  *     not misclassified as "port free" — they are inconclusive and retried.
- *  3. A missing lsof binary (permanent) short-circuits cleanly rather than
+ *  3. Missing lsof/ss backends short-circuit cleanly rather than
  *     spinning the full budget pointlessly.
  */
 type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
@@ -324,6 +519,10 @@ type PollResult = { free: true } | { free: false } | { free: null; permanent: bo
 function pollPortOnce(port: number): PollResult {
   if (process.platform === "win32") {
     return pollPortOnceWindows(port);
+  }
+  const procInodes = readLinuxListeningSocketInodesSync(port);
+  if (procInodes != null) {
+    return procInodes.size === 0 ? { free: true } : { free: false };
   }
   try {
     const lsof = resolveLsofCommandSync();
@@ -334,9 +533,7 @@ function pollPortOnce(port: number): PollResult {
     if (res.error) {
       // Spawn-level failure. ENOENT / EACCES means lsof is permanently
       // unavailable on this system; other errors (e.g. timeout) are transient.
-      const code = (res.error as NodeJS.ErrnoException).code;
-      const permanent = code === "ENOENT" || code === "EACCES" || code === "EPERM";
-      return { free: null, permanent };
+      return pollPortOnceViaSs(port);
     }
     if (res.status === 1) {
       // lsof canonical "no matching processes" exit — port is genuinely free.
@@ -353,14 +550,14 @@ function pollPortOnce(port: number): PollResult {
       // status > 1: runtime/permission/flag error. Cannot confirm port state —
       // treat as a transient failure and keep polling rather than falsely
       // reporting the port as free (which would recreate the EADDRINUSE race).
-      return { free: null, permanent: false };
+      return pollPortOnceViaSs(port);
     }
     // status === 0: lsof found listeners. Parse pids from the stdout we
     // already hold — no second lsof spawn, no new failure surface.
     const pids = parsePidsFromLsofOutput(res.stdout);
     return pids.length === 0 ? { free: true } : { free: false };
   } catch {
-    return { free: null, permanent: false };
+    return pollPortOnceViaSs(port);
   }
 }
 

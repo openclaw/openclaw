@@ -4,11 +4,29 @@ import { captureFullEnv } from "../test-utils/env.js";
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
+const readFileSyncMock = vi.hoisted(() => vi.fn());
+const readDirSyncMock = vi.hoisted(() => vi.fn());
+const readLinkSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } =
     await import("../../test/helpers/node-builtin-mocks.js");
   return mockNodeChildProcessSpawnSync(spawnSyncMock);
+});
+
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    (actual) => ({
+      readFileSync: ((path: unknown, encoding?: unknown) =>
+        readFileSyncMock(path, encoding)) as typeof actual.readFileSync,
+      readdirSync: ((path: unknown, options?: unknown) =>
+        readDirSyncMock(path, options)) as typeof actual.readdirSync,
+      readlinkSync: ((path: unknown, options?: unknown) =>
+        readLinkSyncMock(path, options)) as typeof actual.readlinkSync,
+    }),
+  );
 });
 
 vi.mock("./ports-lsof.js", () => ({
@@ -42,10 +60,28 @@ beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
+  readFileSyncMock.mockReset();
+  readDirSyncMock.mockReset();
+  readLinkSyncMock.mockReset();
 
   currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
+  readFileSyncMock.mockImplementation(() => {
+    const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+    error.code = "ENOENT";
+    throw error;
+  });
+  readDirSyncMock.mockImplementation(() => {
+    const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+    error.code = "ENOENT";
+    throw error;
+  });
+  readLinkSyncMock.mockImplementation(() => {
+    const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+    error.code = "ENOENT";
+    throw error;
+  });
   __testing.setSleepSyncOverride((ms) => {
     currentTimeMs += ms;
   });
