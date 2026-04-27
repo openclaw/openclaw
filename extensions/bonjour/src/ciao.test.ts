@@ -48,6 +48,34 @@ describe("bonjour-ciao", () => {
     expect(ignoreCiaoUnhandledRejection(new Error("CIAO PROBING CANCELLED"))).toBe(true);
   });
 
+  it("suppresses wrapped ciao cancellation rejections", () => {
+    expect(
+      classifyCiaoUnhandledRejection({
+        reason: new Error("CIAO ANNOUNCEMENT CANCELLED"),
+      }),
+    ).toEqual({
+      kind: "cancellation",
+      formatted: "CIAO ANNOUNCEMENT CANCELLED",
+    });
+  });
+
+  it("suppresses aggregate ciao assertion rejections", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new AggregateError([
+          Object.assign(
+            new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
+            { name: "AssertionError" },
+          ),
+        ]),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted:
+        "AssertionError: Reached illegal state! IPV4 address change from defined to undefined!",
+    });
+  });
+
   it("suppresses lower-case string cancellation reasons too", () => {
     expect(ignoreCiaoUnhandledRejection("ciao announcement cancelled during cleanup")).toBe(true);
   });

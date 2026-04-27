@@ -2,6 +2,7 @@
 // the agent reports a model id. This includes custom models.json entries.
 
 import path from "node:path";
+import { isHelpOrVersionInvocation } from "../cli/argv.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -130,18 +131,6 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
-function hasHelpOrVersionFlag(argv: string[]): boolean {
-  for (const arg of argv.slice(2)) {
-    if (arg === FLAG_TERMINATOR) {
-      return false;
-    }
-    if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") {
-      return true;
-    }
-  }
-  return false;
-}
-
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "agent",
   "backup",
@@ -175,7 +164,7 @@ export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv)
   if (!isLikelyOpenClawCliProcess(argv)) {
     return false;
   }
-  if (hasHelpOrVersionFlag(argv)) {
+  if (isHelpOrVersionInvocation(argv)) {
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);

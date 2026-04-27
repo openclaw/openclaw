@@ -21,7 +21,7 @@ import {
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -260,6 +260,17 @@ function resolveProviderTransport(params: {
   };
 }
 
+function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return Math.floor(timeoutSeconds) * 1000;
+}
+
 function matchesProviderScopedModelId(params: {
   candidateId?: string;
   provider: string;
@@ -346,6 +357,80 @@ function findConfiguredProviderModel(
   );
 }
 
+function readModelParams(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function mergeModelParams(
+  ...entries: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> | undefined {
+  const merged = Object.assign({}, ...entries.filter(Boolean));
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function findConfiguredAgentModelParams(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): Record<string, unknown> | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const directKeys = [
+    modelKey(params.provider, params.modelId),
+    `${params.provider}/${params.modelId}`,
+  ];
+  for (const key of directKeys) {
+    const direct = readModelParams(configuredModels[key]?.params);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
+    .trim()
+    .toLowerCase();
+  for (const [rawKey, entry] of Object.entries(configuredModels)) {
+    const slashIndex = rawKey.indexOf("/");
+    if (slashIndex <= 0) {
+      continue;
+    }
+    const candidateProvider = rawKey.slice(0, slashIndex);
+    const candidateModelId = rawKey.slice(slashIndex + 1);
+    if (
+      normalizeProviderId(candidateProvider) === normalizedProvider &&
+      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
+        normalizedModelId
+    ) {
+      return readModelParams(entry.params);
+    }
+  }
+  return undefined;
+}
+
+function mergeConfiguredRuntimeModelParams(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  discoveredParams?: unknown;
+  configuredParams?: unknown;
+}): Record<string, unknown> | undefined {
+  return mergeModelParams(
+    readModelParams(params.discoveredParams),
+    findConfiguredAgentModelParams({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+    }),
+    readModelParams(params.configuredParams),
+  );
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -356,9 +441,20 @@ function applyConfiguredProviderOverrides(params: {
   preferDiscoveredModelMetadata?: boolean;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const defaultModelParams = findConfiguredAgentModelParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId,
+  });
   if (!providerConfig) {
+    const resolvedParams = mergeModelParams(
+      readModelParams(discoveredModel.params),
+      defaultModelParams,
+    );
     return {
       ...discoveredModel,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
@@ -387,14 +483,26 @@ function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
+    requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest
   ) {
+    const resolvedParams = mergeModelParams(
+      readModelParams(discoveredModel.params),
+      defaultModelParams,
+    );
     return {
       ...discoveredModel,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: discoveredHeaders,
     };
   }
+  const resolvedParams = mergeModelParams(
+    readModelParams(discoveredModel.params),
+    defaultModelParams,
+    readModelParams(configuredModel?.params),
+  );
   const normalizedInput = resolveProviderModelInput({
     provider: params.provider,
     modelId,
@@ -436,6 +544,8 @@ function applyConfiguredProviderOverrides(params: {
       contextWindow: metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow,
       contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: metadataOverrideModel?.maxTokens ?? discoveredModel.maxTokens,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: requestConfig.headers,
       compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
     },
@@ -452,6 +562,7 @@ function resolveExplicitModelWithRegistry(params: {
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   if (
     shouldSuppressBuiltInModel({
       provider,
@@ -468,13 +579,23 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (inlineMatch?.api) {
+    const resolvedParams = mergeConfiguredRuntimeModelParams({
+      cfg,
+      provider,
+      modelId,
+      configuredParams: inlineMatch.params,
+    });
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: inlineMatch as Model<Api>,
+        model: {
+          ...inlineMatch,
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        } as Model<Api>,
         runtimeHooks,
       }),
     };
@@ -508,13 +629,23 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (fallbackInlineMatch?.api) {
+    const resolvedParams = mergeConfiguredRuntimeModelParams({
+      cfg,
+      provider,
+      modelId,
+      configuredParams: fallbackInlineMatch.params,
+    });
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: fallbackInlineMatch as Model<Api>,
+        model: {
+          ...fallbackInlineMatch,
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        } as Model<Api>,
         runtimeHooks,
       }),
     };
@@ -586,6 +717,7 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
@@ -593,6 +725,12 @@ function resolveConfiguredFallbackModel(params: {
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
+  });
+  const resolvedParams = mergeConfiguredRuntimeModelParams({
+    cfg,
+    provider,
+    modelId,
+    configuredParams: configuredModel?.params,
   });
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
@@ -643,6 +781,8 @@ function resolveConfiguredFallbackModel(params: {
           configuredModel?.maxTokens ??
           providerConfig?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
+        ...(resolvedParams ? { params: resolvedParams } : {}),
+        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
       } as Model<Api>,
       providerRequest,

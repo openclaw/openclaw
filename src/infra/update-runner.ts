@@ -138,6 +138,7 @@ const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 
@@ -215,10 +216,7 @@ async function removePathRecursive(target: string) {
     .catch(() => {});
 }
 
-async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
-  if (process.platform !== "win32") {
-    return false;
-  }
+async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
     await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -938,22 +936,25 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           break;
         }
       } finally {
-        const removeStep = await runStep(
-          step(
+        const removeStep = await runStep({
+          ...step(
             "preflight cleanup",
             ["git", "-C", gitRoot, "worktree", "remove", "--force", worktreeDir],
             gitRoot,
           ),
-        );
+          timeoutMs: Math.min(timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS),
+        });
         if (
           removeStep.exitCode !== 0 &&
-          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+          (await repairPreflightCleanup(worktreeDir, preflightRoot))
         ) {
           removeStep.exitCode = 0;
+          const fallbackMessage =
+            process.platform === "win32"
+              ? "windows fallback cleanup removed preflight tree"
+              : "fallback cleanup removed preflight tree";
           removeStep.stderrTail = trimLogTail(
-            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
-              .filter(Boolean)
-              .join("\n"),
+            [removeStep.stderrTail, fallbackMessage].filter(Boolean).join("\n"),
             MAX_LOG_CHARS,
           );
         }
