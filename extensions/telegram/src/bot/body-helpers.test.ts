@@ -1,4 +1,6 @@
 import type { Message } from "@grammyjs/types";
+
+type ReplyTo = NonNullable<Message["reply_to_message"]>;
 import { describe, expect, it } from "vitest";
 import { detectTelegramBotTargeting } from "./body-helpers.js";
 
@@ -77,7 +79,7 @@ describe("detectTelegramBotTargeting", () => {
           date: 1,
           chat: { id: 1, type: "supergroup", title: "x" },
           from: { id: 99, is_bot: true, first_name: "Helper", username: "HelperBot" },
-        } as Message,
+        } as ReplyTo,
       }),
       {},
     );
@@ -93,7 +95,7 @@ describe("detectTelegramBotTargeting", () => {
           date: 1,
           chat: { id: 1, type: "supergroup", title: "x" },
           from: { id: 1, is_bot: false, first_name: "Alice", username: "alice" },
-        } as Message,
+        } as ReplyTo,
       }),
       {},
     );
@@ -116,7 +118,7 @@ describe("detectTelegramBotTargeting", () => {
           date: 1,
           chat: { id: 1, type: "supergroup", title: "x" },
           from: { id: 200, is_bot: true, first_name: "Sib", username: "OtherBot" },
-        } as Message,
+        } as ReplyTo,
       }),
       { currentBotUsername: "mybot", otherBotUsernames: ["otherbot"] },
     );
