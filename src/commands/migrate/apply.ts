@@ -15,7 +15,9 @@ function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
   );
 }
 
-async function createPreMigrationBackup(opts: { output?: string }): Promise<string | undefined> {
+export async function createPreMigrationBackup(opts: {
+  output?: string;
+}): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {

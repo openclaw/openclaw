@@ -10,12 +10,36 @@ export type HermesSource = {
   memoryPath?: string;
   userPath?: string;
   skillsDir?: string;
+  archivePaths: HermesArchivePath[];
 };
+
+export type HermesArchivePath = {
+  id: string;
+  path: string;
+  relativePath: string;
+};
+
+const HERMES_ARCHIVE_DIRS = ["plugins", "sessions", "logs", "cron", "mcp-tokens"] as const;
+const HERMES_ARCHIVE_FILES = ["auth.json", "state.db"] as const;
 
 export async function discoverHermesSource(input?: string): Promise<HermesSource> {
   const root = resolveHomePath(input?.trim() || "~/.hermes");
+  const archivePaths: HermesArchivePath[] = [];
+  for (const dir of HERMES_ARCHIVE_DIRS) {
+    const candidate = path.join(root, dir);
+    if (await isDirectory(candidate)) {
+      archivePaths.push({ id: `archive:${dir}`, path: candidate, relativePath: dir });
+    }
+  }
+  for (const file of HERMES_ARCHIVE_FILES) {
+    const candidate = path.join(root, file);
+    if (await exists(candidate)) {
+      archivePaths.push({ id: `archive:${file}`, path: candidate, relativePath: file });
+    }
+  }
   return {
     root,
+    archivePaths,
     ...((await exists(path.join(root, "config.yaml")))
       ? { configPath: path.join(root, "config.yaml") }
       : {}),
@@ -44,6 +68,7 @@ export function hasHermesSource(source: HermesSource): boolean {
     source.agentsPath ||
     source.memoryPath ||
     source.userPath ||
-    source.skillsDir,
+    source.skillsDir ||
+    source.archivePaths.length > 0,
   );
 }

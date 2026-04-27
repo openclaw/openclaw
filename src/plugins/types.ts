@@ -2057,6 +2057,7 @@ export type MigrationItemKind =
   | "workspace"
   | "session"
   | "file"
+  | "archive"
   | "manual";
 export type MigrationItemAction =
   | "copy"
@@ -2064,6 +2065,7 @@ export type MigrationItemAction =
   | "update"
   | "merge"
   | "append"
+  | "archive"
   | "skip"
   | "manual";
 

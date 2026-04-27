@@ -127,4 +127,61 @@ describe("Hermes migration file and skill items", () => {
       key: "sk-hermes",
     });
   });
+
+  it("archives unsupported Hermes state into the report without importing it", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    await writeFile(path.join(source, "logs", "session.log"), "log line\n");
+    await writeFile(path.join(source, "auth.json"), '{"token":"opaque"}\n');
+
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir, reportDir }));
+
+    expect(plan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "archive:logs",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        }),
+        expect.objectContaining({
+          id: "archive:auth.json",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        }),
+      ]),
+    );
+    expect(plan.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("archive-only")]),
+    );
+
+    const result = await provider.apply(makeContext({ source, stateDir, workspaceDir, reportDir }));
+
+    expect(result.summary.errors).toBe(0);
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "archive:logs",
+          status: "migrated",
+          target: path.join(reportDir, "archive", "logs"),
+        }),
+        expect.objectContaining({
+          id: "archive:auth.json",
+          status: "migrated",
+          target: path.join(reportDir, "archive", "auth.json"),
+        }),
+      ]),
+    );
+    expect(await fs.readFile(path.join(reportDir, "archive", "logs", "session.log"), "utf8")).toBe(
+      "log line\n",
+    );
+    await expect(fs.access(path.join(workspaceDir, "logs", "session.log"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
-import { copyMigrationFileItem, writeMigrationReport } from "openclaw/plugin-sdk/migration-runtime";
+import {
+  archiveMigrationItem,
+  copyMigrationFileItem,
+  writeMigrationReport,
+} from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -34,6 +38,8 @@ export async function applyHermesPlan(params: {
           item,
         ),
       );
+    } else if (item.action === "archive") {
+      items.push(await archiveMigrationItem(item, reportDir));
     } else if (item.kind === "secret") {
       items.push(await applySecretItem(params.ctx, item, targets));
     } else if (item.action === "append") {

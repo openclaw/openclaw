@@ -16,6 +16,8 @@ openclaw migrate hermes --dry-run
 openclaw migrate hermes
 openclaw migrate apply hermes --yes
 openclaw migrate apply hermes --include-secrets --yes
+openclaw onboard --flow import
+openclaw onboard --import-from hermes --import-source ~/.hermes
 ```
 
 ## Safety model
@@ -42,6 +44,8 @@ The Hermes migration can import:
 - skills with a `SKILL.md` file from `skills/<name>/`
 - supported API keys from `.env`, only with `--include-secrets`
 
+Archive-only Hermes state is copied into the migration report for manual review, but it is not loaded into live OpenClaw config or credentials. This preserves opaque or unsafe state such as `plugins/`, `sessions/`, `logs/`, `cron/`, `mcp-tokens/`, `auth.json`, and `state.db` without pretending OpenClaw can execute or trust it automatically.
+
 Supported Hermes `.env` keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, and `DEEPSEEK_API_KEY`.
 
 After applying a migration, run:
@@ -62,4 +66,6 @@ Migration sources are plugins. A plugin declares its provider ids in `openclaw.p
 }
 ```
 
-At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`; core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility. Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies and migration reports.
+At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`; core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility. Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies, archive-only report copies, and migration reports.
+
+Onboarding can also offer migration when a provider detects a known source. `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying.

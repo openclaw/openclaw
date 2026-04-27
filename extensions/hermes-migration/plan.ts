@@ -106,6 +106,19 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
   items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
   items.push(...(await buildSecretItems({ ctx, source, targets })));
+  for (const archivePath of source.archivePaths) {
+    items.push(
+      createMigrationItem({
+        id: archivePath.id,
+        kind: "archive",
+        action: "archive",
+        source: archivePath.path,
+        message:
+          "Archived in the migration report for manual review; not imported into live config.",
+        details: { archiveRelativePath: archivePath.relativePath },
+      }),
+    );
+  }
 
   const warnings = [
     ...(!ctx.includeSecrets && items.some((item) => item.kind === "secret")
@@ -116,6 +129,11 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting targets after item-level backups.",
+        ]
+      : []),
+    ...(source.archivePaths.length > 0
+      ? [
+          "Some Hermes files are archive-only. They will be copied into the migration report for manual review, not loaded into OpenClaw.",
         ]
       : []),
   ];

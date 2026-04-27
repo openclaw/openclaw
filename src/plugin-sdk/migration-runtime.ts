@@ -54,6 +54,69 @@ function isFileAlreadyExistsError(err: unknown): boolean {
   );
 }
 
+function readArchiveRelativePath(item: MigrationItem): string {
+  const detailPath = item.details?.archiveRelativePath;
+  const raw = typeof detailPath === "string" && detailPath.trim() ? detailPath : undefined;
+  const fallback = item.source ? path.basename(item.source) : item.id;
+  const normalized = path
+    .normalize(raw ?? fallback)
+    .split(path.sep)
+    .filter((part) => part && part !== "." && part !== "..")
+    .join(path.sep);
+  return normalized || "item";
+}
+
+async function resolveUniqueArchivePath(
+  archiveRoot: string,
+  relativePath: string,
+): Promise<string> {
+  const parsed = path.parse(relativePath);
+  let candidate = path.join(archiveRoot, relativePath);
+  let index = 2;
+  while (await exists(candidate)) {
+    const filename = `${parsed.name}-${index}${parsed.ext}`;
+    candidate = path.join(archiveRoot, parsed.dir, filename);
+    index += 1;
+  }
+  return candidate;
+}
+
+export async function archiveMigrationItem(
+  item: MigrationItem,
+  reportDir: string,
+): Promise<MigrationItem> {
+  if (!item.source) {
+    return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
+  }
+  try {
+    const sourceStat = await fs.lstat(item.source);
+    if (sourceStat.isSymbolicLink()) {
+      return markMigrationItemError(item, "archive source is a symlink");
+    }
+    const archiveRoot = path.join(reportDir, "archive");
+    const relativePath = readArchiveRelativePath(item);
+    const archivePath = await resolveUniqueArchivePath(archiveRoot, relativePath);
+    await fs.mkdir(path.dirname(archivePath), { recursive: true });
+    await fs.cp(item.source, archivePath, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      verbatimSymlinks: true,
+    });
+    return {
+      ...item,
+      status: "migrated",
+      target: archivePath,
+      details: { ...item.details, archivePath, archiveRelativePath: relativePath },
+    };
+  } catch (err) {
+    if (isFileAlreadyExistsError(err)) {
+      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+    }
+    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+  }
+}
+
 export async function copyMigrationFileItem(
   item: MigrationItem,
   reportDir: string,

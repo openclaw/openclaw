@@ -38,6 +38,27 @@ describe("Hermes migration provider", () => {
     });
   });
 
+  it("detects archive-only Hermes sources", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    await writeFile(path.join(source, "logs", "run.log"), "log line\n");
+
+    const provider = buildHermesMigrationProvider();
+    const detected = await provider.detect?.(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+
+    expect(detected).toMatchObject({
+      found: true,
+      source,
+      confidence: "high",
+    });
+  });
+
   it("plans model, workspace, memory, skill, and secret items without importing secrets by default", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
