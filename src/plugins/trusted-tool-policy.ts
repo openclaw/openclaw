@@ -18,6 +18,7 @@ export async function runTrustedToolPolicies(
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
       ...ctx,
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
         getPluginSessionExtensionSync<T>({
           pluginId: registration.pluginId,
