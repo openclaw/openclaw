@@ -4,6 +4,7 @@ import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-inter
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -33,6 +34,8 @@ import {
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+
+const log = createSubsystemLogger("agents/sessions-send");
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -246,6 +249,12 @@ export function createSessionsSendTool(opts?: {
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
+        log.info("sessions_send access denied", {
+          callerSessionKey: effectiveRequesterKey,
+          targetSessionKey: displayKey,
+          status: access.status,
+          error: access.error,
+        });
         return jsonResult({
           runId: crypto.randomUUID(),
           status: access.status,
@@ -253,6 +262,14 @@ export function createSessionsSendTool(opts?: {
           sessionKey: displayKey,
         });
       }
+
+      log.info("sessions_send call", {
+        callerSessionKey: effectiveRequesterKey,
+        targetSessionKey: displayKey,
+        messageLength: message.length,
+        timeoutSeconds,
+      });
+      const callStartMs = Date.now();
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
@@ -347,6 +364,12 @@ export function createSessionsSendTool(opts?: {
         }
         runId = start.runId;
         startA2AFlow(undefined, runId);
+        log.info("sessions_send fire-and-forget accepted", {
+          callerSessionKey: effectiveRequesterKey,
+          targetSessionKey: displayKey,
+          runId,
+          durationMs: Date.now() - callStartMs,
+        });
         return jsonResult({
           runId,
           status: "accepted",
@@ -375,6 +398,12 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        log.info("sessions_send timeout", {
+          callerSessionKey: effectiveRequesterKey,
+          targetSessionKey: displayKey,
+          runId,
+          durationMs: Date.now() - callStartMs,
+        });
         return jsonResult({
           runId,
           status: "timeout",
@@ -383,6 +412,13 @@ export function createSessionsSendTool(opts?: {
         });
       }
       if (result.status === "error") {
+        log.info("sessions_send error", {
+          callerSessionKey: effectiveRequesterKey,
+          targetSessionKey: displayKey,
+          runId,
+          durationMs: Date.now() - callStartMs,
+          error: result.error,
+        });
         return jsonResult({
           runId,
           status: "error",
@@ -393,6 +429,14 @@ export function createSessionsSendTool(opts?: {
       const reply = result.replyText;
       startA2AFlow(reply ?? undefined);
 
+      log.info("sessions_send completed", {
+        callerSessionKey: effectiveRequesterKey,
+        targetSessionKey: displayKey,
+        runId,
+        status: "ok",
+        replyLength: reply?.length ?? 0,
+        durationMs: Date.now() - callStartMs,
+      });
       return jsonResult({
         runId,
         status: "ok",
