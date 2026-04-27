@@ -131,7 +131,7 @@
     },
     "realtime.agentId": {
       "label": "Realtime Consult Agent",
-      "help": "OpenClaw agent id to consult when realtime.toolPolicy exposes openclaw_agent_consult.",
+      "help": "OpenClaw agent id used by openclaw_agent_consult. Defaults to \"main\".",
       "advanced": true
     },
     "realtime.toolPolicy": {
@@ -360,7 +360,7 @@
           },
           "agentId": {
             "type": "string",
-            "description": "OpenClaw agent id to consult when realtime.toolPolicy exposes openclaw_agent_consult."
+            "description": "OpenClaw agent id used by openclaw_agent_consult. Defaults to \"main\"."
           },
           "toolPolicy": {
             "type": "string",

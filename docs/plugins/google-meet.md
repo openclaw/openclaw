@@ -897,6 +897,8 @@ Defaults:
   `openclaw_agent_consult` for deeper answers
 - `realtime.introMessage`: short spoken readiness check when the realtime bridge
   connects; set it to `""` to join silently
+- `realtime.agentId`: optional OpenClaw agent id for
+  `openclaw_agent_consult`; defaults to `main`
 
 Optional overrides:
 
@@ -915,6 +917,7 @@ Optional overrides:
   },
   realtime: {
     provider: "google",
+    agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
     providers: {
@@ -1000,6 +1003,10 @@ The consult tool runs the regular OpenClaw agent behind the scenes with recent
 meeting transcript context and returns a concise spoken answer to the realtime
 voice session. The voice model can then speak that answer back into the meeting.
 It uses the same shared realtime consult tool as Voice Call.
+
+By default, consults run against the `main` agent. Set `realtime.agentId` when a
+Meet lane should consult a dedicated OpenClaw agent workspace, model defaults,
+tool policy, memory, and session history.
 
 `realtime.toolPolicy` controls the consult run:
 

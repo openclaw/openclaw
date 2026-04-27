@@ -120,6 +120,11 @@ const googleMeetConfigSchema = {
       label: "Realtime Intro Message",
       help: "Spoken once when the realtime bridge is ready. Set to an empty string to join silently.",
     },
+    "realtime.agentId": {
+      label: "Realtime Consult Agent",
+      help: 'OpenClaw agent id used by openclaw_agent_consult. Defaults to "main".',
+      advanced: true,
+    },
     "realtime.toolPolicy": {
       label: "Realtime Tool Policy",
       help: "Safe read-only tools are available by default; owner requests can unlock broader tools.",
