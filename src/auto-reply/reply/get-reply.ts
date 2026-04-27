@@ -788,8 +788,14 @@ export async function getReplyFromConfig(
               currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
             }),
+            ...(sessionCtx.SenderId ? { senderId: sessionCtx.SenderId } : {}),
+            // NativeChannelId is the transport-native conversation identifier
+            // (Feishu chat_id, Telegram chat_id, Discord channel_id, etc.).
+            ...(sessionCtx.NativeChannelId ? { chatId: sessionCtx.NativeChannelId } : {}),
+            // senderExternalId (cross-app ID, e.g. Feishu union_id) is not available
+            // in MsgContext; channel plugins can populate it via their own hook handlers.
           },
-        ),
+        ),)
       );
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
