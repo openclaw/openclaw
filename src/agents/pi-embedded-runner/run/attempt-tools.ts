@@ -12,11 +12,13 @@
 //     runtime needs to spin up for an attempt based on toolsAllow shape.
 //   - `collectAttemptExplicitToolAllowlistSources` aggregates the layered
 //     tool-allow policy sources (global, agent, group, sandbox, subagent,
-//     runtime override) for the explicit-allowlist guard.
+//     runtime override) for the explicit-allowlist guard. Used internally by
+//     `attempt.ts` only; not part of the re-export surface below.
 //
-// `attempt.ts` re-exports the public symbols so the existing import paths
-// (`./attempt.js`) keep working without churn for `attempt.test.ts` or any
-// future caller. PR 3 deliberately keeps consumers unchanged.
+// `attempt.ts` re-exports `applyEmbeddedAttemptToolsAllow`,
+// `resolveUnknownToolGuardThreshold`, and `shouldCreateBundleMcpRuntimeForAttempt`
+// so existing import paths (`./attempt.js`) keep working without churn for
+// `attempt.test.ts` or any future caller.
 
 import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
