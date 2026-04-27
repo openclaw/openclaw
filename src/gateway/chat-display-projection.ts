@@ -266,7 +266,7 @@ function sanitizeChatHistoryMessage(
     changed = true;
   }
 
-  if (entry.role !== "assistant") {
+  if (role !== "assistant") {
     if ("usage" in entry) {
       delete entry.usage;
       changed = true;
@@ -334,7 +334,7 @@ function sanitizeChatHistoryMessage(
       entry.content = updated.map((item) => item.block);
       changed = true;
     }
-    if (entry.role === "assistant" && Array.isArray(entry.content)) {
+    if (role === "assistant" && Array.isArray(entry.content)) {
       const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
       if (sanitizedPhases.changed) {
         entry.content = sanitizedPhases.content;
@@ -363,7 +363,8 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
     return undefined;
   }
   const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role !== "assistant") {
     return undefined;
   }
   if (typeof entry.text === "string") {
@@ -408,7 +409,8 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return false;
   }
   const entry = message as { role?: unknown };
-  if (entry.role !== "assistant") {
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role !== "assistant") {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {

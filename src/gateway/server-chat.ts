@@ -8,6 +8,19 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { sanitizeDirectiveAndEmotionTagsForDisplay } from "../utils/directive-tags.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
+  type CachedLiveEmotionMode,
+  type ChatRunEntry,
+  type ChatRunRegistry,
+  type ChatRunState,
+  createChatRunRegistry,
+  createChatRunState,
+} from "./server-chat-state.js";
+
+// Re-export so existing consumers (e.g. server-maintenance, server-node-events-types)
+// continue to import from server-chat. Definitions live in server-chat-state.
+export type { CachedLiveEmotionMode, ChatRunEntry, ChatRunRegistry, ChatRunState };
+export { createChatRunRegistry, createChatRunState };
+import {
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
   resolveMergedAssistantText,
@@ -91,121 +104,8 @@ function normalizeHeartbeatChatFinalText(params: {
 // the canonical chat-merge module on main; we add only the emotion-mode lookup.
 const LIVE_EMOTION_MODE_CACHE_TTL_MS = 250;
 
-type CachedLiveEmotionMode = {
-  mode: EmotionMode;
-  expiresAt: number;
-};
-
 function resolveSessionEmotionMode(sessionKey: string) {
   return normalizeEmotionMode(loadSessionEntry(sessionKey).entry?.emotionMode) ?? "off";
-}
-
-export type ChatRunEntry = {
-  sessionKey: string;
-  clientRunId: string;
-};
-
-export type ChatRunRegistry = {
-  add: (sessionId: string, entry: ChatRunEntry) => void;
-  peek: (sessionId: string) => ChatRunEntry | undefined;
-  shift: (sessionId: string) => ChatRunEntry | undefined;
-  remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
-  clear: () => void;
-};
-
-export function createChatRunRegistry(): ChatRunRegistry {
-  const chatRunSessions = new Map<string, ChatRunEntry[]>();
-
-  const add = (sessionId: string, entry: ChatRunEntry) => {
-    const queue = chatRunSessions.get(sessionId);
-    if (queue) {
-      queue.push(entry);
-    } else {
-      chatRunSessions.set(sessionId, [entry]);
-    }
-  };
-
-  const peek = (sessionId: string) => chatRunSessions.get(sessionId)?.[0];
-
-  const shift = (sessionId: string) => {
-    const queue = chatRunSessions.get(sessionId);
-    if (!queue || queue.length === 0) {
-      return undefined;
-    }
-    const entry = queue.shift();
-    if (!queue.length) {
-      chatRunSessions.delete(sessionId);
-    }
-    return entry;
-  };
-
-  const remove = (sessionId: string, clientRunId: string, sessionKey?: string) => {
-    const queue = chatRunSessions.get(sessionId);
-    if (!queue || queue.length === 0) {
-      return undefined;
-    }
-    const idx = queue.findIndex(
-      (entry) =>
-        entry.clientRunId === clientRunId && (sessionKey ? entry.sessionKey === sessionKey : true),
-    );
-    if (idx < 0) {
-      return undefined;
-    }
-    const [entry] = queue.splice(idx, 1);
-    if (!queue.length) {
-      chatRunSessions.delete(sessionId);
-    }
-    return entry;
-  };
-
-  const clear = () => {
-    chatRunSessions.clear();
-  };
-
-  return { add, peek, shift, remove, clear };
-}
-
-export type ChatRunState = {
-  registry: ChatRunRegistry;
-  rawBuffers: Map<string, string>;
-  buffers: Map<string, string>;
-  emotionModes: Map<string, CachedLiveEmotionMode>;
-  deltaSentAt: Map<string, number>;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen: Map<string, number>;
-  abortedRuns: Map<string, number>;
-  clear: () => void;
-};
-
-export function createChatRunState(): ChatRunState {
-  const registry = createChatRunRegistry();
-  const rawBuffers = new Map<string, string>();
-  const buffers = new Map<string, string>();
-  const emotionModes = new Map<string, CachedLiveEmotionMode>();
-  const deltaSentAt = new Map<string, number>();
-  const deltaLastBroadcastLen = new Map<string, number>();
-  const abortedRuns = new Map<string, number>();
-
-  const clear = () => {
-    registry.clear();
-    rawBuffers.clear();
-    buffers.clear();
-    emotionModes.clear();
-    deltaSentAt.clear();
-    deltaLastBroadcastLen.clear();
-    abortedRuns.clear();
-  };
-
-  return {
-    registry,
-    rawBuffers,
-    buffers,
-    emotionModes,
-    deltaSentAt,
-    deltaLastBroadcastLen,
-    abortedRuns,
-    clear,
-  };
 }
 
 export type ToolEventRecipientRegistry = {
