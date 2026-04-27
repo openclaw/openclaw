@@ -1883,6 +1883,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.context.prompt_images": evt.promptImages,
         };
         addRunAttrs(spanAttrs, evt);
+        delete spanAttrs["openclaw.session_key"];
+        delete spanAttrs["openclaw.session_id"];
         if (evt.contextTokenBudget !== undefined) {
           spanAttrs["openclaw.context.token_budget"] = evt.contextTokenBudget;
         }
