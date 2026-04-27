@@ -1,6 +1,10 @@
 import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { setReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type {
   SpeechProviderPlugin,
@@ -167,6 +171,7 @@ async function expectTtsPayloadResult(params: {
 
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
     summarizeTextMock.mockClear();
@@ -217,6 +222,63 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+
+  it("uses the active runtime snapshot when source config still contains TTS SecretRefs", async () => {
+    const sourceConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: "resolved-minimax-key",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        isConfigured: ({ providerConfig }) => providerConfig.apiKey === "resolved-minimax-key",
+        resolveConfig: ({ rawConfig }) => {
+          const providers = rawConfig.providers as Record<string, { apiKey?: unknown }> | undefined;
+          return {
+            apiKey: providers?.mock?.apiKey,
+          };
+        },
+      }),
+    ]);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const result = await synthesizeSpeech({
+      text: "Runtime snapshot TTS SecretRef",
+      cfg: sourceConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+        providerConfig: expect.objectContaining({
+          apiKey: "resolved-minimax-key",
+        }),
+      }),
+    );
   });
 
   it.each(["feishu", "whatsapp"] as const)(
@@ -777,6 +839,115 @@ describe("speech-core native voice-note routing", () => {
       }
     }
   });
+
+  it("respects expressiveTagsModels allowlist — strips tags when active model is not in the allowlist", async () => {
+    const elevenSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: {
+        sourceTextHandling: "preserve_expressive_tags",
+        expressiveTagsModels: ["eleven_v3"],
+      },
+      synthesize: elevenSynthesize,
+      resolveConfig: ({ rawConfig }) => {
+        const providers = (rawConfig?.providers as Record<string, unknown>) ?? {};
+        const elevenCfg = (providers.elevenlabs as Record<string, unknown>) ?? {};
+        return { modelId: elevenCfg.modelId ?? "eleven_multilingual_v2" };
+      },
+    });
+    installSpeechProviders([eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          providers: { elevenlabs: { modelId: "eleven_multilingual_v2" } },
+          prefsPath: `/tmp/openclaw-tts-pra-allowlist-strip.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      {
+        ttsSourceText: "[warmly] Hello there, friend.",
+        ttsPlainText: "Hello there, friend.",
+      },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      // ElevenLabs is the active provider, but the configured model
+      // (`eleven_multilingual_v2`) is not in the `expressiveTagsModels`
+      // allowlist — so it should receive the plain variant, not expressive.
+      expect(elevenSynthesize).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("respects expressiveTagsModels allowlist — preserves tags when active model is in the allowlist", async () => {
+    const elevenSynthesize = vi.fn(synthesizeMock);
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: {
+        sourceTextHandling: "preserve_expressive_tags",
+        expressiveTagsModels: ["eleven_v3"],
+      },
+      synthesize: elevenSynthesize,
+      resolveConfig: ({ rawConfig }) => {
+        const providers = (rawConfig?.providers as Record<string, unknown>) ?? {};
+        const elevenCfg = (providers.elevenlabs as Record<string, unknown>) ?? {};
+        return { modelId: elevenCfg.modelId ?? "eleven_multilingual_v2" };
+      },
+    });
+    installSpeechProviders([eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          providers: { elevenlabs: { modelId: "eleven_v3" } },
+          prefsPath: `/tmp/openclaw-tts-pra-allowlist-preserve.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      {
+        ttsSourceText: "[warmly] Hello there, friend.",
+        ttsPlainText: "Hello there, friend.",
+      },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+      // ElevenLabs on `eleven_v3` is in the allowlist, so expressive variant flows through.
+      expect(elevenSynthesize).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "[warmly] Hello there, friend." }),
+      );
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("uses persona-merged provider config for initial expressive routing", async () => {
     const elevenSynthesize = vi.fn(synthesizeMock);
     const eleven = createMockSpeechProvider("elevenlabs", {

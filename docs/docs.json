@@ -761,6 +761,10 @@
       "destination": "/reference/templates/SOUL"
     },
     {
+      "source": "/templates/VOICE",
+      "destination": "/reference/templates/voice"
+    },
+    {
       "source": "/templates/TOOLS",
       "destination": "/reference/templates/TOOLS"
     },
@@ -1012,6 +1016,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-hermes",
                   "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
@@ -1545,6 +1550,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",
@@ -1634,6 +1640,7 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
+                  "reference/templates/voice",
                   "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]

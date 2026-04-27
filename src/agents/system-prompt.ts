@@ -126,6 +126,12 @@ function buildProjectContextSection(params: {
   return lines;
 }
 
+/**
+ * Speech Preparation Contract — gated on (emotionMode in {on, full}) AND
+ * voice.md present in workspace context. SOUL.md ordering is enforced upstream
+ * so the persona context appears before the tag-syntax dictionary in the
+ * final system prompt.
+ */
 function buildEmotionTranslationSection(params: {
   isMinimal: boolean;
   emotionMode?: EmotionMode;

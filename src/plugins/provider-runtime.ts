@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   __testing as providerHookRuntimeTesting,
@@ -106,6 +107,19 @@ function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string):
   return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
     (alias) => normalizeProviderId(alias) === normalized,
   );
+}
+
+function resolveProviderHookRefs(provider: string, providerConfig?: ModelProviderConfig): string[] {
+  const refs = [provider];
+  const apiRef = normalizeOptionalString(providerConfig?.api);
+  if (apiRef && normalizeProviderId(apiRef) !== normalizeProviderId(provider)) {
+    refs.push(apiRef);
+  }
+  return [...new Set(refs)];
+}
+
+function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: readonly string[]) {
+  return providerRefs.some((providerRef) => matchesProviderPluginRef(provider, providerRef));
 }
 
 function hasExplicitProviderRuntimePluginActivation(params: {
@@ -526,7 +540,10 @@ export function normalizeProviderModelIdWithPlugin(params: {
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
-  return normalizeOptionalString(plugin?.normalizeModelId?.(params.context));
+  return (
+    normalizeOptionalString(plugin?.normalizeModelId?.(params.context)) ??
+    normalizeProviderModelIdWithManifest(params)
+  );
 }
 
 export function normalizeProviderTransportWithPlugin(params: {
@@ -930,13 +947,20 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  const discoveryPluginIds =
-    resolveOwningPluginIdsForProvider({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }) ?? [];
+  const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig);
+  const discoveryPluginIds = [
+    ...new Set(
+      providerRefs.flatMap(
+        (provider) =>
+          resolveOwningPluginIdsForProvider({
+            provider,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          }) ?? [],
+      ),
+    ),
+  ];
   const discoveryProvider = (
     discoveryPluginIds.length > 0
       ? resolvePluginDiscoveryProvidersRuntime({
@@ -947,7 +971,7 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
           discoveryEntriesOnly: true,
         })
       : []
-  ).find((provider) => matchesProviderPluginRef(provider, params.provider));
+  ).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));
   if (typeof discoveryProvider?.resolveSyntheticAuth === "function") {
     return discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined;
   }
@@ -961,13 +985,32 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   if (runtimeResolved) {
     return runtimeResolved;
   }
-  return resolvePluginDiscoveryProvidersRuntime({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .find((provider) => provider.id === params.provider)
-    ?.resolveSyntheticAuth?.(params.context);
+  for (const providerRef of providerRefs) {
+    if (normalizeProviderId(providerRef) === normalizeProviderId(params.provider)) {
+      continue;
+    }
+    const runtimeProviderResolved = resolveProviderRuntimePlugin({
+      ...params,
+      provider: providerRef,
+      applyAutoEnable: false,
+      bundledProviderAllowlistCompat: false,
+      bundledProviderVitestCompat: false,
+      installBundledRuntimeDeps: false,
+    })?.resolveSyntheticAuth?.(params.context);
+    if (runtimeProviderResolved) {
+      return runtimeProviderResolved;
+    }
+  }
+  if (providerRefs.length === 1) {
+    return resolvePluginDiscoveryProvidersRuntime({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    })
+      .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
+      ?.resolveSyntheticAuth?.(params.context);
+  }
+  return undefined;
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {
@@ -1040,10 +1083,17 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderDeferSyntheticProfileAuthContext;
 }) {
-  return (
-    resolveProviderRuntimePlugin(params)?.shouldDeferSyntheticProfileAuth?.(params.context) ??
-    undefined
-  );
+  const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig);
+  for (const providerRef of providerRefs) {
+    const resolved = resolveProviderRuntimePlugin({
+      ...params,
+      provider: providerRef,
+    })?.shouldDeferSyntheticProfileAuth?.(params.context);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderBuiltInModelSuppression(params: {

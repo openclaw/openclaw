@@ -155,6 +155,9 @@ export type AppViewState = {
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamingRestartConfirmOpen: boolean;
+  dreamingRestartConfirmLoading: boolean;
+  dreamingPendingEnabled: boolean | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
@@ -173,6 +176,8 @@ export type AppViewState = {
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
+  pendingUpdateExpectedVersion: string | null;
+  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   communicationsFormMode: "form" | "raw";
   communicationsSearchQuery: string;
   communicationsActiveSection: string | null;

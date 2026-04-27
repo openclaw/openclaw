@@ -66,6 +66,9 @@ These are the standard files OpenClaw expects inside the workspace:
   <Accordion title="SOUL.md — persona and tone">
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
+  <Accordion title="voice.md — speech preparation">
+    Speech delivery guidance layered on top of SOUL.md. Loaded when present, and used by `/emotions on|full` to help expressive TTS land naturally.
+  </Accordion>
   <Accordion title="USER.md — who the user is">
     Who the user is and how to address them. Loaded every session.
   </Accordion>
@@ -127,7 +130,7 @@ Run these steps on the machine where the Gateway runs (that is where the workspa
     ```bash
     cd ~/.openclaw/workspace
     git init
-    git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
+    git add AGENTS.md SOUL.md voice.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
     git commit -m "Add agent workspace"
     ```
 

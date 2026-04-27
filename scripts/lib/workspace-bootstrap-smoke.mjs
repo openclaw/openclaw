@@ -6,6 +6,7 @@ import { join } from "node:path";
 export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/AGENTS.md",
   "docs/reference/templates/SOUL.md",
+  "docs/reference/templates/voice.md",
   "docs/reference/templates/TOOLS.md",
   "docs/reference/templates/IDENTITY.md",
   "docs/reference/templates/USER.md",
@@ -16,6 +17,7 @@ export const WORKSPACE_TEMPLATE_PACK_PATHS = [
 const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "AGENTS.md",
   "SOUL.md",
+  "voice.md",
   "TOOLS.md",
   "IDENTITY.md",
   "USER.md",

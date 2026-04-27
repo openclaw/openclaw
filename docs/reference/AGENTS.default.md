@@ -23,6 +23,7 @@ mkdir -p ~/.openclaw/workspace
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
 cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
+cp docs/reference/templates/voice.md ~/.openclaw/workspace/voice.md
 cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
@@ -89,13 +90,13 @@ git commit -m "Add Clawd workspace"
 # Optional: add a private remote + push
 ```
 
-## What OpenClaw Does
+## What OpenClaw does
 
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run skills via the host Mac.
 - macOS app manages permissions (screen recording, notifications, microphone) and exposes the `openclaw` CLI via its bundled binary.
 - Direct chats collapse into the agent's `main` session by default; groups stay isolated as `agent:<agentId>:<channel>:group:<id>` (rooms/channels: `agent:<agentId>:<channel>:channel:<id>`); heartbeats keep background tasks alive.
 
-## Core Skills (enable in Settings → Skills)
+## Core skills (enable in Settings → Skills)
 
 - **mcporter** — Tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** — Fast macOS screenshots with optional AI vision analysis.
@@ -115,7 +116,7 @@ git commit -m "Add Clawd workspace"
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
 - **agent-tools** — Utility toolkit for automations and helper scripts.
 
-## Usage Notes
+## Usage notes
 
 - Prefer the `openclaw` CLI for scripting; mac app handles permissions.
 - Run installs from the Skills tab; it hides the button if a binary is already present.

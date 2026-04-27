@@ -12,6 +12,7 @@ import {
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
+  DEFAULT_VOICE_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
@@ -73,6 +74,7 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   expect(names).not.toContain("HEARTBEAT.md");
   expect(names).not.toContain("BOOTSTRAP.md");
   expect(names).not.toContain("MEMORY.md");
+  expect(names).not.toContain("voice.md");
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -285,6 +287,18 @@ describe("ensureAgentWorkspace", () => {
       "# Add tasks below when you want the agent to check something periodically.",
     );
   });
+
+  it("writes the default voice.md library into new workspaces", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const voice = await fs.readFile(path.join(tempDir, DEFAULT_VOICE_FILENAME), "utf-8");
+    expect(voice).toContain("# Voice Speech Preparation Library");
+    expect(voice).toContain("This file is a prompting contract, not proof of a live TTS backend.");
+    expect(voice).toContain("[calm]");
+    expect(voice).toContain("ElevenLabs Eleven v3 and Eleven v3 Conversational");
+  });
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {
@@ -324,6 +338,27 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
+  it("loads voice.md after SOUL.md and before TOOLS.md when present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_SOUL_FILENAME, content: "soul" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_VOICE_FILENAME, content: "voice" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_TOOLS_FILENAME, content: "tools" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const names = files.map((file) => file.name);
+
+    expect(names.indexOf(DEFAULT_SOUL_FILENAME)).toBeLessThan(
+      names.indexOf(DEFAULT_VOICE_FILENAME),
+    );
+    expect(names.indexOf(DEFAULT_VOICE_FILENAME)).toBeLessThan(
+      names.indexOf(DEFAULT_TOOLS_FILENAME),
+    );
+    expect(files.find((file) => file.name === DEFAULT_VOICE_FILENAME)).toMatchObject({
+      content: "voice",
+      missing: false,
+    });
+  });
+
   it("treats hardlinked bootstrap aliases as missing", async () => {
     if (process.platform === "win32") {
       return;
@@ -360,6 +395,7 @@ describe("filterBootstrapFilesForSession", () => {
   const mockFiles: WorkspaceBootstrapFile[] = [
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
+    { name: "voice.md", path: "/w/voice.md", content: "", missing: false },
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },

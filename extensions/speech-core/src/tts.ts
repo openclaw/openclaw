@@ -10,13 +10,15 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
-import type {
-  OpenClawConfig,
-  ResolvedTtsPersona,
-  TtsAutoMode,
-  TtsConfig,
-  TtsModelOverrideConfig,
-  TtsProvider,
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  type OpenClawConfig,
+  type ResolvedTtsPersona,
+  type TtsAutoMode,
+  type TtsConfig,
+  type TtsModelOverrideConfig,
+  type TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
@@ -315,6 +317,43 @@ function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvi
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
+function stableConfigStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
+    .join(",")}}`;
+}
+
+function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return stableConfigStringify(left) === stableConfigStringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (!runtimeConfig || cfg === runtimeConfig) {
+    return cfg;
+  }
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  if (!sourceConfig || configSnapshotsMatch(cfg, sourceConfig)) {
+    return runtimeConfig;
+  }
+  return cfg;
+}
+
 function asProviderConfig(value: unknown): SpeechProviderConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as SpeechProviderConfig)
@@ -428,7 +467,7 @@ function resolveLazyProviderConfig(
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = config.providerConfigs[canonical];
-  const effectiveCfg = cfg ?? config.sourceConfig;
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
   if (existing && !effectiveCfg) {
     return existing;
   }
@@ -488,17 +527,19 @@ export function getResolvedSpeechProviderConfig(
   providerId: string,
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
   const canonical =
-    canonicalizeSpeechProviderId(providerId, cfg) ??
+    canonicalizeSpeechProviderId(providerId, effectiveCfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
     normalizeLowercaseStringOrEmpty(providerId);
-  return resolveLazyProviderConfig(config, canonical, cfg);
+  return resolveLazyProviderConfig(config, canonical, effectiveCfg);
 }
 
 export function resolveTtsConfig(
   cfg: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): ResolvedTtsConfig {
+  cfg = resolveTtsRuntimeConfig(cfg);
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -589,6 +630,7 @@ export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,
 ): string | undefined {
+  cfg = resolveTtsRuntimeConfig(cfg);
   const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({ cfg, agentId });
   if (autoMode === "off") {
     return undefined;
@@ -752,17 +794,18 @@ export function resolveExplicitTtsOverrides(params: {
   channelId?: string;
   accountId?: string;
 }): TtsDirectiveOverrides {
+  const cfg = resolveTtsRuntimeConfig(params.cfg);
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
   const voiceId = params.voiceId?.trim();
-  const config = resolveTtsConfig(params.cfg, {
+  const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channelId,
     accountId: params.accountId,
   });
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const selectedProvider =
-    canonicalizeSpeechProviderId(providerInput, params.cfg) ??
+    canonicalizeSpeechProviderId(providerInput, cfg) ??
     (modelId || voiceId ? getTtsProvider(config, prefsPath) : undefined);
 
   if (providerInput && !selectedProvider) {
@@ -777,7 +820,7 @@ export function resolveExplicitTtsOverrides(params: {
     throw new Error("TTS model or voice overrides require a resolved provider.");
   }
 
-  const provider = getSpeechProvider(selectedProvider, params.cfg);
+  const provider = getSpeechProvider(selectedProvider, cfg);
   if (!provider) {
     throw new Error(`speech provider ${selectedProvider} is not registered`);
   }
@@ -897,9 +940,10 @@ function shouldDeliverTtsAsVoice(params: {
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
-  const normalizedPrimary = canonicalizeSpeechProviderId(primary, cfg) ?? primary;
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
+  const normalizedPrimary = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
   const ordered = new Set<TtsProvider>([normalizedPrimary]);
-  for (const provider of sortSpeechProvidersForAutoSelection(cfg)) {
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
     const normalized = provider.id;
     if (normalized !== normalizedPrimary) {
       ordered.add(normalized);
@@ -913,14 +957,15 @@ export function isTtsProviderConfigured(
   provider: TtsProvider,
   cfg?: OpenClawConfig,
 ): boolean {
-  const resolvedProvider = getSpeechProvider(provider, cfg);
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
+  const resolvedProvider = getSpeechProvider(provider, effectiveCfg);
   if (!resolvedProvider) {
     return false;
   }
   return (
     resolvedProvider.isConfigured({
-      cfg,
-      providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
+      cfg: effectiveCfg,
+      providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, effectiveCfg),
       timeoutMs: config.timeoutMs,
     }) ?? false
   );
@@ -1097,6 +1142,7 @@ function resolveTtsRequestSetup(params: {
   allowOversizeSourceText?: boolean;
 }):
   | {
+      cfg: OpenClawConfig;
       config: ResolvedTtsConfig;
       persona?: ResolvedTtsPersona;
       providers: TtsProvider[];
@@ -1104,7 +1150,8 @@ function resolveTtsRequestSetup(params: {
   | {
       error: string;
     } {
-  const config = resolveTtsConfig(params.cfg, {
+  const cfg = resolveTtsRuntimeConfig(params.cfg);
+  const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channelId,
     accountId: params.accountId,
@@ -1117,12 +1164,12 @@ function resolveTtsRequestSetup(params: {
   }
 
   const userProvider = getTtsProvider(config, prefsPath);
-  const provider =
-    canonicalizeSpeechProviderId(params.providerOverride, params.cfg) ?? userProvider;
+  const provider = canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
   return {
+    cfg,
     config,
     persona: getTtsPersona(config, prefsPath),
-    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, params.cfg),
+    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, cfg),
   };
 }
 
@@ -1207,7 +1254,7 @@ export async function synthesizeSpeech(params: {
     return { success: false, error: setup.error };
   }
 
-  const { config, persona, providers } = setup;
+  const { cfg, config, persona, providers } = setup;
   const timeoutMs = params.timeoutMs ?? config.timeoutMs;
   const target = resolveTtsSynthesisTarget(params.channel);
 
@@ -1231,7 +1278,7 @@ export async function synthesizeSpeech(params: {
       // persona-bound model overrides.
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
-        cfg: params.cfg,
+        cfg,
         config,
         persona,
       });
@@ -1308,7 +1355,7 @@ export async function synthesizeSpeech(params: {
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: trimmedProviderText,
-        cfg: params.cfg,
+        cfg,
         providerConfig: resolvedProvider.providerConfig,
         providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
         persona: resolvedProvider.synthesisPersona,
@@ -1318,7 +1365,7 @@ export async function synthesizeSpeech(params: {
       });
       const synthesis = await resolvedProvider.provider.synthesize({
         text: prepared.text,
-        cfg: params.cfg,
+        cfg,
         providerConfig: prepared.providerConfig,
         target,
         providerOverrides: prepared.providerOverrides,
@@ -1395,7 +1442,7 @@ export async function textToSpeechTelephony(params: {
     return { success: false, error: setup.error };
   }
 
-  const { config, persona, providers } = setup;
+  const { cfg, config, persona, providers } = setup;
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
@@ -1410,7 +1457,7 @@ export async function textToSpeechTelephony(params: {
     try {
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
-        cfg: params.cfg,
+        cfg,
         config,
         persona,
         requireTelephony: true,
@@ -1436,7 +1483,7 @@ export async function textToSpeechTelephony(params: {
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
-        cfg: params.cfg,
+        cfg,
         providerConfig: resolvedProvider.providerConfig,
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
@@ -1445,7 +1492,7 @@ export async function textToSpeechTelephony(params: {
       });
       const synthesis = await synthesizeTelephony({
         text: prepared.text,
-        cfg: params.cfg,
+        cfg,
         providerConfig: prepared.providerConfig,
         timeoutMs: config.timeoutMs,
       });
@@ -1512,15 +1559,16 @@ export async function listSpeechVoices(params: {
   apiKey?: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
-  const provider = canonicalizeSpeechProviderId(params.provider, params.cfg);
+  const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
+  const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {
     throw new Error("speech provider id is required");
   }
-  const config = params.config ?? (params.cfg ? resolveTtsConfig(params.cfg) : undefined);
+  const config = params.config ?? (cfg ? resolveTtsConfig(cfg) : undefined);
   if (!config) {
     throw new Error(`speech provider ${provider} requires cfg or resolved config`);
   }
-  const resolvedProvider = getSpeechProvider(provider, params.cfg);
+  const resolvedProvider = getSpeechProvider(provider, cfg);
   if (!resolvedProvider) {
     throw new Error(`speech provider ${provider} is not registered`);
   }
@@ -1528,8 +1576,8 @@ export async function listSpeechVoices(params: {
     throw new Error(`speech provider ${provider} does not support voice listing`);
   }
   return await resolvedProvider.listVoices({
-    cfg: params.cfg,
-    providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, params.cfg),
+    cfg,
+    providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
   });
@@ -1548,8 +1596,9 @@ export async function maybeApplyTtsToPayload(params: {
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
+  const cfg = resolveTtsRuntimeConfig(params.cfg);
   const { autoMode, prefsPath } = resolveEffectiveTtsAutoState({
-    cfg: params.cfg,
+    cfg,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channel,
@@ -1558,7 +1607,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (autoMode === "off") {
     return params.payload;
   }
-  const config = resolveTtsConfig(params.cfg, {
+  const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channel,
     accountId: params.accountId,
@@ -1579,14 +1628,14 @@ export async function maybeApplyTtsToPayload(params: {
   // review on PR-A's tts.ts:1491 and tts.ts:1516 — using speechDirectives for
   // routing dropped [[tts]] directives that lived in visible text).
   const directives = parseTtsDirectives(text, config.modelOverrides, {
-    cfg: params.cfg,
+    cfg,
     providerConfigs: config.providerConfigs,
     preferredProviderId: activeProvider,
   });
   const plainSpeechDirectives =
     hasTtsPlainText && ttsPlainText !== text
       ? parseTtsDirectives(ttsPlainText, config.modelOverrides, {
-          cfg: params.cfg,
+          cfg,
           providerConfigs: config.providerConfigs,
           preferredProviderId: activeProvider,
         })
@@ -1594,7 +1643,7 @@ export async function maybeApplyTtsToPayload(params: {
   const expressiveSpeechDirectives =
     hasTtsSourceText && ttsSourceText !== text
       ? parseTtsDirectives(ttsSourceText, config.modelOverrides, {
-          cfg: params.cfg,
+          cfg,
           providerConfigs: config.providerConfigs,
           preferredProviderId: activeProvider,
         })
@@ -1605,7 +1654,7 @@ export async function maybeApplyTtsToPayload(params: {
 
   // Routing decisions live on the visible directives only.
   const effectiveProvider = directives.overrides?.provider
-    ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ?? activeProvider)
+    ? (canonicalizeSpeechProviderId(directives.overrides.provider, cfg) ?? activeProvider)
     : activeProvider;
   if (isVerbose()) {
     logVerbose(
@@ -1775,7 +1824,7 @@ export async function maybeApplyTtsToPayload(params: {
         const summary = await summarizeText({
           text: textForAudio,
           targetLength: maxLength,
-          cfg: params.cfg,
+          cfg,
           config,
           timeoutMs: config.timeoutMs,
         });
@@ -1851,7 +1900,7 @@ export async function maybeApplyTtsToPayload(params: {
   const ttsStart = Date.now();
   const result = await textToSpeech({
     text: preparedTextForAudio,
-    cfg: params.cfg,
+    cfg,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,

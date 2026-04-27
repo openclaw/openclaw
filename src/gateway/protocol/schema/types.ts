@@ -69,6 +69,7 @@ export type ConfigSchemaParams = SchemaType<"ConfigSchemaParams">;
 export type ConfigSchemaLookupParams = SchemaType<"ConfigSchemaLookupParams">;
 export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
 export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
+export type UpdateStatusParams = SchemaType<"UpdateStatusParams">;
 export type WizardStartParams = SchemaType<"WizardStartParams">;
 export type WizardNextParams = SchemaType<"WizardNextParams">;
 export type WizardCancelParams = SchemaType<"WizardCancelParams">;

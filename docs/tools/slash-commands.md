@@ -453,3 +453,5 @@ See [BTW Side Questions](/tools/btw) for the full behavior and client UX details
 - [Creating skills](/tools/creating-skills)
 - [Skills](/tools/skills)
 - [Skills config](/tools/skills-config)
+
+<!-- /emotions slash command documented at line 141 above; see #72239 for details. -->
