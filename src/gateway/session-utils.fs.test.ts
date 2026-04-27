@@ -501,6 +501,76 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("attaches sender labels from hidden runtime context rows without exposing the row", () => {
+    const sessionId = "test-session-runtime-context-sender";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello from Discord" } }),
+      JSON.stringify({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content: [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify({ label: "Yuka", id: "358611388488351744" }),
+          "```",
+        ].join("\n"),
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Hello" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      role: "user",
+      content: "Hello from Discord",
+      senderLabel: "Yuka",
+      __openclaw: { seq: 1 },
+    });
+    expect(out[1]).toMatchObject({ role: "assistant", __openclaw: { seq: 2 } });
+    expect(out).not.toContainEqual(
+      expect.objectContaining({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+      }),
+    );
+  });
+
+  test("does not attach runtime-context sender labels across assistant messages", () => {
+    const sessionId = "test-session-runtime-context-stale-sender";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello from Discord" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Hello" } }),
+      JSON.stringify({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content: [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify({ label: "Late Sender" }),
+          "```",
+        ].join("\n"),
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+    expect(out[0]).not.toHaveProperty("senderLabel");
+  });
+
   test.each([
     {
       sessionId: "cross-agent-default-root",

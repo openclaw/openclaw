@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -25,6 +26,7 @@ type SessionTitleFieldsCacheEntry = SessionTitleFields & {
   size: number;
 };
 
+const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
 const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
 
@@ -90,6 +92,51 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+function extractRuntimeContextSenderLabel(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+  const record = entry as Record<string, unknown>;
+  if (
+    record.type !== "custom_message" ||
+    record.customType !== RUNTIME_CONTEXT_CUSTOM_TYPE ||
+    typeof record.content !== "string"
+  ) {
+    return null;
+  }
+  return extractInboundSenderLabel(record.content);
+}
+
+function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: string | null): boolean {
+  if (!senderLabel) {
+    return false;
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    const role =
+      typeof record.role === "string" ? normalizeLowercaseStringOrEmpty(record.role) : "";
+    if (!role) {
+      continue;
+    }
+    if (role !== "user") {
+      return false;
+    }
+    if (record.senderLabel === senderLabel) {
+      return false;
+    }
+    messages[i] = {
+      ...record,
+      senderLabel,
+    };
+    return true;
+  }
+  return false;
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -111,6 +158,12 @@ export function readSessionMessages(
     }
     try {
       const parsed = JSON.parse(line);
+      const runtimeSenderLabel = extractRuntimeContextSenderLabel(parsed);
+      if (runtimeSenderLabel) {
+        attachSenderLabelToPreviousUser(messages, runtimeSenderLabel);
+        continue;
+      }
+
       if (parsed?.message) {
         messageSeq += 1;
         messages.push(
