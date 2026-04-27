@@ -408,6 +408,26 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+// GitHub Copilot exposes long-context Claude variants under explicit suffixed
+// ids (`claude-opus-4.6-1m`, `claude-opus-4.7-1m-internal`). The base ids on
+// Copilot are not 1M (e.g. `claude-opus-4.7` is 144K upstream), so unlike the
+// anthropic/claude-cli case we can't just match the base prefix. Match the
+// `-1m` / `-1m-internal` suffix on the family id instead.
+const COPILOT_1M_SUFFIX_PATTERNS = [/-1m$/i, /-1m-internal$/i] as const;
+function isCopilotClaude1mModel(provider: string, model: string): boolean {
+  if (normalizeProviderId(provider) !== "github-copilot") {
+    return false;
+  }
+  const modelId = resolveModelFamilyId(model);
+  // Only Claude variants are known to use the -1m suffix today; gate on the
+  // base prefix so future Copilot models with unrelated `-1m` suffixes do not
+  // accidentally inherit the 1M window.
+  if (!ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))) {
+    return false;
+  }
+  return COPILOT_1M_SUFFIX_PATTERNS.some((pattern) => pattern.test(modelId));
+}
+
 function shouldUseAnthropicOpus47ContextWindow(params: {
   provider?: string;
   model: string;
@@ -483,6 +503,15 @@ export function resolveContextTokensForModel(params: {
   }
 
   if (explicitProvider && ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
+  }
+
+  // GitHub Copilot's `claude-opus-*-1m` / `-1m-internal` variants advertise a
+  // 1M context window upstream but are not in pi-ai's bundled catalog, so the
+  // cache lookup below would miss and the fallback would clamp them to
+  // DEFAULT_CONTEXT_TOKENS. Recognise the suffix explicitly so the status
+  // panel and session_utils both surface the correct window.
+  if (ref && isCopilotClaude1mModel(ref.provider, ref.model)) {
     return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 

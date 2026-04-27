@@ -453,4 +453,51 @@ describe("resolveContextTokensForModel", () => {
 
     expect(result).toBe(160_000);
   });
+
+  it("returns 1M for github-copilot claude-opus-4.6-1m even with a cold cache", () => {
+    // pi-ai's bundled catalog has no entry for the -1m suffix Copilot variants,
+    // so the cache lookup misses. Without an explicit suffix rule the resolver
+    // would fall through to DEFAULT_CONTEXT_TOKENS and underreport the window.
+    const result = resolveContextTokensForModel({
+      provider: "github-copilot",
+      model: "claude-opus-4.6-1m",
+      fallbackContextTokens: 200_000,
+    });
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M for github-copilot claude-opus-4.7-1m-internal even with a cold cache", () => {
+    const result = resolveContextTokensForModel({
+      provider: "github-copilot",
+      model: "claude-opus-4.7-1m-internal",
+      fallbackContextTokens: 200_000,
+    });
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("does not apply the -1m suffix rule to non-Claude github-copilot models", () => {
+    // Hypothetical future Copilot model with a -1m suffix that is NOT a Claude
+    // family variant must not inherit the 1M window automatically. The gate
+    // requires the base prefix to be a known anthropic 1M family.
+    const result = resolveContextTokensForModel({
+      provider: "github-copilot",
+      model: "some-future-model-1m",
+      fallbackContextTokens: 200_000,
+    });
+    // Falls through to the bare-key cache miss and returns the fallback.
+    expect(result).toBe(200_000);
+  });
+
+  it("does not apply the -1m suffix rule to non-copilot providers", () => {
+    // Anthropic-direct claude-opus-4.6-1m would be handled by the existing
+    // anthropic 1M codepath (params.context1m), not this Copilot-specific
+    // suffix rule, so a Copilot-suffix id under another provider must not
+    // accidentally short-circuit to 1M.
+    const result = resolveContextTokensForModel({
+      provider: "openrouter",
+      model: "claude-opus-4.6-1m",
+      fallbackContextTokens: 200_000,
+    });
+    expect(result).toBe(200_000);
+  });
 });
