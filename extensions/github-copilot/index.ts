@@ -38,6 +38,15 @@ async function loadGithubCopilotRuntime() {
 function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
+  const existingPrimary =
+    typeof existingModel === "string"
+      ? existingModel.trim()
+      : typeof existingModel === "object" && typeof existingModel?.primary === "string"
+        ? existingModel.primary.trim()
+        : "";
+  if (existingPrimary) {
+    return cfg;
+  }
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
@@ -76,20 +85,79 @@ function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undef
   });
 }
 
+async function resolveCopilotNonInteractiveToken(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+  flagValue: string | undefined,
+) {
+  const resolveFromEnvChain = async () => {
+    for (const envVar of COPILOT_ENV_VARS) {
+      const resolved = await ctx.resolveApiKey({
+        provider: PROVIDER_ID,
+        flagName: "--github-copilot-token",
+        envVar,
+        envVarName: envVar,
+        allowProfile: false,
+        required: false,
+      });
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return null;
+  };
+
+  if (ctx.opts.secretInputMode === "ref") {
+    const resolved = await resolveFromEnvChain();
+    if (resolved) {
+      return resolved;
+    }
+    if (flagValue) {
+      ctx.runtime.error(
+        [
+          "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN is set in env.",
+          "Set one of those env vars and omit --github-copilot-token, or use --secret-input-mode plaintext.",
+        ].join("\n"),
+      );
+      ctx.runtime.exit(1);
+    }
+    return null;
+  }
+
+  const primary = await ctx.resolveApiKey({
+    provider: PROVIDER_ID,
+    flagValue,
+    flagName: "--github-copilot-token",
+    envVar: COPILOT_ENV_VARS[0],
+    envVarName: COPILOT_ENV_VARS[0],
+    allowProfile: false,
+    required: false,
+  });
+  if (primary || flagValue) {
+    return primary;
+  }
+
+  for (const envVar of COPILOT_ENV_VARS.slice(1)) {
+    const resolved = await ctx.resolveApiKey({
+      provider: PROVIDER_ID,
+      flagName: "--github-copilot-token",
+      envVar,
+      envVarName: envVar,
+      allowProfile: false,
+      required: false,
+    });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 async function runGitHubCopilotNonInteractiveAuth(
   ctx: ProviderAuthMethodNonInteractiveContext,
 ): Promise<OpenClawConfig | null> {
   const opts = ctx.opts as Record<string, unknown> | undefined;
   const flagValue = normalizeOptionalSecretInput(opts?.githubCopilotToken);
-  const resolved = await ctx.resolveApiKey({
-    provider: PROVIDER_ID,
-    flagValue,
-    flagName: "--github-copilot-token",
-    envVar: "COPILOT_GITHUB_TOKEN",
-    envVarName: "COPILOT_GITHUB_TOKEN",
-    allowProfile: false,
-    required: false,
-  });
+  const resolved = await resolveCopilotNonInteractiveToken(ctx, flagValue);
 
   let profileId = DEFAULT_COPILOT_PROFILE_ID;
   if (resolved) {
