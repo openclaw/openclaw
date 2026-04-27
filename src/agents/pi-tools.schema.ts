@@ -8,6 +8,33 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 
 export { normalizeToolParameterSchema };
 
+function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const record = schema as Record<string, unknown>;
+  const type = record.type;
+  const hasObjectType =
+    type === "object" || (Array.isArray(type) && type.some((entry) => entry === "object"));
+  if (!hasObjectType) {
+    return false;
+  }
+  return !Array.isArray(record.required) || record.required.length === 0;
+}
+
+function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unknown): AnyAgentTool {
+  if (!isObjectSchemaWithNoRequiredParams(parameters)) {
+    return tool;
+  }
+  return {
+    ...tool,
+    prepareArguments: (args: unknown) => {
+      const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+      return prepared === null || prepared === undefined ? {} : prepared;
+    },
+  };
+}
+
 export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,
@@ -24,9 +51,11 @@ export function normalizeToolParameters(
   if (!schema) {
     return tool;
   }
+  const parameters = normalizeToolParameterSchema(schema, options);
   return preserveToolMeta({
     ...tool,
-    parameters: normalizeToolParameterSchema(schema, options),
+    ...addEmptyObjectArgumentPreparation(tool, parameters),
+    parameters,
   });
 }
 
