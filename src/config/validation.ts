@@ -3,8 +3,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
-  normalizePluginsConfig,
   normalizePluginId,
+  normalizePluginsConfig,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
@@ -38,7 +38,7 @@ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-con
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -131,12 +131,16 @@ function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesC
     return { values: [], incomplete: false, hasValues: false };
   }
 
-  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+  if (Object.hasOwn(node, "const")) {
     return { values: [node.const], incomplete: false, hasValues: true };
   }
 
   if (Array.isArray(node.enum)) {
-    return { values: node.enum, incomplete: false, hasValues: node.enum.length > 0 };
+    return {
+      values: node.enum,
+      incomplete: false,
+      hasValues: node.enum.length > 0,
+    };
   }
 
   const type = node.type;
@@ -165,7 +169,11 @@ function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesC
     collected.push(...branchCollected.values);
   }
 
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+  return {
+    values: collected,
+    incomplete: false,
+    hasValues: collected.length > 0,
+  };
 }
 
 function collectAllowedValuesFromBundledChannelSchemaPath(
@@ -248,7 +256,11 @@ function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection 
     collected.push(...branchCollected.values);
   }
 
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+  return {
+    values: collected,
+    incomplete: false,
+    hasValues: collected.length > 0,
+  };
 }
 
 function collectAllowedValuesFromIssueList(
@@ -467,7 +479,11 @@ function formatLegacySecretRefEnvMarkerMessage(candidate: {
   ref: { id: string; provider: string } | null;
 }): string {
   const replacement = candidate.ref
-    ? JSON.stringify({ source: "env", provider: candidate.ref.provider, id: candidate.ref.id })
+    ? JSON.stringify({
+        source: "env",
+        provider: candidate.ref.provider,
+        id: candidate.ref.id,
+      })
     : '{"source":"env","provider":"default","id":"ENV_VAR"}';
   return [
     `${JSON.stringify(candidate.value)} is a legacy SecretRef marker and is not valid openclaw.json config.`,
@@ -762,8 +778,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -1029,8 +1044,9 @@ function validateConfigObjectWithPluginsBase(
       };
       pluginEntriesCloned = true;
     }
-    const currentEntry = mutatedConfig.plugins?.entries?.[pluginId];
-    mutatedConfig.plugins!.entries![pluginId] = {
+    const entries = mutatedConfig.plugins!.entries!;
+    const currentEntry = entries[pluginId];
+    entries[pluginId] = {
       ...currentEntry,
       config: nextValue,
     };
@@ -1186,7 +1202,9 @@ function validateConfigObjectWithPluginsBase(
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
-        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, {
+          warnOnly: true,
+        });
       }
     }
   }
@@ -1226,8 +1244,7 @@ function validateConfigObjectWithPluginsBase(
 
   // The default memory slot is inferred; only a user-configured slot should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
+  const hasExplicitMemorySlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
   if (
     hasExplicitMemorySlot &&
