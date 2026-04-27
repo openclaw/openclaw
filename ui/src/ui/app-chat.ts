@@ -1,7 +1,7 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
-import { persistChatQueue as persistQueue, restoreChatQueue as restoreQueue } from "./chat-queue-persistence.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import { persistChatQueue as persistQueue } from "./chat-queue-persistence.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";

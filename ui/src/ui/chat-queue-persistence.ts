@@ -9,7 +9,9 @@ export const CHAT_QUEUE_TTL_MS = 86_400_000; // 24 hours
  * queue is empty to avoid stale entries accumulating across sessions. */
 export function persistChatQueue(sessionKey: string, queue: ChatQueueItem[]): void {
   const storage = getSafeLocalStorage();
-  if (!storage) return;
+  if (!storage) {
+    return;
+  }
   try {
     const key = `${CHAT_QUEUE_STORAGE_KEY_PREFIX}${sessionKey}`;
     if (queue.length === 0) {
@@ -34,10 +36,14 @@ export function restoreChatQueue(
   currentQueue: ChatQueueItem[],
 ): ChatQueueItem[] {
   const storage = getSafeLocalStorage();
-  if (!storage) return currentQueue;
+  if (!storage) {
+    return currentQueue;
+  }
   try {
     const raw = storage.getItem(`${CHAT_QUEUE_STORAGE_KEY_PREFIX}${sessionKey}`);
-    if (!raw) return currentQueue;
+    if (!raw) {
+      return currentQueue;
+    }
     const parsed = JSON.parse(raw) as { items: ChatQueueItem[]; ts: number };
     if (Date.now() - parsed.ts > CHAT_QUEUE_TTL_MS) {
       storage.removeItem(`${CHAT_QUEUE_STORAGE_KEY_PREFIX}${sessionKey}`);

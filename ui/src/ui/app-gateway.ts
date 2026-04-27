@@ -328,9 +328,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
-        void flushChatQueueForEvent(
-          host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
-        );
+        flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);

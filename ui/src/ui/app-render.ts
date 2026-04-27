@@ -7,7 +7,6 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { restoreChatQueue } from "./chat-queue-persistence.ts";
 import { refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -23,6 +22,7 @@ import {
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { restoreChatQueue } from "./chat-queue-persistence.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -121,9 +121,10 @@ import {
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -1489,9 +1490,9 @@ export function renderApp(state: AppViewState) {
                 state.chatRunId = null;
                 state.chatQueue = [];
                 // Restore persisted queue for the new session (if any).
-                const restoredQueue = restoreChatQueue(next, state.chatQueue as any[]);
+                const restoredQueue = restoreChatQueue(next, state.chatQueue as ChatQueueItem[]);
                 if (restoredQueue.length > 0) {
-                  state.chatQueue = restoredQueue as any;
+                  state.chatQueue = restoredQueue as ChatQueueItem[];
                 }
                 state.resetToolStream();
                 state.applySettings({
