@@ -689,6 +689,7 @@ export async function prepareSlackMessage(params: {
     contextVisibilityMode,
     envelopeOptions,
     effectiveDirectMedia,
+    cfg: ctx.cfg,
   });
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
