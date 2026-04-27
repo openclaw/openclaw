@@ -113,7 +113,7 @@ describe("RealtimeTalkSession", () => {
     const session = new RealtimeTalkSession({ request } as never, "main");
 
     await expect(session.start()).rejects.toThrow(
-      'Realtime voice provider "google" does not support browser WebRTC sessions',
+      'Realtime voice provider "google" does not support browser WebRTC sessions. Control UI Talk can use Google through the gateway relay or a Google Live WebSocket session instead. Restart the gateway so it returns "gateway-relay" or "json-pcm-websocket", or switch Talk realtime to a WebRTC-capable provider such as OpenAI.',
     );
 
     expect(webRtcCtor).not.toHaveBeenCalled();

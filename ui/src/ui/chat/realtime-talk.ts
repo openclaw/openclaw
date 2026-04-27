@@ -55,11 +55,17 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
     return "json-pcm-websocket";
   }
   if (raw.provider?.trim().toLowerCase() === "google") {
-    throw new Error(
-      'Realtime voice provider "google" does not support browser WebRTC sessions; restart the gateway so Google Live returns a browser WebSocket session.',
-    );
+    throw new Error(buildGoogleWebRtcUnsupportedMessage());
   }
   return "webrtc-sdp";
+}
+
+function buildGoogleWebRtcUnsupportedMessage(): string {
+  return [
+    'Realtime voice provider "google" does not support browser WebRTC sessions.',
+    "Control UI Talk can use Google through the gateway relay or a Google Live WebSocket session instead.",
+    'Restart the gateway so it returns "gateway-relay" or "json-pcm-websocket", or switch Talk realtime to a WebRTC-capable provider such as OpenAI.',
+  ].join(" ");
 }
 
 export class RealtimeTalkSession {
