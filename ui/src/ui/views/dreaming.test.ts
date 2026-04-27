@@ -522,6 +522,60 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
+  it("labels daily-only and grounded-only waiting entries as daily log origins", () => {
+    setDreamSubTab("advanced");
+    setDreamAdvancedWaitingSort("recent");
+    const shortTermEntries = [
+      {
+        key: "memory:daily-only",
+        path: "memory/2026-04-05.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Daily-only replay",
+        recallCount: 0,
+        dailyCount: 2,
+        groundedCount: 0,
+        totalSignalCount: 2,
+        lightHits: 0,
+        remHits: 0,
+        phaseHitCount: 0,
+        lastRecalledAt: "2026-04-06T12:00:00.000Z",
+      },
+      {
+        key: "memory:grounded-only",
+        path: "memory/2026-04-04.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Grounded-only replay",
+        recallCount: 0,
+        dailyCount: 0,
+        groundedCount: 3,
+        totalSignalCount: 3,
+        lightHits: 0,
+        remHits: 1,
+        phaseHitCount: 1,
+        lastRecalledAt: "2026-04-04T12:00:00.000Z",
+      },
+    ];
+
+    const container = renderInto(
+      buildProps({
+        shortTermEntries,
+        promotedEntries: [],
+      }),
+    );
+
+    const badges = [...container.querySelectorAll(".dreams-advanced__badge")].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(badges.filter((badge) => badge === "replayed").length).toBeGreaterThanOrEqual(2);
+    expect(container.querySelector(".dreams-advanced__summary")?.textContent).toContain(
+      "1 from daily log",
+    );
+    setDreamAdvancedWaitingSort("recent");
+    setDreamSubTab("scene");
+  });
+
   it("sorts waiting entries by strongest support without swapping datasets", () => {
     setDreamSubTab("advanced");
     const shortTermEntries = [
@@ -547,8 +601,8 @@ describe("dreaming view", () => {
         endLine: 1,
         snippet: "Older but strongly supported",
         recallCount: 5,
-        dailyCount: 4,
-        groundedCount: 0,
+        dailyCount: 0,
+        groundedCount: 4,
         totalSignalCount: 9,
         lightHits: 2,
         remHits: 1,

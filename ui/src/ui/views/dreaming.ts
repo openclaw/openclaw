@@ -680,11 +680,12 @@ function sortWaitingEntries(entries: DreamingEntry[], sort: AdvancedWaitingSort)
 
 function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   const hasGroundedReplay = entry.groundedCount > 0;
-  const hasLiveSupport = entry.recallCount > 0 || entry.dailyCount > 0;
+  const hasDailyLog = entry.dailyCount > 0;
+  const hasLiveSupport = entry.recallCount > 0 || hasDailyLog;
   if (hasGroundedReplay && hasLiveSupport) {
     return t("dreaming.advanced.originMixed");
   }
-  if (hasGroundedReplay) {
+  if (hasDailyLog || hasGroundedReplay) {
     return t("dreaming.advanced.originDailyLog");
   }
   return t("dreaming.advanced.originLive");
@@ -746,11 +747,11 @@ function renderAdvancedEntryList(params: {
 }
 
 function renderAdvancedSection(props: DreamingProps) {
-  const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
+  const dailyEntries = props.shortTermEntries.filter((entry) => entry.dailyCount > 0);
   const waitingEntries = sortWaitingEntries(props.shortTermEntries, _advancedWaitingSort);
   const description = t("dreaming.advanced.description");
   const summary = [
-    `${groundedEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
+    `${dailyEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
     `${props.shortTermCount} ${t("dreaming.advanced.summaryWaiting")}`,
     `${props.promotedCount} ${t("dreaming.advanced.summaryPromotedToday")}`,
   ].join(" · ");
@@ -837,7 +838,7 @@ function renderAdvancedSection(props: DreamingProps) {
           titleKey: "dreaming.advanced.stagedTitle",
           descriptionKey: "dreaming.advanced.stagedDescription",
           emptyKey: "dreaming.advanced.emptyGrounded",
-          entries: groundedEntries,
+          entries: dailyEntries,
           controls: html`
             <button
               class="btn btn--subtle btn--sm"
@@ -849,11 +850,11 @@ function renderAdvancedSection(props: DreamingProps) {
           `,
           badge: () => t("dreaming.advanced.originDailyLog"),
           meta: (entry) => [
+            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
             entry.groundedCount > 0
               ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
               : "",
-            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
           ],
         })}
         ${renderAdvancedEntryList({
