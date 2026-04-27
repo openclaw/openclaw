@@ -1,7 +1,5 @@
-import { getRuntimeConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
@@ -50,6 +48,34 @@ const state: RegistryState = (() => {
 })();
 
 let pluginAgentEventUnsubscribe: (() => void) | undefined;
+
+function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
+  if (!registry) {
+    return false;
+  }
+  return (
+    registry.plugins.some((plugin) => plugin.status === "loaded") ||
+    (registry.sessionExtensions?.length ?? 0) > 0 ||
+    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
+    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
+    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+  );
+}
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+  nextRegistry: PluginRegistry;
+}): Promise<void> {
+  const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
+    import("../config/config.js"),
+    import("./host-hook-cleanup.js"),
+  ]);
+  await cleanupReplacedPluginHostRegistry({
+    cfg: getRuntimeConfig(),
+    previousRegistry: params.previousRegistry,
+    nextRegistry: params.nextRegistry,
+  });
+}
 
 function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
   pluginAgentEventUnsubscribe?.();
@@ -111,8 +137,14 @@ export function setActivePluginRegistry(
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
   syncPluginAgentEventBridge(registry);
-  void cleanupReplacedPluginHostRegistry({
-    cfg: getRuntimeConfig(),
+  if (
+    !previousRegistry ||
+    previousRegistry === registry ||
+    !registryHasPluginHostCleanupWork(previousRegistry)
+  ) {
+    return;
+  }
+  void cleanupPreviousPluginHostRegistry({
     previousRegistry,
     nextRegistry: registry,
   }).catch((error) => {
