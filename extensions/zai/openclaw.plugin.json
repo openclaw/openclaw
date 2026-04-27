@@ -2,6 +2,31 @@
   "id": "zai",
   "enabledByDefault": true,
   "providers": ["zai"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "zai-native",
+      "hosts": ["api.z.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "zai": {
+        "family": "zai"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "zai": {
+        "openRouter": {
+          "provider": "z-ai"
+        },
+        "liteLLM": {
+          "provider": "zai"
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "zai": ["ZAI_API_KEY", "Z_AI_API_KEY"]
   },
@@ -78,6 +103,17 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["zai"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "zai": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "glm-4.6v"
+      },
+      "autoPriority": {
+        "image": 60
+      }
+    }
   },
   "configSchema": {
     "type": "object",

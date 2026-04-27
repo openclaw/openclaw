@@ -1,22 +1,9 @@
-import type {
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import { NATIVE_ANTHROPIC_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 
-/**
- * Returns the provider-owned replay policy for Anthropic transports.
- */
-export function buildAnthropicReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
-  const modelId = ctx.modelId?.toLowerCase() ?? "";
+const { buildReplayPolicy } = NATIVE_ANTHROPIC_REPLAY_HOOKS;
 
-  return {
-    sanitizeMode: "full",
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
-    preserveSignatures: true,
-    repairToolUseResultPairing: true,
-    validateAnthropicTurns: true,
-    allowSyntheticToolResults: true,
-    ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
-  };
+if (!buildReplayPolicy) {
+  throw new Error("Expected native Anthropic replay hooks to expose buildReplayPolicy.");
 }
+
+export { buildReplayPolicy as buildAnthropicReplayPolicy };

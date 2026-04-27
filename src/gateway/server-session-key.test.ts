@@ -8,7 +8,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => hoisted.loadConfigMock(),
+  getRuntimeConfig: () => hoisted.loadConfigMock(),
 }));
 
 vi.mock("./session-utils.js", async () => {

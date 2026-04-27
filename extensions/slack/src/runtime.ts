@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 type SlackChannelRuntime = {
@@ -16,5 +16,8 @@ const {
   clearRuntime: clearSlackRuntime,
   tryGetRuntime: getOptionalSlackRuntime,
   getRuntime: getSlackRuntime,
-} = createPluginRuntimeStore<SlackRuntime>("Slack runtime not initialized");
+} = createPluginRuntimeStore<SlackRuntime>({
+  pluginId: "slack",
+  errorMessage: "Slack runtime not initialized",
+});
 export { clearSlackRuntime, getOptionalSlackRuntime, getSlackRuntime, setSlackRuntime };

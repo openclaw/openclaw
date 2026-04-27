@@ -8,7 +8,7 @@ const storeState = vi.hoisted(() => ({
 }));
 
 vi.mock("../io.js", () => ({
-  loadConfig: () => ({}),
+  getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("./paths.js", () => ({
@@ -159,6 +159,60 @@ describe("extractDeliveryInfo", () => {
         threadId: "77",
       },
       threadId: undefined,
+    });
+  });
+
+  it("derives delivery info from stored last route metadata when deliveryContext is missing", () => {
+    const sessionKey = "agent:main:matrix:channel:!lowercased:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+      },
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:example.org",
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("falls back to the base session when a thread entry only has partial route metadata", () => {
+    const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const threadKey = `${baseKey}:thread:$thread-event`;
+    storeState.store[threadKey] = {
+      sessionId: "thread-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+        threadId: "$thread-event",
+      },
+    };
+    storeState.store[baseKey] = {
+      sessionId: "base-session",
+      updatedAt: Date.now(),
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:example.org",
+    };
+
+    const result = extractDeliveryInfo(threadKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
+      },
+      threadId: "$thread-event",
     });
   });
 });

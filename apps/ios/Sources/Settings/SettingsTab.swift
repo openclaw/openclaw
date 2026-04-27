@@ -21,6 +21,7 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
@@ -53,6 +54,7 @@ struct SettingsTab: View {
     @State private var selectedAgentPickerId: String = ""
 
     @State private var showResetOnboardingAlert: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
     @State private var activeFeatureHelp: FeatureHelp?
     @State private var suppressCredentialPersist: Bool = false
 
@@ -63,6 +65,20 @@ struct SettingsTab: View {
             Form {
                 Section {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
+                        if let gatewayProblem = self.appModel.lastGatewayProblem,
+                           !self.isGatewayConnected
+                        {
+                            GatewayProblemBanner(
+                                problem: gatewayProblem,
+                                primaryActionTitle: "Retry connection",
+                                onPrimaryAction: {
+                                    Task { await self.retryGatewayConnectionFromProblem() }
+                                },
+                                onShowDetails: {
+                                    self.showGatewayProblemDetails = true
+                                })
+                        }
+
                         if !self.isGatewayConnected {
                             Text(
                                 "1. Open a chat with your OpenClaw agent and send /pair\n"
@@ -123,7 +139,7 @@ struct SettingsTab: View {
                         if self.appModel.gatewayServerName == nil {
                             LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
                         }
-                        LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                        LabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
                         Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
 
                         if let serverName = self.appModel.gatewayServerName {
@@ -263,6 +279,11 @@ struct SettingsTab: View {
                             help: "Enables voice conversation mode with your connected OpenClaw agent.") { newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
+                        Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                            ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                                Text(option.label).tag(option.id)
+                            }
+                        }
                         self.featureToggle(
                             "Background Listening",
                             isOn: self.$talkBackgroundEnabled,
@@ -400,6 +421,16 @@ struct SettingsTab: View {
                         Image(systemName: "xmark")
                     }
                     .accessibilityLabel("Close")
+                }
+            }
+            .sheet(isPresented: self.$showGatewayProblemDetails) {
+                if let gatewayProblem = self.appModel.lastGatewayProblem {
+                    GatewayProblemDetailsSheet(
+                        problem: gatewayProblem,
+                        primaryActionTitle: "Retry",
+                        onPrimaryAction: {
+                            Task { await self.retryGatewayConnectionFromProblem() }
+                        })
                 }
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
@@ -593,6 +624,9 @@ struct SettingsTab: View {
         if let server = self.appModel.gatewayServerName, self.isGatewayConnected {
             return server
         }
+        if let problem = self.appModel.lastGatewayProblem {
+            return problem.statusText
+        }
         let trimmed = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Not connected" : trimmed
     }
@@ -642,7 +676,7 @@ struct SettingsTab: View {
 
     private func gatewayDebugText() -> String {
         var lines: [String] = [
-            "gateway: \(self.appModel.gatewayStatusText)",
+            "gateway: \(self.appModel.gatewayDisplayStatusText)",
             "discovery: \(self.gatewayController.discoveryStatusText)",
         ]
         lines.append("server: \(self.appModel.gatewayServerName ?? "—")")
@@ -889,6 +923,9 @@ struct SettingsTab: View {
     }
 
     private var setupStatusLine: String? {
+        if let problem = self.appModel.lastGatewayProblem {
+            return problem.message
+        }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
@@ -985,6 +1022,14 @@ struct SettingsTab: View {
 
     private static func httpURLString(host: String?, port: Int?, fallback: String) -> String {
         SettingsNetworkingHelpers.httpURLString(host: host, port: port, fallback: fallback)
+    }
+
+    private func retryGatewayConnectionFromProblem() async {
+        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
+            await self.connectManual()
+            return
+        }
+        await self.connectLastKnown()
     }
 
     private func resetOnboarding() {

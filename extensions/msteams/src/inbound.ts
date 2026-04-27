@@ -38,20 +38,26 @@ export function extractMSTeamsQuoteInfo(
 ): MSTeamsQuoteInfo | undefined {
   for (const att of attachments) {
     // Content may be a plain string or an object with .text/.body (e.g. Adaptive Card payloads).
-    const content =
-      typeof att.content === "string"
-        ? att.content
-        : typeof att.content === "object" && att.content !== null
-          ? String(
-              (att.content as Record<string, unknown>).text ??
-                (att.content as Record<string, unknown>).body ??
-                "",
-            )
-          : "";
-    if (!content) continue;
+    let content = "";
+    if (typeof att.content === "string") {
+      content = att.content;
+    } else if (typeof att.content === "object" && att.content !== null) {
+      const record = att.content as Record<string, unknown>;
+      content =
+        typeof record.text === "string"
+          ? record.text
+          : typeof record.body === "string"
+            ? record.body
+            : "";
+    }
+    if (!content) {
+      continue;
+    }
 
     // Look for the Skype Reply schema blockquote.
-    if (!content.includes("http://schema.skype.com/Reply")) continue;
+    if (!content.includes("http://schema.skype.com/Reply")) {
+      continue;
+    }
 
     // Extract sender from <strong itemprop="mri">.
     const senderMatch = /<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)<\/strong>/i.exec(content);

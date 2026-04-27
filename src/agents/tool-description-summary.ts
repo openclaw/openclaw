@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -41,12 +43,12 @@ export function summarizeToolDescriptionText(params: {
   displaySummary?: string | null;
   maxLen?: number;
 }): string {
-  const explicit = typeof params.displaySummary === "string" ? params.displaySummary.trim() : "";
+  const explicit = normalizeOptionalString(params.displaySummary) ?? "";
   if (explicit) {
     return truncateSummary(normalizeSummaryWhitespace(explicit), params.maxLen);
   }
 
-  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
     return "Tool";
   }
@@ -92,7 +94,7 @@ export function describeToolForVerbose(params: {
   fallback: string;
   maxLen?: number;
 }): string {
-  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
     return params.fallback;
   }

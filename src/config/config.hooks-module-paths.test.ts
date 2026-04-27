@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("config hooks module paths", () => {
   const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
@@ -85,7 +85,7 @@ describe("config hooks module paths", () => {
           {
             match: { path: "custom" },
             action: "agent",
-            channel: "feishu",
+            channel: "collabchat",
             messageTemplate: "hello",
           },
         ],

@@ -1,4 +1,5 @@
-import { truncateText } from "./format.ts";
+import { formatUnknownText, truncateText } from "./format.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -53,7 +54,11 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const providerValue = toTrimmedString(provider);
   if (providerValue) {
     const prefix = `${providerValue}/`;
-    if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    if (
+      normalizeLowercaseStringOrEmpty(modelValue).startsWith(
+        normalizeLowercaseStringOrEmpty(prefix),
+      )
+    ) {
       const trimmedModel = modelValue.slice(prefix.length).trim();
       if (trimmedModel) {
         return `${providerValue}/${trimmedModel}`;
@@ -160,8 +165,7 @@ function formatToolOutput(value: unknown): string | null {
     try {
       text = JSON.stringify(value, null, 2);
     } catch {
-      // oxlint-disable typescript/no-base-to-string
-      text = String(value);
+      text = formatUnknownText(value);
     }
   }
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
@@ -497,7 +501,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
-    if (host.chatStream && host.chatStream.trim().length > 0) {
+    if (
+      host.chatRunId &&
+      payload.runId === host.chatRunId &&
+      host.chatStream &&
+      host.chatStream.trim().length > 0
+    ) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

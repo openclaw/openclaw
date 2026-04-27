@@ -55,7 +55,16 @@ export const NostrProfileSchema = z.object({
   lud16: z.string().optional(),
 });
 
-export type NostrProfile = z.infer<typeof NostrProfileSchema>;
+export interface NostrProfile {
+  name?: string;
+  displayName?: string;
+  about?: string;
+  picture?: string;
+  banner?: string;
+  website?: string;
+  nip05?: string;
+  lud16?: string;
+}
 
 /**
  * Zod schema for channels.nostr.* configuration

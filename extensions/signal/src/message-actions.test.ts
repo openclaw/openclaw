@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendReactionsModule = await import("./send-reactions.js");
@@ -14,6 +14,7 @@ function createSignalAccountOverrideCfg(): OpenClawConfig {
   return {
     channels: {
       signal: {
+        account: "+15550002222",
         actions: { reactions: false },
         accounts: {
           work: { account: "+15550001111", actions: { reactions: true } },
@@ -46,6 +47,17 @@ describe("signalMessageActions", () => {
       signalMessageActions.describeMessageTool?.({ cfg: createSignalAccountOverrideCfg() })
         ?.actions,
     ).toEqual(["send", "react"]);
+  });
+
+  it("honors account-scoped reaction gates during discovery", () => {
+    const cfg = createSignalAccountOverrideCfg();
+
+    expect(
+      signalMessageActions.describeMessageTool?.({ cfg, accountId: "default" })?.actions,
+    ).toEqual(["send"]);
+    expect(signalMessageActions.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(
+      ["send", "react"],
+    );
   });
 
   it("skips send for plugin dispatch", () => {

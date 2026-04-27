@@ -7,10 +7,12 @@ type TimeoutCallbackMock = ReturnType<typeof vi.fn<TimeoutCallback>>;
 
 async function withFakeTimers(run: () => Promise<void>) {
   vi.useFakeTimers();
+  vi.clearAllTimers();
   try {
     await run();
   } finally {
     await vi.runOnlyPendingTimersAsync();
+    vi.clearAllTimers();
     vi.useRealTimers();
   }
 }

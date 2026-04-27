@@ -76,6 +76,68 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out[3]?.role).toBe("user");
   });
 
+  it("uses custom text for synthesized missing tool results", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added).toHaveLength(1);
+    expect(result.messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(result.added[0]?.content).toEqual([{ type: "text", text: "aborted" }]);
+  });
+
+  it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "checking" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_3", name: "write", arguments: {} },
+        ],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.messages.map((m) => m.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(getAssistantToolCallBlocks(result.messages)).toMatchObject([
+      { id: "call_1", name: "read" },
+      { id: "call_2", name: "exec" },
+      { id: "call_3", name: "write" },
+    ]);
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
+    expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
+    expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
       {
@@ -207,10 +269,8 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
-  it("retains matching tool results that follow an aborted assistant message", () => {
-    // Aborted assistant turns do not synthesize missing tool results, but real
-    // matching results in the same span remain part of the repaired transcript.
-    const input = castAgentMessages([
+  function createAbortedAssistantTranscript() {
+    return castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
@@ -225,6 +285,12 @@ describe("sanitizeToolUseResultPairing", () => {
       },
       { role: "user", content: "retrying" },
     ]);
+  }
+
+  it("retains matching tool results that follow an aborted assistant message", () => {
+    // Aborted assistant turns do not synthesize missing tool results, but real
+    // matching results in the same span remain part of the repaired transcript.
+    const input = createAbortedAssistantTranscript();
 
     const result = repairToolUseResultPairing(input);
 
@@ -237,30 +303,15 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("drops matching tool results for aborted assistant messages when requested", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
-        stopReason: "aborted",
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_aborted",
-        toolName: "exec",
-        content: [{ type: "text", text: "partial result" }],
-        isError: false,
-      },
-      { role: "user", content: "retrying" },
-    ]);
+    const input = createAbortedAssistantTranscript();
 
     const result = repairToolUseResultPairing(input, {
       erroredAssistantResultPolicy: "drop",
     });
 
     expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
 });
@@ -378,6 +429,202 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me check the gateway config.",
+            thinkingSignature: "sig_gateway",
+          },
+          {
+            type: "toolCall",
+            id: "call_gateway",
+            name: "gateway",
+            arguments: {
+              action: "config.get",
+              path: "channels.telegram",
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me reuse the tool id.",
+            thinkingSignature: "sig_duplicate",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "First signed replay turn.",
+            thinkingSignature: "sig_first",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Second signed replay turn.",
+            thinkingSignature: "sig_second",
+          },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([input[0]]);
+  });
+
+  it("drops signed-thinking assistant turns that would require attachment redaction", () => {
+    const secret = "SIGNED_THINKING_ATTACHMENT_SECRET"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me spawn a helper.",
+            thinkingSignature: "sig_spawn",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: secret }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("keeps signed-thinking assistant turns when sessions_spawn attachments are already redacted", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me replay the helper turn.",
+            thinkingSignature: "sig_spawn_safe",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [
+                {
+                  name: "snapshot.txt",
+                  mimeType: "text/plain",
+                  content: "__OPENCLAW_REDACTED__",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual(input);
+  });
+
+  it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me normalize this tool name.",
+            thinkingSignature: "sig_generic",
+          },
+          {
+            type: "toolCall",
+            id: "call_read",
+            name: " read ",
+            arguments: { path: "README.md" },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Let me normalize this tool name.",
+        thinkingSignature: "sig_generic",
+      },
+      {
+        type: "toolCall",
+        id: "call_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
   });
 
   it.each([

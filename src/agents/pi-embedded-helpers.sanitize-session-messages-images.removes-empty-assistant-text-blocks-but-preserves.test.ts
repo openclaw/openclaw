@@ -24,7 +24,7 @@ function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessa
           arguments: { path: "package.json" },
         },
       ],
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       stopReason: "toolUse",
       timestamp: nextTimestamp(),
     }),
@@ -43,7 +43,7 @@ function makeEmptyAssistantErrorMessage(): AssistantMessage {
   return makeAgentAssistantMessage({
     stopReason: "error",
     content: [],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     timestamp: nextTimestamp(),
   }) satisfies AssistantMessage;
 }
@@ -54,7 +54,7 @@ function makeOpenAiResponsesAssistantMessage(
 ): AssistantMessage {
   return makeAgentAssistantMessage({
     content,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason,
     timestamp: nextTimestamp(),
   });
@@ -194,26 +194,13 @@ describe("sanitizeSessionMessagesImages", () => {
   });
   it("filters whitespace-only assistant text blocks", async () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
+      makeOpenAiResponsesAssistantMessage(
+        [
           { type: "text", text: "   " },
           { type: "text", text: "ok" },
         ],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: nextTimestamp(),
-      },
+        "stop",
+      ),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -225,23 +212,7 @@ describe("sanitizeSessionMessagesImages", () => {
   it("drops assistant messages that only contain empty text", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: nextTimestamp(),
-      } satisfies AssistantMessage,
+      makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], "stop"),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");

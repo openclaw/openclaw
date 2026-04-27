@@ -1,4 +1,4 @@
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
@@ -187,9 +187,7 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     },
     {
       name: "normalizes trimmed config values",
-      network: { dnsResultOrder: "  Verbatim  " } as TelegramNetworkConfig & {
-        dnsResultOrder: string;
-      },
+      network: { dnsResultOrder: "  Verbatim  " } as unknown as TelegramNetworkConfig,
       nodeMajor: 20,
       expected: { value: "verbatim", source: "config" },
     },
@@ -203,14 +201,14 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     {
       name: "ignores invalid env and config values before applying Node 22 default",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
-      network: { dnsResultOrder: "invalid" } as TelegramNetworkConfig & { dnsResultOrder: string },
+      network: { dnsResultOrder: "invalid" } as unknown as TelegramNetworkConfig,
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
     },
   ] satisfies Array<{
     name: string;
     env?: NodeJS.ProcessEnv;
-    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    network?: TelegramNetworkConfig;
     nodeMajor: number;
     expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
   }>)("$name", ({ env, network, nodeMajor, expected }) => {

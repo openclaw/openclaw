@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
   type OpenClawConfig,
-  loadConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -74,13 +74,16 @@ async function readExistingModelsFile(pathname: string): Promise<{
   }
 }
 
-async function ensureModelsFileMode(pathname: string): Promise<void> {
+export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
 }
 
-async function writeModelsFileAtomic(targetPath: string, contents: string): Promise<void> {
+export async function writeModelsFileAtomicForModelsJson(
+  targetPath: string,
+  contents: string,
+): Promise<void> {
   const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tempPath, contents, { mode: 0o600 });
   await fs.rename(tempPath, targetPath);
@@ -92,7 +95,7 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
 } {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
   if (!config) {
-    const loaded = loadConfig();
+    const loaded = getRuntimeConfig();
     return {
       config: runtimeSource ?? loaded,
       sourceConfigForSecrets: runtimeSource ?? loaded,
@@ -149,7 +152,7 @@ export async function ensureOpenClawModelsJson(
   if (cached) {
     const settled = await cached;
     if (settled.fingerprint === fingerprint) {
-      await ensureModelsFileMode(targetPath);
+      await ensureModelsFileModeForModelsJson(targetPath);
       return settled.result;
     }
   }
@@ -173,13 +176,13 @@ export async function ensureOpenClawModelsJson(
     }
 
     if (plan.action === "noop") {
-      await ensureModelsFileMode(targetPath);
+      await ensureModelsFileModeForModelsJson(targetPath);
       return { fingerprint, result: { agentDir, wrote: false } };
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-    await writeModelsFileAtomic(targetPath, plan.contents);
-    await ensureModelsFileMode(targetPath);
+    await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
+    await ensureModelsFileModeForModelsJson(targetPath);
     return { fingerprint, result: { agentDir, wrote: true } };
   });
   MODELS_JSON_STATE.readyCache.set(targetPath, pending);

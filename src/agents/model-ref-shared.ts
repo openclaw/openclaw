@@ -1,0 +1,65 @@
+import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeProviderId } from "./provider-id.js";
+
+export type StaticModelRef = {
+  provider: string;
+  model: string;
+};
+
+export function modelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+export function normalizeStaticProviderModelId(provider: string, model: string): string {
+  return (
+    normalizeProviderModelIdWithManifest({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model
+  );
+}
+
+export function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slash = trimmed.indexOf("/");
+  const providerRaw = slash === -1 ? defaultProvider : trimmed.slice(0, slash).trim();
+  const modelRaw = slash === -1 ? trimmed : trimmed.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return null;
+  }
+  const provider = normalizeProviderId(providerRaw);
+  return {
+    provider,
+    model: normalizeStaticProviderModelId(provider, modelRaw),
+  };
+}
+
+export function resolveStaticAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+): string | null {
+  const parsed = parseStaticModelRef(raw, defaultProvider);
+  if (!parsed) {
+    return null;
+  }
+  return modelKey(parsed.provider, parsed.model);
+}

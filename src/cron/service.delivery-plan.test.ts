@@ -14,7 +14,7 @@ type DeliveryMode = "none" | "announce";
 
 type DeliveryOverride = {
   mode: DeliveryMode;
-  channel?: ChannelId | "last";
+  channel?: ChannelId;
   to?: string;
 };
 

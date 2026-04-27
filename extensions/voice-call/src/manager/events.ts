@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
@@ -98,7 +99,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(dedupeKey)) {
     return;
   }
-  ctx.processedEventIds.add(dedupeKey);
 
   let call = findCall({
     activeCalls: ctx.activeCalls,
@@ -124,6 +124,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         );
         return;
       }
+      ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
         return;
       }
@@ -137,7 +138,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           reason: "hangup-bot",
         })
         .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
+          ctx.rejectedProviderCallIds.delete(pid);
+          const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
       return;
@@ -171,11 +173,29 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     }
   }
 
-  call.processedEventIds.push(dedupeKey);
+  const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
+  if (shouldCommitReplayKey) {
+    ctx.processedEventIds.add(dedupeKey);
+    call.processedEventIds.push(dedupeKey);
+  }
 
   switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
+      if (call.direction === "inbound" && call.providerCallId && ctx.provider?.answerCall) {
+        void ctx.provider
+          .answerCall({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+          })
+          .catch((err) => {
+            const message = formatErrorMessage(err);
+            console.warn(
+              `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
+              message,
+            );
+          });
+      }
       break;
 
     case "call.ringing":
@@ -223,6 +243,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       transitionState(call, "listening");
       break;
 
+    case "call.silence":
+    case "call.dtmf":
+      break;
+
     case "call.ended":
       finalizeCall({
         ctx,
@@ -243,6 +267,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         });
         return;
       }
+      // Keep retryable provider errors replayable so a redelivery can still
+      // drive later recovery or terminal handling for the same event key.
       break;
   }
 

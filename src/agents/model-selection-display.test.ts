@@ -19,18 +19,18 @@ describe("model-selection-display", () => {
       expect(
         resolveModelDisplayRef({
           runtimeProvider: "openai",
-          runtimeModel: "gpt-5.2",
+          runtimeModel: "gpt-5.4",
         }),
-      ).toBe("openai/gpt-5.2");
+      ).toBe("openai/gpt-5.4");
     });
 
     it("falls back to override values when runtime values are absent", () => {
       expect(
         resolveModelDisplayRef({
           overrideProvider: "openrouter",
-          overrideModel: "anthropic/claude-sonnet-4-5",
+          overrideModel: "anthropic/claude-sonnet-4-6",
         }),
-      ).toBe("anthropic/claude-sonnet-4-5");
+      ).toBe("anthropic/claude-sonnet-4-6");
     });
   });
 
@@ -39,9 +39,9 @@ describe("model-selection-display", () => {
       expect(
         resolveModelDisplayName({
           runtimeProvider: "openrouter",
-          runtimeModel: "anthropic/claude-sonnet-4-5",
+          runtimeModel: "anthropic/claude-sonnet-4-6",
         }),
-      ).toBe("claude-sonnet-4-5");
+      ).toBe("claude-sonnet-4-6");
     });
 
     it("returns a stable empty-state label", () => {
@@ -86,6 +86,18 @@ describe("model-selection-display", () => {
       ).toEqual({
         modelProvider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
+      });
+    });
+
+    it("falls back to configured defaults when runtime session state is empty", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        }),
+      ).toEqual({
+        modelProvider: "openai",
+        model: "gpt-5.4",
       });
     });
   });

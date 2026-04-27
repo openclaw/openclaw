@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
@@ -12,6 +12,7 @@ type RegisteredCommand = {
   command: string;
   description: string;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
 type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
@@ -19,6 +20,9 @@ type CreateCommandBotResult = {
   sendMessage: ReturnType<typeof vi.fn>;
   deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
+};
+type CreateCommandBotParams = {
+  api?: Record<string, unknown>;
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
@@ -36,7 +40,7 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 export const editMessageTelegram = deliveryMocks.editMessageTelegram;
-export const emitTelegramMessageSentHooks = deliveryMocks.emitTelegramMessageSentHooks;
+export const emitTelegramMessageSentHooks: UnknownMock = deliveryMocks.emitTelegramMessageSentHooks;
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
@@ -66,7 +70,7 @@ export function resetNativeCommandMenuMocks() {
   emitTelegramMessageSentHooks.mockClear();
 }
 
-export function createCommandBot(): CreateCommandBotResult {
+export function createCommandBot(params: CreateCommandBotParams = {}): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
   const deleteMessage = vi.fn().mockResolvedValue(true);
@@ -76,6 +80,7 @@ export function createCommandBot(): CreateCommandBotResult {
       setMyCommands,
       sendMessage,
       deleteMessage,
+      ...params.api,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);
@@ -95,7 +100,7 @@ export function createNativeCommandTestParams(
     counts: { block: 0, final: 0, tool: 0 },
   };
   const telegramDeps: TelegramNativeCommandDeps = {
-    loadConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["loadConfig"],
+    getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],

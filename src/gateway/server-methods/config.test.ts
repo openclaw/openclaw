@@ -1,37 +1,25 @@
-import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configHandlers, resolveConfigOpenCommand } from "./config.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
-vi.mock("node:child_process", () => ({
-  execFile: vi.fn(),
-}));
+const execFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: Object.assign(execFileMock, {
+        __promisify__: vi.fn(),
+      }) as typeof import("node:child_process").execFile,
+    },
+  );
+});
 
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);
   expect(callback).toEqual(expect.any(Function));
   (callback as (error: Error | null) => void)(error);
-}
-
-function createOptions(
-  overrides?: Partial<GatewayRequestHandlerOptions>,
-): GatewayRequestHandlerOptions {
-  return {
-    req: { type: "req", id: "1", method: "config.openFile" },
-    params: {},
-    client: null,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: {
-      logGateway: {
-        error: vi.fn(),
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-      },
-    },
-    ...overrides,
-  } as unknown as GatewayRequestHandlerOptions;
 }
 
 describe("resolveConfigOpenCommand", () => {
@@ -70,17 +58,17 @@ describe("config.openFile", () => {
 
   it("opens the configured file without shell interpolation", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
-    vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
       expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
       expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
       invokeExecFileCallback(args, null);
       return {} as never;
-    }) as unknown as typeof execFile);
+    });
 
-    const opts = createOptions();
-    await configHandlers["config.openFile"](opts);
+    const { options, respond } = createConfigHandlerHarness({ method: "config.openFile" });
+    await configHandlers["config.openFile"](options);
 
-    expect(opts.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       true,
       {
         ok: true,
@@ -92,18 +80,20 @@ describe("config.openFile", () => {
 
   it("returns a generic error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
-    vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
       invokeExecFileCallback(
         args,
         Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }),
       );
       return {} as never;
-    }) as unknown as typeof execFile);
+    });
 
-    const opts = createOptions();
-    await configHandlers["config.openFile"](opts);
+    const { options, respond, logGateway } = createConfigHandlerHarness({
+      method: "config.openFile",
+    });
+    await configHandlers["config.openFile"](options);
 
-    expect(opts.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       true,
       {
         ok: false,
@@ -112,8 +102,6 @@ describe("config.openFile", () => {
       },
       undefined,
     );
-    expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining("spawn xdg-open ENOENT"),
-    );
+    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("spawn xdg-open ENOENT"));
   });
 });

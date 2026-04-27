@@ -1,5 +1,5 @@
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
-import { UNSUPPORTED_SECRETREF_SURFACE_PATTERNS } from "./unsupported-surface-policy.js";
+import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
   id: string;
@@ -33,18 +33,15 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
         ? "tools.web.fetch.firecrawl.apiKey"
         : entry.pathPattern;
 
-      return {
-        id: canonicalId,
-        configFile: entry.configFile,
-        path: canonicalPath,
-        ...(entry.refPathPattern ? { refPath: entry.refPathPattern } : {}),
-        ...(entry.authProfileType ? { when: { type: entry.authProfileType } } : {}),
-        secretShape: entry.secretShape,
-        optIn: true as const,
-        ...(entry.id.startsWith("channels.googlechat.")
-          ? { notes: "Google Chat compatibility exception: sibling ref field remains canonical." }
-          : {}),
-      };
+      return Object.assign(
+        { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+        entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
+        entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
+        { secretShape: entry.secretShape, optIn: true as const },
+        entry.secretShape === `sibling_ref` && entry.refPathPattern
+          ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+          : {},
+      );
     })
     .toSorted((a, b) => a.id.localeCompare(b.id));
 
@@ -54,7 +51,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.',
     scope:
       "Credentials that are strictly user-supplied and not minted/rotated by OpenClaw runtime.",
-    excludedMutableOrRuntimeManaged: [...UNSUPPORTED_SECRETREF_SURFACE_PATTERNS],
+    excludedMutableOrRuntimeManaged: getUnsupportedSecretRefSurfacePatterns(),
     entries,
   };
 }

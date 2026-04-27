@@ -15,16 +15,6 @@ const CLI_PRESENCE_TIMEOUT_MS = 3_000;
 
 let harness: GatewayServerHarness;
 
-type GatewayFrame = {
-  type?: string;
-  id?: string;
-  ok?: boolean;
-  event?: string;
-  payload?: Record<string, unknown> | null;
-  seq?: number;
-  stateVersion?: { presence?: number; [key: string]: unknown };
-};
-
 beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
@@ -40,12 +30,9 @@ describe("gateway server health/presence", () => {
     async () => {
       const { ws } = await harness.openClient();
 
-      const healthP = onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "health1");
-      const statusP = onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "status1");
-      const presenceP = onceMessage<GatewayFrame>(
-        ws,
-        (o) => o.type === "res" && o.id === "presence1",
-      );
+      const healthP = onceMessage(ws, (o) => o.type === "res" && o.id === "health1");
+      const statusP = onceMessage(ws, (o) => o.type === "res" && o.id === "status1");
+      const presenceP = onceMessage(ws, (o) => o.type === "res" && o.id === "presence1");
 
       const sendReq = (id: string, method: string) =>
         ws.send(JSON.stringify({ type: "req", id, method }));
@@ -99,7 +86,7 @@ describe("gateway server health/presence", () => {
         method: "last-heartbeat",
       }),
     );
-    const last = await onceMessage<GatewayFrame>(ws, (o) => o.type === "res" && o.id === "hb-last");
+    const last = await onceMessage(ws, (o) => o.type === "res" && o.id === "hb-last");
     expect(last.ok).toBe(true);
     const lastPayload = last.payload as HeartbeatPayload | null | undefined;
     expect(lastPayload?.status).toBe("sent");
@@ -113,10 +100,7 @@ describe("gateway server health/presence", () => {
         params: { enabled: false },
       }),
     );
-    const toggle = await onceMessage<GatewayFrame>(
-      ws,
-      (o) => o.type === "res" && o.id === "hb-toggle-off",
-    );
+    const toggle = await onceMessage(ws, (o) => o.type === "res" && o.id === "hb-toggle-off");
     expect(toggle.ok).toBe(true);
     expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
 
@@ -129,10 +113,7 @@ describe("gateway server health/presence", () => {
     async () => {
       const { ws } = await harness.openClient();
 
-      const presenceEventP = onceMessage<GatewayFrame>(
-        ws,
-        (o) => o.type === "event" && o.event === "presence",
-      );
+      const presenceEventP = onceMessage(ws, (o) => o.type === "event" && o.event === "presence");
       ws.send(
         JSON.stringify({
           type: "req",
@@ -156,7 +137,7 @@ describe("gateway server health/presence", () => {
     const { ws } = await harness.openClient();
 
     const runId = randomUUID();
-    const evtPromise = onceMessage<GatewayFrame>(
+    const evtPromise = onceMessage(
       ws,
       (o) =>
         o.type === "event" &&
@@ -178,7 +159,7 @@ describe("gateway server health/presence", () => {
   test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
     const localHarness = await startGatewayServerHarness();
     const { ws } = await localHarness.openClient();
-    const shutdownP = onceMessage<GatewayFrame>(
+    const shutdownP = onceMessage(
       ws,
       (o) => o.type === "event" && o.event === "shutdown",
       SHUTDOWN_EVENT_TIMEOUT_MS,
@@ -199,7 +180,7 @@ describe("gateway server health/presence", () => {
         harness.openClient(),
       ]);
       const waits = clients.map(({ ws }) =>
-        onceMessage<GatewayFrame>(ws, (o) => o.type === "event" && o.event === "presence"),
+        onceMessage(ws, (o) => o.type === "event" && o.event === "presence"),
       );
       clients[0].ws.send(
         JSON.stringify({
@@ -238,7 +219,7 @@ describe("gateway server health/presence", () => {
       },
     });
 
-    const presenceP = onceMessage<GatewayFrame>(
+    const presenceP = onceMessage(
       ws,
       (o) => o.type === "res" && o.id === "fingerprint",
       FINGERPRINT_TIMEOUT_MS,
@@ -283,7 +264,7 @@ describe("gateway server health/presence", () => {
       },
     });
 
-    const presenceP = onceMessage<GatewayFrame>(
+    const presenceP = onceMessage(
       ws,
       (o) => o.type === "res" && o.id === "cli-presence",
       CLI_PRESENCE_TIMEOUT_MS,

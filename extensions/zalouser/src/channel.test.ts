@@ -1,11 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
+import {
+  zalouserAuthAdapter,
+  zalouserGroupsAdapter,
+  zalouserMessageActions,
+  zalouserOutboundAdapter,
+  zalouserPairingTextAdapter,
+  zalouserResolverAdapter,
+  zalouserSecurityAdapter,
+} from "./channel.adapters.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
+import {
+  listZaloFriendsMatchingMock,
+  startZaloQrLoginMock,
+  waitForZaloQrLoginMock,
+} from "./zalo-js.test-mocks.js";
 
-vi.mock("./send.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock("./qr-temp-file.js", () => ({
+  writeQrDataUrlToTempFile: vi.fn(async () => null),
+}));
+
+vi.mock("./send.js", async () => {
+  const actual = (await vi.importActual("./send.js")) as Record<string, unknown>;
   return {
     ...actual,
     sendMessageZalouser: vi.fn(async () => ({ ok: true, messageId: "mid-1" })),
@@ -17,7 +35,7 @@ const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
 
 function requireZalouserSendText() {
-  const sendText = zalouserPlugin.outbound?.sendText;
+  const sendText = zalouserOutboundAdapter.sendText;
   if (!sendText) {
     throw new Error("zalouser outbound.sendText unavailable");
   }
@@ -25,7 +43,7 @@ function requireZalouserSendText() {
 }
 
 function getResolveToolPolicy() {
-  const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
+  const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
   if (!resolveToolPolicy) {
     throw new Error("resolveToolPolicy unavailable");
   }
@@ -33,7 +51,7 @@ function getResolveToolPolicy() {
 }
 
 function requireZalouserResolveRequireMention() {
-  const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
+  const resolveRequireMention = zalouserGroupsAdapter.resolveRequireMention;
   if (!resolveRequireMention) {
     throw new Error("resolveRequireMention unavailable");
   }
@@ -41,7 +59,7 @@ function requireZalouserResolveRequireMention() {
 }
 
 function requireZalouserPairingNormalizer() {
-  const normalizeAllowEntry = zalouserPlugin.pairing?.normalizeAllowEntry;
+  const normalizeAllowEntry = zalouserPairingTextAdapter.normalizeAllowEntry;
   if (!normalizeAllowEntry) {
     throw new Error("pairing.normalizeAllowEntry unavailable");
   }
@@ -112,7 +130,7 @@ describe("zalouser outbound", () => {
 
 describe("zalouser outbound chunking", () => {
   it("chunks outbound text without requiring Zalouser runtime initialization", () => {
-    const chunker = zalouserPlugin.outbound?.chunker;
+    const chunker = zalouserOutboundAdapter.chunker;
     if (!chunker) {
       throw new Error("zalouser outbound.chunker unavailable");
     }
@@ -128,7 +146,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {
-    const resolveDmPolicy = zalouserPlugin.security?.resolveDmPolicy;
+    const resolveDmPolicy = zalouserSecurityAdapter.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
     }
@@ -199,7 +217,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("handles react action", async () => {
-    const actions = zalouserPlugin.actions;
+    const actions = zalouserMessageActions;
     expect(
       actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
         ?.actions,
@@ -238,6 +256,122 @@ describe("zalouser channel policies", () => {
         cliMsgId: "222",
         threadId: "123456",
       },
+    });
+  });
+
+  it("honors the selected Zalouser account during discovery", () => {
+    const actions = zalouserMessageActions;
+    const cfg = {
+      channels: {
+        zalouser: {
+          enabled: true,
+          profile: "default",
+          accounts: {
+            default: {
+              enabled: false,
+              profile: "default",
+            },
+            work: {
+              enabled: true,
+              profile: "work",
+            },
+          },
+        },
+      },
+    };
+
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "default" })).toBeNull();
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(["react"]);
+  });
+});
+
+describe("zalouser account resolution", () => {
+  beforeEach(() => {
+    listZaloFriendsMatchingMock.mockReset();
+    startZaloQrLoginMock.mockReset();
+    waitForZaloQrLoginMock.mockReset();
+  });
+
+  it("uses the configured default account for omitted target lookup", async () => {
+    const resolveTargets = zalouserResolverAdapter.resolveTargets;
+    if (!resolveTargets) {
+      throw new Error("zalouser resolver.resolveTargets unavailable");
+    }
+
+    listZaloFriendsMatchingMock.mockResolvedValue([
+      { userId: "42", displayName: "Work User" } as never,
+    ]);
+
+    const result = await resolveTargets({
+      cfg: {
+        channels: {
+          zalouser: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                profile: "work-profile",
+              },
+            },
+          },
+        },
+      } as never,
+      inputs: ["Work User"],
+      kind: "user",
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(listZaloFriendsMatchingMock).toHaveBeenCalledWith("work-profile", "Work User");
+    expect(result).toEqual([
+      expect.objectContaining({
+        input: "Work User",
+        resolved: true,
+        id: "42",
+        name: "Work User",
+      }),
+    ]);
+  });
+
+  it("uses the configured default account for omitted qr login", async () => {
+    const login = zalouserAuthAdapter.login;
+    if (!login) {
+      throw new Error("zalouser auth.login unavailable");
+    }
+
+    startZaloQrLoginMock.mockResolvedValue({
+      message: "qr ready",
+      qrDataUrl: "data:image/png;base64,abc",
+    } as never);
+    waitForZaloQrLoginMock.mockResolvedValue({
+      connected: true,
+      userId: "u-1",
+      displayName: "Work User",
+    } as never);
+
+    const runtime = createNonExitingRuntimeEnv();
+
+    await login({
+      cfg: {
+        channels: {
+          zalouser: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                profile: "work-profile",
+              },
+            },
+          },
+        },
+      } as never,
+      runtime,
+    });
+
+    expect(startZaloQrLoginMock).toHaveBeenCalledWith({
+      profile: "work-profile",
+      timeoutMs: 35_000,
+    });
+    expect(waitForZaloQrLoginMock).toHaveBeenCalledWith({
+      profile: "work-profile",
+      timeoutMs: 180_000,
     });
   });
 });

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { handleDisconnected } from "./app-lifecycle.ts";
 
@@ -11,6 +12,7 @@ function createHost() {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    localMediaPreviewRoots: [],
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,
     chatLoading: false,
@@ -27,6 +29,9 @@ function createHost() {
 
 describe("handleDisconnected", () => {
   it("stops and clears gateway client on teardown", () => {
+    vi.stubGlobal("window", {
+      removeEventListener: vi.fn(),
+    });
     const removeSpy = vi.spyOn(window, "removeEventListener").mockImplementation(() => undefined);
     const host = createHost();
     const disconnectSpy = (
@@ -42,5 +47,6 @@ describe("handleDisconnected", () => {
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(host.topbarObserver).toBeNull();
     removeSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

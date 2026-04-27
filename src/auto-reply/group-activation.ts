@@ -1,7 +1,9 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 export type GroupActivationMode = "mention" | "always";
 
 export function normalizeGroupActivation(raw?: string | null): GroupActivationMode | undefined {
-  const value = raw?.trim().toLowerCase();
+  const value = normalizeOptionalLowercaseString(raw);
   if (value === "mention") {
     return "mention";
   }

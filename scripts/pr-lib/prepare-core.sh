@@ -178,6 +178,7 @@ EOF_PREP
   printf '%s=%q\n' \
     PR_NUMBER "$PR_NUMBER" \
     PR_AUTHOR "$contrib" \
+    PR_URL "${PR_URL:-}" \
     PR_HEAD "$PR_HEAD" \
     PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
     PREP_HEAD_SHA "$prep_head_sha" \
@@ -187,6 +188,7 @@ EOF_PREP
   ls -la .local/prep.md .local/prep.env >/dev/null
 
   echo "prepare-push complete"
+  echo "pr_url=${PR_URL:-}"
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
@@ -251,6 +253,7 @@ EOF_PREP
   printf '%s=%q\n' \
     PR_NUMBER "$PR_NUMBER" \
     PR_AUTHOR "$contrib" \
+    PR_URL "${PR_URL:-}" \
     PR_HEAD "$PR_HEAD" \
     PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
     PREP_HEAD_SHA "$prep_head_sha" \
@@ -260,6 +263,7 @@ EOF_PREP
   ls -la .local/prep.md .local/prep.env >/dev/null
 
   echo "prepare-sync-head complete"
+  echo "pr_url=${PR_URL:-}"
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
@@ -272,4 +276,5 @@ prepare_run() {
   prepare_gates "$pr"
   prepare_push "$pr"
   echo "prepare-run complete for PR #$pr"
+  echo "pr_url=${PR_URL:-}"
 }

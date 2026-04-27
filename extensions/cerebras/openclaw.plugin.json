@@ -1,0 +1,41 @@
+{
+  "id": "cerebras",
+  "enabledByDefault": true,
+  "providers": ["cerebras"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "cerebras-native",
+      "hosts": ["api.cerebras.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "cerebras": {
+        "family": "cerebras"
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "cerebras": ["CEREBRAS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "cerebras",
+      "method": "api-key",
+      "choiceId": "cerebras-api-key",
+      "choiceLabel": "Cerebras API key",
+      "groupId": "cerebras",
+      "groupLabel": "Cerebras",
+      "groupHint": "Fast OpenAI-compatible inference",
+      "optionKey": "cerebrasApiKey",
+      "cliFlag": "--cerebras-api-key",
+      "cliOption": "--cerebras-api-key <key>",
+      "cliDescription": "Cerebras API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

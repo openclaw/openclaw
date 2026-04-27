@@ -1,3 +1,5 @@
+import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
+
 export { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 
 export function formatPermissions(raw: unknown) {
@@ -5,7 +7,7 @@ export function formatPermissions(raw: unknown) {
     return null;
   }
   const entries = Object.entries(raw as Record<string, unknown>)
-    .map(([key, value]) => [String(key).trim(), value === true] as const)
+    .map(([key, value]) => [normalizeStringifiedOptionalString(key) ?? "", value === true] as const)
     .filter(([key]) => key.length > 0)
     .toSorted((a, b) => a[0].localeCompare(b[0]));
   if (entries.length === 0) {

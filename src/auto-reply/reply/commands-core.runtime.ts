@@ -1,1 +1,1 @@
-export { emitResetCommandHooks } from "./commands-core.js";
+export { emitResetCommandHooks } from "./commands-reset-hooks.js";

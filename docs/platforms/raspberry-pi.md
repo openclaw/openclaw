@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on a Raspberry Pi
   - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
-title: "Raspberry Pi (Platform)"
+title: "Raspberry Pi (platform)"
 ---
 
 # OpenClaw on Raspberry Pi
@@ -19,7 +19,7 @@ Perfect for:
 - Home automation hub
 - Low-power, always-available Telegram/WhatsApp bot
 
-## Hardware Requirements
+## Hardware requirements
 
 | Pi Model        | RAM     | Works?   | Notes                              |
 | --------------- | ------- | -------- | ---------------------------------- |
@@ -109,13 +109,13 @@ sudo sysctl -p
 
 ## 6) Install OpenClaw
 
-### Option A: Standard Install (Recommended)
+### Option A: standard install (recommended)
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-### Option B: Hackable Install (For tinkering)
+### Option B: hackable install (for tinkering)
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -146,11 +146,11 @@ Follow the wizard:
 # Check status
 openclaw status
 
-# Check service
-sudo systemctl status openclaw
+# Check service (standard install = systemd user unit)
+systemctl --user status openclaw-gateway.service
 
 # View logs
-journalctl -u openclaw -f
+journalctl --user -u openclaw-gateway.service -f
 ```
 
 ## 9) Access the OpenClaw Dashboard
@@ -175,14 +175,15 @@ ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 
 Then open the printed Dashboard URL in your local browser.
 
-If the UI asks for auth, paste the token from `gateway.auth.token`
-(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+If the UI asks for shared-secret auth, paste the configured token or password
+into Control UI settings. For token auth, use `gateway.auth.token` (or
+`OPENCLAW_GATEWAY_TOKEN`).
 
 For always-on remote access, see [Tailscale](/gateway/tailscale).
 
 ---
 
-## Performance Optimizations
+## Performance optimizations
 
 ### Use a USB SSD (Huge Improvement)
 
@@ -221,7 +222,7 @@ If this Pi is mostly running OpenClaw, add a service drop-in to reduce restart
 jitter and keep startup env stable:
 
 ```bash
-sudo systemctl edit openclaw
+systemctl --user edit openclaw-gateway.service
 ```
 
 ```ini
@@ -236,17 +237,24 @@ TimeoutStartSec=90
 Then apply:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart openclaw
+systemctl --user daemon-reload
+systemctl --user restart openclaw-gateway.service
 ```
 
 If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
 random-I/O bottlenecks during cold starts.
 
+If this is a headless Pi, enable lingering once so the user service survives
+logout:
+
+```bash
+sudo loginctl enable-linger "$(whoami)"
+```
+
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
-### Reduce Memory Usage
+### Reduce memory usage
 
 ```bash
 # Disable GPU memory allocation (headless)
@@ -256,7 +264,7 @@ echo 'gpu_mem=16' | sudo tee -a /boot/config.txt
 sudo systemctl disable bluetooth
 ```
 
-### Monitor Resources
+### Monitor resources
 
 ```bash
 # Check memory
@@ -273,7 +281,7 @@ htop
 
 ## ARM-Specific Notes
 
-### Binary Compatibility
+### Binary compatibility
 
 Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
 
@@ -298,7 +306,7 @@ uname -m
 
 ---
 
-## Recommended Model Setup
+## Recommended model setup
 
 Since the Pi is just the Gateway (models run in the cloud), use API-based models:
 
@@ -307,8 +315,8 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-20250514",
-        "fallbacks": ["openai/gpt-4o-mini"]
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-5.4-mini"]
       }
     }
   }
@@ -325,13 +333,13 @@ Onboarding sets this up, but to verify:
 
 ```bash
 # Check service is enabled
-sudo systemctl is-enabled openclaw
+systemctl --user is-enabled openclaw-gateway.service
 
 # Enable if not
-sudo systemctl enable openclaw
+systemctl --user enable openclaw-gateway.service
 
 # Start on boot
-sudo systemctl start openclaw
+systemctl --user start openclaw-gateway.service
 ```
 
 ---
@@ -348,7 +356,7 @@ free -h
 # Or reduce services running on the Pi
 ```
 
-### Slow Performance
+### Slow performance
 
 - Use USB SSD instead of SD card
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
@@ -358,12 +366,12 @@ free -h
 
 ```bash
 # Check logs
-journalctl -u openclaw --no-pager -n 100
+journalctl --user -u openclaw-gateway.service --no-pager -n 100
 
 # Common fix: rebuild
 cd ~/openclaw  # if using hackable install
 npm run build
-sudo systemctl restart openclaw
+systemctl --user restart openclaw-gateway.service
 ```
 
 ### ARM Binary Issues
@@ -388,7 +396,7 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ---
 
-## Cost Comparison
+## Cost comparison
 
 | Setup          | One-Time Cost | Monthly Cost | Notes                     |
 | -------------- | ------------- | ------------ | ------------------------- |
@@ -403,7 +411,7 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ---
 
-## See Also
+## Related
 
 - [Linux guide](/platforms/linux) — general Linux setup
 - [DigitalOcean guide](/platforms/digitalocean) — cloud alternative

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
-import { withFileLock } from "openclaw/plugin-sdk/infra-runtime";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -96,8 +96,8 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
 
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.addEventListener("success", () => resolve(req.result), { once: true });
+    req.addEventListener("error", () => reject(req.error), { once: true });
   });
 }
 
@@ -108,12 +108,16 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
   const expectedPrefix = databasePrefix ? `${databasePrefix}::` : null;
 
   for (const { name, version } of dbList) {
-    if (!name || !version) continue;
-    if (expectedPrefix && !name.startsWith(expectedPrefix)) continue;
+    if (!name || !version) {
+      continue;
+    }
+    if (expectedPrefix && !name.startsWith(expectedPrefix)) {
+      continue;
+    }
     const db: IDBDatabase = await new Promise((resolve, reject) => {
       const r = idb.open(name, version);
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
+      r.addEventListener("success", () => resolve(r.result), { once: true });
+      r.addEventListener("error", () => reject(r.error), { once: true });
     });
 
     const stores: IdbStoreSnapshot[] = [];
@@ -131,7 +135,7 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
         const idx = store.index(idxName);
         storeInfo.indexes.push({
           name: idxName,
-          keyPath: idx.keyPath as string | string[],
+          keyPath: idx.keyPath,
           multiEntry: idx.multiEntry,
           unique: idx.unique,
         });
@@ -152,12 +156,16 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
   for (const dbSnap of snapshot) {
     await new Promise<void>((resolve, reject) => {
       const r = idb.open(dbSnap.name, dbSnap.version);
-      r.onupgradeneeded = () => {
+      r.addEventListener("upgradeneeded", () => {
         const db = r.result;
         for (const storeSnap of dbSnap.stores) {
           const opts: IDBObjectStoreParameters = {};
-          if (storeSnap.keyPath !== null) opts.keyPath = storeSnap.keyPath;
-          if (storeSnap.autoIncrement) opts.autoIncrement = true;
+          if (storeSnap.keyPath !== null) {
+            opts.keyPath = storeSnap.keyPath;
+          }
+          if (storeSnap.autoIncrement) {
+            opts.autoIncrement = true;
+          }
           const store = db.createObjectStore(storeSnap.name, opts);
           for (const idx of storeSnap.indexes) {
             store.createIndex(idx.name, idx.keyPath, {
@@ -166,32 +174,36 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
             });
           }
         }
-      };
-      r.onsuccess = async () => {
-        try {
-          const db = r.result;
-          for (const storeSnap of dbSnap.stores) {
-            if (storeSnap.records.length === 0) continue;
-            const tx = db.transaction(storeSnap.name, "readwrite");
-            const store = tx.objectStore(storeSnap.name);
-            for (const rec of storeSnap.records) {
-              if (storeSnap.keyPath !== null) {
-                store.put(rec.value);
-              } else {
-                store.put(rec.value, rec.key);
+      });
+      r.addEventListener(
+        "success",
+        () => {
+          void (async () => {
+            const db = r.result;
+            for (const storeSnap of dbSnap.stores) {
+              if (storeSnap.records.length === 0) {
+                continue;
               }
+              const tx = db.transaction(storeSnap.name, "readwrite");
+              const store = tx.objectStore(storeSnap.name);
+              for (const rec of storeSnap.records) {
+                if (storeSnap.keyPath !== null) {
+                  store.put(rec.value);
+                } else {
+                  store.put(rec.value, rec.key);
+                }
+              }
+              await new Promise<void>((res) => {
+                tx.addEventListener("complete", () => res(), { once: true });
+              });
             }
-            await new Promise<void>((res) => {
-              tx.oncomplete = () => res();
-            });
-          }
-          db.close();
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      };
-      r.onerror = () => reject(r.error);
+            db.close();
+            resolve();
+          })().catch(reject);
+        },
+        { once: true },
+      );
+      r.addEventListener("error", () => reject(r.error), { once: true });
     });
   }
 }
@@ -205,6 +217,9 @@ function resolveDefaultIdbSnapshotPath(): string {
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
   const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
   for (const resolvedPath of candidatePaths) {
+    if (!fs.existsSync(resolvedPath)) {
+      continue;
+    }
     try {
       const restored = await withFileLock(
         resolvedPath,
@@ -258,7 +273,9 @@ export async function persistIdbToDisk(params?: {
         return snapshot.length;
       },
     );
-    if (persistedCount === 0) return;
+    if (persistedCount === 0) {
+      return;
+    }
     LogService.debug(
       "IdbPersistence",
       `Persisted ${persistedCount} IndexedDB database(s) to ${snapshotPath}`,

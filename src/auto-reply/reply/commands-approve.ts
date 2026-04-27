@@ -3,10 +3,13 @@ import {
   resolveChannelApprovalCapability,
 } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
-import { ErrorCodes } from "../../gateway/protocol/index.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { logVerbose } from "../../globals.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -51,8 +54,8 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
-  const first = tokens[0].toLowerCase();
-  const second = tokens[1].toLowerCase();
+  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
   if (DECISION_ALIASES[first]) {
     return {
@@ -77,41 +80,8 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-function readErrorCode(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function readApprovalNotFoundDetailsReason(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const reason = (value as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason : null;
-}
-
-function isApprovalNotFoundError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
-  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
-    return true;
-  }
-
-  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
-  if (
-    gatewayCode === ErrorCodes.INVALID_REQUEST &&
-    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
-  ) {
-    return true;
-  }
-
-  // Legacy server/client combinations may only include the message text.
-  return /unknown or expired approval id/i.test(err.message);
-}
-
 function formatApprovalSubmitError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
 
 type ApprovalMethod = "exec.approval.resolve" | "plugin.approval.resolve";
@@ -167,12 +137,17 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const isPluginId = parsed.id.startsWith("plugin:");
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );
   const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
     cfg: params.cfg,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     approvalKind: isPluginId ? "plugin" : "exec",
   });
@@ -185,14 +160,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "exec",
   });
   const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "plugin",
   });

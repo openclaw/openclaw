@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import {
   buildIMessageInboundContext,
@@ -102,6 +102,22 @@ describe("imessage monitor gating + envelope builders", () => {
         message: { chat_id: 1, sender: { nested: "nope" } },
       }),
     ).toBeNull();
+  });
+
+  it("parseIMessageNotification preserves destination_caller_id metadata", () => {
+    expect(
+      parseIMessageNotification({
+        message: {
+          id: 1,
+          sender: "+15550001111",
+          destination_caller_id: "+15550002222",
+          is_from_me: true,
+          text: "hello",
+        },
+      }),
+    ).toMatchObject({
+      destination_caller_id: "+15550002222",
+    });
   });
 
   it("drops group messages without mention by default", () => {

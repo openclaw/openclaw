@@ -4,7 +4,7 @@ import { resolveSlackAutoThreadId } from "./action-threading.js";
 type SlackThreadingToolContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 

@@ -20,6 +20,23 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const TtsOverrideSchema = z
+  .object({
+    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    enabled: z.boolean().optional(),
+    mode: z.enum(["final", "all"]).optional(),
+    provider: z.string().optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z.record(z.string(), z.unknown()).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 
 const ToolPolicySchema = z
   .object({
@@ -122,8 +139,9 @@ const GroupSessionScopeSchema = z
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
  *
- * Topic routing uses `root_id` when present to keep session continuity and
- * falls back to `thread_id` when `root_id` is unavailable.
+ * Topic routing uses Feishu topic-group `thread_id` when the event identifies a
+ * native topic group, and keeps `root_id` precedence for normal groups so
+ * reply-created threads stay on the initiating message session.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
@@ -182,6 +200,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  tts: TtsOverrideSchema,
 };
 
 /**

@@ -3,12 +3,38 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
+const readConfiguredLogTail = vi.fn();
+const buildGatewayConnectionDetails = vi.fn(
+  (_options?: {
+    configPath?: string;
+    config?: unknown;
+    url?: string;
+    urlSource?: "cli" | "env";
+  }) => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  }),
+);
+
+vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: (
+    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
+  ) => buildGatewayConnectionDetails(...args),
+}));
+
+vi.mock("../logging/log-tail.js", () => ({
+  readConfiguredLogTail: (
+    ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
+  ) => readConfiguredLogTail(...args),
+}));
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (...args: unknown[]) => callGatewayFromCli(...args),
+    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
+      callGatewayFromCli(...args),
   };
 });
 
@@ -19,9 +45,29 @@ async function runLogsCli(argv: string[]) {
   });
 }
 
+function captureStdoutWrites() {
+  const writes: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  return writes;
+}
+
+function captureStderrWrites() {
+  const writes: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  return writes;
+}
+
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockClear();
+    readConfiguredLogTail.mockClear();
+    buildGatewayConnectionDetails.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -35,16 +81,8 @@ describe("logs cli", () => {
       reset: true,
     });
 
-    const stdoutWrites: string[] = [];
-    const stderrWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
 
     await runLogsCli(["logs"]);
 
@@ -66,11 +104,7 @@ describe("logs cli", () => {
       ],
     });
 
-    const stdoutWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
+    const stdoutWrites = captureStdoutWrites();
 
     await runLogsCli(["logs", "--local-time", "--plain"]);
 
@@ -87,20 +121,64 @@ describe("logs cli", () => {
       lines: ["line one"],
     });
 
-    const stderrWrites: string[] = [];
+    const stderrWrites = captureStderrWrites();
     vi.spyOn(process.stdout, "write").mockImplementation(() => {
       const err = new Error("EPIPE") as NodeJS.ErrnoException;
       err.code = "EPIPE";
       throw err;
     });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
 
     await runLogsCli(["logs"]);
 
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("falls back to the local log file on loopback pairing-required errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 200,
+      maxBytes: 250_000,
+    });
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("reading local log file instead");
+  });
+
+  it("falls back to the local log file on loopback scope-upgrade errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("reading local log file instead");
   });
 
   describe("formatLogTimestamp", () => {

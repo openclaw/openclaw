@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -31,7 +32,6 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
 }
 
 const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolApprovalClass>([
-  ["whatsapp_login", "interactive"],
   ["cron", "control_plane"],
   ["gateway", "control_plane"],
   ["nodes", "exec_capable"],
@@ -112,7 +112,7 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = meta.pluginId.trim().toLowerCase();
+    const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
     if (!pluginId) {
       continue;
     }

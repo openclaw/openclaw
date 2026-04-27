@@ -1,37 +1,43 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
+import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
+import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "../openai-responses-payload-policy.js";
+import { resolveOpenAITextVerbosity, type OpenAITextVerbosity } from "../openai-text-verbosity.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
+import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
-type OpenAITextVerbosity = "low" | "medium" | "high";
-
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
-const OPENAI_REASONING_COMPAT_PROVIDERS = new Set([
-  "openai",
-  "openai-codex",
-  "azure-openai",
-  "azure-openai-responses",
-]);
+export { resolveOpenAITextVerbosity };
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 }) {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsStore?: boolean })
+      : undefined;
   return resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-    compat: model.compat,
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
+    compat,
     capability: "llm",
     transport: "stream",
   }).capabilities;
@@ -53,139 +59,90 @@ function shouldApplyOpenAIServiceTier(model: {
   provider?: unknown;
   baseUrl?: unknown;
 }): boolean {
-  return resolveOpenAIRequestCapabilities(model).allowsOpenAIServiceTier;
-}
-
-function shouldForceResponsesStore(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
-}): boolean {
-  return resolveOpenAIRequestCapabilities(model).allowsResponsesStore;
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
-  const contextWindow = parsePositiveInteger(model.contextWindow);
-  if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
-  }
-  return 80_000;
-}
-
-function shouldEnableOpenAIResponsesServerCompaction(
-  model: {
-    api?: unknown;
-    provider?: unknown;
-    baseUrl?: unknown;
-    compat?: { supportsStore?: boolean };
-  },
-  extraParams: Record<string, unknown> | undefined,
-): boolean {
-  const configured = extraParams?.responsesServerCompaction;
-  if (configured === false) {
-    return false;
-  }
-  if (!shouldForceResponsesStore(model)) {
-    return false;
-  }
-  if (configured === true) {
-    return true;
-  }
-  return model.provider === "openai";
-}
-
-function shouldStripResponsesStore(
-  model: { api?: unknown; compat?: { supportsStore?: boolean } },
-  forceStore: boolean,
-): boolean {
-  if (forceStore) {
-    return false;
-  }
-  if (typeof model.api !== "string") {
-    return false;
-  }
-  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
-}
-
-function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
-  return resolveOpenAIRequestCapabilities(model).shouldStripResponsesPromptCache;
+  return resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" }).allowsServiceTier;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {
   api?: unknown;
   provider?: unknown;
+  baseUrl?: unknown;
 }): boolean {
-  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+  const api = readStringValue(model.api);
+  const provider = readStringValue(model.provider);
+  if (!api || !provider) {
     return false;
   }
-  if (
-    model.api !== "openai-completions" &&
-    model.api !== "openai-responses" &&
-    model.api !== "openai-codex-responses" &&
-    model.api !== "azure-openai-responses"
-  ) {
+  return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
+}
+
+function shouldFlattenOpenAICompletionMessages(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { requiresStringContent?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.requiresStringContent === true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasResponsesWebSearchTool(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
     return false;
   }
-  return OPENAI_REASONING_COMPAT_PROVIDERS.has(model.provider);
+  return tools.some((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    if (tool.type === "web_search") {
+      return true;
+    }
+    if (tool.type === "function" && tool.name === "web_search") {
+      return true;
+    }
+    const fn = tool.function;
+    return isRecord(fn) && fn.name === "web_search";
+  });
 }
 
-function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
-  const reasoning = payloadObj.reasoning;
-  if (reasoning === "none") {
-    delete payloadObj.reasoning;
-    return;
-  }
-  if (!reasoning || typeof reasoning !== "object" || Array.isArray(reasoning)) {
-    return;
-  }
-
-  // GPT-5 models reject `reasoning.effort: "none"`. Treat the disabled effort
-  // as "reasoning omitted" instead of forwarding an unsupported value.
-  const reasoningObj = reasoning as Record<string, unknown>;
-  if (reasoningObj.effort === "none") {
-    delete payloadObj.reasoning;
-  }
-}
-
-function applyOpenAIResponsesPayloadOverrides(params: {
+function resolveOpenAIThinkingPayloadEffort(params: {
+  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
   payloadObj: Record<string, unknown>;
-  forceStore: boolean;
-  stripStore: boolean;
-  stripPromptCache: boolean;
-  useServerCompaction: boolean;
-  compactThreshold: number;
+  thinkingLevel: ThinkLevel;
+}) {
+  const mapped = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  if (mapped !== "minimal" || !hasResponsesWebSearchTool(params.payloadObj.tools)) {
+    return mapped;
+  }
+  return (
+    resolveOpenAIReasoningEffortForModel({
+      model: params.model,
+      effort: "low",
+    }) ?? mapped
+  );
+}
+
+function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
+  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
+  payloadObj: Record<string, unknown>;
 }): void {
-  if (params.forceStore) {
-    params.payloadObj.store = true;
+  const reasoning = params.payloadObj.reasoning;
+  if (!isRecord(reasoning) || reasoning.effort !== "minimal") {
+    return;
   }
-  if (params.stripStore) {
-    delete params.payloadObj.store;
+  if (!hasResponsesWebSearchTool(params.payloadObj.tools)) {
+    return;
   }
-  if (params.stripPromptCache) {
-    delete params.payloadObj.prompt_cache_key;
-    delete params.payloadObj.prompt_cache_retention;
-  }
-  if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
-    params.payloadObj.context_management = [
-      {
-        type: "compaction",
-        compact_threshold: params.compactThreshold,
-      },
-    ];
+  const nextEffort = resolveOpenAIReasoningEffortForModel({
+    model: params.model,
+    effort: "low",
+  });
+  if (nextEffort && nextEffort !== "minimal" && nextEffort !== "none") {
+    reasoning.effort = nextEffort;
   }
 }
 
@@ -193,7 +150,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -217,37 +174,14 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
-function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "low" || normalized === "medium" || normalized === "high") {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function resolveOpenAITextVerbosity(
-  extraParams: Record<string, unknown> | undefined,
-): OpenAITextVerbosity | undefined {
-  const raw = extraParams?.textVerbosity ?? extraParams?.text_verbosity;
-  const normalized = normalizeOpenAITextVerbosity(raw);
-  if (raw !== undefined && normalized === undefined) {
-    const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
-  }
-  return normalized;
-}
-
 function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
   }
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   if (
     normalized === "on" ||
     normalized === "true" ||
@@ -296,30 +230,28 @@ export function createOpenAIResponsesContextManagementWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const forceStore = shouldForceResponsesStore(model);
-    const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    const stripStore = shouldStripResponsesStore(model, forceStore);
-    const stripPromptCache = shouldStripResponsesPromptCache(model);
-    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
+    const policy = resolveOpenAIResponsesPayloadPolicy(model, {
+      extraParams,
+      enablePromptCacheStripping: true,
+      enableServerCompaction: true,
+      storeMode: "provider-policy",
+    });
+    if (
+      policy.explicitStore === undefined &&
+      !policy.useServerCompaction &&
+      !policy.shouldStripStore &&
+      !policy.shouldStripPromptCache &&
+      !policy.shouldStripDisabledReasoningPayload
+    ) {
       return underlying(model, context, options);
     }
 
-    const compactThreshold =
-      parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
-      resolveOpenAIResponsesCompactThreshold(model);
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          applyOpenAIResponsesPayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
-            forceStore,
-            stripStore,
-            stripPromptCache,
-            useServerCompaction,
-            compactThreshold,
-          });
+          applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
         }
         return originalOnPayload?.(payload, model);
       },
@@ -336,7 +268,72 @@ export function createOpenAIReasoningCompatibilityWrapper(
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      stripDisabledOpenAIReasoningPayload(payloadObj);
+      applyOpenAIResponsesPayloadPolicy(
+        payloadObj,
+        resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "preserve" }),
+      );
+    });
+  };
+}
+
+export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldFlattenOpenAICompletionMessages(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = flattenCompletionMessagesToStringContent(payloadObj.messages);
+    });
+  };
+}
+
+export function createOpenAIThinkingLevelWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (!thinkingLevel) {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (!shouldApplyOpenAIReasoningCompatibility(model)) {
+      if (thinkingLevel === "off") {
+        return underlying(model, context, options);
+      }
+      return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+        raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
+      });
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const existingReasoning = payloadObj.reasoning;
+      if (thinkingLevel === "off") {
+        if (existingReasoning !== undefined) {
+          delete payloadObj.reasoning;
+        }
+        return;
+      }
+
+      const reasoningEffort = resolveOpenAIThinkingPayloadEffort({
+        model,
+        payloadObj,
+        thinkingLevel,
+      });
+      if (existingReasoning === "none") {
+        payloadObj.reasoning = { effort: reasoningEffort };
+        return;
+      }
+      if (
+        existingReasoning &&
+        typeof existingReasoning === "object" &&
+        !Array.isArray(existingReasoning)
+      ) {
+        (existingReasoning as Record<string, unknown>).effort = reasoningEffort;
+        raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
+      }
     });
   };
 }
@@ -422,26 +419,26 @@ export function createCodexNativeWebSearchWrapper(
   return (model, context, options) => {
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
-      modelProvider: typeof model.provider === "string" ? model.provider : undefined,
-      modelApi: typeof model.api === "string" ? model.api : undefined,
+      modelProvider: readStringValue(model.provider),
+      modelApi: readStringValue(model.api),
       agentDir: params.agentDir,
     });
 
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {
         log.debug(
-          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
-            model.provider ?? "unknown",
-          )}/${String(model.id ?? "unknown")}`,
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
+            model.provider ?? "unknown"
+          }/${model.id ?? "unknown"}`,
         );
       }
       return underlying(model, context, options);
     }
 
     log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${String(
-        model.provider ?? "unknown",
-      )}/${String(model.id ?? "unknown")}`,
+      `activating Codex native web search (${activation.codexMode}) for ${
+        model.provider ?? "unknown"
+      }/${model.id ?? "unknown"}`,
     );
 
     const originalOnPayload = options?.onPayload;
@@ -484,7 +481,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };
@@ -503,8 +500,8 @@ export function createOpenAIAttributionHeadersWrapper(
       ...options,
       headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,
-        api: typeof model.api === "string" ? model.api : undefined,
-        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        api: readStringValue(model.api),
+        baseUrl: readStringValue(model.baseUrl),
         capability: "llm",
         transport: "stream",
         callerHeaders: options?.headers,

@@ -1,5 +1,5 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 
 type ChannelMetadataRecord = ChannelUiMetadata & {
@@ -68,7 +68,11 @@ export function collectChannelSchemaMetadata(
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
       const current = byChannelId.get(channelId);
-      if (current && current.originRank < originRank) {
+      if (
+        current &&
+        current.originRank < originRank &&
+        (current.configSchema !== undefined || current.configUiHints !== undefined)
+      ) {
         continue;
       }
       byChannelId.set(channelId, {

@@ -485,14 +485,14 @@ function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
     },
     pluginConfig,
     runtime: {} as OpenClawPluginApi["runtime"],
-  }) as OpenClawPluginApi;
+  });
 }
 
 function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
   defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
-  context: OpenClawPluginToolContext | undefined = {
+  context: OpenClawPluginToolContext = {
     agentId: "main",
     sessionId: "session-123",
     messageChannel: "discord",

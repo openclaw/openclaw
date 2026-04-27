@@ -1,6 +1,9 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { qqbotSetupPlugin } from "./src/channel.setup.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { qqbotSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(qqbotSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./setup-plugin-api.js",
+    exportName: "qqbotSetupPlugin",
+  },
+});

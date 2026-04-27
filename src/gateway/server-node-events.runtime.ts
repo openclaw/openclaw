@@ -3,7 +3,7 @@ export { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 export { normalizeChannelId } from "../channels/plugins/index.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
-export { loadConfig } from "../config/config.js";
+export { getRuntimeConfig } from "../config/config.js";
 export { updateSessionStore } from "../config/sessions.js";
 export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeatNow } from "../infra/heartbeat-wake.js";

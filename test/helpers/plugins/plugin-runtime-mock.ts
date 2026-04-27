@@ -1,10 +1,18 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
 import { vi } from "vitest";
 import {
+  createAckReactionHandle,
   removeAckReactionAfterReply,
+  removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+
+const DEFAULT_PROVIDER = "openai";
+const DEFAULT_MODEL = "gpt-5.5";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -36,46 +44,67 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   return result as T;
 }
 
+function createTaskFlowSessionMock() {
+  return {
+    sessionKey: "agent:main:main",
+    createManaged: vi.fn(),
+    get: vi.fn(),
+    list: vi.fn(() => []),
+    findLatest: vi.fn(),
+    resolve: vi.fn(),
+    getTaskSummary: vi.fn(),
+    setWaiting: vi.fn(),
+    resume: vi.fn(),
+    finish: vi.fn(),
+    fail: vi.fn(),
+    requestCancel: vi.fn(),
+    cancel: vi.fn(),
+    runTask: vi.fn(),
+  };
+}
+
+function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFile"): Error {
+  return new Error(
+    `Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`,
+  );
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
-    bindSession: vi.fn(() => ({
-      sessionKey: "agent:main:main",
-      createManaged: vi.fn(),
-      get: vi.fn(),
-      list: vi.fn(() => []),
-      findLatest: vi.fn(),
-      resolve: vi.fn(),
-      getTaskSummary: vi.fn(),
-      setWaiting: vi.fn(),
-      resume: vi.fn(),
-      finish: vi.fn(),
-      fail: vi.fn(),
-      requestCancel: vi.fn(),
-      cancel: vi.fn(),
-      runTask: vi.fn(),
-    })) as unknown as PluginRuntime["taskFlow"]["bindSession"],
-    fromToolContext: vi.fn(() => ({
-      sessionKey: "agent:main:main",
-      createManaged: vi.fn(),
-      get: vi.fn(),
-      list: vi.fn(() => []),
-      findLatest: vi.fn(),
-      resolve: vi.fn(),
-      getTaskSummary: vi.fn(),
-      setWaiting: vi.fn(),
-      resume: vi.fn(),
-      finish: vi.fn(),
-      fail: vi.fn(),
-      requestCancel: vi.fn(),
-      cancel: vi.fn(),
-      runTask: vi.fn(),
-    })) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
+    bindSession: vi.fn(
+      createTaskFlowSessionMock,
+    ) as unknown as PluginRuntime["taskFlow"]["bindSession"],
+    fromToolContext: vi.fn(
+      createTaskFlowSessionMock,
+    ) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
-      loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
-      writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
+      current: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["current"],
+      mutateConfigFile: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        snapshot: {} as never,
+        nextConfig: {},
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+        result: undefined,
+      })) as unknown as PluginRuntime["config"]["mutateConfigFile"],
+      replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        snapshot: {} as never,
+        nextConfig,
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+      })) as unknown as PluginRuntime["config"]["replaceConfigFile"],
+      loadConfig: vi.fn(() => {
+        throw createDeprecatedRuntimeConfigError("loadConfig");
+      }) as unknown as PluginRuntime["config"]["loadConfig"],
+      writeConfigFile: vi.fn(async () => {
+        throw createDeprecatedRuntimeConfigError("writeConfigFile");
+      }) as unknown as PluginRuntime["config"]["writeConfigFile"],
     },
     agent: {
       defaults: {
@@ -94,10 +123,26 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      normalizeThinkingLevel: vi.fn(
+        (raw?: string | null) => raw,
+      ) as unknown as PluginRuntime["agent"]["normalizeThinkingLevel"],
+      resolveThinkingPolicy: vi.fn(() => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+        ],
+      })) as unknown as PluginRuntime["agent"]["resolveThinkingPolicy"],
       runEmbeddedPiAgent: vi.fn().mockResolvedValue({
         payloads: [],
         meta: {},
       }) as unknown as PluginRuntime["agent"]["runEmbeddedPiAgent"],
+      runEmbeddedAgent: vi.fn().mockResolvedValue({
+        payloads: [],
+        meta: {},
+      }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"],
       resolveAgentTimeoutMs: vi.fn(
         () => 30_000,
       ) as unknown as PluginRuntime["agent"]["resolveAgentTimeoutMs"],
@@ -161,6 +206,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     imageGeneration: {
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
+    },
+    musicGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["musicGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["musicGeneration"]["listProviders"],
+    },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
     },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
@@ -290,10 +343,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               ? true
               : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
       reactions: {
+        createAckReactionHandle,
         shouldAckReaction,
         removeAckReactionAfterReply,
+        removeAckReactionHandleAfterReply,
       },
       groups: {
         resolveGroupPolicy: vi.fn(
@@ -312,9 +369,44 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
             flushKey: vi.fn(),
           }),
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
-        resolveInboundDebounceMs: vi.fn(
-          () => 0,
-        ) as unknown as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"],
+        resolveInboundDebounceMs: vi.fn((params: unknown) => {
+          // Match the production contract so channel plugins that delegate to
+          // `core.channel.debounce.resolveInboundDebounceMs({ cfg, channel })`
+          // see the same per-channel/global/default precedence in tests as
+          // they would at runtime. Prior to this, the mock returned 0
+          // unconditionally, which meant any channel that delegated (vs.
+          // reading config directly) effectively disabled its debounce
+          // window in tests — a footgun that silently hid coverage for
+          // per-channel overrides.
+          const p = params as
+            | {
+                cfg?: {
+                  messages?: {
+                    inbound?: {
+                      debounceMs?: unknown;
+                      byChannel?: Record<string, unknown>;
+                    };
+                  };
+                };
+                channel?: string;
+                overrideMs?: unknown;
+              }
+            | undefined;
+          const override = typeof p?.overrideMs === "number" ? p.overrideMs : undefined;
+          if (typeof override === "number") {
+            return override;
+          }
+          const inbound = p?.cfg?.messages?.inbound;
+          const perChannel =
+            p?.channel && inbound?.byChannel ? inbound.byChannel[p.channel] : undefined;
+          if (typeof perChannel === "number") {
+            return perChannel;
+          }
+          if (typeof inbound?.debounceMs === "number") {
+            return inbound.debounceMs;
+          }
+          return 0;
+        }) as unknown as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"],
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers: vi.fn(
@@ -335,6 +427,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"],
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
+      },
+      runtimeContexts: {
+        register: vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          const lease = { dispose: vi.fn() };
+          abortSignal?.addEventListener("abort", lease.dispose, { once: true });
+          return lease;
+        }) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
+        get: vi.fn() as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
+        watch: vi.fn(() =>
+          vi.fn(),
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
       },
       activity: {} as PluginRuntime["channel"]["activity"],
     },
@@ -370,6 +473,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
+      getRuntimeAuthForModel:
+        vi.fn() as unknown as PluginRuntime["modelAuth"]["getRuntimeAuthForModel"],
       resolveApiKeyForProvider:
         vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },
@@ -379,6 +484,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    nodes: {
+      list: vi.fn(async () => ({ nodes: [] })),
+      invoke: vi.fn(),
     },
   };
 

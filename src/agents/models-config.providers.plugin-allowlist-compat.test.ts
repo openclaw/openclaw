@@ -1,53 +1,110 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "../plugins/bundled-compat.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
+import { resolveEnabledProviderPluginIds } from "../plugins/providers.js";
+
+const PROVIDER_PLUGIN_IDS = ["kilocode", "moonshot", "openrouter"] as const;
+
+function createProviderManifestRecord(pluginId: string): PluginManifestRecord {
+  return {
+    id: pluginId,
+    channels: [],
+    providers: [pluginId],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "bundled",
+    rootDir: `/virtual/${pluginId}`,
+    source: `/virtual/${pluginId}/index.ts`,
+    manifestPath: `/virtual/${pluginId}/openclaw.plugin.json`,
+  };
+}
+
+function createProviderRegistryRecord(pluginId: string): PluginRegistrySnapshot["plugins"][number] {
+  return {
+    pluginId,
+    manifestPath: `/virtual/${pluginId}/openclaw.plugin.json`,
+    manifestHash: `${pluginId}-manifest-hash`,
+    rootDir: `/virtual/${pluginId}`,
+    origin: "bundled",
+    enabled: true,
+    enabledByDefault: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+  };
+}
+
+const providerRegistry: PluginRegistrySnapshot = {
+  version: 1,
+  hostContractVersion: "2026.4.25",
+  compatRegistryVersion: "compat-v1",
+  migrationVersion: 1,
+  policyHash: "policy-v1",
+  generatedAtMs: 1777118400000,
+  installRecords: {},
+  plugins: PROVIDER_PLUGIN_IDS.map(createProviderRegistryRecord),
+  diagnostics: [],
+};
+
+const providerManifestRegistry: PluginManifestRegistry = {
+  plugins: PROVIDER_PLUGIN_IDS.map(createProviderManifestRecord),
+  diagnostics: [],
+};
 
 describe("implicit provider plugin allowlist compatibility", () => {
-  it("keeps bundled implicit providers discoverable when plugins.allow is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KILOCODE_API_KEY", "MOONSHOT_API_KEY"]);
-    process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
-    process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
+  it("keeps bundled implicit providers discoverable when plugins.allow is set", () => {
+    const config = withBundledPluginEnablementCompat({
+      config: withBundledPluginAllowlistCompat({
         config: {
           plugins: {
             allow: ["openrouter"],
           },
         },
-      });
-      expect(providers?.kilocode).toBeDefined();
-      expect(providers?.moonshot).toBeDefined();
-    } finally {
-      envSnapshot.restore();
-    }
+        pluginIds: ["kilocode", "moonshot"],
+      }),
+      pluginIds: ["kilocode", "moonshot"],
+    });
+
+    expect(
+      resolveEnabledProviderPluginIds({
+        config,
+        registry: providerRegistry,
+        manifestRegistry: providerManifestRegistry,
+        onlyPluginIds: PROVIDER_PLUGIN_IDS,
+      }),
+    ).toEqual(["kilocode", "moonshot", "openrouter"]);
   });
 
-  it("still honors explicit plugin denies over compat allowlist injection", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["KILOCODE_API_KEY", "MOONSHOT_API_KEY"]);
-    process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
-    process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
+  it("still honors explicit plugin denies over compat allowlist injection", () => {
+    const config = withBundledPluginEnablementCompat({
+      config: withBundledPluginAllowlistCompat({
         config: {
           plugins: {
             allow: ["openrouter"],
             deny: ["kilocode"],
           },
         },
-      });
-      expect(providers?.kilocode).toBeUndefined();
-      expect(providers?.moonshot).toBeDefined();
-    } finally {
-      envSnapshot.restore();
-    }
+        pluginIds: ["kilocode", "moonshot"],
+      }),
+      pluginIds: ["kilocode", "moonshot"],
+    });
+
+    expect(
+      resolveEnabledProviderPluginIds({
+        config,
+        registry: providerRegistry,
+        manifestRegistry: providerManifestRegistry,
+        onlyPluginIds: PROVIDER_PLUGIN_IDS,
+      }),
+    ).toEqual(["moonshot", "openrouter"]);
   });
 });

@@ -1,12 +1,68 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
+  saveAuthProfileStore,
+} from "./auth-profiles/store.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
+const resolveExternalAuthProfilesWithPluginsMock = vi.hoisted(() =>
+  vi.fn<() => ProviderExternalAuthProfile[]>(() => []),
+);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+}));
+
+vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
+  readCodexCliCredentialsCached: () => {
+    const codexHome = process.env.CODEX_HOME;
+    if (!codexHome) {
+      return null;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")) as {
+        tokens?: {
+          access_token?: unknown;
+          refresh_token?: unknown;
+          account_id?: unknown;
+        };
+      };
+      const access = raw.tokens?.access_token;
+      const refresh = raw.tokens?.refresh_token;
+      if (typeof access !== "string" || typeof refresh !== "string") {
+        return null;
+      }
+      return {
+        type: "oauth",
+        provider: "openai-codex",
+        access,
+        refresh,
+        expires: Date.now() + 60 * 60 * 1000,
+        accountId: typeof raw.tokens?.account_id === "string" ? raw.tokens.account_id : undefined,
+      };
+    } catch {
+      return null;
+    }
+  },
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: vi.fn(),
+}));
+
 describe("ensureAuthProfileStore", () => {
+  afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    resolveExternalAuthProfilesWithPluginsMock.mockReset();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+  });
+
   function withTempAgentDir<T>(prefix: string, run: (agentDir: string) => T): T {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     try {
@@ -30,6 +86,22 @@ describe("ensureAuthProfileStore", () => {
     const profile = store.profiles[profileId];
     expect(profile).toBeDefined();
     return profile;
+  }
+
+  function restoreEnvValue(name: string, previous: string | undefined): void {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+
+  function restoreAgentDirEnv(params: {
+    previousAgentDir: string | undefined;
+    previousPiAgentDir: string | undefined;
+  }): void {
+    restoreEnvValue("OPENCLAW_AGENT_DIR", params.previousAgentDir);
+    restoreEnvValue("PI_CODING_AGENT_DIR", params.previousPiAgentDir);
   }
 
   function expectApiKeyProfile(
@@ -155,16 +227,348 @@ describe("ensureAuthProfileStore", () => {
         key: "agent-key",
       });
     } finally {
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the main agent's newer OAuth profile when an agent still has a stale default profile", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const freshProfileId = "openai-codex:user@example.com";
+      const staleProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              email: "user@example.com",
+            },
+          },
+          order: {
+            "openai-codex": [freshProfileId],
+          },
+          lastGood: {
+            "openai-codex": freshProfileId,
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-identity-access",
+              refresh: "stale-identity-refresh",
+              expires: Date.now() - 30 * 60 * 1000,
+              email: "user@example.com",
+            },
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-access",
+              refresh: "stale-refresh",
+              expires: Date.now() - 60 * 60 * 1000,
+              accountId: "acct-from-old-codex-auth",
+            },
+          },
+          order: {
+            "openai-codex": [staleProfileId],
+          },
+          lastGood: {
+            "openai-codex": staleProfileId,
+          },
+          usageStats: {
+            [staleProfileId]: {
+              lastUsed: Date.now() - 30_000,
+              errorCount: 3,
+            },
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.profiles[freshProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-access",
+        refresh: "main-refresh",
+      });
+      expect(store.profiles[staleProfileId]).toBeUndefined();
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(freshProfileId);
+      expect(store.usageStats?.[staleProfileId]).toBeUndefined();
+
+      const persistedAgentStore = JSON.parse(
+        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as { profiles: Record<string, unknown> };
+      expect(persistedAgentStore.profiles[staleProfileId]).toBeDefined();
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a newer agent replacement credential while repairing stale default references", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-newer-agent-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const freshProfileId = "openai-codex:user@example.com";
+      const staleProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "older-main-access",
+              refresh: "older-main-refresh",
+              expires: Date.now() + 30 * 60 * 1000,
+              email: "user@example.com",
+            },
+          },
+          order: {
+            "openai-codex": [freshProfileId],
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "newer-agent-access",
+              refresh: "newer-agent-refresh",
+              expires: Date.now() + 90 * 60 * 1000,
+              email: "user@example.com",
+            },
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-access",
+              refresh: "stale-refresh",
+              expires: Date.now() - 60 * 60 * 1000,
+              email: "user@example.com",
+            },
+          },
+          order: {
+            "openai-codex": [staleProfileId],
+          },
+          lastGood: {
+            "openai-codex": staleProfileId,
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.profiles[freshProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "newer-agent-access",
+        refresh: "newer-agent-refresh",
+      });
+      expect(store.profiles[staleProfileId]).toBeUndefined();
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(freshProfileId);
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a valid main default OAuth profile while replacing a stale agent override", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-base-default-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const freshProfileId = "openai-codex:user@example.com";
+      const defaultProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              email: "user@example.com",
+            },
+            [defaultProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-default-access",
+              refresh: "main-default-refresh",
+              expires: Date.now() + 45 * 60 * 1000,
+            },
+          },
+          order: {
+            "openai-codex": [freshProfileId, defaultProfileId],
+          },
+          usageStats: {
+            [defaultProfileId]: {
+              lastUsed: 123,
+            },
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [defaultProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-agent-default-access",
+              refresh: "stale-agent-default-refresh",
+              expires: Date.now() - 60 * 60 * 1000,
+            },
+          },
+          order: {
+            "openai-codex": [defaultProfileId],
+          },
+          usageStats: {
+            [defaultProfileId]: {
+              lastUsed: 999,
+              errorCount: 2,
+            },
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.profiles[defaultProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-default-access",
+      });
+      expect(store.usageStats?.[defaultProfileId]).toMatchObject({
+        lastUsed: 123,
+      });
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a stale default OAuth profile when the main profile belongs to a different identity", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-mismatch-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const freshProfileId = "openai-codex:user@example.com";
+      const staleProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              email: "user@example.com",
+            },
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "other-access",
+              refresh: "other-refresh",
+              expires: Date.now() - 60 * 60 * 1000,
+              email: "other@example.com",
+            },
+          },
+          order: {
+            "openai-codex": [staleProfileId],
+          },
+          lastGood: {
+            "openai-codex": staleProfileId,
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.profiles[freshProfileId]).toBeDefined();
+      expect(store.profiles[staleProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "other-access",
+      });
+      expect(store.order?.["openai-codex"]).toEqual([staleProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(staleProfileId);
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -322,21 +726,94 @@ describe("ensureAuthProfileStore", () => {
       });
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      if (previousAgentDir === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes provider-managed runtime auth without persisting copied tokens", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-external-auth-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const agentDir = path.join(root, "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+        {
+          profileId: "demo-provider:external",
+          credential: {
+            type: "oauth",
+            provider: "demo-provider",
+            access: "external-access-token",
+            refresh: "external-refresh-token",
+            expires: Date.now() + 60_000,
+            accountId: "acct_123",
+          },
+          persistence: "runtime-only",
+        },
+      ]);
+
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["demo-provider:external"]).toMatchObject({
+        type: "oauth",
+        provider: "demo-provider",
+        access: "external-access-token",
+        refresh: "external-refresh-token",
+      });
+
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write inherited auth stores during secrets runtime reads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const stateDir = path.join(root, ".openclaw");
+      const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+      const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(workerAgentDir, { readOnly: true });
+
+      expect(store.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(fs.existsSync(workerStorePath)).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

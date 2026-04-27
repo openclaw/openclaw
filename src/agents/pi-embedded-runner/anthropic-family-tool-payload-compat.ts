@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";
 
@@ -70,7 +71,7 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     return toolObj;
   }
 
-  const rawName = typeof toolObj.name === "string" ? toolObj.name.trim() : "";
+  const rawName = normalizeOptionalString(toolObj.name) ?? "";
   if (!rawName) {
     return toolObj;
   }
@@ -157,4 +158,13 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
       },
     });
   };
+}
+
+export function createOpenAIAnthropicToolPayloadCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  return createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn, {
+    toolSchemaMode: "openai-functions",
+    toolChoiceMode: "openai-string-modes",
+  });
 }

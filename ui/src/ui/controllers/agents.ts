@@ -1,9 +1,9 @@
-import { resolveAgentIdFromSessionKey } from "../../../../src/routing/session-key.js";
 import {
-  resolveChatModelOverride,
+  normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { resolveAgentIdFromSessionKey } from "../session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -44,11 +44,21 @@ export type AgentsState = {
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
 
+function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
+  return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
+}
+
+function resolveToolsErrorMessage(
+  err: unknown,
+  target: "tools catalog" | "effective tools",
+): string {
+  return isMissingOperatorReadScopeError(err)
+    ? formatMissingOperatorReadScopeMessage(target)
+    : String(err);
+}
+
 export async function loadAgents(state: AgentsState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.agentsLoading) {
+  if (!state.client || !state.connected || state.agentsLoading) {
     return;
   }
   state.agentsLoading = true;
@@ -58,8 +68,7 @@ export async function loadAgents(state: AgentsState) {
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
-      const known = res.agents.some((entry) => entry.id === selected);
-      if (!selected || !known) {
+      if (!selected || !res.agents.some((entry) => entry.id === selected)) {
         state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
       }
     }
@@ -77,12 +86,17 @@ export async function loadAgents(state: AgentsState) {
 
 export async function loadToolsCatalog(state: AgentsState, agentId: string) {
   const resolvedAgentId = agentId.trim();
-  if (!state.client || !state.connected || !resolvedAgentId) {
+  if (
+    !state.client ||
+    !state.connected ||
+    !resolvedAgentId ||
+    (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId)
+  ) {
     return;
   }
-  if (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
-    return;
-  }
+  const shouldIgnoreResponse = () =>
+    state.toolsCatalogLoadingAgentId !== resolvedAgentId ||
+    hasSelectedAgentMismatch(state, resolvedAgentId);
   state.toolsCatalogLoading = true;
   state.toolsCatalogLoadingAgentId = resolvedAgentId;
   state.toolsCatalogError = null;
@@ -92,24 +106,15 @@ export async function loadToolsCatalog(state: AgentsState, agentId: string) {
       agentId: resolvedAgentId,
       includePlugins: true,
     });
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsCatalogResult = res;
   } catch (err) {
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
-      return;
-    }
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = isMissingOperatorReadScopeError(err)
-      ? formatMissingOperatorReadScopeMessage("tools catalog")
-      : String(err);
+    state.toolsCatalogError = resolveToolsErrorMessage(err, "tools catalog");
   } finally {
     if (state.toolsCatalogLoadingAgentId === resolvedAgentId) {
       state.toolsCatalogLoadingAgentId = null;
@@ -128,12 +133,18 @@ export async function loadToolsEffective(
     agentId: resolvedAgentId,
     sessionKey: resolvedSessionKey,
   });
-  if (!state.client || !state.connected || !resolvedAgentId || !resolvedSessionKey) {
+  if (
+    !state.client ||
+    !state.connected ||
+    !resolvedAgentId ||
+    !resolvedSessionKey ||
+    (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey)
+  ) {
     return;
   }
-  if (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey) {
-    return;
-  }
+  const shouldIgnoreResponse = () =>
+    state.toolsEffectiveLoadingKey !== requestKey ||
+    hasSelectedAgentMismatch(state, resolvedAgentId);
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
   state.toolsEffectiveResultKey = null;
@@ -144,26 +155,16 @@ export async function loadToolsEffective(
       agentId: resolvedAgentId,
       sessionKey: resolvedSessionKey,
     });
-    if (state.toolsEffectiveLoadingKey !== requestKey) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsEffectiveResultKey = requestKey;
     state.toolsEffectiveResult = res;
   } catch (err) {
-    if (state.toolsEffectiveLoadingKey !== requestKey) {
+    if (shouldIgnoreResponse()) {
       return;
     }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
-      return;
-    }
-    state.toolsEffectiveResult = null;
-    state.toolsEffectiveResultKey = null;
-    state.toolsEffectiveError = isMissingOperatorReadScopeError(err)
-      ? formatMissingOperatorReadScopeMessage("effective tools")
-      : String(err);
+    state.toolsEffectiveError = resolveToolsErrorMessage(err, "effective tools");
   } finally {
     if (state.toolsEffectiveLoadingKey === requestKey) {
       state.toolsEffectiveLoadingKey = null;
@@ -195,11 +196,11 @@ export function refreshVisibleToolsEffectiveForCurrentSession(
 ): Promise<void> | undefined {
   const resolvedSessionKey = state.sessionKey?.trim();
   if (!resolvedSessionKey || state.agentsPanel !== "tools" || !state.agentsSelectedId) {
-    return;
+    return undefined;
   }
   const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
   if (!sessionAgentId || state.agentsSelectedId !== sessionAgentId) {
-    return;
+    return undefined;
   }
   return loadToolsEffective(state, {
     agentId: sessionAgentId,
@@ -227,7 +228,7 @@ function resolveEffectiveToolsModelKey(
     return defaultModel;
   }
   if (cachedOverride) {
-    return resolveChatModelOverride(cachedOverride, catalog).value;
+    return normalizeChatModelOverrideValue(cachedOverride, catalog);
   }
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
   if (activeRow?.model) {

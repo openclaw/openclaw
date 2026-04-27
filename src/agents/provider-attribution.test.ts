@@ -1,4 +1,79 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const providerEndpointPlugins = vi.hoisted(() => [
+  {
+    providerEndpoints: [
+      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
+      { endpointClass: "openai-codex", hosts: ["chatgpt.com"] },
+      { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
+      { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
+      { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
+      { endpointClass: "mistral-public", hosts: ["api.mistral.ai"] },
+      { endpointClass: "chutes-native", hosts: ["llm.chutes.ai"] },
+      { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
+      { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
+      { endpointClass: "groq-native", hosts: ["api.groq.com"] },
+      { endpointClass: "opencode-native", hostSuffixes: ["opencode.ai"] },
+      { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
+      { endpointClass: "zai-native", hosts: ["api.z.ai"] },
+      { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.googleapis.com"],
+        googleVertexRegion: "global",
+      },
+      {
+        endpointClass: "google-vertex",
+        hostSuffixes: ["-aiplatform.googleapis.com"],
+        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
+      },
+      {
+        endpointClass: "moonshot-native",
+        baseUrls: ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"],
+      },
+      {
+        endpointClass: "modelstudio-native",
+        baseUrls: [
+          "https://coding-intl.dashscope.aliyuncs.com/v1",
+          "https://coding.dashscope.aliyuncs.com/v1",
+          "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        ],
+      },
+      {
+        endpointClass: "xai-native",
+        hosts: ["api.x.ai", "api.grok.x.ai"],
+      },
+    ],
+    providerRequest: {
+      providers: {
+        anthropic: { family: "anthropic" },
+        cerebras: { family: "cerebras" },
+        chutes: { family: "chutes" },
+        deepseek: { family: "deepseek" },
+        "github-copilot": { family: "github-copilot" },
+        google: { family: "google" },
+        groq: { family: "groq" },
+        kimi: { family: "moonshot", compatibilityFamily: "moonshot" },
+        mistral: { family: "mistral" },
+        moonshot: { family: "moonshot", compatibilityFamily: "moonshot" },
+        openrouter: { family: "openrouter" },
+        qwen: { family: "modelstudio" },
+        together: { family: "together" },
+        xai: { family: "xai" },
+        zai: { family: "zai" },
+      },
+    },
+  },
+]);
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: providerEndpointPlugins,
+    diagnostics: [],
+  }),
+}));
+
 import {
   listProviderAttributionPolicies,
   resolveProviderAttributionHeaders,
@@ -8,6 +83,7 @@ import {
   resolveProviderRequestAttributionHeaders,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
+  describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
 describe("provider attribution", () => {
@@ -227,6 +303,41 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native OpenAI-compatible vendor hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.x.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.grok.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.grok.x.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
+      endpointClass: "zai-native",
+      hostname: "api.z.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.deepseek.com")).toMatchObject({
+      endpointClass: "deepseek-native",
+      hostname: "api.deepseek.com",
+    });
+    expect(resolveProviderEndpoint("https://llm.chutes.ai/v1")).toMatchObject({
+      endpointClass: "chutes-native",
+      hostname: "llm.chutes.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.groq.com/openai/v1")).toMatchObject({
+      endpointClass: "groq-native",
+      hostname: "api.groq.com",
+    });
+    expect(resolveProviderEndpoint("https://api.cerebras.ai/v1")).toMatchObject({
+      endpointClass: "cerebras-native",
+      hostname: "api.cerebras.ai",
+    });
+    expect(resolveProviderEndpoint("https://opencode.ai/api")).toMatchObject({
+      endpointClass: "opencode-native",
+      hostname: "opencode.ai",
+    });
+  });
+
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -266,6 +377,77 @@ describe("provider attribution", () => {
         capability: "llm",
       }),
     ).toBeUndefined();
+  });
+
+  it("summarizes proxy-like, local, invalid, default, and native routing compactly", () => {
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=default route=default policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "javascript:alert(1)",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=invalid route=invalid policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=custom route=proxy-like policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "qwen",
+        api: "openai-responses",
+        baseUrl: "http://localhost:1234/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openai api=openai-responses endpoint=openai-public route=native policy=hidden",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openrouter",
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openrouter api=openai-responses endpoint=openrouter route=proxy-like policy=documented",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "groq",
+        api: "openai-completions",
+        baseUrl: "https://api.groq.com/openai/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=groq api=openai-completions endpoint=groq-native route=native policy=none");
   });
 
   it("models other provider families without enabling hidden attribution", () => {
@@ -477,6 +659,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "openai-public",
       allowsOpenAIServiceTier: true,
+      supportsOpenAIReasoningCompatPayload: true,
       allowsResponsesStore: true,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: false,
@@ -505,8 +688,58 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "custom",
       allowsOpenAIServiceTier: false,
+      supportsOpenAIReasoningCompatPayload: false,
       allowsResponsesStore: false,
       supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
+  it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
+    // compat.supportsPromptCacheKey = true disables the strip even on a
+    // proxy-like endpoint that would otherwise trigger it.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: true },
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    // compat.supportsPromptCacheKey = false forces the strip even on a
+    // native OpenAI endpoint that would otherwise forward the field.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: false },
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    // compat.supportsPromptCacheKey unset preserves the existing default
+    // (strip on proxy-like responses endpoints, preserving the fix from
+    // #48155 for providers that reject the field).
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
       shouldStripResponsesPromptCache: true,
     });
   });
@@ -528,7 +761,7 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "modelstudio",
+        provider: "qwen",
         api: "openai-completions",
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         capability: "llm",
@@ -541,13 +774,28 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
+        provider: "generic",
+        api: "openai-completions",
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
         capability: "llm",
         transport: "stream",
       }),
     ).toMatchObject({
-      compatibilityFamily: "moonshot",
+      endpointClass: "modelstudio-native",
+      supportsNativeStreamingUsageCompat: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
     });
   });
 
@@ -565,5 +813,255 @@ describe("provider attribution", () => {
       knownProviderFamily: "github-copilot",
       isKnownNativeEndpoint: true,
     });
+  });
+
+  it("resolves a provider capability matrix for representative native and proxied routes", () => {
+    const cases = [
+      {
+        name: "native OpenAI responses",
+        input: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-public",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: true,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "proxied OpenAI responses",
+        input: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://proxy.example.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "custom",
+          isKnownNativeEndpoint: false,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "direct Anthropic messages",
+        input: {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "anthropic",
+          endpointClass: "anthropic-public",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: true,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "proxied custom anthropic api",
+        input: {
+          provider: "custom-anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://proxy.example.com/anthropic",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          endpointClass: "custom",
+          isKnownNativeEndpoint: false,
+          allowsAnthropicServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          supportsResponsesStoreField: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenRouter responses",
+        input: {
+          provider: "openrouter",
+          api: "openai-responses",
+          baseUrl: "https://openrouter.ai/api/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openrouter",
+          endpointClass: "openrouter",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native Moonshot completions",
+        input: {
+          provider: "moonshot",
+          api: "openai-completions",
+          baseUrl: "https://api.moonshot.ai/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "moonshot",
+          endpointClass: "moonshot-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+          compatibilityFamily: "moonshot",
+        },
+      },
+      {
+        name: "native Qwen completions",
+        input: {
+          provider: "qwen",
+          api: "openai-completions",
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "modelstudio",
+          endpointClass: "modelstudio-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "generic provider on native DashScope completions",
+        input: {
+          provider: "generic",
+          api: "openai-completions",
+          baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "generic",
+          endpointClass: "modelstudio-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "native Google Gemini api",
+        input: {
+          provider: "google",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "google",
+          endpointClass: "google-generative-ai",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native GitHub Copilot responses",
+        input: {
+          provider: "github-copilot",
+          api: "openai-responses",
+          baseUrl: "https://api.individual.githubcopilot.com",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "github-copilot",
+          endpointClass: "github-copilot-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenAI Codex responses",
+        input: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-codex",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      expect(resolveProviderRequestCapabilities(testCase.input), testCase.name).toMatchObject(
+        testCase.expected,
+      );
+    }
   });
 });

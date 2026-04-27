@@ -1,24 +1,106 @@
-import { createJiti } from "jiti";
-type WebChannelHeavyRuntimeModule = typeof import("@openclaw/whatsapp/runtime-api.js");
-type WebChannelLightRuntimeModule = typeof import("@openclaw/whatsapp/light-runtime-api.js");
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelAgentTool } from "../../channels/plugins/types.core.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getDefaultLocalRoots as getDefaultLocalRootsImpl,
   loadWebMedia as loadWebMediaImpl,
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
+import type { PollInput } from "../../polls.js";
+import type { PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import {
   loadPluginBoundaryModuleWithJiti,
+  resolvePluginRuntimeRecordByEntryBaseNames,
   resolvePluginRuntimeModulePath,
-  resolvePluginRuntimeRecord,
 } from "./runtime-plugin-boundary.js";
 
-const WEB_CHANNEL_PLUGIN_ID = "whatsapp";
-
 type WebChannelPluginRecord = {
-  origin: string;
+  origin?: string;
   rootDir?: string;
   source: string;
+};
+
+type WebChannelLightRuntimeModule = {
+  getActiveWebListener: (accountId?: string | null) => unknown;
+  getWebAuthAgeMs: (authDir?: string) => number | null;
+  logWebSelfId: (authDir?: string, runtime?: unknown, includeChannelPrefix?: boolean) => void;
+  logoutWeb: (params: {
+    authDir?: string;
+    isLegacyAuthDir?: boolean;
+    runtime?: unknown;
+  }) => Promise<boolean>;
+  readWebSelfId: (authDir?: string) => {
+    e164: string | null;
+    jid: string | null;
+    lid: string | null;
+  };
+  webAuthExists: (authDir?: string) => Promise<boolean>;
+  createWhatsAppLoginTool: () => ChannelAgentTool;
+  formatError: (error: unknown) => string;
+  getStatusCode: (error: unknown) => number | undefined;
+  pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
+  WA_WEB_AUTH_DIR: string;
+};
+
+type WebChannelHeavyRuntimeModule = {
+  loginWeb: (
+    verbose: boolean,
+    waitForConnection?: (sock: unknown) => Promise<void>,
+    runtime?: unknown,
+    accountId?: string,
+  ) => Promise<void>;
+  sendMessageWhatsApp: (
+    to: string,
+    body: string,
+    options: {
+      verbose: boolean;
+      cfg?: OpenClawConfig;
+      mediaUrl?: string;
+      mediaAccess?: {
+        localRoots?: readonly string[];
+        readFile?: (filePath: string) => Promise<Buffer>;
+      };
+      mediaLocalRoots?: readonly string[];
+      mediaReadFile?: (filePath: string) => Promise<Buffer>;
+      gifPlayback?: boolean;
+      accountId?: string;
+    },
+  ) => Promise<{ messageId: string; toJid: string }>;
+  sendPollWhatsApp: (
+    to: string,
+    poll: PollInput,
+    options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+  ) => Promise<{ messageId: string; toJid: string }>;
+  sendReactionWhatsApp: (
+    chatJid: string,
+    messageId: string,
+    emoji: string,
+    options: {
+      verbose: boolean;
+      fromMe?: boolean;
+      participant?: string;
+      accountId?: string;
+    },
+  ) => Promise<void>;
+  createWaSocket: (
+    printQr: boolean,
+    verbose: boolean,
+    opts?: { authDir?: string; onQr?: (qr: string) => void },
+  ) => Promise<unknown>;
+  handleWhatsAppAction: (
+    params: Record<string, unknown>,
+    cfg: OpenClawConfig,
+  ) => Promise<AgentToolResult<unknown>>;
+  monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
+  monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
+  runWebHeartbeatOnce: (...args: unknown[]) => Promise<unknown>;
+  startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
+  waitForWaConnection: (sock: unknown) => Promise<void>;
+  waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
+  extractMediaPlaceholder: (...args: unknown[]) => unknown;
+  extractText: (...args: unknown[]) => unknown;
+  resolveHeartbeatRecipients: (...args: unknown[]) => unknown;
 };
 
 let cachedHeavyModulePath: string | null = null;
@@ -26,12 +108,12 @@ let cachedHeavyModule: WebChannelHeavyRuntimeModule | null = null;
 let cachedLightModulePath: string | null = null;
 let cachedLightModule: WebChannelLightRuntimeModule | null = null;
 
-const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
-  return resolvePluginRuntimeRecord(WEB_CHANNEL_PLUGIN_ID, () => {
+  return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
     throw new Error(
-      `web channel plugin runtime is unavailable: missing plugin '${WEB_CHANNEL_PLUGIN_ID}'`,
+      "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
     );
   }) as WebChannelPluginRecord;
 }
@@ -41,14 +123,10 @@ function resolveWebChannelRuntimeModulePath(
   entryBaseName: "light-runtime-api" | "runtime-api",
 ): string {
   const modulePath = resolvePluginRuntimeModulePath(record, entryBaseName, () => {
-    throw new Error(
-      `web channel plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WEB_CHANNEL_PLUGIN_ID}'`,
-    );
+    throw new Error(`web channel plugin runtime is unavailable: missing ${entryBaseName}`);
   });
   if (!modulePath) {
-    throw new Error(
-      `web channel plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WEB_CHANNEL_PLUGIN_ID}'`,
-    );
+    throw new Error(`web channel plugin runtime is unavailable: missing ${entryBaseName}`);
   }
   return modulePath;
 }
@@ -99,7 +177,7 @@ function getLightExport<K extends keyof WebChannelLightRuntimeModule>(
   const loaded = loadWebChannelLightModule();
   const value = loaded[exportName];
   if (value == null) {
-    throw new Error(`web channel plugin runtime is missing export '${String(exportName)}'`);
+    throw new Error(`web channel plugin runtime is missing export '${exportName}'`);
   }
   return value as NonNullable<WebChannelLightRuntimeModule[K]>;
 }
@@ -110,7 +188,7 @@ async function getHeavyExport<K extends keyof WebChannelHeavyRuntimeModule>(
   const loaded = await loadWebChannelHeavyModule();
   const value = loaded[exportName];
   if (value == null) {
-    throw new Error(`web channel plugin runtime is missing export '${String(exportName)}'`);
+    throw new Error(`web channel plugin runtime is missing export '${exportName}'`);
   }
   return value as NonNullable<WebChannelHeavyRuntimeModule[K]>;
 }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -25,7 +26,7 @@ export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
 
 export function resolveAvatarMime(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
@@ -78,6 +79,6 @@ export function looksLikeAvatarPath(value: string): boolean {
 }
 
 export function isSupportedLocalAvatarExtension(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return LOCAL_AVATAR_EXTENSIONS.has(ext);
 }

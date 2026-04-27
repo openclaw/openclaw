@@ -107,6 +107,87 @@ describe("nextcloud talk setup", () => {
     });
   });
 
+  it("honors named-account DM policy state and config keys", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base, "work")).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base, "work")).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base)).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+
+    const next = nextcloudTalkDmPolicy.setPolicy(base, "open");
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBe("disabled");
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+  });
+
+  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = nextcloudTalkDmPolicy.setPolicy(
+      {
+        channels: {
+          "nextcloud-talk": {
+            allowFrom: ["alice"],
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBeUndefined();
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["alice", "*"]);
+  });
+
   it("validates env/default-account constraints and applies config patches", () => {
     const validateInput = nextcloudTalkSetupAdapter.validateInput;
     const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
@@ -135,7 +216,7 @@ describe("nextcloud talk setup", () => {
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {},
@@ -160,7 +241,7 @@ describe("nextcloud talk setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {
@@ -287,5 +368,55 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secret).toBe("");
     expect(account.secretSource).toBe("none");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            botSecret: "top-secret",
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.accountId).toBe("work");
+    expect(account.baseUrl).toBe("https://cloud.example.com");
+    expect(account.secret).toBe("work-secret");
+    expect(account.secretSource).toBe("config");
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", () => {
+    const configured = nextcloudTalkSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            baseUrl: "https://root.example.com",
+            botSecret: "root-secret",
+            accounts: {
+              alerts: {
+                baseUrl: "https://alerts.example.com",
+                botSecret: "alerts-secret",
+              },
+              work: {
+                baseUrl: "",
+                botSecret: "",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });

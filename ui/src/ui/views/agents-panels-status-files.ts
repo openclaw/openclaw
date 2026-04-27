@@ -3,6 +3,7 @@ import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import {
@@ -18,9 +19,71 @@ import type {
   CronJob,
   CronStatus,
 } from "../types.ts";
-import { type AgentContext } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.ts";
+import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import type { AgentsPanel } from "./agents.types.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
+
+function countWords(text: string) {
+  const normalized = text.trim();
+  return normalized ? normalized.split(/\s+/).length : 0;
+}
+
+function countLines(text: string) {
+  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
+}
+
+function estimateReadingTimeLabel(wordCount: number) {
+  if (wordCount <= 0) {
+    return "Empty draft";
+  }
+  return `${Math.max(1, Math.round(wordCount / 220))} min read`;
+}
+
+function getExtensionLabel(fileName: string) {
+  const ext = fileName.split(".").pop()?.trim().toLowerCase();
+  if (ext === "md" || ext === "markdown") {
+    return "Markdown Preview";
+  }
+  return ext ? `${ext.toUpperCase()} Preview` : "Preview";
+}
+
+function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
+  const normalizedPath = filePath.trim();
+  const normalizedWorkspace = workspace?.trim();
+  if (!normalizedPath) {
+    return "";
+  }
+  if (normalizedWorkspace && normalizedPath === normalizedWorkspace) {
+    return ".";
+  }
+  if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
+    return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
+  }
+  const pathParts = normalizedPath.split(/[\\/]+/);
+  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
+    const pathPart = pathParts[index];
+    if (pathPart) {
+      return pathPart;
+    }
+  }
+  return normalizedPath;
+}
+
+function toDomId(value: string) {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "preview";
+}
+
+function setPreviewExpandButtonState(button: Element | null | undefined, isFullscreen: boolean) {
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  const label = isFullscreen ? "Collapse preview" : "Expand preview";
+  button.classList.toggle("is-fullscreen", isFullscreen);
+  button.setAttribute("aria-pressed", String(isFullscreen));
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
+}
 
 function renderAgentContextCard(
   context: AgentContext,
@@ -175,7 +238,7 @@ export function renderAgentChannels(params: {
             <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="muted" style="margin-top: 8px;">Last refresh: ${lastSuccessLabel}</div>
@@ -270,19 +333,23 @@ export function renderAgentCron(params: {
             <div class="card-sub">Gateway cron status.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
-            <div class="stat-label">Enabled</div>
+            <div class="stat-label">${t("common.enabled")}</div>
             <div class="stat-value">
-              ${params.status ? (params.status.enabled ? "Yes" : "No") : "n/a"}
+              ${params.status
+                ? params.status.enabled
+                  ? t("common.yes")
+                  : t("common.no")
+                : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Jobs</div>
-            <div class="stat-value">${params.status?.jobs ?? "n/a"}</div>
+            <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
@@ -360,6 +427,33 @@ export function renderAgentFiles(params: {
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
+  const previewHtml = activeEntry
+    ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
+        sanitize: (h: string) => DOMPurify.sanitize(h),
+      })
+    : "";
+  const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
+  const draftWordCount = countWords(draft);
+  const draftLineCount = countLines(draft);
+  const activePathLabel = activeEntry
+    ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
+    : "";
+  const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
+  const previewStatusLabel = activeEntry?.missing
+    ? "Will Create on Save"
+    : isDirty
+      ? "Live Draft Preview"
+      : "Saved Preview";
+  const previewStatusClass = activeEntry?.missing
+    ? "is-missing"
+    : isDirty
+      ? "is-dirty"
+      : "is-synced";
+  const previewUpdatedLabel = activeEntry?.updatedAtMs
+    ? `Updated ${formatRelativeTimestamp(activeEntry.updatedAtMs)}`
+    : activeEntry?.missing
+      ? "Not Created Yet"
+      : "Updated Unknown";
 
   return html`
     <section class="card">
@@ -373,7 +467,7 @@ export function renderAgentFiles(params: {
           ?disabled=${params.agentFilesLoading}
           @click=${() => params.onLoadFiles(params.agentId)}
         >
-          ${params.agentFilesLoading ? "Loading…" : "Refresh"}
+          ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       ${list
@@ -471,6 +565,7 @@ export function renderAgentFiles(params: {
                     </label>
                     <dialog
                       class="md-preview-dialog"
+                      aria-labelledby=${previewTitleId}
                       @click=${(e: Event) => {
                         const dialog = e.currentTarget as HTMLDialogElement;
                         if (e.target === dialog) {
@@ -482,15 +577,39 @@ export function renderAgentFiles(params: {
                         dialog
                           .querySelector(".md-preview-dialog__panel")
                           ?.classList.remove("fullscreen");
+                        setPreviewExpandButtonState(
+                          dialog.querySelector(".md-preview-expand-btn"),
+                          false,
+                        );
                       }}
                     >
                       <div class="md-preview-dialog__panel">
                         <div class="md-preview-dialog__header">
-                          <div class="md-preview-dialog__title mono">${activeEntry.name}</div>
+                          <div class="md-preview-dialog__header-main">
+                            <div class="md-preview-dialog__eyebrow">
+                              ${icons.scrollText}
+                              <span>${getExtensionLabel(activeEntry.name)}</span>
+                            </div>
+                            <div class="md-preview-dialog__title-wrap">
+                              <div
+                                id=${previewTitleId}
+                                class="md-preview-dialog__title"
+                                translate="no"
+                              >
+                                ${activeEntry.name}
+                              </div>
+                              <div class="md-preview-dialog__path mono" translate="no">
+                                ${activePathLabel}
+                              </div>
+                            </div>
+                          </div>
                           <div class="md-preview-dialog__actions">
                             <button
-                              class="btn btn--sm md-preview-expand-btn"
-                              title="Toggle fullscreen"
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
+                              title="Expand preview"
+                              aria-label="Expand preview"
+                              aria-pressed="false"
                               @click=${(e: Event) => {
                                 const btn = e.currentTarget as HTMLElement;
                                 const panel = btn.closest(".md-preview-dialog__panel");
@@ -498,15 +617,19 @@ export function renderAgentFiles(params: {
                                   return;
                                 }
                                 const isFullscreen = panel.classList.toggle("fullscreen");
-                                btn.classList.toggle("is-fullscreen", isFullscreen);
+                                setPreviewExpandButtonState(btn, isFullscreen);
                               }}
                             >
-                              <span class="when-normal">${icons.maximize} Expand</span
-                              ><span class="when-fullscreen">${icons.minimize} Collapse</span>
+                              <span class="when-normal" aria-hidden="true">${icons.maximize}</span
+                              ><span class="when-fullscreen" aria-hidden="true"
+                                >${icons.minimize}</span
+                              >
                             </button>
                             <button
-                              class="btn btn--sm"
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn"
                               title="Edit file"
+                              aria-label="Edit file"
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                                 const textarea =
@@ -514,25 +637,42 @@ export function renderAgentFiles(params: {
                                 textarea?.focus();
                               }}
                             >
-                              ${icons.edit} Editor
+                              <span aria-hidden="true">${icons.edit}</span>
                             </button>
                             <button
-                              class="btn btn--sm"
+                              type="button"
+                              class="btn btn--sm md-preview-icon-btn"
+                              title="Close preview"
+                              aria-label="Close preview"
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                               }}
                             >
-                              ${icons.x} Close
+                              <span aria-hidden="true">${icons.x}</span>
                             </button>
                           </div>
                         </div>
+                        <div class="md-preview-dialog__meta">
+                          <div class="md-preview-dialog__chip ${previewStatusClass}">
+                            <strong>${previewStatusLabel}</strong>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
+                            <span>${draftWordCount} words</span>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${draftLineCount}</strong>
+                            <span>lines</span>
+                          </div>
+                          <div class="md-preview-dialog__chip">
+                            <strong>${draftByteSize}</strong>
+                            <span>${previewUpdatedLabel}</span>
+                          </div>
+                        </div>
                         <div class="md-preview-dialog__body">
-                          ${unsafeHTML(
-                            applyPreviewTheme(
-                              marked.parse(draft, { gfm: true, breaks: true }) as string,
-                              { sanitize: (h: string) => DOMPurify.sanitize(h) },
-                            ),
-                          )}
+                          <article class="md-preview-dialog__reader sidebar-markdown">
+                            ${unsafeHTML(previewHtml)}
+                          </article>
                         </div>
                       </div>
                     </dialog>

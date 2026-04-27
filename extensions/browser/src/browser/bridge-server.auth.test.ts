@@ -18,6 +18,8 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     cdpIsLoopback: true,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    localLaunchTimeoutMs: 15_000,
+    localCdpReadyTimeoutMs: 8_000,
     extraArgs: [],
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
@@ -44,6 +46,7 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       ...authConfig,
+      skipRouteRegistrationForTest: true,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
@@ -83,10 +86,13 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
+    let resolveCalls = 0;
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
       resolveSandboxNoVncToken: (token) => {
+        resolveCalls += 1;
         if (token !== "valid-token") {
           return null;
         }
@@ -95,8 +101,15 @@ describe("startBrowserBridgeServer auth", () => {
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
-    const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
+    const unauth = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
+    expect(unauth.status).toBe(401);
+    expect(resolveCalls).toBe(0);
+
+    const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`, {
+      headers: { Authorization: "Bearer secret-token" },
+    });
     expect(res.status).toBe(200);
+    expect(resolveCalls).toBe(1);
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");

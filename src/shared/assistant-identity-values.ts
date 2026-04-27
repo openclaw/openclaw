@@ -1,11 +1,10 @@
+import { normalizeOptionalString } from "./string-coerce.js";
+
 export function coerceIdentityValue(
   value: string | undefined,
   maxLength: number,
 ): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

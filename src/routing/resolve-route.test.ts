@@ -138,6 +138,109 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("route binding session dmScope isolates selected direct peers without changing agent", () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "1497598990336790559" },
+          },
+          session: { dmScope: "per-account-channel-peer" },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "389224669418618880" },
+          },
+          session: { dmScope: "per-account-channel-peer" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "direct", id: "358611388488351744" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        matchedBy: "default",
+        lastRoutePolicy: "main",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "direct", id: "1497598990336790559" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:default:direct:1497598990336790559",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "direct", id: "389224669418618880" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:default:direct:389224669418618880",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "1494710434396110868" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:1494710434396110868",
+        matchedBy: "default",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "webchat",
+        accountId: null,
+        peer: null,
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        matchedBy: "default",
+        lastRoutePolicy: "main",
+      },
+    );
+  });
+
   test.each([
     {
       name: "collapses inbound last-route session keys to main when policy is main",
@@ -1062,29 +1165,40 @@ describe("wildcard peer bindings (peer.id=*)", () => {
 });
 
 describe("binding evaluation cache scalability", () => {
-  test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
-    const bindingCount = 2_205;
+  test("does not rescan full bindings across distinct channel/account cache entries (#36915)", () => {
+    const cacheKeyCount = 64;
     const cfg: OpenClawConfig = {
-      bindings: Array.from({ length: bindingCount }, (_, idx) => ({
-        agentId: `agent-${idx}`,
-        match: {
-          channel: "dingtalk",
-          accountId: `acct-${idx}`,
-          peer: { kind: "direct", id: `user-${idx}` },
+      bindings: [
+        {
+          agentId: "agent-0",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-0",
+            peer: { kind: "direct", id: "user-0" },
+          },
         },
-      })),
+      ],
     };
     const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
     try {
-      for (let idx = 0; idx < bindingCount; idx += 1) {
+      const boundRoute = resolveAgentRoute({
+        cfg,
+        channel: "dingtalk",
+        accountId: "acct-0",
+        peer: { kind: "direct", id: "user-0" },
+      });
+      expect(boundRoute.agentId).toBe("agent-0");
+      expect(boundRoute.matchedBy).toBe("binding.peer");
+
+      for (let idx = 1; idx < cacheKeyCount; idx += 1) {
         const route = resolveAgentRoute({
           cfg,
           channel: "dingtalk",
           accountId: `acct-${idx}`,
           peer: { kind: "direct", id: `user-${idx}` },
         });
-        expect(route.agentId).toBe(`agent-${idx}`);
-        expect(route.matchedBy).toBe("binding.peer");
+        expect(route.agentId).toBe("main");
+        expect(route.matchedBy).toBe("default");
       }
 
       const repeated = resolveAgentRoute({
@@ -1098,5 +1212,37 @@ describe("binding evaluation cache scalability", () => {
     } finally {
       listBindingsSpy.mockRestore();
     }
+  });
+
+  test("uses indexed channel/account bindings without per-route scans", () => {
+    const bindingCount = 101;
+    const cfg: OpenClawConfig = {
+      bindings: Array.from({ length: bindingCount }, (_, idx) => ({
+        agentId: `agent-${idx}`,
+        match: {
+          channel: "dingtalk",
+          accountId: `acct-${idx}`,
+          peer: { kind: "direct", id: `user-${idx}` },
+        },
+      })),
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "acct-100",
+      peer: { kind: "direct", id: "user-100" },
+    });
+    expect(route.agentId).toBe("agent-100");
+    expect(route.matchedBy).toBe("binding.peer");
+
+    const defaultRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "acct-missing",
+      peer: { kind: "direct", id: "user-missing" },
+    });
+    expect(defaultRoute.agentId).toBe("main");
+    expect(defaultRoute.matchedBy).toBe("default");
   });
 });

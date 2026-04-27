@@ -60,6 +60,7 @@ prepare_gates() {
 
   if [ "$has_changelog_update" = "true" ]; then
     normalize_pr_changelog_entries "$pr"
+    validate_changelog_attribution_policy
   fi
 
   if [ "$changelog_required" = "true" ]; then
@@ -103,11 +104,16 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     else
       gates_mode="full"
-      echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-4}."
-      run_quiet_logged \
-        "pnpm test" \
-        ".local/gates-test.log" \
-        env OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-4}" pnpm test
+      if [ -n "${OPENCLAW_VITEST_MAX_WORKERS:-}" ]; then
+        echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=$OPENCLAW_VITEST_MAX_WORKERS."
+        run_quiet_logged \
+          "pnpm test" \
+          ".local/gates-test.log" \
+          env OPENCLAW_VITEST_MAX_WORKERS="$OPENCLAW_VITEST_MAX_WORKERS" pnpm test
+      else
+        echo "Running pnpm test with host-aware scheduling defaults."
+        run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
+      fi
       previous_full_gates_head="$current_head"
     fi
   fi

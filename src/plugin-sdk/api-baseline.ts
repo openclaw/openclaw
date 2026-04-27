@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,11 +58,13 @@ export type PluginSdkApiBaselineWriteResult = {
   wrote: boolean;
   jsonPath: string;
   statefilePath: string;
+  hashPath: string;
 };
 
 const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
 const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
+const DEFAULT_HASH_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.sha256";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -446,6 +449,21 @@ async function loadCurrentFile(filePath: string): Promise<string | null> {
   }
 }
 
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/** Build the sha256 hash file content for plugin SDK API baseline artifacts. */
+export function computePluginSdkApiBaselineHashFileContent(
+  rendered: PluginSdkApiBaselineRender,
+): string {
+  const lines = [
+    `${sha256(rendered.json)}  plugin-sdk-api-baseline.json`,
+    `${sha256(rendered.jsonl)}  plugin-sdk-api-baseline.jsonl`,
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function validateMetadata(): void {
   const canonicalEntrypoints = new Set<string>(pluginSdkEntrypoints);
   const metadataEntrypoints = new Set<string>(Object.keys(pluginSdkDocMetadata));
@@ -463,14 +481,17 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
   check?: boolean;
   jsonPath?: string;
   statefilePath?: string;
+  hashPath?: string;
 }): Promise<PluginSdkApiBaselineWriteResult> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
   const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
+  const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-  const currentJson = await loadCurrentFile(jsonPath);
-  const currentJsonl = await loadCurrentFile(statefilePath);
-  const changed = currentJson !== rendered.json || currentJsonl !== rendered.jsonl;
+
+  const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
+  const currentHashContent = await loadCurrentFile(hashPath);
+  const changed = currentHashContent !== nextHashContent;
 
   if (params?.check) {
     return {
@@ -478,9 +499,15 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
       wrote: false,
       jsonPath,
       statefilePath,
+      hashPath,
     };
   }
 
+  // Write the hash file (tracked in git)
+  await fs.mkdir(path.dirname(hashPath), { recursive: true });
+  await fs.writeFile(hashPath, nextHashContent, "utf8");
+
+  // Write full JSON/JSONL artifacts locally (gitignored, useful for inspection)
   await fs.mkdir(path.dirname(jsonPath), { recursive: true });
   await fs.writeFile(jsonPath, rendered.json, "utf8");
   await fs.writeFile(statefilePath, rendered.jsonl, "utf8");
@@ -490,5 +517,6 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
     wrote: true,
     jsonPath,
     statefilePath,
+    hashPath,
   };
 }

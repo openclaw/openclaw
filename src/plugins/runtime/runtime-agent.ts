@@ -4,6 +4,7 @@ import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -24,11 +25,25 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
     resolveThinkingDefault,
+    normalizeThinkingLevel: normalizeThinkLevel,
+    resolveThinkingPolicy: (params) => {
+      const profile = resolveThinkingProfile(params);
+      const policy: Omit<
+        ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,
+        "defaultLevel"
+      > = {
+        levels: profile.levels.map(({ id, label }) => ({ id, label })),
+      };
+      return profile.defaultLevel ? { ...policy, defaultLevel: profile.defaultLevel } : policy;
+    },
     resolveAgentTimeoutMs,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session">>;
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
 
+  defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
+    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedAgent),
+  );
   defineCachedValue(agentRuntime, "runEmbeddedPiAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
   );

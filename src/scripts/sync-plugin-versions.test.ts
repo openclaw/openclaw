@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { syncPluginVersions } from "../../scripts/sync-plugin-versions.js";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 
@@ -13,14 +13,11 @@ function writeJson(filePath: string, value: unknown) {
 
 describe("syncPluginVersions", () => {
   afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    cleanupTempDirs(tempDirs);
   });
 
-  it("preserves workspace openclaw devDependencies while bumping plugin host constraints", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sync-plugin-versions-"));
-    tempDirs.push(rootDir);
+  it("preserves workspace openclaw devDependencies and plugin host floors", () => {
+    const rootDir = makeTempDir(tempDirs, "openclaw-sync-plugin-versions-");
 
     writeJson(path.join(rootDir, "package.json"), {
       name: "openclaw",
@@ -39,6 +36,12 @@ describe("syncPluginVersions", () => {
         install: {
           minHostVersion: ">=2026.3.30",
         },
+        compat: {
+          pluginApi: ">=2026.3.30",
+        },
+        build: {
+          openclawVersion: "2026.3.30",
+        },
       },
     });
 
@@ -53,6 +56,12 @@ describe("syncPluginVersions", () => {
         install?: {
           minHostVersion?: string;
         };
+        compat?: {
+          pluginApi?: string;
+        };
+        build?: {
+          openclawVersion?: string;
+        };
       };
     };
 
@@ -60,6 +69,8 @@ describe("syncPluginVersions", () => {
     expect(updatedPackage.version).toBe("2026.4.1");
     expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
     expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.4.1");
+    expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.3.30");
+    expect(updatedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
+    expect(updatedPackage.openclaw?.build?.openclawVersion).toBe("2026.4.1");
   });
 });

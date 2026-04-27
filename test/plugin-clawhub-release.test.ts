@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -12,16 +11,12 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
+import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
+  cleanupTempDirs(tempDirs);
 });
 
 describe("resolveChangedClawHubPublishablePluginPackages", () => {
@@ -160,21 +155,7 @@ describe("collectClawHubVersionGateErrors", () => {
 
   it("does not require a version bump for shared release-tooling changes", () => {
     const repoDir = createTempPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const errors = collectClawHubVersionGateErrors({
       rootDir: repoDir,
@@ -191,21 +172,7 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two"],
     });
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -294,8 +261,7 @@ function createTempPluginRepo(
     includeClawHubContract?: boolean;
   } = {},
 ) {
-  const repoDir = mkdtempSync(join(tmpdir(), "openclaw-clawhub-release-"));
-  tempDirs.push(repoDir);
+  const repoDir = makeTempRepoRoot(tempDirs, "openclaw-clawhub-release-");
   const extensionId = options.extensionId ?? "demo-plugin";
   const extensionIds = [extensionId, ...(options.extraExtensionIds ?? [])];
 
@@ -352,6 +318,26 @@ function createTempPluginRepo(
   ]);
 
   return repoDir;
+}
+
+function commitSharedReleaseToolingChange(repoDir: string) {
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  mkdirSync(join(repoDir, "scripts"), { recursive: true });
+  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-m",
+    "shared tooling",
+  ]);
+  const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  return { baseRef, headRef };
 }
 
 function git(cwd: string, args: string[]) {

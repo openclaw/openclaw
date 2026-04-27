@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { ReplyToMode } from "../../config/types.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundMirror } from "./mirror.js";
+import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -21,11 +24,15 @@ export type QueuedDeliveryPayload = {
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
+  replyToMode?: ReplyToMode;
+  formatting?: OutboundDeliveryFormattingOptions;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  /** Session context needed to preserve outbound media policy on recovery. */
+  session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
 };
@@ -38,7 +45,7 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastError?: string;
 }
 
-function resolveQueueDir(stateDir?: string): string {
+export function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
 }
@@ -139,11 +146,14 @@ export async function enqueueDelivery(
     payloads: params.payloads,
     threadId: params.threadId,
     replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
     mirror: params.mirror,
+    session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   });
@@ -186,6 +196,30 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   await writeQueueEntry(filePath, entry);
+}
+
+/** Load a single pending delivery entry by ID from the queue directory. */
+export async function loadPendingDelivery(
+  id: string,
+  stateDir?: string,
+): Promise<QueuedDelivery | null> {
+  const { jsonPath } = resolveQueueEntryPaths(id, stateDir);
+  try {
+    const stat = await fs.promises.stat(jsonPath);
+    if (!stat.isFile()) {
+      return null;
+    }
+    const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(await readQueueEntry(jsonPath));
+    if (migrated) {
+      await writeQueueEntry(jsonPath, entry);
+    }
+    return entry;
+  } catch (err) {
+    if (getErrnoCode(err) === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */

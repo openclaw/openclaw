@@ -19,18 +19,22 @@ export {
   type ExecApprovalReplyMetadata,
 } from "../infra/exec-approval-reply.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
+export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
 } from "./approval-native-helpers.js";
 export {
-  doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestOriginTarget,
-  resolveApprovalRequestAccountId,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
+export {
+  doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
+} from "../infra/approval-request-account-binding.js";
 export {
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,

@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { installProcessWarningFilter } from "../../../../src/infra/warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -8,7 +9,7 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
   try {
     return require("node:sqlite") as typeof import("node:sqlite");
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     // Node distributions can ship without the experimental builtin SQLite module.
     // Surface an actionable error instead of the generic "unknown builtin module".
     throw new Error(

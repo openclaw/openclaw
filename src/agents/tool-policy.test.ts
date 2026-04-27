@@ -20,24 +20,16 @@ function createOwnerPolicyTools() {
   return [
     {
       name: "read",
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "cron",
       ownerOnly: true,
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "gateway",
       ownerOnly: true,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      execute: async () => ({ content: [], details: {} }) as any,
-    },
-    {
-      name: "whatsapp_login",
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
   ] as unknown as AnyAgentTool[];
@@ -80,7 +72,6 @@ describe("tool-policy", () => {
   });
 
   it("identifies owner-only tools", () => {
-    expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
     expect(isOwnerOnlyToolName("cron")).toBe(true);
     expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("nodes")).toBe(true);
@@ -88,7 +79,6 @@ describe("tool-policy", () => {
   });
 
   it("exposes stable approval classes for shared owner-only fallbacks", () => {
-    expect(resolveOwnerOnlyToolApprovalClass("whatsapp_login")).toBe("interactive");
     expect(resolveOwnerOnlyToolApprovalClass("cron")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("gateway")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("nodes")).toBe("exec_capable");
@@ -105,7 +95,6 @@ describe("tool-policy", () => {
       cron: "control_plane",
       gateway: "control_plane",
       nodes: "exec_capable",
-      whatsapp_login: "interactive",
     });
   });
 
@@ -118,7 +107,7 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway"]);
   });
 
   it("honors ownerOnly metadata for custom tool names", async () => {
@@ -126,7 +115,6 @@ describe("tool-policy", () => {
       {
         name: "custom_admin_tool",
         ownerOnly: true,
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];
@@ -148,12 +136,10 @@ describe("tool-policy", () => {
     const tools = [
       {
         name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
       {
         name: "nodes",
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];

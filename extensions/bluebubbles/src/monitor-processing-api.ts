@@ -1,4 +1,4 @@
-export { resolveAckReaction } from "./runtime-api.js";
+export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -10,7 +10,7 @@ export {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/channel-policy";
 export { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 export {
   evictOldHistoryKeys,
   recordPendingHistoryEntryIfEnabled,

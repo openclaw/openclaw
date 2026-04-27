@@ -1,1 +1,3 @@
-import "./setup.shared.js";
+import { installSharedTestSetup } from "./setup.shared.js";
+
+installSharedTestSetup();

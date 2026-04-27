@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { deleteMediaBuffer } from "../media/store.js";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
@@ -14,6 +15,10 @@ async function parseWithWarnings(message: string, attachments: ChatAttachment[])
     log: { warn: (warning) => logs.push(warning) },
   });
   return { parsed, logs };
+}
+
+async function cleanupOffloadedRefs(refs: { id: string }[]) {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
 }
 
 describe("buildMessageWithAttachments", () => {
@@ -106,14 +111,23 @@ describe("parseMessageWithAttachments", () => {
     expect(logs[0]).toMatch(/mime mismatch/i);
   });
 
-  it("drops unknown mime when sniff fails and logs", async () => {
+  it("persists unknown non-image files when sniff fails", async () => {
     const unknown = Buffer.from("not an image").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       { type: "file", fileName: "unknown.bin", content: unknown },
     ]);
-    expect(parsed.images).toHaveLength(0);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unable to detect image mime type/i);
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]).toMatchObject({
+        label: "unknown.bin",
+        mimeType: "application/octet-stream",
+      });
+      expect(parsed.message).toMatch(/^x\n\[media attached: media:\/\/inbound\//);
+      expect(logs).toHaveLength(0);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
   });
 
   it("keeps valid images and drops invalid ones", async () => {
@@ -136,6 +150,111 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+  });
+
+  it("persists non-image file attachments as media refs", async () => {
+    const parsed = await parseMessageWithAttachments(
+      "read this",
+      [
+        {
+          type: "file",
+          mimeType: "application/pdf",
+          fileName: "brief.pdf",
+          content: Buffer.from("%PDF-1.4\n").toString("base64"),
+        },
+      ],
+      { log: { warn: () => {} } },
+    );
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.imageOrder).toEqual(["offloaded"]);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]).toMatchObject({
+        mimeType: "application/pdf",
+        label: "brief.pdf",
+      });
+      expect(parsed.message).toMatch(/^read this\n\[media attached: media:\/\/inbound\//);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+  });
+
+  it("keeps image sniff fallback for generic image attachments", async () => {
+    const { parsed, logs } = await parseWithWarnings("see this", [
+      {
+        type: "file",
+        mimeType: "application/octet-stream",
+        fileName: "dot",
+        content: PNG_1x1,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.images[0]?.mimeType).toBe("image/png");
+    expect(parsed.offloadedRefs).toHaveLength(0);
+    expect(logs).toHaveLength(0);
+  });
+
+  it("offloads images for text-only models instead of dropping them", async () => {
+    const logs: string[] = [];
+    const infos: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "see this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      {
+        log: { info: (message) => infos.push(message), warn: (warning) => logs.push(warning) },
+        supportsImages: false,
+      },
+    );
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.imageOrder).toEqual(["offloaded"]);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+      expect(parsed.message).toMatch(/^see this\n\[media attached: media:\/\/inbound\//);
+      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
+      expect(logs).toHaveLength(0);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+  });
+
+  it("caps text-only image offloads", async () => {
+    const logs: string[] = [];
+    const attachments = Array.from(
+      { length: 11 },
+      (_, index): ChatAttachment => ({
+        type: "image",
+        mimeType: "image/png",
+        fileName: `dot-${index}.png`,
+        content: PNG_1x1,
+      }),
+    );
+    const parsed = await parseMessageWithAttachments("see these", attachments, {
+      log: { warn: (warning) => logs.push(warning) },
+      supportsImages: false,
+    });
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.offloadedRefs).toHaveLength(10);
+      expect(parsed.imageOrder).toHaveLength(10);
+      expect(parsed.message.match(/\[media attached: media:\/\/inbound\//g)).toHaveLength(10);
+      expect(parsed.message).toContain(
+        "[image attachment omitted: text-only attachment limit reached]",
+      );
+      expect(logs.some((line) => /offload limit 10/i.test(line))).toBe(true);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
   });
 });
 

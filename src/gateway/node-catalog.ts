@@ -1,6 +1,7 @@
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 
 export type KnownNodeDevicePairingSource = {
@@ -123,8 +124,8 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   if (left.connected !== right.connected) {
     return left.connected ? -1 : 1;
   }
-  const leftName = (left.displayName ?? left.nodeId).toLowerCase();
-  const rightName = (right.displayName ?? right.nodeId).toLowerCase();
+  const leftName = normalizeLowercaseStringOrEmpty(left.displayName ?? left.nodeId);
+  const rightName = normalizeLowercaseStringOrEmpty(right.displayName ?? right.nodeId);
   if (leftName < rightName) {
     return -1;
   }

@@ -4,13 +4,25 @@ const { callGatewayMock } = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
+vi.mock("../agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  return {
+    ...actual,
+    resolveSessionAgentId: () => "agent-123",
+  };
+});
 
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  type TestDelivery = {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+
   function createTestCronTool(
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
@@ -56,10 +68,16 @@ describe("cron tool", () => {
 
   async function executeAddAndReadDelivery(params: {
     callId: string;
-    agentSessionKey: string;
-    delivery?: { mode?: string; channel?: string; to?: string } | null;
+    agentSessionKey?: string;
+    currentDeliveryContext?: NonNullable<
+      Parameters<typeof createCronTool>[0]
+    >["currentDeliveryContext"];
+    delivery?: TestDelivery | null;
   }) {
-    const tool = createTestCronTool({ agentSessionKey: params.agentSessionKey });
+    const tool = createTestCronTool({
+      agentSessionKey: params.agentSessionKey,
+      currentDeliveryContext: params.currentDeliveryContext,
+    });
     await tool.execute(params.callId, {
       action: "add",
       job: {
@@ -69,7 +87,7 @@ describe("cron tool", () => {
     });
 
     const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+      params?: { delivery?: TestDelivery };
     };
     return call?.params?.delivery;
   }
@@ -115,6 +133,16 @@ describe("cron tool", () => {
   it("marks cron as owner-only", async () => {
     const tool = createTestCronTool();
     expect(tool.ownerOnly).toBe(true);
+  });
+
+  it("documents deferred follow-up guidance in the tool description", () => {
+    const tool = createTestCronTool();
+    expect(tool.description).toContain(
+      'Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks.',
+    );
+    expect(tool.description).toContain(
+      "Do not emulate scheduling with exec sleep or process polling.",
+    );
   });
 
   it.each([
@@ -399,6 +427,217 @@ describe("cron tool", () => {
       channel: "telegram",
       to: "-1001234567890:topic:99",
     });
+  });
+
+  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("preserves telegram account ids with direct-chat thread inference", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-account-direct-thread",
+        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      accountId: "bot-a",
+      threadId: "99",
+    });
+  });
+
+  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-dm-thread",
+        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-mismatched-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+    });
+  });
+
+  it("prefers current delivery context over lowercased session-key targets", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-current-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!AbCdEf1234567890:example.org",
+          accountId: "bot-a",
+          threadId: "$RootEvent:Example.Org",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
+      accountId: "bot-a",
+      threadId: "$RootEvent:Example.Org",
+    });
+  });
+
+  it("does not let current delivery context override explicit delivery targets", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-explicit-target-wins",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!AbCdEf1234567890:example.org",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-100123",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+  });
+
+  it("keeps explicit delivery account and thread while filling target from context", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-explicit-delivery-fields-win",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "!AbCdEf1234567890:example.org",
+          accountId: "context-bot",
+          threadId: "$ContextThread:Example.Org",
+        },
+        delivery: {
+          mode: "announce",
+          accountId: "explicit-bot",
+          threadId: "$ExplicitThread:Example.Org",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:example.org",
+      accountId: "explicit-bot",
+      threadId: "$ExplicitThread:Example.Org",
+    });
+  });
+
+  it("trims current context fields without changing provider target casing", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-trim-current-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: " Matrix ",
+          to: "  !AbCdEf1234567890:Example.Org  ",
+          accountId: " Bot-A ",
+          threadId: "  $RootEvent:Example.Org  ",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:Example.Org",
+      accountId: "bot-a",
+      threadId: "$RootEvent:Example.Org",
+    });
+  });
+
+  it("infers delivery from current context even when no session key is available", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-context-no-session",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "!AbCdEf1234567890:example.org",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:example.org",
+    });
+  });
+
+  it("uses current delivery context when delivery is null", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-null-delivery-current-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "!AbCdEf1234567890:example.org",
+        },
+        delivery: null,
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "matrix",
+      to: "!AbCdEf1234567890:example.org",
+    });
+  });
+
+  it("falls back to session-key inference when current context has no target", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-empty-current-context",
+        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "   ",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:99",
+    });
+  });
+
+  it("does not infer current delivery context when delivery mode is none", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-current-context-mode-none",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "!AbCdEf1234567890:example.org",
+        },
+        delivery: { mode: "none" },
+      }),
+    ).toEqual({ mode: "none" });
   });
 
   it("infers delivery when delivery is null", async () => {

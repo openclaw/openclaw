@@ -1,12 +1,22 @@
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  createConnectedChannelStatusPatch,
+  createTransportActivityStatusPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
+import {
+  DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
+  type MutableDiscordGateway,
+} from "./gateway-handle.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
-import type { DiscordGatewayEvent, DiscordGatewaySupervisor } from "./gateway-supervisor.js";
+import {
+  DiscordGatewayLifecycleError,
+  type DiscordGatewayEvent,
+  type DiscordGatewaySupervisor,
+} from "./gateway-supervisor.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
@@ -14,11 +24,7 @@ const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
-
-type ExecApprovalsHandler = {
-  start: () => Promise<void>;
-  stop: () => Promise<void>;
-};
+const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
 
@@ -139,6 +145,11 @@ function parseGatewayCloseCode(message: string): number | undefined {
   }
   const code = Number.parseInt(match[1], 10);
   return Number.isFinite(code) ? code : undefined;
+}
+
+function resolveTransportActivityAt(event: unknown): number {
+  const at = (event as { at?: unknown } | undefined)?.at;
+  return typeof at === "number" && Number.isFinite(at) && at >= 0 ? at : Date.now();
 }
 
 function createGatewayStatusObserver(params: {
@@ -288,7 +299,7 @@ async function waitForGatewayReady(params: {
       if ((await params.beforePoll?.()) === "stop") {
         return "stopped";
       }
-      if (params.gateway?.isConnected ?? true) {
+      if (params.gateway?.isConnected === true) {
         const at = Date.now();
         params.pushStatus?.({
           ...createConnectedChannelStatusPatch(at),
@@ -358,7 +369,6 @@ export async function runDiscordGatewayLifecycle(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
   voiceManager: DiscordVoiceManager | null;
   voiceManagerRef: { current: DiscordVoiceManager | null };
-  execApprovalsHandler: ExecApprovalsHandler | null;
   threadBindings: { stop: () => void };
   gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
@@ -385,6 +395,22 @@ export async function runDiscordGatewayLifecycle(params: {
     isLifecycleStopping: () => lifecycleStopping,
   });
   gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
+  let lastTransportActivityStatusAt: number | undefined;
+  const onGatewayTransportActivity = (event: unknown) => {
+    if (lifecycleStopping || params.abortSignal?.aborted) {
+      return;
+    }
+    const at = resolveTransportActivityAt(event);
+    if (
+      lastTransportActivityStatusAt !== undefined &&
+      at - lastTransportActivityStatusAt < DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    lastTransportActivityStatusAt = at;
+    pushStatus(createTransportActivityStatusPatch(at));
+  };
+  gatewayEmitter?.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, onGatewayTransportActivity);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
@@ -401,7 +427,13 @@ export async function runDiscordGatewayLifecycle(params: {
     if (event.shouldStopLifecycle) {
       lifecycleStopping = true;
     }
-    params.runtime.error?.(danger(`discord gateway error: ${event.message}`));
+    params.runtime.error?.(
+      danger(
+        event.shouldStopLifecycle
+          ? `discord gateway ${event.type}: ${event.message}`
+          : `discord gateway error: ${event.message}`,
+      ),
+    );
     return event.shouldStopLifecycle ? "stop" : "continue";
   };
   const drainPendingGatewayErrors = (): "continue" | "stop" =>
@@ -413,13 +445,9 @@ export async function runDiscordGatewayLifecycle(params: {
       if (event.type === "disallowed-intents") {
         return "stop";
       }
-      throw event.err;
+      throw new DiscordGatewayLifecycleError(event);
     });
   try {
-    if (params.execApprovalsHandler) {
-      await params.execApprovalsHandler.start();
-    }
-
     // Drain gateway errors emitted before lifecycle listeners were attached.
     if (drainPendingGatewayErrors() === "stop") {
       return;
@@ -460,12 +488,13 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     statusObserver.dispose();
     gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
+    gatewayEmitter?.removeListener(
+      DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
+      onGatewayTransportActivity,
+    );
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;
-    }
-    if (params.execApprovalsHandler) {
-      await params.execApprovalsHandler.stop();
     }
     params.threadBindings.stop();
   }

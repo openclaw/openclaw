@@ -1,5 +1,3 @@
-import type { SecretInput } from "./types.secrets.js";
-
 export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
@@ -27,65 +25,34 @@ export type TtsModelOverrideConfig = {
 
 export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
-export type LegacyTtsConfigCompat = {
-  /** Legacy ElevenLabs configuration. Prefer providers.elevenlabs. */
-  elevenlabs?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    voiceId?: string;
-    modelId?: string;
-    seed?: number;
-    applyTextNormalization?: "auto" | "on" | "off";
-    languageCode?: string;
-    voiceSettings?: {
-      stability?: number;
-      similarityBoost?: number;
-      style?: number;
-      useSpeakerBoost?: boolean;
-      speed?: number;
-    };
-  };
-  /** Legacy OpenAI configuration. Prefer providers.openai. */
-  openai?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    model?: string;
-    voice?: string;
-    /** Playback speed (0.25–4.0, default 1.0). */
-    speed?: number;
-    /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
-    instructions?: string;
-  };
-  /** Legacy alias for Microsoft speech configuration. Prefer providers.microsoft. */
-  edge?: {
-    /** Explicitly allow Microsoft speech usage (no API key required). */
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
-  /** Legacy Microsoft speech configuration. Prefer providers.microsoft. */
-  microsoft?: {
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
+export type TtsPersonaFallbackPolicy = "preserve-persona" | "provider-defaults" | "fail";
+
+export type TtsPersonaPromptConfig = {
+  profile?: string;
+  scene?: string;
+  sampleContext?: string;
+  style?: string;
+  accent?: string;
+  pacing?: string;
+  constraints?: string[];
 };
 
-export type TtsConfig = LegacyTtsConfigCompat & {
+export type TtsPersonaConfig = {
+  label?: string;
+  description?: string;
+  /** Preferred provider for this persona. Explicit provider prefs still win. */
+  provider?: TtsProvider;
+  fallbackPolicy?: TtsPersonaFallbackPolicy;
+  prompt?: TtsPersonaPromptConfig;
+  /** Provider-specific persona bindings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
+};
+
+export type ResolvedTtsPersona = TtsPersonaConfig & {
+  id: string;
+};
+
+export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
   /** Legacy: enable auto-TTS when `auto` is not set. */
@@ -94,6 +61,10 @@ export type TtsConfig = LegacyTtsConfigCompat & {
   mode?: TtsMode;
   /** Primary TTS provider (fallbacks are automatic). */
   provider?: TtsProvider;
+  /** Active TTS persona id. */
+  persona?: string;
+  /** Named TTS personas. */
+  personas?: Record<string, TtsPersonaConfig>;
   /** Optional model override for TTS auto-summary (provider/model or alias). */
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */

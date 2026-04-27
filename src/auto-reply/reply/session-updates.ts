@@ -1,20 +1,28 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { matchesSkillFilter } from "../../agents/skills/filter.js";
+import {
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "../../agents/skills/refresh-state.js";
+import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
@@ -85,6 +93,12 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 }
 
+function resolvePositiveTokenCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -125,11 +139,29 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
-  const remoteEligibility = getRemoteSkillEligibility();
+  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const remoteEligibility = getRemoteSkillEligibility({
+    advertiseExecNode: canExecRequestNode({
+      cfg,
+      sessionEntry,
+      sessionKey,
+      agentId: sessionAgentId,
+    }),
+  });
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
+  const buildSnapshot = () =>
+    buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfg,
+      agentId: sessionAgentId,
+      skillFilter,
+      eligibility: { remote: remoteEligibility },
+      snapshotVersion,
+    });
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -138,14 +170,7 @@ export async function ensureSkillSnapshot(params: {
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
+      !current.skillsSnapshot || shouldRefreshSnapshot ? buildSnapshot() : current.skillsSnapshot;
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -157,22 +182,14 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  const hasFreshSnapshotInEntry =
+    Boolean(nextEntry?.skillsSnapshot) &&
+    (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
+  const skillsSnapshot = hasFreshSnapshotInEntry
+    ? nextEntry?.skillsSnapshot
+    : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
+      ? buildSnapshot()
+      : nextEntry.skillsSnapshot;
   if (
     skillsSnapshot &&
     sessionStore &&
@@ -208,6 +225,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
+  /** Session file after compaction, when the runtime rotated transcripts. */
+  newSessionFile?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -219,6 +238,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -234,18 +254,28 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  if (newSessionId && newSessionId !== entry.sessionId) {
+  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
+  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
+  const sessionFileChanged = Boolean(
+    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
+  );
+  if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile = resolveCompactionSessionFile({
-      entry,
-      sessionKey,
-      storePath,
-      newSessionId,
-    });
+    updates.sessionFile =
+      explicitNewSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId,
+      });
+  } else if (sessionFileChanged && explicitNewSessionFile) {
+    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  if (tokensAfter != null && tokensAfter > 0) {
-    updates.totalTokens = tokensAfter;
+  const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
+  if (tokensAfterCompaction !== undefined) {
+    updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
@@ -265,7 +295,7 @@ export async function incrementCompactionCount(params: {
       };
     });
   }
-  if (newSessionId && newSessionId !== entry.sessionId && cfg) {
+  if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,
@@ -306,11 +336,19 @@ function resolveCompactionSessionFile(params: {
 
 function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  try {
-    const parentDir = fs.realpathSync(path.dirname(resolved));
-    return path.join(parentDir, path.basename(resolved));
-  } catch {
-    return resolved;
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    try {
+      return path.join(fs.realpathSync(cursor), ...missingSegments.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      missingSegments.push(path.basename(cursor));
+      cursor = parent;
+    }
   }
 }
 
@@ -319,7 +357,7 @@ function rewriteSessionFileForNewSessionId(params: {
   previousSessionId: string;
   nextSessionId: string;
 }): string | undefined {
-  const trimmed = params.sessionFile?.trim();
+  const trimmed = normalizeOptionalString(params.sessionFile);
   if (!trimmed) {
     return undefined;
   }

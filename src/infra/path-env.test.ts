@@ -11,8 +11,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 
@@ -129,6 +129,26 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "darwin",
     });
     expect(updated[0]).toBe(appBinDir);
+  });
+
+  it("keeps the current runtime directory ahead of system PATH hardening", () => {
+    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
+    const nodeBinDir = path.join(tmp, "node-bin");
+    const nodeExec = path.join(nodeBinDir, "node");
+    setDir(tmp);
+    setDir(nodeBinDir);
+    setExe(nodeExec);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: nodeExec,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expect(updated[0]).toBe(nodeBinDir);
+    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
   });
 
   it("is idempotent", () => {

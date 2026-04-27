@@ -1,4 +1,9 @@
-export { buildOpenrouterProvider } from "./provider-catalog.js";
+export { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
+export {
+  buildOpenrouterProvider,
+  isOpenRouterProxyReasoningUnsupportedModel,
+} from "./provider-catalog.js";
+export { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 export {
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,

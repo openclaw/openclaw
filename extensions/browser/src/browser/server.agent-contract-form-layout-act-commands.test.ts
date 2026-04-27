@@ -107,18 +107,36 @@ describe("browser control server", () => {
         }),
       );
 
+      const resizeZero = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: 0,
+        height: 600,
+      });
+      expect(resizeZero.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeZero.error).toContain("resize requires positive width and height");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
+      const resizeNegative = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: -800,
+        height: 600,
+      });
+      expect(resizeNegative.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeNegative.error).toContain("resize requires positive width and height");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
       });
       expect(wait.ok).toBe(true);
-      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        timeMs: 5,
-        text: undefined,
-        textGone: undefined,
-      });
+      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          timeMs: 5,
+        }),
+      );
 
       const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
@@ -220,12 +238,13 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+      const batchRes = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "batch",
         actions: [{ kind: "click", ref: {} }],
       });
 
       expect(batchRes.error).toContain("click requires ref or selector");
+      expect(batchRes.code).toBe("ACT_INVALID_REQUEST");
       expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
@@ -236,12 +255,13 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+      const batchRes = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "batch",
         actions: [{ kind: "click", ref: "5", targetId: "other-tab" }],
       });
 
       expect(batchRes.error).toContain("batched action targetId must match request targetId");
+      expect(batchRes.code).toBe("ACT_TARGET_ID_MISMATCH");
       expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
@@ -354,9 +374,17 @@ describe("browser control server", () => {
     const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
       element: "body",
       type: "jpeg",
+      timeoutMs: 3333,
     });
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        element: "body",
+        type: "jpeg",
+        timeoutMs: 3333,
+      }),
+    );
   });
 
   it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {

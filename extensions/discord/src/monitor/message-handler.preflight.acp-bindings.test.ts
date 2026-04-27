@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
+vi.mock("../../../../src/channels/plugins/binding-routing.js", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
@@ -12,7 +12,10 @@ vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOrig
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    importOriginal,
+    () =>
+      vi.importActual<typeof import("../../../../src/channels/plugins/binding-routing.js")>(
+        "../../../../src/channels/plugins/binding-routing.js",
+      ),
   );
 });
 
@@ -148,7 +151,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
       discordConfig: {
         allowBots: true,
       } as NonNullable<
-        import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
+        import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
       >["discord"],
       data: createGuildEvent({
         channelId: CHANNEL_ID,
@@ -162,7 +165,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
     discordConfig: {
       allowBots: true,
     } as NonNullable<
-      import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
+      import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
     >["discord"],
     ...overrides,
   } satisfies Parameters<typeof preflightDiscordMessage>[0];
@@ -174,7 +177,6 @@ function createAllowedGuildEntries(requireMention = false) {
       id: GUILD_ID,
       channels: {
         [CHANNEL_ID]: {
-          allow: true,
           enabled: true,
           requireMention,
         },
@@ -185,12 +187,11 @@ function createAllowedGuildEntries(requireMention = false) {
 
 function createHydratedGuildClient(restPayload: Record<string, unknown>) {
   const restGet = vi.fn(async () => restPayload);
-  const client = {
-    ...createGuildTextClient(CHANNEL_ID),
+  const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
     rest: {
       get: restGet,
     },
-  } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+  }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
   return { client, restGet };
 }
 
@@ -247,7 +248,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: false,
               },
             },
@@ -269,7 +269,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: true,
                 requireMention: false,
               },

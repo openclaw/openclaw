@@ -1,20 +1,15 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/text-runtime";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | undefined {
-  if (!record) {
-    return undefined;
-  }
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
+export const asRecord = asNullableRecord;
+const readString = readStringField;
 
 function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
   if (!record) {
@@ -39,7 +34,7 @@ function readNumberLike(record: Record<string, unknown> | null, key: string): nu
   return parseFiniteNumber(record[key]);
 }
 
-function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
+export function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
   const raw = message["attachments"];
   if (!Array.isArray(raw)) {
     return [];
@@ -174,8 +169,8 @@ function extractReplyMetadata(message: Record<string, unknown>): {
       : undefined;
 
   return {
-    replyToId: (replyToId ?? fallbackReplyId)?.trim() || undefined,
-    replyToBody: replyToBody?.trim() || undefined,
+    replyToId: normalizeOptionalString(replyToId ?? fallbackReplyId),
+    replyToBody: normalizeOptionalString(replyToBody),
     replyToSender: normalizedSender || undefined,
   };
 }
@@ -346,7 +341,7 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   if (!normalizedId) {
     return null;
   }
-  const name = nameRaw?.trim() || undefined;
+  const name = normalizeOptionalString(nameRaw);
   return { id: normalizedId, name };
 }
 
@@ -362,7 +357,7 @@ export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[]
     if (!normalized?.id) {
       continue;
     }
-    const key = normalized.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized.id);
     if (seen.has(key)) {
       continue;
     }
@@ -382,7 +377,7 @@ export function formatGroupMembers(params: {
     if (!entry?.id) {
       continue;
     }
-    const key = entry.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(entry.id);
     if (seen.has(key)) {
       continue;
     }
@@ -482,6 +477,17 @@ export type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  /** Webhook event type preserved for dedup key differentiation. */
+  eventType?: string;
+  /**
+   * When the debouncer merges multiple source webhook events into one
+   * processed message (see `combineDebounceEntries` in `monitor-debounce.ts`),
+   * this preserves every source `messageId` that contributed to the merged
+   * view. Downstream inbound-dedupe commits all of them so a later BlueBubbles
+   * MessagePoller replay of any individual source event is recognized as a
+   * duplicate rather than re-processed. Unset for single-event messages.
+   */
+  coalescedMessageIds?: string[];
 };
 
 export type NormalizedWebhookReaction = {
@@ -573,7 +579,9 @@ export function resolveTapbackContext(message: NormalizedWebhookMessage): {
   if (!hasTapbackType && !hasTapbackMarker) {
     return null;
   }
-  const replyToId = message.associatedMessageGuid?.trim() || message.replyToId?.trim() || undefined;
+  const replyToId =
+    normalizeOptionalString(message.associatedMessageGuid) ??
+    normalizeOptionalString(message.replyToId);
   const actionHint = resolveTapbackActionHint(associatedType);
   const emojiHint =
     message.associatedMessageEmoji?.trim() || REACTION_TYPE_MAP.get(associatedType ?? -1)?.emoji;
@@ -592,7 +600,7 @@ export function parseTapbackText(params: {
   quotedText: string;
 } | null {
   const trimmed = params.text.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!trimmed) {
     return null;
   }
@@ -690,6 +698,7 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
 
 export function normalizeWebhookMessage(
   payload: Record<string, unknown>,
+  options?: { eventType?: string },
 ): NormalizedWebhookMessage | null {
   const message = extractMessagePayload(payload);
   if (!message) {
@@ -777,6 +786,7 @@ export function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    eventType: options?.eventType,
   };
 }
 

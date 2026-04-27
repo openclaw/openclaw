@@ -1,0 +1,354 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+
+const modelCatalogMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(),
+}));
+
+const modelAuthLabelMocks = vi.hoisted(() => ({
+  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+}));
+
+const MODELS_ADD_DEPRECATED_TEXT =
+  "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
+}));
+
+vi.mock("../../agents/model-auth-label.js", () => ({
+  resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
+}));
+
+const telegramModelsTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "telegram",
+    label: "Telegram",
+    docsPath: "/channels/telegram",
+    capabilities: {
+      chatTypes: ["direct", "group", "channel", "thread"],
+      reactions: true,
+      threads: true,
+      media: true,
+      polls: true,
+      nativeCommands: true,
+      blockStreaming: true,
+    },
+  }),
+  commands: {
+    buildModelsProviderChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: providers.map((provider) => [
+          {
+            text: provider.id,
+            callback_data: `models:${provider.id}`,
+          },
+        ]),
+      },
+    }),
+  },
+};
+
+const menuOnlyModelsTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "menuonly",
+    label: "Menu Only",
+    capabilities: {
+      chatTypes: ["direct"],
+      nativeCommands: true,
+    },
+  }),
+  commands: {
+    buildModelsMenuChannelData: ({ providers }) => ({
+      menuonly: {
+        providerIds: providers.map((provider) => provider.id),
+        labels: providers.map((provider) => `${provider.id}:${provider.count}`),
+      },
+    }),
+  },
+};
+
+const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
+  pluginId: id,
+  plugin: createChannelTestPluginBase({ id }),
+  source: "test",
+}));
+
+beforeEach(() => {
+  modelCatalogMocks.loadModelCatalog.mockReset();
+  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+  ]);
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
+  setActivePluginRegistry(
+    createTestRegistry([
+      ...textSurfaceModelsTestPlugins,
+      {
+        pluginId: "telegram",
+        plugin: telegramModelsTestPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "menuonly",
+        plugin: menuOnlyModelsTestPlugin,
+        source: "test",
+      },
+    ]),
+  );
+});
+
+function buildParams(
+  commandBodyNormalized: string,
+  cfgOverrides: Partial<OpenClawConfig> = {},
+): HandleCommandsParams {
+  return {
+    cfg: {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        },
+      },
+      commands: {
+        text: true,
+      },
+      ...cfgOverrides,
+    } as OpenClawConfig,
+    ctx: {
+      Surface: "discord",
+    },
+    command: {
+      commandBodyNormalized,
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      senderId: "user-1",
+      channel: "discord",
+      channelId: "channel-1",
+      surface: "discord",
+      ownerList: [],
+      from: "user-1",
+      to: "bot",
+    },
+    sessionKey: "agent:main:discord:direct:user-1",
+    workspaceDir: "/tmp",
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    contextTokens: 0,
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    directives: {},
+    elevated: { enabled: true, allowed: true, failures: [] },
+  } as unknown as HandleCommandsParams;
+}
+
+describe("handleModelsCommand", () => {
+  it("shows a simple providers menu on text surfaces", async () => {
+    const result = await handleModelsCommand(buildParams("/models"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Providers:");
+    expect(result?.reply?.text).toContain("- anthropic (2)");
+    expect(result?.reply?.text).toContain("- google (1)");
+    expect(result?.reply?.text).toContain("- openai (2)");
+    expect(result?.reply?.text).toContain("Use: /models <provider>");
+    expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+    expect(result?.reply?.text).not.toContain("Add: /models add");
+  });
+
+  it("hides legacy runtime providers from /models provider lists", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- anthropic (1)");
+    expect(result?.reply?.text).toContain("- google (1)");
+    expect(result?.reply?.text).toContain("- openai (1)");
+    expect(result?.reply?.text).not.toContain("- codex");
+    expect(result?.reply?.text).not.toContain("- codex-cli");
+    expect(result?.reply?.text).not.toContain("- claude-cli");
+    expect(result?.reply?.text).not.toContain("- google-gemini-cli");
+  });
+
+  it("labels the default runtime choice as OpenClaw Pi", async () => {
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
+  it("keeps the telegram provider picker browse-only", async () => {
+    const params = buildParams("/models");
+    params.ctx.Surface = "telegram";
+    params.command.channel = "telegram";
+    params.command.surface = "telegram";
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toBe("Select a provider:");
+    expect(result?.reply?.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "google", callback_data: "models:google" }],
+          [{ text: "openai", callback_data: "models:openai" }],
+        ],
+      },
+    });
+  });
+
+  it("keeps plugin menu hook compatibility for provider pickers", async () => {
+    const params = buildParams("/models");
+    params.ctx.Surface = "menuonly";
+    params.command.channel = "menuonly";
+    params.command.surface = "menuonly";
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toBe("Select a provider:");
+    expect(result?.reply?.channelData).toEqual({
+      menuonly: {
+        providerIds: ["anthropic", "google", "openai"],
+        labels: ["anthropic:2", "google:1", "openai:2"],
+      },
+    });
+  });
+
+  it("lists models for /models <provider>", async () => {
+    const result = await handleModelsCommand(buildParams("/models openai"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+    expect(result?.reply?.text).toContain("- openai/gpt-4.1");
+    expect(result?.reply?.text).toContain("- openai/gpt-4.1-mini");
+    expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: ["deepseek-v4-flash", "deepseek-v4-pro"],
+          },
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    } satisfies Partial<OpenClawConfig>;
+
+    const defaultProviderResult = await handleModelsCommand(
+      buildParams("/models openai-codex", cfg),
+      true,
+    );
+    const deepseekResult = await handleModelsCommand(buildParams("/models deepseek", cfg), true);
+
+    expect(defaultProviderResult?.reply?.text).toContain(
+      "Models (openai-codex) — showing 1-1 of 1 (page 1/1)",
+    );
+    expect(defaultProviderResult?.reply?.text).toContain("- openai-codex/gpt-5.4");
+    expect(defaultProviderResult?.reply?.text).not.toContain("openai-codex/deepseek-v4");
+    expect(deepseekResult?.reply?.text).toContain(
+      "Models (deepseek) — showing 1-2 of 2 (page 1/1)",
+    );
+    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-flash");
+    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-pro");
+  });
+
+  it("keeps /models list <provider> as an alias", async () => {
+    const result = await handleModelsCommand(buildParams("/models list anthropic"), true);
+
+    expect(result?.reply?.text).toContain("Models (anthropic) — showing 1-2 of 2 (page 1/1)");
+    expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
+  });
+
+  it("keeps the auth label on text-surface provider listings", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("target-auth");
+    const params = buildParams("/models anthropic");
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      authProfileOverride: "wrapper-auth",
+    };
+    params.sessionStore = {
+      "agent:main:discord:direct:user-1": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        authProfileOverride: "target-auth",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
+  });
+
+  it("returns a deprecation message for /models add when no provider is given", async () => {
+    const result = await handleModelsCommand(buildParams("/models add"), true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+    });
+  });
+
+  it("returns a deprecation message for /models add <provider>", async () => {
+    const result = await handleModelsCommand(buildParams("/models add ollama"), true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+    });
+  });
+
+  it("returns a deprecation message for /models add <provider> <modelId>", async () => {
+    const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+    });
+  });
+});

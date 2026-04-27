@@ -9,6 +9,7 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
@@ -18,6 +19,7 @@ const loadWebMediaMock = vi.fn().mockResolvedValue({
   kind: "image",
 });
 const loadConfigMock = vi.fn(() => ({}));
+const withResolvedRuntimeMatrixClientMock = vi.hoisted(() => vi.fn());
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
 const resizeToJpegMock = vi.fn();
 const mediaKindFromMimeMock = vi.fn((_: string | null | undefined) => "image");
@@ -29,14 +31,29 @@ const resolveTextChunkLimitMock = vi.fn<
 >(() => 4000);
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
+const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
+
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfigMock()),
+  };
+});
 
 vi.mock("./outbound-media-runtime.js", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
 
+vi.mock("./client-bootstrap.js", () => ({
+  withResolvedRuntimeMatrixClient: withResolvedRuntimeMatrixClientMock,
+}));
+
 const runtimeStub = {
   config: {
-    loadConfig: () => loadConfigMock(),
+    current: () => loadConfigMock(),
   },
   media: {
     loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
@@ -52,7 +69,7 @@ const runtimeStub = {
         resolveTextChunkLimitMock(cfg, channel, accountId),
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
+      chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
       convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
     },
@@ -136,6 +153,19 @@ function resetMatrixSendRuntimeMocks() {
     kind: "image",
   });
   loadConfigMock.mockReset().mockReturnValue({});
+  withResolvedRuntimeMatrixClientMock
+    .mockReset()
+    .mockImplementation(
+      async (
+        opts: { client?: import("./sdk.js").MatrixClient },
+        run: (resolved: import("./sdk.js").MatrixClient) => Promise<unknown>,
+      ) => {
+        if (!opts.client) {
+          throw new Error("test Matrix client is required");
+        }
+        return await run(opts.client);
+      },
+    );
   getImageMetadataMock.mockReset().mockResolvedValue(null);
   resizeToJpegMock.mockReset();
   mediaKindFromMimeMock.mockReset().mockReturnValue("image");
@@ -143,6 +173,9 @@ function resetMatrixSendRuntimeMocks() {
   resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
   resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
   convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
+  chunkMarkdownTextWithModeMock
+    .mockReset()
+    .mockImplementation((text: string) => (text ? [text] : []));
   applyMatrixSendRuntimeStub();
 }
 
@@ -156,6 +189,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -179,11 +213,14 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    const uploadArg = uploadContent.mock.calls[0]?.[0] as Buffer | undefined;
-    expect(uploadArg?.toString()).toBe("encrypted");
+    const uploadArg = uploadContent.mock.calls[0]?.[0];
+    expect(uploadArg instanceof Uint8Array ? Buffer.from(uploadArg).toString() : undefined).toBe(
+      "encrypted",
+    );
 
     const content = sendMessage.mock.calls[0]?.[1] as {
       url?: string;
@@ -221,6 +258,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -254,6 +292,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/clip.mp3",
       audioAsVoice: true,
       replyToId: "$reply",
@@ -285,6 +324,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/clip.wav",
       audioAsVoice: true,
     });
@@ -309,6 +349,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -376,6 +417,7 @@ describe("sendMessageMatrix media", () => {
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
@@ -401,6 +443,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -414,6 +457,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello @alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -430,6 +474,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "hello @alice", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -445,6 +490,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -460,6 +506,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "\\@room please review", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -472,6 +519,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "@room please review", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -484,6 +532,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "caption @alice:example.org", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/photo.png",
     });
 
@@ -503,6 +552,7 @@ describe("sendMessageMatrix mentions", () => {
 
     await sendMessageMatrix("room:!room:example", "", {
       client,
+      cfg: {} as never,
       mediaUrl: "file:///tmp/room.png",
     });
 
@@ -527,6 +577,7 @@ describe("sendMessageMatrix threads", () => {
 
     await sendMessageMatrix("room:!room:example", "hello thread", {
       client,
+      cfg: {} as never,
       threadId: "$thread",
     });
 
@@ -550,10 +601,34 @@ describe("sendMessageMatrix threads", () => {
 
     await sendMessageMatrix("room:!room:example", "hello", {
       client,
+      cfg: {} as never,
       accountId: "ops",
     });
 
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+  });
+
+  it("returns ordered event ids for chunked text sends", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce("$m1")
+      .mockResolvedValueOnce("$m2")
+      .mockResolvedValueOnce("$m3");
+    convertMarkdownTablesMock.mockImplementation(() => "part1|part2|part3");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+
+    const result = await sendMessageMatrix("room:!room:example", "ignored", {
+      client,
+      cfg: {} as never,
+    });
+
+    expect(result).toMatchObject({
+      roomId: "!room:example",
+      primaryMessageId: "$m1",
+      messageId: "$m3",
+      messageIds: ["$m1", "$m2", "$m3"],
+    });
   });
 });
 
@@ -571,10 +646,46 @@ describe("sendSingleTextMessageMatrix", () => {
     await expect(
       sendSingleTextMessageMatrix("room:!room:example", "1234", {
         client,
+        cfg: {} as never,
       }),
     ).rejects.toThrow("Matrix single-message text exceeds limit");
 
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("supports quiet draft preview sends without mention metadata", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "@room hi @alice:example.org", {
+      client,
+      cfg: {} as never,
+      msgtype: "m.notice",
+      includeMentions: false,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      body: "@room hi @alice:example.org",
+    });
+    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to");
+  });
+
+  it("merges extra content fields into single-event sends", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "done", {
+      client,
+      cfg: {} as never,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "done",
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+    });
   });
 });
 
@@ -599,6 +710,7 @@ describe("editMessageMatrix mentions", () => {
       "hello @alice:example.org and @bob:example.org",
       {
         client,
+        cfg: {} as never,
       },
     );
 
@@ -620,6 +732,7 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "hello again @alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
@@ -642,12 +755,66 @@ describe("editMessageMatrix mentions", () => {
 
     await editMessageMatrix("room:!room:example", "$original", "@alice:example.org", {
       client,
+      cfg: {} as never,
     });
 
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
       "m.mentions": { user_ids: ["@alice:example.org"] },
       "m.new_content": {
         "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
+
+  it("supports quiet draft preview edits without mention metadata", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "@room hi @alice:example.org",
+        "m.mentions": { room: true, user_ids: ["@alice:example.org"] },
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "@room hi @alice:example.org", {
+      client,
+      cfg: {} as never,
+      msgtype: "m.notice",
+      includeMentions: false,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": {
+        msgtype: "m.notice",
+      },
+    });
+    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(sendMessage.mock.calls[0]?.[1]?.["m.new_content"]).not.toHaveProperty("m.mentions");
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to");
+    expect(
+      (
+        sendMessage.mock.calls[0]?.[1] as {
+          "m.new_content"?: { formatted_body?: string };
+        }
+      )["m.new_content"]?.formatted_body,
+    ).not.toContain("matrix.to");
+  });
+
+  it("merges extra content fields into edit payloads and m.new_content", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      cfg: {} as never,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      "m.new_content": {
+        [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
       },
     });
   });
@@ -670,6 +837,7 @@ describe("sendPollMatrix mentions", () => {
       },
       {
         client,
+        cfg: {} as never,
       },
     );
 
@@ -710,6 +878,7 @@ describe("voteMatrixPoll", () => {
 
     const result = await voteMatrixPoll("room:!room:example", "$poll", {
       client,
+      cfg: {} as never,
       optionIndex: 2,
     });
 
@@ -746,6 +915,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 2,
       }),
     ).rejects.toThrow("out of range");
@@ -770,6 +940,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndexes: [1, 2],
       }),
     ).rejects.toThrow("at most 1 selection");
@@ -785,6 +956,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 1,
       }),
     ).rejects.toThrow("is not a Matrix poll start event");
@@ -807,6 +979,7 @@ describe("voteMatrixPoll", () => {
     await expect(
       voteMatrixPoll("room:!room:example", "$poll", {
         client,
+        cfg: {} as never,
         optionIndex: 1,
       }),
     ).resolves.toMatchObject({
@@ -843,5 +1016,35 @@ describe("sendTypingMatrix", () => {
     await sendTypingMatrix("room:!room:example", true, undefined, client);
 
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 30_000);
+  });
+
+  it("passes account config through when resolving the typing client", async () => {
+    const cfg = { channels: { matrix: {} } } as unknown as import("../types.js").CoreConfig;
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+    } as unknown as import("./sdk.js").MatrixClient;
+    withResolvedRuntimeMatrixClientMock.mockImplementation(
+      async (
+        opts: Record<string, unknown>,
+        run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
+      ) => {
+        expect(opts).toMatchObject({
+          cfg,
+          accountId: "work",
+          timeoutMs: 12_345,
+          readiness: "none",
+        });
+        return await run(client);
+      },
+    );
+
+    await sendTypingMatrix("room:!room:example", true, {
+      cfg,
+      accountId: "work",
+      timeoutMs: 12_345,
+    });
+
+    expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
   });
 });

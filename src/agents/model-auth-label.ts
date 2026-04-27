@@ -1,18 +1,21 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ensureAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
+  includeExternalProfiles?: boolean;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
@@ -20,9 +23,12 @@ export function resolveModelAuthLabel(params: {
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  const store =
+    params.includeExternalProfiles === false
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
+      : ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: false,
+        });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({
     cfg: params.cfg,
@@ -57,6 +63,10 @@ export function resolveModelAuthLabel(params: {
       return `oauth (${envKey.source})`;
     }
     return `api-key (${envKey.source})`;
+  }
+
+  if (providerKey === "codex" && readCodexCliCredentialsCached({ ttlMs: 5_000 })) {
+    return "oauth (codex-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

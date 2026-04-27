@@ -1,3 +1,4 @@
+import type { Context, Model } from "@mariozechner/pi-ai";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -7,12 +8,21 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
-import googlePlugin from "./index.js";
+import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { registerGoogleProvider } from "./provider-registration.js";
+
+const googleProviderPlugin = {
+  register(api: Parameters<typeof registerGoogleProvider>[0]) {
+    registerGoogleProvider(api);
+    registerGoogleGeminiCliProvider(api);
+  },
+};
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
-    const { providers } = registerProviderPlugin({
-      plugin: googlePlugin,
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -81,9 +91,9 @@ describe("google provider plugin hooks", () => {
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", () => {
-    const { providers } = registerProviderPlugin({
-      plugin: googlePlugin,
+  it("owns Gemini CLI tool schema normalization", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -126,5 +136,94 @@ describe("google provider plugin hooks", () => {
         tools: [tool],
       } as never),
     ).toEqual([]);
+  });
+
+  it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const googleProvider = requireRegisteredProvider(providers, "google");
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const capturedStream = createCapturedThinkingConfigStream();
+
+    const runCase = (provider: typeof googleProvider, providerId: string) => {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: providerId,
+        modelId: "gemini-3.1-pro-preview",
+        thinkingLevel: "high",
+        streamFn: capturedStream.streamFn,
+      } as never);
+
+      void wrapped?.(
+        {
+          api: "google-generative-ai",
+          provider: providerId,
+          id: "gemini-3.1-pro-preview",
+        } as Model<"google-generative-ai">,
+        { messages: [] } as Context,
+        {},
+      );
+
+      const capturedPayload = capturedStream.getCapturedPayload();
+      expect(capturedPayload).toMatchObject({
+        config: { thinkingConfig: { thinkingLevel: "HIGH" } },
+      });
+      const thinkingConfig = (
+        (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
+      ).thinkingConfig as Record<string, unknown>;
+      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
+    };
+
+    runCase(googleProvider, "google");
+    runCase(cliProvider, "google-gemini-cli");
+  });
+
+  it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    expect(provider.resolveThinkingProfile).toBeDefined();
+    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const gemini3Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    } as never);
+    const gemini25Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    } as never);
+
+    expect(gemini3Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "low" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+    expect(gemini25Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+  });
+
+  it("shares Gemini replay and stream hooks across Google provider variants", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const googleProvider = requireRegisteredProvider(providers, "google");
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
+    expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
   });
 });

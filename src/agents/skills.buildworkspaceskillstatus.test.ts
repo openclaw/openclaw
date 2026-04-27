@@ -11,10 +11,14 @@ import type { SkillEntry } from "./skills/types.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
+
+async function createTempWorkspaceDir() {
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+  tempDirs.push(workspaceDir);
+  return workspaceDir;
+}
 
 function makeEntry(params: {
   name: string;
@@ -96,6 +100,36 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.missing.config).toContain("browser.enabled");
     expect(skill?.install[0]?.id).toBe("brew");
   });
+
+  it("honors legacy clawdbot skill metadata requirements and install hints", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "legacy-skill"),
+      name: "legacy-skill",
+      description: "Legacy metadata",
+      metadata:
+        '{"clawdbot":{"requires":{"bins":["fakebin"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin"}]}}',
+    });
+
+    const report = withEnv({ PATH: "" }, () =>
+      buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+      }),
+    );
+    const skill = report.skills.find((entry) => entry.name === "legacy-skill");
+
+    expect(skill).toBeDefined();
+    expect(skill?.eligible).toBe(false);
+    expect(skill?.requirements.bins).toEqual(["fakebin"]);
+    expect(skill?.missing.bins).toEqual(["fakebin"]);
+    expect(skill?.install[0]).toMatchObject({
+      id: "brew",
+      kind: "brew",
+      label: "Install fakebin",
+      bins: ["fakebin"],
+    });
+  });
+
   it("respects OS-gated skills", async () => {
     const entry = makeEntry({
       name: "os-skill",

@@ -30,7 +30,7 @@ async function loadFreshCompactionModuleForTest() {
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } }],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "toolUse",
     timestamp,
   });

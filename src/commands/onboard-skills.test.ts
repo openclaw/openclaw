@@ -3,14 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-// Module under test imports these at module scope.
-vi.mock("../agents/skills-status.js", () => ({
+const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
-}));
-vi.mock("../agents/skills-install.js", () => ({
   installSkill: vi.fn(),
-}));
-vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
@@ -19,9 +14,18 @@ vi.mock("./onboard-helpers.js", () => ({
   ]),
 }));
 
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import { detectBinary } from "./onboard-helpers.js";
+// Module under test imports these at module scope.
+vi.mock("../agents/skills-status.js", () => ({
+  buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
+}));
+vi.mock("../agents/skills-install.js", () => ({
+  installSkill: mocks.installSkill,
+}));
+vi.mock("./onboard-helpers.js", () => ({
+  detectBinary: mocks.detectBinary,
+  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
+}));
+
 import { setupSkills } from "./onboard-skills.js";
 
 function createBundledSkill(params: {
@@ -73,15 +77,15 @@ function createBundledSkill(params: {
 }
 
 function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
-  vi.mocked(detectBinary).mockResolvedValue(false);
-  vi.mocked(installSkill).mockResolvedValue({
+  mocks.detectBinary.mockResolvedValue(false);
+  mocks.installSkill.mockResolvedValue({
     ok: true,
     message: "Installed",
     stdout: "",
     stderr: "",
     code: 0,
   });
-  vi.mocked(buildWorkspaceSkillStatus).mockReturnValue({
+  mocks.buildWorkspaceSkillStatus.mockReturnValue({
     workspaceDir: "/tmp/ws",
     managedSkillsDir: "/tmp/managed",
     skills,

@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   createActionGate,
@@ -76,8 +77,8 @@ export type SlackActionContext = {
   /** Current thread timestamp for auto-threading. */
   currentThreadTs?: string;
   /** Reply-to mode for auto-threading. */
-  replyToMode?: "off" | "first" | "all";
-  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  replyToMode?: "off" | "first" | "all" | "batched";
+  /** Mutable ref to track if a reply was sent for single-use reply modes. */
   hasRepliedRef?: { value: boolean };
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
@@ -87,7 +88,7 @@ export type SlackActionContext = {
 /**
  * Resolve threadTs for a Slack message based on context and replyToMode.
  * - "all": always inject threadTs
- * - "first": inject only for first message (updates hasRepliedRef)
+ * - "first"/"batched": inject only for the first eligible message (updates hasRepliedRef)
  * - "off": never auto-inject
  */
 function resolveThreadTsFromContext(
@@ -121,7 +122,11 @@ function resolveThreadTsFromContext(
   if (context.replyToMode === "all") {
     return context.currentThreadTs;
   }
-  if (context.replyToMode === "first" && context.hasRepliedRef && !context.hasRepliedRef.value) {
+  if (
+    isSingleUseReplyToMode(context.replyToMode ?? "off") &&
+    context.hasRepliedRef &&
+    !context.hasRepliedRef.value
+  ) {
     context.hasRepliedRef.value = true;
     return context.currentThreadTs;
   }
@@ -130,6 +135,10 @@ function resolveThreadTsFromContext(
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
   return slackActionRuntime.parseSlackBlocksInput(params.blocks);
+}
+
+function isImageContentType(value: string | undefined): boolean {
+  return value?.trim().toLowerCase().startsWith("image/") === true;
 }
 
 export async function handleSlackAction(
@@ -167,10 +176,8 @@ export async function handleSlackAction(
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
     const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) {
-      return undefined;
-    }
     return {
+      cfg,
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
     };
@@ -378,8 +385,10 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
+        const readToken = getTokenForOperation("read");
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
+          ...(readToken && !readOpts?.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
           threadId: threadId ?? undefined,
@@ -390,11 +399,28 @@ export async function handleSlackAction(
             error: "File could not be downloaded (not found, too large, or inaccessible).",
           });
         }
+        if (!isImageContentType(downloaded.contentType)) {
+          return jsonResult({
+            ok: true,
+            fileId,
+            path: downloaded.path,
+            contentType: downloaded.contentType,
+            placeholder: downloaded.placeholder,
+            media: {
+              mediaUrl: downloaded.path,
+              ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            },
+          });
+        }
         return await imageResultFromFile({
           label: "slack-file",
           path: downloaded.path,
           extraText: downloaded.placeholder,
-          details: { fileId, path: downloaded.path },
+          details: {
+            fileId,
+            path: downloaded.path,
+            ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+          },
         });
       }
       default:
@@ -439,7 +465,7 @@ export async function handleSlackAction(
             (pin.message as { ts?: unknown }).ts,
           )
         : pin.message;
-      return message ? { ...pin, message } : pin;
+      return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
   }

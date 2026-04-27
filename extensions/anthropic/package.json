@@ -1,10 +1,19 @@
 {
   "name": "@openclaw/anthropic-provider",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw Anthropic provider plugin",
   "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.70.2"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

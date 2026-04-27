@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
   return text.includes(nonceA) && text.includes(nonceB);
 }
@@ -31,10 +33,12 @@ const PROBE_REFUSAL_MARKERS = [
   "not a legitimate self-test",
   "not legitimate self-test",
   "authorized integration probe",
+  "authorizing me to execute",
+  "authorizing me to run",
 ];
 
 export function isLikelyToolNonceRefusal(text: string): boolean {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (PROBE_REFUSAL_MARKERS.some((marker) => lower.includes(marker))) {
     return true;
   }
@@ -49,7 +53,7 @@ function hasMalformedToolOutput(text: string): boolean {
   if (!trimmed) {
     return true;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (trimmed.includes("[object Object]")) {
     return true;
   }
@@ -91,7 +95,7 @@ export function shouldRetryToolReadProbe(params: {
   if (params.provider === "anthropic" && isLikelyToolNonceRefusal(params.text)) {
     return true;
   }
-  const lower = params.text.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.text);
   if (params.provider === "mistral" && (lower.includes("noncea=") || lower.includes("nonceb="))) {
     return true;
   }

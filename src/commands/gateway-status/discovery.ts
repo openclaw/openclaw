@@ -3,12 +3,13 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../../infra/gateway-discovery-targets.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
   if (typeof rawUrl !== "string") {
     return null;
   }
-  const trimmed = rawUrl.trim();
+  const trimmed = normalizeOptionalString(rawUrl) ?? "";
   if (!trimmed) {
     return null;
   }
@@ -21,7 +22,7 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
   if (!host) {
     return null;
   }
-  const user = process.env.USER?.trim() || "";
+  const user = normalizeOptionalString(process.env.USER) ?? "";
   return user ? `${user}@${host}` : host;
 }
 
@@ -30,11 +31,11 @@ export function buildSshTarget(input: {
   host?: string;
   port?: number;
 }): string | null {
-  const host = input.host?.trim() ?? "";
+  const host = normalizeOptionalString(input.host) ?? "";
   if (!host) {
     return null;
   }
-  const user = input.user?.trim() ?? "";
+  const user = normalizeOptionalString(input.user) ?? "";
   const base = user ? `${user}@${host}` : host;
   const port = input.port ?? 22;
   if (port && port !== 22) {
@@ -75,7 +76,7 @@ export async function resolveSshTarget(params: {
   }
   const identityFile =
     params.identity ??
-    config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ??
+    config.identityFiles.find((entry) => normalizeOptionalString(entry)) ??
     undefined;
   return { target, identity: identityFile };
 }

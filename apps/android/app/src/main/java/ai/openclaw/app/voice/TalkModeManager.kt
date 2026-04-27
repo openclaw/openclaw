@@ -14,19 +14,21 @@ import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Log
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +48,8 @@ class TalkModeManager(
   private val session: GatewaySession,
   private val supportsChatSubscribe: Boolean,
   private val isConnected: () -> Boolean,
+  private val onBeforeSpeak: suspend () -> Unit = {},
+  private val onAfterSpeak: suspend () -> Unit = {},
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -57,6 +61,8 @@ class TalkModeManager(
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
+  private val talkSpeakClient = TalkSpeakClient(session = session, json = json)
+  private val talkAudioPlayer = TalkAudioPlayer(context)
 
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -101,6 +107,7 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
+  private val ttsJobLock = Any()
   private val ttsLock = Any()
   private var textToSpeech: TextToSpeech? = null
   private var textToSpeechInit: CompletableDeferred<TextToSpeech>? = null
@@ -163,8 +170,11 @@ class TalkModeManager(
           ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
         if (!assistant.isNullOrBlank()) {
           val playbackToken = playbackGeneration.incrementAndGet()
+          cancelActivePlayback()
           _statusText.value = "Speaking…"
-          playAssistant(assistant, playbackToken)
+          runPlaybackSession(playbackToken) {
+            playAssistant(assistant, playbackToken)
+          }
         } else {
           _statusText.value = "No reply"
         }
@@ -180,14 +190,12 @@ class TalkModeManager(
 
   fun playTtsForText(text: String) {
     val playbackToken = playbackGeneration.incrementAndGet()
-    ttsJob?.cancel()
-    ttsJob = scope.launch {
+    cancelActivePlayback()
+    scope.launch {
       reloadConfig()
-      ensurePlaybackActive(playbackToken)
-      _isSpeaking.value = true
-      _statusText.value = "Speaking…"
-      playAssistant(text, playbackToken)
-      ttsJob = null
+      runPlaybackSession(playbackToken) {
+        playAssistant(text, playbackToken)
+      }
     }
   }
 
@@ -218,14 +226,15 @@ class TalkModeManager(
     // If this is a response we initiated, handle normally below.
     // Otherwise, if ttsOnAllResponses, finish streaming TTS on terminal events.
     val pending = pendingRunId
-    if (pending == null || runId != pending) {
+    val knownRun = pending == runId || hasRunCompletion(runId)
+    if (!knownRun) {
       if (ttsOnAllResponses && state == "final") {
         val text = extractTextFromChatEventMessage(obj["message"])
         if (!text.isNullOrBlank()) {
           playTtsForText(text)
         }
       }
-      if (pending == null || runId != pending) return
+      return
     }
     Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
@@ -258,7 +267,6 @@ class TalkModeManager(
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
     if (!enabled) {
-      playbackGeneration.incrementAndGet()
       stopSpeaking()
     }
   }
@@ -270,10 +278,11 @@ class TalkModeManager(
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
     val playbackToken = playbackGeneration.incrementAndGet()
-    stopSpeaking(resetInterrupt = false)
+    cancelActivePlayback()
     ensureConfigLoaded()
-    ensurePlaybackActive(playbackToken)
-    playAssistant(text, playbackToken)
+    runPlaybackSession(playbackToken) {
+      playAssistant(text, playbackToken)
+    }
   }
 
   private fun start() {
@@ -483,9 +492,10 @@ class TalkModeManager(
       }
       Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = playbackGeneration.incrementAndGet()
-      stopSpeaking(resetInterrupt = false)
-      ensurePlaybackActive(playbackToken)
-      playAssistant(assistant, playbackToken)
+      cancelActivePlayback()
+      runPlaybackSession(playbackToken) {
+        playAssistant(assistant, playbackToken)
+      }
     } catch (err: Throwable) {
       if (err is CancellationException) {
         Log.d(tag, "finalize speech cancelled")
@@ -530,6 +540,7 @@ class TalkModeManager(
 
   private suspend fun sendChat(message: String, session: GatewaySession): String {
     val runId = UUID.randomUUID().toString()
+    armPendingRun(runId)
     val params =
       buildJsonObject {
         put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
@@ -538,19 +549,29 @@ class TalkModeManager(
         put("timeoutMs", JsonPrimitive(30_000))
         put("idempotencyKey", JsonPrimitive(runId))
       }
-    val res = session.request("chat.send", params.toString())
-    val parsed = parseRunId(res) ?: runId
-    if (parsed != runId) {
-      pendingRunId = parsed
+    try {
+      val res = session.request("chat.send", params.toString())
+      val parsed = parseRunId(res) ?: runId
+      if (parsed != runId) {
+        pendingRunId = parsed
+      }
+      return parsed
+    } catch (err: Throwable) {
+      clearPendingRun(runId)
+      throw err
     }
-    return parsed
   }
 
   private suspend fun waitForChatFinal(runId: String): Boolean {
-    pendingFinal?.cancel()
-    val deferred = CompletableDeferred<Boolean>()
-    pendingRunId = runId
-    pendingFinal = deferred
+    consumeRunCompletion(runId)?.let { return it }
+    val deferred =
+      if (pendingRunId == runId) {
+        pendingFinal ?: armPendingRun(runId)
+      } else {
+        armPendingRun(runId)
+      }
+
+    consumeRunCompletion(runId)?.let { return it }
 
     val result =
       withContext(Dispatchers.IO) {
@@ -561,11 +582,25 @@ class TalkModeManager(
         }
       }
 
-    if (!result) {
+    if (!result && pendingRunId == runId) {
+      clearPendingRun(runId)
+    }
+    return result
+  }
+
+  private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
+    pendingFinal?.cancel()
+    val deferred = CompletableDeferred<Boolean>()
+    pendingRunId = runId
+    pendingFinal = deferred
+    return deferred
+  }
+
+  private fun clearPendingRun(runId: String) {
+    if (pendingRunId == runId) {
       pendingFinal = null
       pendingRunId = null
     }
-    return result
   }
 
   private fun cacheRunCompletion(runId: String, isFinal: Boolean) {
@@ -581,6 +616,12 @@ class TalkModeManager(
   private fun consumeRunCompletion(runId: String): Boolean? {
     synchronized(completedRunsLock) {
       return completedRunStates.remove(runId)
+    }
+  }
+
+  private fun hasRunCompletion(runId: String): Boolean {
+    synchronized(completedRunsLock) {
+      return completedRunStates.containsKey(runId)
     }
   }
 
@@ -655,20 +696,85 @@ class TalkModeManager(
     requestAudioFocusForTts()
 
     try {
-      val ttsStarted = SystemClock.elapsedRealtime()
-      speakWithSystemTts(cleaned, directive, playbackToken)
-      Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
+      val started = SystemClock.elapsedRealtime()
+      when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
+        is TalkSpeakResult.Success -> {
+          ensurePlaybackActive(playbackToken)
+          talkAudioPlayer.play(result.audio)
+          ensurePlaybackActive(playbackToken)
+          Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
+        }
+        is TalkSpeakResult.FallbackToLocal -> {
+          Log.d(tag, "talk.speak unavailable; using local TTS: ${result.message}")
+          speakWithSystemTts(cleaned, directive, playbackToken)
+          Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
+        }
+        is TalkSpeakResult.Failure -> {
+          throw IllegalStateException(result.message)
+        }
+      }
     } catch (err: Throwable) {
       if (isPlaybackCancelled(err, playbackToken)) {
         Log.d(tag, "assistant speech cancelled")
         return
       }
       _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
-      Log.w(tag, "system tts failed: ${err.message ?: err::class.simpleName}")
+      Log.w(tag, "talk playback failed: ${err.message ?: err::class.simpleName}")
     } finally {
-
       _isSpeaking.value = false
     }
+  }
+
+  private suspend fun runPlaybackSession(
+    playbackToken: Long,
+    block: suspend () -> Unit,
+  ) {
+    val currentJob = coroutineContext[Job]
+    var shouldResumeAfterSpeak = false
+    try {
+      val claimedPlayback =
+        synchronized(ttsJobLock) {
+          if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
+            false
+          } else {
+            ttsJob = currentJob
+            true
+          }
+        }
+      if (!claimedPlayback) {
+        ensurePlaybackActive(playbackToken)
+        return
+      }
+      ensurePlaybackActive(playbackToken)
+      shouldResumeAfterSpeak = true
+      onBeforeSpeak()
+      ensurePlaybackActive(playbackToken)
+      _isSpeaking.value = true
+      _statusText.value = "Speaking…"
+      block()
+    } finally {
+      synchronized(ttsJobLock) {
+        if (ttsJob === currentJob) {
+          ttsJob = null
+        }
+      }
+      _isSpeaking.value = false
+      if (shouldResumeAfterSpeak) {
+        withContext(NonCancellable) {
+          onAfterSpeak()
+        }
+      }
+    }
+  }
+
+  private fun cancelActivePlayback() {
+    val activeJob =
+      synchronized(ttsJobLock) {
+        ttsJob
+      }
+    activeJob?.cancel()
+    talkAudioPlayer.stop()
+    stopTextToSpeechPlayback()
   }
 
   private suspend fun speakWithSystemTts(text: String, directive: TalkDirective?, playbackToken: Long) {
@@ -755,15 +861,16 @@ class TalkModeManager(
   }
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
+    playbackGeneration.incrementAndGet()
     if (!_isSpeaking.value) {
-      stopTextToSpeechPlayback()
+      cancelActivePlayback()
       abandonAudioFocus()
       return
     }
     if (resetInterrupt) {
       lastInterruptedAtSeconds = null
     }
-    stopTextToSpeechPlayback()
+    cancelActivePlayback()
     _isSpeaking.value = false
     abandonAudioFocus()
   }

@@ -6,22 +6,18 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   matchesMentionPatterns,
+  resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  logInboundDrop,
-  resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-targets";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -45,7 +41,8 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -57,6 +54,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
@@ -164,7 +162,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       envelope: envelopeOptions,
     });
     let combinedBody = body;
-    const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
+    const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
@@ -286,6 +284,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             return;
           }
           await sendTypingSignal(ctxPayload.To, {
+            cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
             accountId: deps.accountId,
@@ -308,6 +307,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typingCallbacks,
       deliver: async (payload) => {
         await deps.deliverReplies({
+          cfg: deps.cfg,
           replies: [payload],
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
@@ -418,7 +418,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.reaction.isRemove) {
       return true; // Ignore reaction removals
     }
-    const emojiLabel = params.reaction.emoji?.trim() || "emoji";
+    const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
     logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
@@ -548,7 +548,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupAllowFrom: deps.groupAllowFrom,
         sender,
       });
-    const quoteText = dataMessage?.quote?.text?.trim() ?? "";
+    const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
       resolveSignalQuoteContext({
         cfg: deps.cfg,
@@ -603,6 +603,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         sendPairingReply: async (text) => {
           await sendMessageSignal(`signal:${senderRecipient}`, text, {
+            cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
             maxBytes: deps.mediaMaxBytes,
@@ -672,19 +673,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
       });
     const canDetectMention = mentionRegexes.length > 0;
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup,
-      requireMention: Boolean(requireMention),
-      canDetectMention,
-      wasMentioned,
-      implicitMention: false,
-      hasAnyMention: false,
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention,
+        wasMentioned,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup,
+        requireMention,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized,
+      },
     });
-    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+    const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",
@@ -829,6 +834,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && receiptTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, receiptTimestamp, {
+          cfg: deps.cfg,
           baseUrl: deps.baseUrl,
           account: deps.account,
           accountId: deps.accountId,

@@ -327,7 +327,7 @@ export async function resolveGraphChatId(params: {
   }
 
   const res = await fetchFn(`${GRAPH_ROOT}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {

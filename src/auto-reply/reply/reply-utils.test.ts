@@ -4,13 +4,16 @@ import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { createReplyReferencePlanner } from "./reply-reference.js";
+import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
   hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
-import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -125,10 +128,36 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
+  it("strips glued leading NO_REPLY text without leaking the token", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLYThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
+  it("strips glued leading NO_REPLY text case-insensitively", () => {
+    const result = normalizeReplyPayload({
+      text: "no_replyThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();
     expect(result!.text).toBe("NO_REPLY -- nope");
+  });
+
+  it("keeps punctuation-start content after a leading NO_REPLY token", () => {
+    const colonResult = normalizeReplyPayload({ text: "NO_REPLY: explanation" });
+    expect(colonResult).not.toBeNull();
+    expect(colonResult!.text).toBe("NO_REPLY: explanation");
+
+    const dashResult = normalizeReplyPayload({ text: "NO_REPLY—note" });
+    expect(dashResult).not.toBeNull();
+    expect(dashResult!.text).toBe("NO_REPLY—note");
   });
 
   it("suppresses message when stripping NO_REPLY leaves nothing", () => {
@@ -189,106 +218,45 @@ describe("normalizeReplyPayload", () => {
     expect(result!.interactive).toBeUndefined();
   });
 
-  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
+  it("applies responsePrefix before channel-owned transforms run", () => {
     const result = normalizeReplyPayload(
       {
         text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
       },
-      { responsePrefix: "[bot]", enableSlackInteractiveReplies: true },
+      { responsePrefix: "[bot]" },
     );
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("[bot] hello");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "[bot] hello",
-        },
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Retry",
-              value: "retry",
-            },
-            {
-              label: "Ignore",
-              value: "ignore",
-            },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("compiles simple trailing Options lines into Slack buttons when interactive replies are enabled", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "Current verbose level: off.\nOptions: on, full, off.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+  it("leaves trailing Options lines for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Current verbose level: off.\nOptions: on, full, off.",
+    });
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Current verbose level: off.");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "Current verbose level: off.",
-        },
-        {
-          type: "buttons",
-          buttons: [
-            { label: "on", value: "on" },
-            { label: "full", value: "full" },
-            { label: "off", value: "off" },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("uses a Slack select when simple Options lines exceed the button row size", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+  it("leaves larger Options lists for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    });
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Choose a reasoning level.");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "Choose a reasoning level.",
-        },
-        {
-          type: "select",
-          placeholder: "Choose an option",
-          options: [
-            { label: "off", value: "off" },
-            { label: "minimal", value: "minimal" },
-            { label: "low", value: "low" },
-            { label: "medium", value: "medium" },
-            { label: "high", value: "high" },
-            { label: "adaptive", value: "adaptive" },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe(
+      "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    );
+    expect(result!.interactive).toBeUndefined();
   });
 
   it("leaves complex Options lines as plain text", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+    const result = normalizeReplyPayload({
+      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    });
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe(
@@ -502,14 +470,14 @@ describe("parseAudioTag", () => {
 });
 
 describe("resolveResponsePrefixTemplate", () => {
-  function expectResolvedTemplateCases<
-    T extends ReadonlyArray<{
+  function expectResolvedTemplateCases(
+    cases: ReadonlyArray<{
       name: string;
       template: string | undefined;
       values: Parameters<typeof resolveResponsePrefixTemplate>[1];
       expected: string | undefined;
     }>,
-  >(cases: T) {
+  ) {
     for (const testCase of cases) {
       expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
         testCase.expected,
@@ -522,14 +490,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "model",
         template: "[{model}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4]",
       },
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.2" },
-        expected: "[openai-codex/gpt-5.2]",
+        values: { modelFull: "openai-codex/gpt-5.4" },
+        expected: "[openai-codex/gpt-5.4]",
       },
       {
         name: "provider",
@@ -564,8 +532,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "case-insensitive variables",
         template: "[{MODEL} | {ThinkingLevel}]",
-        values: { model: "gpt-5.2", thinkingLevel: "low" },
-        expected: "[gpt-5.2 | low]",
+        values: { model: "gpt-5.4", thinkingLevel: "low" },
+        expected: "[gpt-5.4 | low]",
       },
       {
         name: "all variables",
@@ -573,10 +541,10 @@ describe("resolveResponsePrefixTemplate", () => {
         values: {
           identityName: "OpenClaw",
           provider: "anthropic",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           thinkingLevel: "high",
         },
-        expected: "[OpenClaw] anthropic/claude-opus-4-5 (think:high)",
+        expected: "[OpenClaw] anthropic/claude-opus-4-6 (think:high)",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -595,14 +563,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "unrecognized variable",
         template: "[{unknownVar}]",
-        values: { model: "gpt-5.2" },
+        values: { model: "gpt-5.4" },
         expected: "[{unknownVar}]",
       },
       {
         name: "mixed resolved/unresolved",
         template: "[{model} | {provider}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2 | {provider}]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4 | {provider}]",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -825,6 +793,50 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not coalesce reasoning blocks into visible reply text", async () => {
+    const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isReasoning: payload.isReasoning,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "Visible answer" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "Visible answer", isReasoning: undefined },
+    ]);
+    coalescer.stop();
+  });
+
+  it("preserves compaction notice markers across flushes", async () => {
+    const flushes: Array<{ text?: string; isCompactionNotice?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isCompactionNotice: payload.isCompactionNotice,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([{ text: "Compacting context...", isCompactionNotice: true }]);
+    coalescer.stop();
+  });
+
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {
@@ -886,15 +898,20 @@ describe("createReplyReferencePlanner", () => {
       replyToMode: "first",
       startId: "parent",
     });
+    expect(firstPlanner.peek()).toBe("parent");
+    expect(firstPlanner.hasReplied()).toBe(false);
     expect(firstPlanner.use()).toBe("parent");
     expect(firstPlanner.hasReplied()).toBe(true);
     firstPlanner.markSent();
+    expect(firstPlanner.peek()).toBeUndefined();
     expect(firstPlanner.use()).toBeUndefined();
 
     const allPlanner = createReplyReferencePlanner({
       replyToMode: "all",
       startId: "parent",
     });
+    expect(allPlanner.peek()).toBe("parent");
+    expect(allPlanner.hasReplied()).toBe(false);
     expect(allPlanner.use()).toBe("parent");
     expect(allPlanner.use()).toBe("parent");
 
@@ -905,6 +922,31 @@ describe("createReplyReferencePlanner", () => {
     });
     expect(existingIdPlanner.use()).toBe("thread-1");
     expect(existingIdPlanner.use()).toBeUndefined();
+
+    const batchedPlanner = createReplyReferencePlanner({
+      replyToMode: "batched",
+      startId: "parent",
+    });
+    expect(batchedPlanner.peek()).toBe("parent");
+    expect(batchedPlanner.use()).toBe("parent");
+    expect(batchedPlanner.peek()).toBeUndefined();
+    expect(batchedPlanner.use()).toBeUndefined();
+  });
+
+  it("lets transient previews inspect first references without consuming them", () => {
+    const planner = createReplyReferencePlanner({
+      replyToMode: "first",
+      startId: "parent",
+    });
+
+    expect(planner.peek()).toBe("parent");
+    expect(planner.peek()).toBe("parent");
+    expect(planner.hasReplied()).toBe(false);
+
+    planner.markSent();
+
+    expect(planner.peek()).toBeUndefined();
+    expect(planner.use()).toBeUndefined();
   });
 
   it("honors allowReference=false", () => {
@@ -917,6 +959,15 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.hasReplied()).toBe(false);
     planner.markSent();
     expect(planner.hasReplied()).toBe(true);
+  });
+});
+
+describe("isSingleUseReplyToMode", () => {
+  it("treats first and batched as single-use reply modes", () => {
+    expect(isSingleUseReplyToMode("off")).toBe(false);
+    expect(isSingleUseReplyToMode("all")).toBe(false);
+    expect(isSingleUseReplyToMode("first")).toBe(true);
+    expect(isSingleUseReplyToMode("batched")).toBe(true);
   });
 });
 
@@ -937,6 +988,15 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(accumulator.consume("[[reply_to_")).toBeNull();
 
     const result = accumulator.consume("current]] Yo");
+    expect(result?.text).toBe("Yo");
+    expect(result?.replyToCurrent).toBe(true);
+  });
+
+  it("handles reply tags split before the second bracket", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[")).toBeNull();
+
+    const result = accumulator.consume("[reply_to_current]] Yo");
     expect(result?.text).toBe("Yo");
     expect(result?.replyToCurrent).toBe(true);
   });
@@ -969,14 +1029,159 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(afterReset?.replyToTag).toBe(false);
     expect(afterReset?.replyToId).toBeUndefined();
   });
+
+  it("strips a glued leading NO_REPLY token from streamed text", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLYThe user is saying hello");
+
+    expect(result?.text).toBe("The user is saying hello");
+  });
+
+  it("keeps punctuation-start text after a leading NO_REPLY token", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLY: explanation");
+
+    expect(result?.text).toBe("NO_REPLY: explanation");
+  });
+
+  it("reassembles MEDIA: directives split between the token and the colon", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("这次直接发图。\n\nMEDIA");
+    expect(first?.text).toBe("这次直接发图。");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(":/tmp/spy-family.png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/tmp/spy-family.png"]);
+    expect((finalResult?.text ?? "").includes("MEDIA")).toBe(false);
+  });
+
+  it("reassembles MEDIA: directives split inside the URL path", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("Preview below.\n\nMEDIA:/var/folders/tool-image");
+    expect(first?.text).toBe("Preview below.");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume("-generation/cover.png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/var/folders/tool-image-generation/cover.png"]);
+  });
+
+  it("buffers partial MEDIA prefixes (M/ME/MED/MEDI) across chunk boundaries", () => {
+    for (const prefix of ["M", "ME", "MED", "MEDI"]) {
+      const accumulator = createStreamingDirectiveAccumulator();
+      const head = `Here is the file.\n\n${prefix}`;
+      const headResult = accumulator.consume(head);
+      expect(headResult?.text, `prefix=${prefix} head emits text`).toBe("Here is the file.");
+
+      const rest = `MEDIA:/tmp/file.png`.slice(prefix.length);
+      const restResult = accumulator.consume(rest);
+      expect(restResult, `prefix=${prefix} mid returns null`).toBeNull();
+
+      const finalResult = accumulator.consume("", { final: true });
+      expect(finalResult?.mediaUrls, `prefix=${prefix} final mediaUrls`).toEqual(["/tmp/file.png"]);
+    }
+  });
+
+  it("does not buffer a trailing letter that appears mid-line", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // "I am" ends in "m". The prefix guard only anchors to line-start (`^`
+    // or immediately after `\n`), so ordinary prose whose last character
+    // happens to be an `M|ME|MED|MEDI|MEDIA` letter stays in the emitted
+    // text.
+    const result = accumulator.consume("I am");
+    expect(result?.text).toBe("I am");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("does not buffer prose that merely contains the token MEDIA:", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // Matches what upstream `splitMediaFromOutput` considers a directive:
+    // only lines whose trimmed start is `MEDIA:`. A line that merely
+    // contains "MEDIA:" mid-sentence is ordinary prose and must flush
+    // immediately — otherwise on a stream-item boundary (which may call
+    // `reset()` without a preceding `consume("", { final: true })`) the
+    // buffered prose would be silently dropped.
+    const result = accumulator.consume("See the MEDIA: section for details");
+    expect(result?.text).toBe("See the MEDIA: section for details");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("still buffers an indented MEDIA directive line that is mid-stream", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // Upstream parser treats `line.trimStart().startsWith("MEDIA:")` as a
+    // directive, so the guard must also buffer the indented form across
+    // a chunk boundary.
+    const first = accumulator.consume("Preview:\n  MEDIA:/tmp/cover");
+    expect(first?.text).toBe("Preview:");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(".png");
+    expect(second).toBeNull();
+
+    const finalResult = accumulator.consume("", { final: true });
+    expect(finalResult?.mediaUrls).toEqual(["/tmp/cover.png"]);
+  });
+
+  it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // A chunk can legitimately end with `MEDIA` mid-sentence (e.g. "this
+    // uses legacy MEDIA"). A later chunk starting with `:` must NOT join
+    // with the buffered token to synthesize a `MEDIA:<rest>` directive —
+    // upstream `MEDIA_TOKEN_RE` captures `[^\n]+`, and treating the rest
+    // of that sentence as a media path would invent a media reply the
+    // agent never authored.
+    const first = accumulator.consume("The legacy pipeline uses MEDIA");
+    expect(first?.text).toBe("The legacy pipeline uses MEDIA");
+    expect(first?.mediaUrls).toBeUndefined();
+
+    const second = accumulator.consume(": kind=disk capacity=1TB");
+    expect(second?.text).toBe(": kind=disk capacity=1TB");
+    expect(second?.mediaUrls).toBeUndefined();
+  });
+
+  it("passes plain text through when there is no incomplete directive tail", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("Hello world.\nThis is a complete block.");
+    expect(result?.text).toBe("Hello world.\nThis is a complete block.");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
+  it("keeps MEDIA directives that arrive in a single complete chunk working", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("Here it is.\n\nMEDIA:/tmp/complete.png\n");
+    expect(result?.text.includes("MEDIA")).toBe(false);
+    expect(result?.mediaUrls).toEqual(["/tmp/complete.png"]);
+  });
+
+  it("does not strip a complete final MEDIA line when parsing final text", () => {
+    expect(splitTrailingDirective("Here.\nMEDIA:/tmp/final.png", { final: true })).toEqual({
+      text: "Here.\nMEDIA:/tmp/final.png",
+      tail: "",
+    });
+  });
 });
 
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.2-codex", "gpt-5.2-codex"],
-      ["claude-opus-4-5-20251101", "claude-opus-4-5"],
-      ["gpt-5.2-latest", "gpt-5.2"],
+      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["claude-opus-4-6-20251101", "claude-opus-4-6"],
+      ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.
       ["model-123456789", "model-123456789"],
     ] as const;

@@ -40,6 +40,10 @@ type VisibleReplyTarget = {
   } | null;
 };
 
+type ReplyThreadingContext = {
+  implicitCurrentMessage?: "default" | "allow" | "deny";
+};
+
 type SenderContext = {
   id?: string;
   name?: string;
@@ -53,17 +57,20 @@ function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): bo
   return !cfg.channels.whatsapp.blockStreaming;
 }
 
-function shouldSuppressWhatsAppPayload(
+function resolveWhatsAppDeliverablePayload(
   payload: ReplyPayload,
   info: { kind: ReplyLifecycleKind },
-): boolean {
-  if (info.kind === "tool") {
-    return true;
-  }
+): ReplyPayload | null {
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
-    return true;
+    return null;
   }
-  return false;
+  if (info.kind === "tool") {
+    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+      return null;
+    }
+    return { ...payload, text: undefined };
+  }
+  return payload;
 }
 
 export function resolveWhatsAppResponsePrefix(params: {
@@ -82,14 +89,21 @@ export function resolveWhatsAppResponsePrefix(params: {
 }
 
 export function buildWhatsAppInboundContext(params: {
+  bodyForAgent?: string;
   combinedBody: string;
+  commandBody?: string;
   commandAuthorized?: boolean;
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
+  groupSystemPrompt?: string;
   msg: WebInboundMsg;
+  rawBody?: string;
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
+  transcript?: string;
+  mediaTranscribedIndexes?: number[];
+  replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
   const inboundHistory =
@@ -101,12 +115,13 @@ export function buildWhatsAppInboundContext(params: {
         }))
       : undefined;
 
-  return finalizeInboundContext({
+  const result = finalizeInboundContext({
     Body: params.combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: params.bodyForAgent ?? params.msg.body,
     InboundHistory: inboundHistory,
-    RawBody: params.msg.body,
-    CommandBody: params.msg.body,
+    RawBody: params.rawBody ?? params.msg.body,
+    CommandBody: params.commandBody ?? params.msg.body,
+    Transcript: params.transcript,
     From: params.msg.from,
     To: params.msg.to,
     SessionKey: params.route.sessionKey,
@@ -118,6 +133,7 @@ export function buildWhatsAppInboundContext(params: {
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
+    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
     ChatType: params.msg.chatType,
     Timestamp: params.msg.timestamp,
     ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
@@ -131,13 +147,17 @@ export function buildWhatsAppInboundContext(params: {
     SenderId: params.sender.id ?? params.sender.e164,
     SenderE164: params.sender.e164,
     CommandAuthorized: params.commandAuthorized,
+    ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: params.groupSystemPrompt,
+    UntrustedStructuredContext: params.msg.untrustedStructuredContext,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: params.msg.from,
   });
+  return result;
 }
 
 export function resolveWhatsAppDmRouteTarget(params: {
@@ -236,7 +256,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   msg: WebInboundMsg;
-  onModelSelected?: ChannelReplyOnModelSelected | undefined;
+  onModelSelected?: ChannelReplyOnModelSelected;
   rememberSentText: (
     text: string | undefined,
     opts: {
@@ -276,11 +296,12 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
-        if (shouldSuppressWhatsAppPayload(payload, info)) {
+        const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
+        if (!deliveryPayload) {
           return;
         }
         await params.deliverReply({
-          replyResult: payload,
+          replyResult: deliveryPayload,
           msg: params.msg,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
@@ -292,17 +313,17 @@ export async function dispatchWhatsAppBufferedReply(params: {
           tableMode,
         });
         didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
+        const shouldLog = deliveryPayload.text ? true : undefined;
+        params.rememberSentText(deliveryPayload.text, {
           combinedBody: params.context.Body as string | undefined,
           combinedBodySessionKey: params.route.sessionKey,
           logVerboseMessage: shouldLog,
         });
         const fromDisplay =
           params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(payload);
+        const reply = resolveSendableOutboundReplyParts(deliveryPayload);
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? reply.text : "<media>";
+          const preview = deliveryPayload.text != null ? reply.text : "<media>";
           logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
         }
       },
@@ -314,7 +335,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
   });
 
-  const didQueueVisibleReply = queuedFinal || counts.block > 0 || counts.final > 0;
+  const didQueueVisibleReply =
+    queuedFinal || counts.tool > 0 || counts.block > 0 || counts.final > 0;
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-types";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
@@ -108,6 +108,10 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
     bindingResolution: null,
     boundSessionKey: "",
   })),
+  resolveRuntimeConversationBindingRoute: vi.fn(({ route }: { route: unknown }) => ({
+    bindingRecord: null,
+    route,
+  })),
   getSessionBindingService: vi.fn(() => ({
     resolveByConversation: vi.fn(() => null),
     touch: vi.fn(),
@@ -134,7 +138,7 @@ export function createNativeCommandsHarness(params?: {
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
   const telegramDeps = {
-    loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
+    getRuntimeConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
     readChannelAllowFromStore: vi.fn(async () => []),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,

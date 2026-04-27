@@ -1,7 +1,9 @@
+// @vitest-environment node
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
+type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 type MutableHost = ToolStreamHost & {
   compactionStatus?: unknown;
   compactionClearTimer?: number | null;
@@ -28,6 +30,37 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
   };
 }
 
+function agentEvent(
+  runId: string,
+  seq: number,
+  stream: AgentEvent["stream"],
+  data: AgentEvent["data"],
+  sessionKey = "main",
+): AgentEvent {
+  return {
+    runId,
+    seq,
+    stream,
+    ts: Date.now(),
+    sessionKey,
+    data,
+  };
+}
+
+function expectCompactionCompleteAndAutoClears(host: MutableHost) {
+  expect(host.compactionStatus).toEqual({
+    phase: "complete",
+    runId: "run-1",
+    startedAt: expect.any(Number),
+    completedAt: expect.any(Number),
+  });
+  expect(host.compactionClearTimer).not.toBeNull();
+
+  vi.advanceTimersByTime(5_000);
+  expect(host.compactionStatus).toBeNull();
+  expect(host.compactionClearTimer).toBeNull();
+}
+
 describe("app-tool-stream fallback lifecycle handling", () => {
   beforeAll(() => {
     const globalWithWindow = globalThis as typeof globalThis & {
@@ -51,14 +84,16 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
         reasonSummary: "rate limit",
       },
     });
 
-    expect(host.fallbackStatus?.selected).toBe("fireworks/minimax-m2p5");
+    expect(host.fallbackStatus?.selected).toBe(
+      "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+    );
     expect(host.fallbackStatus?.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
     expect(host.fallbackStatus?.reason).toBe("rate limit");
     vi.useRealTimers();
@@ -77,7 +112,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
       },
@@ -100,7 +135,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
       },
@@ -127,9 +162,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback_cleared",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "fireworks",
-        activeModel: "fireworks/minimax-m2p5",
+        activeModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         previousActiveProvider: "deepinfra",
         previousActiveModel: "moonshotai/Kimi-K2.5",
       },
@@ -144,14 +179,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "start" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
 
     expect(host.compactionStatus).toEqual({
       phase: "active",
@@ -160,14 +188,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       completedAt: null,
     });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "end", willRetry: true, completed: true },
-    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", {
+        phase: "end",
+        willRetry: true,
+        completed: true,
+      }),
+    );
 
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
@@ -177,14 +205,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     });
     expect(host.compactionClearTimer).toBeNull();
 
-    handleAgentEvent(host, {
-      runId: "run-2",
-      seq: 3,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "end" },
-    });
+    handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
 
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
@@ -193,26 +214,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       completedAt: null,
     });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 4,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "end" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
 
-    expect(host.compactionStatus).toEqual({
-      phase: "complete",
-      runId: "run-1",
-      startedAt: expect.any(Number),
-      completedAt: expect.any(Number),
-    });
-    expect(host.compactionClearTimer).not.toBeNull();
-
-    vi.advanceTimersByTime(5_000);
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectCompactionCompleteAndAutoClears(host);
 
     vi.useRealTimers();
   });
@@ -221,23 +225,16 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "start" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "end", willRetry: true, completed: true },
-    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", {
+        phase: "end",
+        willRetry: true,
+        completed: true,
+      }),
+    );
 
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
@@ -246,26 +243,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       completedAt: null,
     });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 3,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "error", error: "boom" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
 
-    expect(host.compactionStatus).toEqual({
-      phase: "complete",
-      runId: "run-1",
-      startedAt: expect.any(Number),
-      completedAt: expect.any(Number),
-    });
-    expect(host.compactionClearTimer).not.toBeNull();
-
-    vi.advanceTimersByTime(5_000);
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectCompactionCompleteAndAutoClears(host);
 
     vi.useRealTimers();
   });
@@ -274,35 +254,21 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "start" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "end", willRetry: true, completed: false },
-    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", {
+        phase: "end",
+        willRetry: true,
+        completed: false,
+      }),
+    );
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 3,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: { phase: "error", error: "boom" },
-    });
+    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();

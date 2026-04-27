@@ -141,6 +141,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
       "operator.write",
       "operator.approvals",
       "operator.pairing",
+      "operator.talk.secrets",
     ]);
   });
 

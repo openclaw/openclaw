@@ -5,10 +5,12 @@ import {
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEnableState } from "../../plugins/config-state.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -27,6 +29,7 @@ type ResolveInstallableChannelPluginResult = {
   plugin?: ChannelPlugin;
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
+  pluginInstalled: boolean;
 };
 
 function resolveWorkspaceDir(cfg: OpenClawConfig) {
@@ -48,16 +51,18 @@ function resolveResolvedChannelId(params: {
 }
 
 export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
   const workspaceDir = cfg ? resolveWorkspaceDir(cfg) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
   });
 }
 
@@ -81,6 +86,24 @@ function isTrustedWorkspaceChannelCatalogEntry(
   if (!entry.pluginId) {
     return false;
   }
+  const plugins = cfg.plugins;
+  if (plugins?.enabled === false) {
+    return false;
+  }
+  const pluginEntry = plugins?.entries?.[entry.pluginId];
+  if (pluginEntry?.enabled === false) {
+    return false;
+  }
+  if (plugins?.deny?.length) {
+    return resolveEnableState(entry.pluginId, "workspace", normalizePluginsConfig(cfg.plugins))
+      .enabled;
+  }
+  if (plugins?.allow?.includes(entry.pluginId)) {
+    return true;
+  }
+  if (pluginEntry?.enabled === true && !plugins?.allow?.length) {
+    return true;
+  }
   return resolveEnableState(entry.pluginId, "workspace", normalizePluginsConfig(cfg.plugins))
     .enabled;
 }
@@ -96,15 +119,20 @@ function resolveTrustedCatalogEntry(params: {
     return params.catalogEntry;
   }
   if (params.rawChannel) {
-    const trimmed = params.rawChannel.trim().toLowerCase();
+    const trimmed = normalizeOptionalLowercaseString(params.rawChannel);
+    if (!trimmed) {
+      return undefined;
+    }
     return listChannelPluginCatalogEntries({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
     }).find((entry) => {
-      if (entry.id.toLowerCase() === trimmed) {
+      if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
         return true;
       }
-      return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+      return (entry.meta.aliases ?? []).some(
+        (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+      );
     });
   }
   if (!params.channelId) {
@@ -170,6 +198,7 @@ export async function resolveInstallableChannelPlugin(params: {
       cfg: nextCfg,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -181,6 +210,7 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: existing,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -200,6 +230,7 @@ export async function resolveInstallableChannelPlugin(params: {
         plugin: scoped,
         catalogEntry,
         configChanged: false,
+        pluginInstalled: false,
       };
     }
 
@@ -231,6 +262,7 @@ export async function resolveInstallableChannelPlugin(params: {
             ? { ...catalogEntry, pluginId: installedPluginId }
             : catalogEntry,
         configChanged: nextCfg !== params.cfg,
+        pluginInstalled: installResult.installed,
       };
     }
   }
@@ -241,5 +273,6 @@ export async function resolveInstallableChannelPlugin(params: {
     plugin: existing,
     catalogEntry,
     configChanged: false,
+    pluginInstalled: false,
   };
 }

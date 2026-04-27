@@ -15,8 +15,10 @@ const { withFileLockMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/file-lock", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/file-lock")>(
+    "openclaw/plugin-sdk/file-lock",
+  );
   return {
     ...actual,
     withFileLock: withFileLockMock,
@@ -89,6 +91,7 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
     });
     await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
 
+    fs.writeFileSync(snapshotPath, "[]", "utf8");
     withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
       capturedOptions.push(options as CapturedLockOptions);
       return false;

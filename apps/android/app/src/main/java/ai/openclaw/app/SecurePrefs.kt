@@ -37,6 +37,7 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val voiceMicEnabledKey = "voice.micEnabled"
   }
 
   private val appContext = context.applicationContext
@@ -162,8 +163,8 @@ class SecurePrefs(
   private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
   val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
 
-  private val _talkEnabled = MutableStateFlow(plainPrefs.getBoolean("talk.enabled", false))
-  val talkEnabled: StateFlow<Boolean> = _talkEnabled
+  private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
+  val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
@@ -402,6 +403,18 @@ class SecurePrefs(
     securePrefs.edit { putString(key, password.trim()) }
   }
 
+  fun clearGatewaySetupAuth() {
+    val instanceId = _instanceId.value
+    securePrefs.edit {
+      remove("gateway.manual.token")
+      remove("gateway.token.$instanceId")
+      remove("gateway.bootstrapToken.$instanceId")
+      remove("gateway.password.$instanceId")
+    }
+    _gatewayToken.value = ""
+    _gatewayBootstrapToken.value = ""
+  }
+
   fun loadGatewayTlsFingerprint(stableId: String): String? {
     val key = "gateway.tls.$stableId"
     return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
@@ -466,9 +479,9 @@ class SecurePrefs(
     _voiceWakeMode.value = mode
   }
 
-  fun setTalkEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("talk.enabled", value) }
-    _talkEnabled.value = value
+  fun setVoiceMicEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
+    _voiceMicEnabled.value = value
   }
 
   fun setSpeakerEnabled(value: Boolean) {

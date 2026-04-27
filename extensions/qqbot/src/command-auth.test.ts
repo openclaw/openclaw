@@ -26,7 +26,7 @@ import { qqbotPlugin } from "./channel.js";
 // ---------------------------------------------------------------------------
 
 describe("qqbot: prefix normalization for inbound commandAuthorized", () => {
-  const formatAllowFrom = qqbotPlugin.config!.formatAllowFrom!;
+  const formatAllowFrom = qqbotPlugin.config.formatAllowFrom!;
 
   /** Mirrors the fixed gateway.ts inbound commandAuthorized computation. */
   function resolveInboundCommandAuthorized(rawAllowFrom: string[], senderId: string): boolean {
