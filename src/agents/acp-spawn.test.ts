@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   __testing as sessionBindingServiceTesting,
@@ -723,6 +724,93 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("allows ACP resume IDs recorded for the requester session", async () => {
+    const resumeSessionId = "codex-inner-resume";
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:codex:acp:owned": {
+        sessionId: "sess-owned",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex",
+          identity: {
+            state: "resolved",
+            source: "ensure",
+            agentSessionId: resumeSessionId,
+            acpxSessionId: "acpx-owned",
+            lastUpdatedAt: Date.now(),
+          },
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      } satisfies SessionEntry,
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume owned ACP session",
+        agentId: "codex",
+        resumeSessionId,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resumeSessionId,
+      }),
+    );
+  });
+
+  it("rejects ACP resume IDs not recorded for the requester session", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:codex:acp:other": {
+        sessionId: "sess-other",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:other:main",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex",
+          identity: {
+            state: "resolved",
+            source: "ensure",
+            agentSessionId: "codex-inner-other",
+            acpxSessionId: "acpx-other",
+            lastUpdatedAt: Date.now(),
+          },
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      } satisfies SessionEntry,
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume other ACP session",
+        agentId: "codex",
+        resumeSessionId: "codex-inner-other",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      errorCode: "resume_forbidden",
+    });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("passes model and thinking overrides into ACP session initialization", async () => {

@@ -108,7 +108,7 @@ describe("sessions_spawn tool", () => {
       'ignored for runtime="subagent"',
     );
     expect(schema.properties?.resumeSessionId?.description).toContain(
-      "backend/harness policy owns authorization",
+      "already recorded for this requester",
     );
     expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
     expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');

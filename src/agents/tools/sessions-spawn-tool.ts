@@ -154,7 +154,7 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
           resumeSessionId: Type.Optional(
             Type.String({
               description:
-                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use an existing host-local ACP/harness session ID (e.g. a Codex session UUID from ~/.codex/sessions/) so the ACP backend replays conversation history via session/load instead of starting fresh; backend/harness policy owns authorization for that resume ID.',
+                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use only an ACP/harness session ID already recorded for this requester so the ACP backend replays conversation history instead of starting fresh.',
             }),
           ),
           streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
