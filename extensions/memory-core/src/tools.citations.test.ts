@@ -308,6 +308,40 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });
 
+  it("labels session transcript hits as corpus=sessions", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "qmd/sessions-main/test-session.md",
+        startLine: 11,
+        endLine: 14,
+        score: 0.42,
+        snippet: "User: hello\nAssistant: hi",
+        source: "sessions" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_sessions_corpus", {
+      query: "hello",
+      corpus: "sessions",
+    });
+    const details = result.details as {
+      results: Array<{ corpus: string; source: string; path: string }>;
+    };
+
+    expect(details.results).toEqual([
+      {
+        corpus: "sessions",
+        source: "sessions",
+        path: "qmd/sessions-main/test-session.md",
+        startLine: 11,
+        endLine: 14,
+        score: 0.42,
+        snippet: "User: hello\nAssistant: hi",
+      },
+    ]);
+  });
+
   it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {
     setMemoryReadFileImpl(async () => {
       throw new Error("path required");

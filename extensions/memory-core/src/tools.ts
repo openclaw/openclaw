@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -6,7 +7,6 @@ import {
   readStringParam,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
   MemorySearchResult,
   MemorySearchRuntimeDebug,
@@ -221,7 +221,11 @@ export function createMemorySearchTool(options: {
           const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
           let surfacedMemoryResults: Array<
-            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+            Record<string, unknown> & {
+              corpus: "memory" | "sessions";
+              score: number;
+              path: string;
+            }
           > = [];
           let provider: string | undefined;
           let model: string | undefined;
@@ -279,7 +283,7 @@ export function createMemorySearchTool(options: {
                 : decorated;
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
-              corpus: "memory" as const,
+              corpus: result.source === "sessions" ? ("sessions" as const) : ("memory" as const),
             }));
             const sleepTimezone = resolveMemoryDeepDreamingConfig({
               pluginConfig: resolveMemoryCorePluginConfig(cfg),
