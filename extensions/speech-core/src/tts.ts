@@ -1751,7 +1751,7 @@ export async function maybeApplyTtsToPayload(params: {
     for (const provider of providers) {
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
-        cfg: params.cfg,
+        cfg,
         config,
         persona: activePersona,
       });
