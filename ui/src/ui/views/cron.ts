@@ -1723,8 +1723,8 @@ function renderRun(
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
-  const bodySource = entry.summary ?? entry.error ?? t("cron.runEntry.noSummary");
-  const showErrorInMeta = !!entry.error && entry.summary != null;
+  const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
+  const showErrorInMeta = !!entry.error && !!entry.summary;
   return html`
     <div class="list-item cron-run-entry">
       <div class="cron-run-entry__header">

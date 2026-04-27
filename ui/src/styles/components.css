@@ -1341,15 +1341,6 @@
   box-sizing: border-box;
 }
 
-.cron-run-entry__body pre,
-.cron-run-entry__body blockquote,
-.cron-job-detail-value pre,
-.cron-job-detail-value blockquote {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
 @media (max-width: 1100px) {
   .cron-job.list-item {
     display: flex;

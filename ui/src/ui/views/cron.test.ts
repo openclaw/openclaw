@@ -372,6 +372,31 @@ describe("cron view", () => {
     expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
   });
 
+  it("treats empty run summaries as absent when an error exists", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          runs: [
+            {
+              ts: 2,
+              jobId: "job-empty-summary",
+              status: "error",
+              summary: "",
+              error: "Failed with **markdown**",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".cron-run-entry__meta")?.textContent).not.toContain(
+      "Failed with",
+    );
+    expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
+  });
+
   it("wires the Edit action and shows save/cancel controls when editing", () => {
     const container = document.createElement("div");
     const onEdit = vi.fn();
