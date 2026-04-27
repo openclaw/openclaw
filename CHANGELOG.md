@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS Gateway: detect installed-but-unloaded LaunchAgent split-brain states during status, doctor, and restart, and re-bootstrap launchd supervision before falling back to unmanaged listener restarts. Fixes #67335, #53475, and #71060; refs #58890, #60885, and #70801. Thanks @ze1tgeist88, @dafacto, and @vishutdhar.
 - Plugins/install: stage bundled plugin runtime dependencies before Gateway startup and drain update restarts while preserving per-plugin isolation when pre-stage scan or install fails. Thanks @codex.
 - CLI/startup: read generated startup metadata from the bundled `dist` layout before falling back to live help rendering, so root/browser help and channel-option bootstrap stay on the fast path. Thanks @vincentkoc.
 - CLI/help: treat positional `help` invocations like `openclaw channels help` as help paths for startup gating, avoiding model/auth warmup while preserving positional arguments such as `openclaw docs help`. Thanks @gumadeiras.

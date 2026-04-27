@@ -305,10 +305,11 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    const plistExists = await launchAgentPlistExists(env);
     return {
       status: "unknown",
       detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      ...(plistExists ? { missingSupervision: true } : { missingUnit: true }),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
