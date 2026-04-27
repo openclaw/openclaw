@@ -72,25 +72,27 @@ export async function runSessionsSendA2AFlow(params: {
     });
     await Promise.all(
       relayTargets.map((target, index) =>
-        callGateway({
-          method: "send",
-          params: {
-            to: target.to,
-            message: relayText,
-            channel: target.channel,
-            accountId: target.accountId,
-            threadId: target.threadId,
-            idempotencyKey: `${runContextId}:relay:${fromAgent}:${toAgent}:${index}`,
-          },
-          timeoutMs: 10_000,
-        }).catch((err) => {
-          log.warn("sessions_send relay delivery failed", {
-            runId: runContextId,
-            channel: target.channel,
-            to: target.to,
-            error: formatErrorMessage(err),
-          });
-        }),
+        sessionsSendA2ADeps
+          .callGateway({
+            method: "send",
+            params: {
+              to: target.to,
+              message: relayText,
+              channel: target.channel,
+              accountId: target.accountId,
+              threadId: target.threadId,
+              idempotencyKey: `${runContextId}:relay:${fromAgent}:${toAgent}:${index}`,
+            },
+            timeoutMs: 10_000,
+          })
+          .catch((err) => {
+            log.warn("sessions_send relay delivery failed", {
+              runId: runContextId,
+              channel: target.channel,
+              to: target.to,
+              error: formatErrorMessage(err),
+            });
+          }),
       ),
     );
   };

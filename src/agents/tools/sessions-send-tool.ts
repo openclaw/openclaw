@@ -358,11 +358,11 @@ export function createSessionsSendTool(opts?: {
         cfg.session?.agentToAgent?.guard?.allowNestedSessionsSend === true;
       if (!allowNestedSessionsSend && opts?.agentSessionKey) {
         try {
-          const currentHistory = await callGateway<{ messages?: Array<Record<string, unknown>> }>({
+          const currentHistory = (await callGateway({
             method: "chat.history",
             params: { sessionKey: opts.agentSessionKey, limit: 20 },
             timeoutMs: 10_000,
-          });
+          })) as { messages?: Array<Record<string, unknown>> };
           const messages = Array.isArray(currentHistory?.messages) ? currentHistory.messages : [];
           const latestUser = [...messages].toReversed().find((entry) => entry?.role === "user");
           const provenance = latestUser?.provenance as Record<string, unknown> | undefined;

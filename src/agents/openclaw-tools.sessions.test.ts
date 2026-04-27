@@ -39,7 +39,7 @@ import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolut
 import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
-const TEST_CONFIG = {
+const TEST_CONFIG_SHAPE = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -54,7 +54,20 @@ const TEST_CONFIG = {
     sessions: { visibility: "all" },
     agentToAgent: { enabled: true },
   },
-} as OpenClawConfig;
+} satisfies OpenClawConfig;
+
+const TEST_CONFIG: OpenClawConfig = TEST_CONFIG_SHAPE;
+const TEST_A2A_CONFIG = TEST_CONFIG_SHAPE.session.agentToAgent as {
+  maxPingPongTurns: number;
+  ingressEcho: { enabled: boolean; requireDelivery: boolean };
+  guard: { allowNestedSessionsSend: boolean };
+  relay: {
+    enabled: boolean;
+    mode: "target-only" | "dual-channel";
+    mirrorTurns: "round1" | "all";
+    requireDelivery: boolean;
+  };
+};
 
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
@@ -165,13 +178,13 @@ describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     installMessagingTestRegistry();
-    TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = false;
-    TEST_CONFIG.session.agentToAgent.ingressEcho.requireDelivery = false;
-    TEST_CONFIG.session.agentToAgent.guard.allowNestedSessionsSend = false;
-    TEST_CONFIG.session.agentToAgent.relay.enabled = false;
-    TEST_CONFIG.session.agentToAgent.relay.mode = "target-only";
-    TEST_CONFIG.session.agentToAgent.relay.mirrorTurns = "round1";
-    TEST_CONFIG.session.agentToAgent.relay.requireDelivery = false;
+    TEST_A2A_CONFIG.ingressEcho.enabled = false;
+    TEST_A2A_CONFIG.ingressEcho.requireDelivery = false;
+    TEST_A2A_CONFIG.guard.allowNestedSessionsSend = false;
+    TEST_A2A_CONFIG.relay.enabled = false;
+    TEST_A2A_CONFIG.relay.mode = "target-only";
+    TEST_A2A_CONFIG.relay.mirrorTurns = "round1";
+    TEST_A2A_CONFIG.relay.requireDelivery = false;
     agentStepTesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
@@ -932,7 +945,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(9);
+    expect(historyOnlyCalls).toHaveLength(11);
     expect(sendCallCount).toBe(0);
   });
 
@@ -1019,7 +1032,10 @@ describe("sessions tools", () => {
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "done";
+        const text = lastWaitedRunId ? (replyByRunId.get(lastWaitedRunId) ?? "done") : undefined;
+        if (!text) {
+          return { messages: [] };
+        }
         return {
           messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp: 20 }],
         };
@@ -1027,7 +1043,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = true;
+    TEST_A2A_CONFIG.ingressEcho.enabled = true;
     const tool = createOpenClawTools({
       agentSessionKey: "discord:group:req",
       agentChannel: "discord",
@@ -1102,7 +1118,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send reports not_applicable when ingress echo target cannot be resolved in best-effort mode", async () => {
-    TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = true;
+    TEST_A2A_CONFIG.ingressEcho.enabled = true;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       if (request.method === "agent") {
@@ -1148,7 +1164,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send includes ingressEcho on fire-and-forget accepted path", async () => {
-    TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = true;
+    TEST_A2A_CONFIG.ingressEcho.enabled = true;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       if (request.method === "send") {
@@ -1197,8 +1213,8 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send blocks target run when strict ingress echo delivery fails", async () => {
-    TEST_CONFIG.session.agentToAgent.ingressEcho.enabled = true;
-    TEST_CONFIG.session.agentToAgent.ingressEcho.requireDelivery = true;
+    TEST_A2A_CONFIG.ingressEcho.enabled = true;
+    TEST_A2A_CONFIG.ingressEcho.requireDelivery = true;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "send") {
@@ -1237,7 +1253,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send allows nested relay when explicitly enabled", async () => {
-    TEST_CONFIG.session.agentToAgent.guard.allowNestedSessionsSend = true;
+    TEST_A2A_CONFIG.guard.allowNestedSessionsSend = true;
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -1256,7 +1272,10 @@ describe("sessions tools", () => {
             ],
           };
         }
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "done";
+        const text = lastWaitedRunId ? (replyByRunId.get(lastWaitedRunId) ?? "done") : undefined;
+        if (!text) {
+          return { messages: [] };
+        }
         return {
           messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp: 20 }],
         };
@@ -1302,9 +1321,9 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send relays round1 turns to both source and target channels in dual-channel mode and suppresses announce", async () => {
-    TEST_CONFIG.session.agentToAgent.relay.enabled = true;
-    TEST_CONFIG.session.agentToAgent.relay.mode = "dual-channel";
-    TEST_CONFIG.session.agentToAgent.relay.mirrorTurns = "round1";
+    TEST_A2A_CONFIG.relay.enabled = true;
+    TEST_A2A_CONFIG.relay.mode = "dual-channel";
+    TEST_A2A_CONFIG.relay.mirrorTurns = "round1";
 
     const sends: Array<{ to?: string; channel?: string; message?: string }> = [];
     let agentCallCount = 0;
@@ -1343,6 +1362,10 @@ describe("sessions tools", () => {
         if (sessionKey === "discord:group:req") {
           return { messages: [] };
         }
+        const text = lastWaitedRunId ? (replyByRunId.get(lastWaitedRunId) ?? "done") : undefined;
+        if (!text) {
+          return { messages: [] };
+        }
         return {
           messages: [
             {
@@ -1350,7 +1373,7 @@ describe("sessions tools", () => {
               content: [
                 {
                   type: "text",
-                  text: (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "done",
+                  text,
                 },
               ],
               timestamp: 20,
