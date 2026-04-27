@@ -1,5 +1,9 @@
 import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   installSkillFromClawHub,
   readTrackedClawHubSkillSlugs,
@@ -41,9 +45,13 @@ async function runSkillsAction(render: (report: SkillStatusReport) => string): P
   }
 }
 
-function resolveActiveWorkspaceDir(): string {
+function resolveActiveWorkspaceDir(agentId?: string): string {
   const config = loadConfig();
-  return resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const effectiveAgentId =
+    agentId?.trim() ||
+    resolveAgentIdByWorkspacePath(config, process.cwd()) ||
+    resolveDefaultAgentId(config);
+  return resolveAgentWorkspaceDir(config, effectiveAgentId);
 }
 
 /**
@@ -96,9 +104,10 @@ export function registerSkillsCli(program: Command) {
     .argument("<slug>", "ClawHub skill slug")
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
-    .action(async (slug: string, opts: { version?: string; force?: boolean }) => {
+    .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred or default agent)")
+    .action(async (slug: string, opts: { version?: string; force?: boolean; agent?: string }) => {
       try {
-        const workspaceDir = resolveActiveWorkspaceDir();
+        const workspaceDir = resolveActiveWorkspaceDir(opts.agent);
         const result = await installSkillFromClawHub({
           workspaceDir,
           slug,
@@ -125,7 +134,8 @@ export function registerSkillsCli(program: Command) {
     .description("Update ClawHub-installed skills in the active workspace")
     .argument("[slug]", "Single skill slug")
     .option("--all", "Update all tracked ClawHub skills", false)
-    .action(async (slug: string | undefined, opts: { all?: boolean }) => {
+    .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred or default agent)")
+    .action(async (slug: string | undefined, opts: { all?: boolean; agent?: string }) => {
       try {
         if (!slug && !opts.all) {
           defaultRuntime.error("Provide a skill slug or use --all.");
@@ -137,7 +147,7 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
-        const workspaceDir = resolveActiveWorkspaceDir();
+        const workspaceDir = resolveActiveWorkspaceDir(opts.agent);
         const tracked = await readTrackedClawHubSkillSlugs(workspaceDir);
         if (opts.all && tracked.length === 0) {
           defaultRuntime.log("No tracked ClawHub skills to update.");

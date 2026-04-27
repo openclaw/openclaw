@@ -110,7 +110,8 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => mocks.resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => mocks.resolveAgentWorkspaceDirMock(),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDirMock(...args),
+  resolveAgentIdByWorkspacePath: () => undefined,
 }));
 
 vi.mock("../agents/skills-clawhub.js", () => ({
@@ -208,6 +209,27 @@ describe("skills cli commands", () => {
         line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
       ),
     ).toBe(true);
+  });
+
+  it("installs a skill into agent-specific workspace when --agent is provided", async () => {
+    resolveAgentWorkspaceDirMock.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.0.0",
+      targetDir: "/tmp/workspace-writer/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--agent", "writer"]);
+
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(expect.anything(), "writer");
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-writer",
+      }),
+    );
   });
 
   it("updates all tracked ClawHub skills", async () => {
