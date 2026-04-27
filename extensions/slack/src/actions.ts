@@ -84,18 +84,28 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 
-async function resolveSlackChannelName(
-  client: WebClient,
-  channelId: string,
-): Promise<string | undefined> {
+async function resolveSlackChannelName(client: WebClient, channelId: string): Promise<string> {
   try {
     const info = await client.conversations.info({ channel: channelId });
     const channel = info.channel as { name?: string } | undefined;
     const name = channel?.name?.trim();
-    return name && name.length > 0 ? name : undefined;
-  } catch {
-    return undefined;
+    if (name) {
+      return name;
+    }
+  } catch (error) {
+    const slackError =
+      error && typeof error === "object" && "data" in error
+        ? ((error as { data?: { error?: unknown } }).data?.error as string | undefined)
+        : undefined;
+    throw new Error(
+      `Slack search --channel-id requires resolving the channel name with conversations.info before calling search.messages. Ensure the user token can read this channel and has the required Slack scopes (for example channels:read/groups:read/im:read/mpim:read).${
+        slackError ? ` Slack returned: ${slackError}.` : ""
+      }`,
+    );
   }
+  throw new Error(
+    "Slack search --channel-id could not resolve a channel name from conversations.info. Use --channel-name, or ensure the user token can read this channel.",
+  );
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -359,7 +369,7 @@ export async function searchSlackMessages(
     scopedQuery = `${query} in:${directChannelName}`;
   } else if (opts.channelId?.trim()) {
     const channelName = await resolveSlackChannelName(client, opts.channelId.trim());
-    scopedQuery = channelName ? `${query} in:${channelName}` : `${query} in:<#${opts.channelId.trim()}>`;
+    scopedQuery = `${query} in:${channelName}`;
   }
   const result = await client.search.messages({
     query: scopedQuery,

@@ -51,4 +51,50 @@ describe("registerMessageSearchCommand", () => {
       }),
     );
   });
+
+  it.each([
+    ["--channel-ids", ["--channel-ids", "C1"]],
+    ["--author-id", ["--author-id", "U1"]],
+    ["--author-ids", ["--author-ids", "U1"]],
+  ])("rejects Discord-only %s for Slack search", async (_name, args) => {
+    const message = new Command().exitOverride();
+    registerMessageSearchCommand(message, createHelpers(runMessageAction));
+
+    await expect(
+      message.parseAsync(["search", "--channel", "slack", "--query", "hello", ...args], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Slack message search does not support/);
+    expect(runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows Discord-only filters when Discord guild-id validation passes", async () => {
+    const message = new Command().exitOverride();
+    registerMessageSearchCommand(message, createHelpers(runMessageAction));
+
+    await message.parseAsync(
+      [
+        "search",
+        "--channel",
+        "discord",
+        "--guild-id",
+        "G1",
+        "--query",
+        "hello",
+        "--author-id",
+        "U1",
+      ],
+      { from: "user" },
+    );
+
+    expect(runMessageAction).toHaveBeenCalledWith(
+      "search",
+      expect.objectContaining({
+        channel: "discord",
+        guildId: "G1",
+        query: "hello",
+        authorId: "U1",
+      }),
+    );
+  });
 });
