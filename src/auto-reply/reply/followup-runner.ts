@@ -45,7 +45,15 @@ import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
-const FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY = "__openclawFollowupEmotionRawTtsText";
+// Module-private Symbol carrier so untrusted upstream payloads (plugin/tool/
+// structured model output) cannot spoof the marker via a normal string-key
+// property — Symbols are not enumerable through JSON, never appear in payloads
+// parsed from external input, and cannot be set without holding a reference to
+// this exact module-private value. Mirrors the EMOTION_RAW_TTS_TEXT_KEY
+// approach in agent-runner-payloads.ts.
+const FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY: unique symbol = Symbol(
+  "openclawFollowupEmotionRawTtsText",
+);
 
 type FollowupEmotionTaggedPayload = ReplyPayload & {
   [FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY]?: string;
@@ -57,7 +65,14 @@ function normalizeFollowupPayloadForDelivery(
 ): FollowupEmotionTaggedPayload[] {
   let text = payload.text;
   if (!text) {
-    return [payload as FollowupEmotionTaggedPayload];
+    // Even on the early-return path, proactively strip the Symbol-keyed
+    // marker so a future call site couldn't accidentally re-introduce a
+    // string carrier and let media-only payloads sneak past the symbol gate.
+    const taggedPayload = payload as FollowupEmotionTaggedPayload;
+    if (FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY in taggedPayload) {
+      delete taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
+    }
+    return [taggedPayload];
   }
 
   let nextPayload: FollowupEmotionTaggedPayload = payload;

@@ -209,10 +209,12 @@ export async function buildReplyPayloads(params: {
           extractMarkdownImages: params.extractMarkdownImages,
         });
         const parsedPayload = parsed.payload as EmotionTaggedPayload;
-        // The carrier key is a normal string property, so untrusted upstream
-        // payloads (plugin/tool/LLM) could spoof it. Only honor the value
-        // when emotion mode is enabled; otherwise drop it so it can't leak
-        // forward as ttsSourceText/ttsPlainText.
+        // The carrier key is a module-private Symbol so untrusted upstream
+        // payloads cannot spoof it via JSON or string indexing. We still
+        // gate the value on emotionMode (defense in depth) and drop it
+        // when mode is off so a leaked Symbol reference (e.g. through a
+        // future structuredClone path) can't leak forward as
+        // ttsSourceText/ttsPlainText.
         const rawEmotionTtsText =
           preserveRawEmotionTtsText && typeof parsedPayload[EMOTION_RAW_TTS_TEXT_KEY] === "string"
             ? parsedPayload[EMOTION_RAW_TTS_TEXT_KEY]

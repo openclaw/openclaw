@@ -1716,13 +1716,13 @@ export async function maybeApplyTtsToPayload(params: {
       (() => {
         const resolvedProvider = resolveReadySpeechProvider({
           provider,
-          cfg: params.cfg,
+          cfg,
           config,
           persona: activePersona,
         });
         return resolvedProvider.kind === "ready"
           ? resolvedProvider.providerConfig
-          : getResolvedSpeechProviderConfig(config, provider, params.cfg);
+          : getResolvedSpeechProviderConfig(config, provider, cfg);
       })();
     const directiveOverride = directives.overrides?.providerOverrides?.[provider];
     return directiveOverride ? { ...baseConfig, ...directiveOverride } : baseConfig;
@@ -1735,7 +1735,7 @@ export async function maybeApplyTtsToPayload(params: {
   ): string =>
     resolveSpeechTextForProvider({
       provider,
-      cfg: params.cfg,
+      cfg,
       providerConfig: resolveProviderConfigForTextRouting(provider, resolvedProviderConfig),
       expressiveText,
       plainText,
@@ -1749,21 +1749,42 @@ export async function maybeApplyTtsToPayload(params: {
       ...providerOrder.filter((provider) => provider !== effectiveProvider),
     ];
     for (const provider of providers) {
-      const resolvedProvider = resolveReadySpeechProvider({
-        provider,
-        cfg: params.cfg,
-        config,
-        persona: activePersona,
-      });
+      // Wrap preflight resolution in try/catch so a failure in any single
+      // provider's readiness/config resolution doesn't terminate the whole
+      // fallback chain. Mirrors the matching fix on PR #69051.
+      let resolvedProvider: ReturnType<typeof resolveReadySpeechProvider>;
+      try {
+        resolvedProvider = resolveReadySpeechProvider({
+          provider,
+          cfg,
+          config,
+          persona: activePersona,
+        });
+      } catch (err) {
+        if (isVerbose()) {
+          logVerbose(
+            `tts preflight: ${provider} provider resolution failed: ${formatErrorMessage(err)}`,
+          );
+        }
+        continue;
+      }
       if (resolvedProvider.kind === "skip") {
         continue;
       }
-      const candidate = resolveRoutedSpeechText(
-        provider,
-        expressiveText,
-        plainText,
-        resolvedProvider.providerConfig,
-      ).trim();
+      let candidate: string;
+      try {
+        candidate = resolveRoutedSpeechText(
+          provider,
+          expressiveText,
+          plainText,
+          resolvedProvider.providerConfig,
+        ).trim();
+      } catch (err) {
+        if (isVerbose()) {
+          logVerbose(`tts preflight: ${provider} text routing failed: ${formatErrorMessage(err)}`);
+        }
+        continue;
+      }
       if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
         return { provider, text: candidate };
       }
@@ -1884,7 +1905,7 @@ export async function maybeApplyTtsToPayload(params: {
     : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
   const effectiveTextForAudio = resolveSpeechTextForProvider({
     provider: effectiveProvider,
-    cfg: params.cfg,
+    cfg,
     providerConfig: initialProviderConfig,
     expressiveText: preparedExpressiveText,
     plainText: preparedPlainText,
