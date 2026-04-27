@@ -518,6 +518,28 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips oai memory citation blocks on the canonical user-visible path", () => {
+    const input = [
+      "Visible answer",
+      "",
+      "<oai-mem-citation>",
+      "<citation_entries>",
+      "memory/foo.md:1-2|note=[internal]",
+      "</citation_entries>",
+      "</oai-mem-citation>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("preserves oai memory citation tags inside fenced code blocks", () => {
+    const input = ["```xml", "<oai-mem-citation>", "example", "</oai-mem-citation>", "```"].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
     const input = [
       "<relevant-memories>",

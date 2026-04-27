@@ -97,7 +97,7 @@ describe("CronService failure alerts", () => {
         job: expect.objectContaining({ id: job.id }),
         channel: "telegram",
         to: "19098680",
-        text: expect.stringContaining('Cron job "daily report" failed 2 times'),
+        text: expect.stringContaining("daily report is failing"),
       }),
     );
 
@@ -109,7 +109,7 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
     expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining('Cron job "daily report" failed 4 times'),
+        text: expect.stringContaining("This scheduled job has failed 4 times in a row."),
       }),
     );
 

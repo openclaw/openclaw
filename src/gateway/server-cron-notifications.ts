@@ -125,6 +125,21 @@ async function postCronWebhook(params: {
   }
 }
 
+function formatCronFailureMessage(jobName: string, error?: string) {
+  return [
+    `${jobName} missed`,
+    "",
+    "Impact",
+    "- This scheduled job did not complete.",
+    "",
+    "What happened",
+    `- ${error ?? "unknown error"}`,
+    "",
+    "Next",
+    "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+  ].join("\n");
+}
+
 export async function sendGatewayCronFailureAlert(params: {
   deps: CliDeps;
   logger: CronLogger;
@@ -275,7 +290,7 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const failureMessage = formatCronFailureMessage(params.job.name, params.evt.error);
   const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
 
@@ -330,7 +345,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           accountId: failureDest.accountId,
           sessionKey: deliverySessionKey,
         },
-        `⚠️ ${failureMessage}`,
+        failureMessage,
       );
     }
     return;
@@ -353,6 +368,6 @@ function dispatchCronFailureDestinationNotifications(params: {
       accountId: primaryPlan.accountId,
       sessionKey: deliverySessionKey,
     },
-    `⚠️ ${failureMessage}`,
+    failureMessage,
   );
 }

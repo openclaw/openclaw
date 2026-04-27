@@ -10,6 +10,8 @@ import {
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
+const OAI_MEM_CITATION_TAG_RE = /<\s*(\/?)\s*oai-mem-citation\b[^<>]*>/gi;
+const OAI_MEM_CITATION_TAG_QUICK_RE = /<\s*\/?\s*oai-mem-citation\b/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -483,41 +485,56 @@ export function stripDowngradedToolCallText(text: string): string {
   return cleaned.trim();
 }
 
-function stripRelevantMemoriesTags(text: string): string {
-  if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
+function stripXmlTagBlockOutsideCode(text: string, quickRe: RegExp, tagRe: RegExp): string {
+  if (!text || !quickRe.test(text)) {
     return text;
   }
-  MEMORY_TAG_RE.lastIndex = 0;
+  tagRe.lastIndex = 0;
 
   const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
-  let inMemoryBlock = false;
+  let inBlock = false;
 
-  for (const match of text.matchAll(MEMORY_TAG_RE)) {
+  for (const match of text.matchAll(tagRe)) {
     const idx = match.index ?? 0;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }
 
     const isClose = match[1] === "/";
-    if (!inMemoryBlock) {
+    if (!inBlock) {
       result += text.slice(lastIndex, idx);
       if (!isClose) {
-        inMemoryBlock = true;
+        inBlock = true;
       }
     } else if (isClose) {
-      inMemoryBlock = false;
+      inBlock = false;
     }
 
     lastIndex = idx + match[0].length;
   }
 
-  if (!inMemoryBlock) {
+  if (!inBlock) {
     result += text.slice(lastIndex);
   }
 
   return result;
+}
+
+function stripRelevantMemoriesTags(text: string): string {
+  return stripXmlTagBlockOutsideCode(text, MEMORY_TAG_QUICK_RE, MEMORY_TAG_RE);
+}
+
+export function stripOaiMemoryCitationBlocks(text: string): string {
+  if (!text || !OAI_MEM_CITATION_TAG_QUICK_RE.test(text)) {
+    return text;
+  }
+  return stripXmlTagBlockOutsideCode(
+    text,
+    OAI_MEM_CITATION_TAG_QUICK_RE,
+    OAI_MEM_CITATION_TAG_RE,
+  ).trimEnd();
 }
 
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
@@ -586,6 +603,7 @@ function applyAssistantVisibleTextStagePipeline(
     }
     cleaned = stripModelSpecialTokens(cleaned);
     cleaned = stripRelevantMemoriesTags(cleaned);
+    cleaned = stripOaiMemoryCitationBlocks(cleaned);
     cleaned = stripToolCallXmlTags(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {

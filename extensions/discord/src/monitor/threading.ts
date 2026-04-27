@@ -83,6 +83,97 @@ type DiscordThreadStarterRestMessage = {
 };
 type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
+const DISCORD_AUTO_THREAD_MIN_CHARS = 30;
+const DISCORD_AUTO_THREAD_STRONG_TASK_MIN_CHARS = 8;
+const DISCORD_AUTO_THREAD_LONG_TASK_CHARS = 80;
+const DISCORD_CASUAL_THREAD_BLOCKLIST =
+  /^(yo|hi|hey|hello|sup|ok|okay|thanks|thank you|cool|nice|bet|gm|gn|ping|test|testing|status|status\?|update\?|done\?|all good\?|you there\?|quick check)$/i;
+const DISCORD_TASK_INTENT_RE =
+  /\b(fix|run|check|review|merge|audit|implement|build|create|update|debug|investigate|verify|clean|summarize|find|search|look up|schedule|remind|send|post|email|open|test|ship|continue|proceed|deploy|restart|triage|compare|explain|help)\b/i;
+const DISCORD_URL_RE = /https?:\/\/|discord\.com\/channels\//i;
+
+type DiscordAutoThreadGateResolved = Exclude<
+  NonNullable<DiscordChannelConfigResolved["autoThreadGate"]>,
+  false
+>;
+
+function hasDiscordThreadWorthyAttachment(message: MaybeCreateDiscordAutoThreadParams["message"]) {
+  const withAttachments = message as {
+    attachments?: unknown;
+    embeds?: unknown[];
+    message_snapshots?: unknown[];
+  };
+  const attachments = withAttachments.attachments;
+  if (Array.isArray(attachments)) {
+    return attachments.length > 0;
+  }
+  if (attachments && typeof (attachments as { size?: unknown }).size === "number") {
+    return ((attachments as { size: number }).size ?? 0) > 0;
+  }
+  if (Array.isArray(withAttachments.embeds) && withAttachments.embeds.length > 0) {
+    return true;
+  }
+  if (
+    Array.isArray(withAttachments.message_snapshots) &&
+    withAttachments.message_snapshots.length > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeDiscordAutoThreadGateConfig(
+  channelConfig?: DiscordChannelConfigResolved | null,
+): DiscordAutoThreadGateResolved {
+  const gate = channelConfig?.autoThreadGate;
+  return gate && typeof gate === "object" && !Array.isArray(gate) ? gate : {};
+}
+
+export function shouldCreateDiscordAutoThreadForMessage(
+  params: MaybeCreateDiscordAutoThreadParams,
+) {
+  if (params.channelConfig?.autoThreadGate === false) {
+    return true;
+  }
+  const gate = normalizeDiscordAutoThreadGateConfig(params.channelConfig);
+  const rawText = (params.baseText || params.combinedBody || "")
+    .replace(/<@!?\d+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (hasDiscordThreadWorthyAttachment(params.message)) {
+    return true;
+  }
+  if (DISCORD_URL_RE.test(rawText)) {
+    return true;
+  }
+  const lower = rawText.toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  if (DISCORD_CASUAL_THREAD_BLOCKLIST.test(lower)) {
+    return false;
+  }
+  const minChars = Math.max(1, Math.floor(gate.minChars ?? DISCORD_AUTO_THREAD_MIN_CHARS));
+  const taskMinChars = Math.max(
+    1,
+    Math.floor(gate.taskMinChars ?? DISCORD_AUTO_THREAD_STRONG_TASK_MIN_CHARS),
+  );
+  const longTaskChars = Math.max(
+    minChars,
+    Math.floor(gate.longTaskChars ?? DISCORD_AUTO_THREAD_LONG_TASK_CHARS),
+  );
+  if (rawText.length >= longTaskChars) {
+    return true;
+  }
+  if (rawText.length >= taskMinChars && DISCORD_TASK_INTENT_RE.test(rawText)) {
+    return true;
+  }
+  if (rawText.length < minChars) {
+    return false;
+  }
+  return rawText.endsWith("?") || DISCORD_TASK_INTENT_RE.test(rawText);
+}
+
 // Cache entry with timestamp for TTL-based eviction
 type DiscordThreadStarterCacheEntry = {
   value: DiscordThreadStarter;
@@ -517,6 +608,9 @@ export async function maybeCreateDiscordAutoThread(
     params.channelType === ChannelType.GuildVoice ||
     params.channelType === ChannelType.GuildStageVoice
   ) {
+    return undefined;
+  }
+  if (!shouldCreateDiscordAutoThreadForMessage(params)) {
     return undefined;
   }
 

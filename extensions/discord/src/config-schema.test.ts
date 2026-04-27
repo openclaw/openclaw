@@ -96,7 +96,11 @@ describe("discord config schema", () => {
           requireMention: false,
           users: ["steipete"],
           channels: {
-            general: { enabled: true, autoThread: true },
+            general: {
+              enabled: true,
+              autoThread: true,
+              autoThreadGate: { minChars: 24, taskMinChars: 6, longTaskChars: 96 },
+            },
           },
         },
       },
@@ -111,6 +115,11 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
     expect(cfg.guilds?.["123"]?.channels?.general?.enabled).toBe(true);
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
+    expect(cfg.guilds?.["123"]?.channels?.general?.autoThreadGate).toEqual({
+      minChars: 24,
+      taskMinChars: 6,
+      longTaskChars: 96,
+    });
   });
 
   it("accepts voice model override field", () => {

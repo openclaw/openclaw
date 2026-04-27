@@ -1239,7 +1239,18 @@ describe("gateway server cron", () => {
       expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
-        'Cron job "failure destination webhook" failed: unknown error',
+        [
+          "failure destination webhook missed",
+          "",
+          "Impact",
+          "- This scheduled job did not complete.",
+          "",
+          "What happened",
+          "- unknown error",
+          "",
+          "Next",
+          "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+        ].join("\n"),
       );
 
       fetchWithSsrFGuardMock.mockClear();
@@ -1335,7 +1346,18 @@ describe("gateway server cron", () => {
           accountId: undefined,
           sessionKey: "agent:main:telegram:direct:123:thread:99",
         },
-        '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+        [
+          "primary delivery fallback missed",
+          "",
+          "Impact",
+          "- This scheduled job did not complete.",
+          "",
+          "What happened",
+          "- unknown error",
+          "",
+          "Next",
+          "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+        ].join("\n"),
       );
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

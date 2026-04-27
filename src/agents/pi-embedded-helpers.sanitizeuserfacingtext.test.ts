@@ -226,6 +226,20 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
   });
 
+  it("strips oai memory citation blocks from user-facing text", () => {
+    const input = [
+      "Done.",
+      "",
+      "<oai-mem-citation>",
+      "<citation_entries>",
+      "memory/foo.md:1-2|note=[internal]",
+      "</citation_entries>",
+      "</oai-mem-citation>",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Done.");
+  });
+
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
     const input = [
       "Conversation info (untrusted metadata):",

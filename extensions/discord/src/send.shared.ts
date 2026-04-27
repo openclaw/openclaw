@@ -257,6 +257,127 @@ export async function resolveDiscordChannelType(
 // Discord message flag for silent/suppress notifications
 export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 
+const INTERNAL_DISCORD_LINE_PATTERNS = [
+  /^\s*Discord announcement to send:?\s*$/i,
+  /^\s*I read the prompt\.?\s*$/i,
+  /^\s*Followed instructions exactly\.?\s*$/i,
+  /^\s*Here is the Discord announcement:?\s*$/i,
+];
+
+function humanizeDiscordFailureDetail(detail: string | undefined) {
+  const value = (detail ?? "").trim();
+  if (!value) {
+    return "The failure did not include a useful error message.";
+  }
+  if (/job execution timed out/i.test(value)) {
+    return "The job ran too long and timed out before it finished.";
+  }
+  if (/approval-timeout/i.test(value)) {
+    return "The gateway waited for an approval response and timed out.";
+  }
+  if (/all models failed|FallbackSummaryError/i.test(value)) {
+    return "The model step failed across the configured fallbacks.";
+  }
+  if (/network|econnreset|econnrefused|fetch failed|socket/i.test(value)) {
+    return "A network call failed before the job could finish.";
+  }
+  return value.slice(0, 220);
+}
+
+function rewriteDiscordFailureHeadline(text: string) {
+  const trimmed = text.trim();
+  const cronMatch = trimmed.match(/^Cron job\s+"([^"]+)"\s+failed:\s*([\s\S]+)$/i);
+  if (cronMatch) {
+    return [
+      `${cronMatch[1]} missed`,
+      "",
+      "Impact",
+      "- This scheduled job did not complete.",
+      "",
+      "What happened",
+      `- ${humanizeDiscordFailureDetail(cronMatch[2])}`,
+      "",
+      "Next",
+      "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+    ].join("\n");
+  }
+  const execDeniedMatch = trimmed.match(/^Exec denied\s*\(([^)]*)\):\s*([\s\S]+)$/i);
+  if (execDeniedMatch) {
+    return [
+      "Command did not run",
+      "",
+      "Impact",
+      "- No command output was produced.",
+      "",
+      "What happened",
+      `- ${humanizeDiscordFailureDetail(execDeniedMatch[1])}`,
+      "",
+      "Next",
+      "- I kept the raw command in logs; fix approval routing or run it manually if needed.",
+    ].join("\n");
+  }
+  if (/^FallbackSummaryError:/i.test(trimmed) || /^All models failed/i.test(trimmed)) {
+    return [
+      "Model step failed",
+      "",
+      "Impact",
+      "- The requested work did not finish because every configured model attempt failed.",
+      "",
+      "What happened",
+      `- ${humanizeDiscordFailureDetail(trimmed)}`,
+      "",
+      "Next",
+      "- I kept the raw provider details in logs; retry after the provider/network issue clears.",
+    ].join("\n");
+  }
+  return text;
+}
+
+export function sanitizeDiscordDeliveryText(text: string) {
+  let cleaned = String(text ?? "");
+  cleaned = cleaned.replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/gi, "");
+  cleaned = rewriteDiscordFailureHeadline(cleaned);
+  const lines = cleaned
+    .split(/\r?\n/)
+    .filter((line) => !INTERNAL_DISCORD_LINE_PATTERNS.some((pattern) => pattern.test(line)));
+  return lines
+    .join("\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
+function isTitleOnlyDiscordChunk(chunk: string) {
+  const value = chunk.trim();
+  if (!value || value.includes("\n")) {
+    return false;
+  }
+  if (value.length > 90) {
+    return false;
+  }
+  if (/[:.!?]$/.test(value)) {
+    return false;
+  }
+  if (/^[-*`>]/.test(value)) {
+    return false;
+  }
+  return /[A-Za-z]/.test(value);
+}
+
+function coalesceTitleOnlyDiscordChunk(
+  chunks: string[],
+  opts: { maxLinesPerMessage?: number; maxChars?: number } = {},
+) {
+  if (chunks.length < 2 || !isTitleOnlyDiscordChunk(chunks[0] ?? "")) {
+    return chunks;
+  }
+  const merged = `${(chunks[0] ?? "").trim()}\n\n${(chunks[1] ?? "").trimStart()}`;
+  const maxChars = opts.maxChars ?? DISCORD_TEXT_LIMIT;
+  if (merged.length > maxChars) {
+    return chunks;
+  }
+  return [merged, ...chunks.slice(2)];
+}
+
 export function buildDiscordTextChunks(
   text: string,
   opts: { maxLinesPerMessage?: number; chunkMode?: ChunkMode; maxChars?: number } = {},
@@ -264,12 +385,19 @@ export function buildDiscordTextChunks(
   if (!text) {
     return [];
   }
-  const chunks = chunkDiscordTextWithMode(text, {
-    maxChars: opts.maxChars ?? DISCORD_TEXT_LIMIT,
-    maxLines: opts.maxLinesPerMessage,
-    chunkMode: opts.chunkMode,
-  });
-  return resolveTextChunksWithFallback(text, chunks);
+  const sanitized = sanitizeDiscordDeliveryText(text);
+  if (!sanitized) {
+    return [];
+  }
+  const chunks = resolveTextChunksWithFallback(
+    sanitized,
+    chunkDiscordTextWithMode(sanitized, {
+      maxChars: opts.maxChars ?? DISCORD_TEXT_LIMIT,
+      maxLines: opts.maxLinesPerMessage,
+      chunkMode: opts.chunkMode,
+    }),
+  );
+  return coalesceTitleOnlyDiscordChunk(chunks, opts);
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {

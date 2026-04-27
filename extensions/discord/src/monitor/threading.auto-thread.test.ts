@@ -36,8 +36,8 @@ function createBaseParams(
     isGuildMessage: true,
     channelConfig: { allowed: true, autoThread: true },
     channelType: ChannelType.GuildText,
-    baseText: "test",
-    combinedBody: "test",
+    baseText: "fix test issue",
+    combinedBody: "fix test issue",
     cfg: EMPTY_DISCORD_TEST_CONFIG,
     ...overrides,
   };
@@ -313,6 +313,67 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expect(result).toBe("thread1");
     await flushAsyncWork();
     expect(patchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips casual short pings", async () => {
+    const result = await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        baseText: "yo",
+        combinedBody: "yo",
+      }),
+    );
+    expect(result).toBeUndefined();
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("threads links and task-like requests", async () => {
+    postMock.mockResolvedValueOnce({ id: "link-thread" });
+    await expect(
+      maybeCreateDiscordAutoThread(
+        createBaseParams({
+          baseText: "https://example.com/report",
+          combinedBody: "https://example.com/report",
+        }),
+      ),
+    ).resolves.toBe("link-thread");
+
+    postMock.mockResolvedValueOnce({ id: "task-thread" });
+    await expect(
+      maybeCreateDiscordAutoThread(
+        createBaseParams({
+          baseText: "fix this",
+          combinedBody: "fix this",
+        }),
+      ),
+    ).resolves.toBe("task-thread");
+  });
+
+  it("allows legacy always-thread behavior when autoThreadGate is false", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    const result = await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        baseText: "yo",
+        combinedBody: "yo",
+        channelConfig: { allowed: true, autoThread: true, autoThreadGate: false },
+      }),
+    );
+    expect(result).toBe("thread1");
+  });
+
+  it("honors custom autoThreadGate thresholds", async () => {
+    const result = await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        baseText: "fix it",
+        combinedBody: "fix it",
+        channelConfig: {
+          allowed: true,
+          autoThread: true,
+          autoThreadGate: { taskMinChars: 20 },
+        },
+      }),
+    );
+    expect(result).toBeUndefined();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it("skips thread creation when autoThread is false", async () => {

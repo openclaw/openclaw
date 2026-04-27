@@ -11,6 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import { stripOaiMemoryCitationBlocks } from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -366,7 +367,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const stripped = stripInboundMetadata(
+    stripInternalRuntimeContext(stripOaiMemoryCitationBlocks(stripFinalTagsFromText(raw))),
+  );
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
