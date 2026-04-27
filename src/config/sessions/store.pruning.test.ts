@@ -451,6 +451,25 @@ describe("pruneOrphanedTranscripts", () => {
     expect(remaining).toContain(`${sessionName}.jsonl`);
   });
 
+  it("prunes orphan transcripts whose session id contains the literal '.checkpoint.' (no checkpoint-pattern over-match)", async () => {
+    // SAFE_SESSION_ID_RE permits dots, so a session id like
+    // `release.checkpoint.2026` produces `release.checkpoint.2026.jsonl`. The
+    // dirent filter must not skip this file: only `.checkpoint.<uuid-v4>.jsonl`
+    // shapes belong to compaction snapshots. Substring-matching `.checkpoint.`
+    // would silently leave real orphans behind.
+    const overMatchName = "release.checkpoint.2026";
+    await writeTranscript(overMatchName, overMatchName, -60 * DAY_MS);
+
+    const result = await pruneOrphanedTranscripts(testDir, [], {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(1);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).not.toContain(`${overMatchName}.jsonl`);
+  });
+
   it("does not delete unrelated .jsonl files lacking a session header (custom session.store scenario)", async () => {
     // Simulate a custom session.store dir that contains unrelated logs or
     // exports. An old-enough .jsonl without a valid session header is left

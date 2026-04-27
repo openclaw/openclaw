@@ -413,17 +413,22 @@ const ORPHAN_HEADER_READ_MAX_BYTES = 16 * 1024;
 const ORPHAN_CANDIDATE_CONCURRENCY = 32;
 
 // Compaction checkpoint snapshots produced by `session-compaction-checkpoints`
-// are written as `<sessionName>.checkpoint.<uuid>.jsonl`. They carry valid
+// are written as `<sessionName>.checkpoint.<uuid-v4>.jsonl`. They carry valid
 // session headers and are referenced from `entry.compactionCheckpoints[]`, not
 // from `resolveSessionTranscriptCandidates`. We skip them at the dirent filter
 // regardless of `preservedPaths` so a caller that forgets to enumerate
 // checkpoint paths cannot accidentally unlink live snapshots.
-const ORPHAN_CHECKPOINT_FILENAME_FRAGMENT = ".checkpoint.";
+//
+// Match the strict `<base>.checkpoint.<uuid-v4>.jsonl` shape — a substring
+// `includes(".checkpoint.")` over-matches: `SAFE_SESSION_ID_RE` permits dots,
+// so a session id like `release.checkpoint.2026` would otherwise be skipped
+// as a "checkpoint" even when it is genuinely orphaned. Mirrors upstream's
+// `COMPACTION_CHECKPOINT_TRANSCRIPT_RE` in `artifacts.ts`.
+const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
+  /^.+\.checkpoint\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$/i;
 
 function isCompactionCheckpointFilename(name: string): boolean {
-  return (
-    name.endsWith(ORPHAN_TRANSCRIPT_SUFFIX) && name.includes(ORPHAN_CHECKPOINT_FILENAME_FRAGMENT)
-  );
+  return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(name);
 }
 
 function canonicalizePathForOrphanComparison(filePath: string): string {
