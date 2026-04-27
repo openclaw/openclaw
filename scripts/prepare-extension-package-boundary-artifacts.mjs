@@ -1,27 +1,36 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
+import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 
-const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
-const tscBin = require.resolve("typescript/bin/tsc");
+const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 
-const ROOT_DTS_INPUTS = [
+const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  "src",
-  "packages/memory-host-sdk/src",
-];
-const PACKAGE_DTS_INPUTS = [
-  "tsconfig.json",
-  "packages/plugin-sdk/tsconfig.json",
   "src/plugin-sdk",
+  "src/auto-reply",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
+];
+const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
+const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
+const ROOT_DTS_REQUIRED_OUTPUTS = [
+  "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
+];
+const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
+const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
+const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
+  "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
+  "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
+  "packages/plugin-sdk/dist/src/plugin-sdk/video-generation.d.ts",
 ];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
@@ -99,6 +108,23 @@ export function isArtifactSetFresh(params) {
   return oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs;
 }
 
+function hasMissingOutput(paths) {
+  return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
+}
+
+function removeIncrementalStateForMissingOutput(params) {
+  if (!hasMissingOutput(params.outputPaths)) {
+    return;
+  }
+  fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
+}
+
+function writeStampFile(relativePath) {
+  const filePath = resolve(repoRoot, relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
+}
+
 export function createPrefixedOutputWriter(label, target) {
   let buffered = "";
   const prefix = `[${label}] `;
@@ -137,7 +163,7 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
-      env: process.env,
+      env: params.env ? { ...process.env, ...params.env } : process.env,
       signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -201,7 +227,9 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
 export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
-    steps.map((step) => runNodeStep(step.label, step.args, step.timeoutMs, { abortController })),
+    steps.map((step) =>
+      runNodeStep(step.label, step.args, step.timeoutMs, { abortController, env: step.env }),
+    ),
   );
   const firstFailure = results.find((result) => result.status === "rejected");
   if (firstFailure) {
@@ -209,19 +237,32 @@ export async function runNodeStepsInParallel(steps) {
   }
 }
 
+export async function runNodeSteps(steps, env = process.env) {
+  if (!isLocalCheckEnabled(env)) {
+    await runNodeStepsInParallel(steps);
+    return;
+  }
+
+  for (const step of steps) {
+    await runNodeStep(step.label, step.args, step.timeoutMs, { env: step.env });
+  }
+}
+
 export async function main(argv = process.argv.slice(2)) {
   try {
     const mode = parseMode(argv);
-    const rootDtsFresh = isArtifactSetFresh({
-      inputPaths: ROOT_DTS_INPUTS,
-      outputPaths: ["dist/plugin-sdk/.tsbuildinfo"],
-      includeFile: isRelevantTypeInput,
-    });
-    const packageDtsFresh = isArtifactSetFresh({
-      inputPaths: PACKAGE_DTS_INPUTS,
-      outputPaths: ["packages/plugin-sdk/dist/.tsbuildinfo"],
-      includeFile: isRelevantTypeInput,
-    });
+    const rootDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: ROOT_DTS_INPUTS,
+        outputPaths: [ROOT_DTS_STAMP, ...ROOT_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(ROOT_DTS_REQUIRED_OUTPUTS);
+    const packageDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: PACKAGE_DTS_INPUTS,
+        outputPaths: [PACKAGE_DTS_STAMP, ...PACKAGE_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
     const entryShimsFresh = isArtifactSetFresh({
       inputPaths: [
         ...ENTRY_SHIMS_INPUTS,
@@ -234,27 +275,44 @@ export async function main(argv = process.argv.slice(2)) {
     const pendingSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
+        });
         pendingSteps.push({
           label: "plugin-sdk boundary dts",
-          args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+          args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
+          stampPath: ROOT_DTS_STAMP,
         });
       } else {
         process.stdout.write("[plugin-sdk boundary dts] fresh; skipping\n");
       }
     }
     if (!packageDtsFresh) {
+      removeIncrementalStateForMissingOutput({
+        outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
+        tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
+      });
       pendingSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+        args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
+        env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         timeoutMs: 300_000,
+        stampPath: PACKAGE_DTS_STAMP,
       });
     } else {
       process.stdout.write("[plugin-sdk package boundary dts] fresh; skipping\n");
     }
 
     if (pendingSteps.length > 0) {
-      await runNodeStepsInParallel(pendingSteps);
+      await runNodeSteps(pendingSteps);
+      for (const step of pendingSteps) {
+        if (step.stampPath) {
+          writeStampFile(step.stampPath);
+        }
+      }
     }
 
     if (mode === "all" && (!entryShimsFresh || pendingSteps.length > 0)) {

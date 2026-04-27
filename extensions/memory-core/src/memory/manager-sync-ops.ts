@@ -5,11 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  buildCaseInsensitiveExtensionGlob,
-  classifyMemoryMultimodalPath,
-  getMemoryMultimodalExtensions,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,
@@ -90,12 +86,32 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 
-function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
+function shouldIgnoreMemoryWatchPath(
+  watchPath: string,
+  stats?: { isDirectory?: () => boolean },
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
+): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized
     .split(path.sep)
     .map((segment) => normalizeLowercaseStringOrEmpty(segment));
-  return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+  if (parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment))) {
+    return true;
+  }
+  if (stats?.isDirectory?.()) {
+    return false;
+  }
+  if (!stats) {
+    return false;
+  }
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
+  if (extension.length === 0 || extension === ".md") {
+    return false;
+  }
+  if (!multimodalSettings) {
+    return true;
+  }
+  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
@@ -149,6 +165,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -172,6 +189,14 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+
+  protected resetVectorState(): void {
+    this.vectorReady = null;
+    this.vector.available = null;
+    this.vector.loadError = undefined;
+    this.vector.dims = undefined;
+    this.vectorDegradedWriteWarningShown = false;
+  }
 
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
@@ -254,8 +279,11 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  protected buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
-    const sources = Array.from(this.sources);
+  protected buildSourceFilter(
+    alias?: string,
+    sourcesOverride?: MemorySource[],
+  ): { sql: string; params: MemorySource[] } {
+    const sources = sourcesOverride ?? Array.from(this.sources);
     if (sources.length === 0) {
       return { sql: "", params: [] };
     }
@@ -344,8 +372,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
+      path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -355,16 +382,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(path.join(entry, "**", "*.md"));
-          if (this.settings.multimodal.enabled) {
-            for (const modality of this.settings.multimodal.modalities) {
-              for (const extension of getMemoryMultimodalExtensions(modality)) {
-                watchPaths.add(
-                  path.join(entry, "**", buildCaseInsensitiveExtensionGlob(extension)),
-                );
-              }
-            }
-          }
+          watchPaths.add(entry);
           continue;
         }
         if (
@@ -380,7 +398,8 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
+      ignored: (watchPath, stats) =>
+        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
@@ -393,6 +412,7 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
+    this.watcher.on("unlinkDir", markDirty);
   }
 
   protected ensureSessionListener() {
@@ -1104,6 +1124,7 @@ export abstract class MemoryManagerSyncOps {
       vectorAvailable: this.vector.available,
       vectorLoadError: this.vector.loadError,
       vectorDims: this.vector.dims,
+      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
       vectorReady: this.vectorReady,
     };
 
@@ -1118,14 +1139,12 @@ export abstract class MemoryManagerSyncOps {
       this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
       this.vector.loadError = originalState.vectorLoadError;
       this.vector.dims = originalState.vectorDims;
+      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
     this.db = tempDb;
-    this.vectorReady = null;
-    this.vector.available = null;
-    this.vector.loadError = undefined;
-    this.vector.dims = undefined;
+    this.resetVectorState();
     this.fts.available = false;
     this.fts.loadError = undefined;
     this.ensureSchema();
@@ -1193,9 +1212,7 @@ export abstract class MemoryManagerSyncOps {
       });
 
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-      this.vectorReady = null;
-      this.vector.available = null;
-      this.vector.loadError = undefined;
+      this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {

@@ -1,16 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
-const buildPluginSnapshotReportMock = vi.hoisted(() => vi.fn());
+const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
 const formatPluginCompatibilityNoticeMock = vi.hoisted(() => vi.fn(() => "ok"));
+const refreshPluginRegistryAfterConfigMutationMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../../cli/npm-resolution.js", () => ({
   buildNpmInstallRecordFields: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("../../cli/plugins-command-helpers.js", () => ({
 
 vi.mock("../../cli/plugins-install-persist.js", () => ({
   persistPluginInstall: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -50,6 +55,12 @@ vi.mock("../../plugins/install.js", () => ({
   installPluginFromPath: vi.fn(),
 }));
 
+vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: vi.fn(
+    async (params = {}) => params.config?.plugins?.installs ?? {},
+  ),
+}));
+
 vi.mock("../../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: vi.fn(),
 }));
@@ -58,7 +69,7 @@ vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,
   buildPluginInspectReport: buildPluginInspectReportMock,
-  buildPluginSnapshotReport: buildPluginSnapshotReportMock,
+  buildPluginRegistrySnapshotReport: buildPluginRegistrySnapshotReportMock,
   formatPluginCompatibilityNotice: formatPluginCompatibilityNoticeMock,
 }));
 
@@ -90,39 +101,11 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
-function buildPluginsParams(
-  commandBodyNormalized: string,
-  cfg: OpenClawConfig,
-): HandleCommandsParams {
-  return {
+function buildPluginsParams(commandBodyNormalized: string, cfg: OpenClawConfig) {
+  return buildPluginsCommandParams({
+    commandBodyNormalized,
     cfg,
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      GatewayClientScopes: ["operator.write", "operator.pairing"],
-      AccountId: undefined,
-    },
-    command: {
-      commandBodyNormalized,
-      rawBodyNormalized: commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "owner",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      surface: "whatsapp",
-      ownerList: [],
-      from: "test-user",
-      to: "test-bot",
-    },
-    sessionKey: "agent:main:whatsapp:direct:test-user",
-    sessionEntry: {
-      sessionId: "session-plugin-command",
-      updatedAt: Date.now(),
-    },
-    workspaceDir: "/tmp/plugins-workspace",
-  } as unknown as HandleCommandsParams;
+  });
 }
 
 describe("handlePluginsCommand", () => {
@@ -131,14 +114,16 @@ describe("handlePluginsCommand", () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
       path: "/tmp/openclaw.json",
+      sourceConfig: buildCfg(),
       resolved: buildCfg(),
+      hash: "config-1",
     });
     validateConfigObjectWithPluginsMock.mockReturnValue({
       ok: true,
       config: buildCfg(),
       issues: [],
     });
-    buildPluginSnapshotReportMock.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [
         {
@@ -217,6 +202,88 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("enables and disables a discovered plugin", async () => {
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+
+    const enableParams = buildPluginsParams("/plugins enable superpowers", buildCfg());
+    enableParams.command.senderIsOwner = true;
+
+    const enableResult = await handlePluginsCommand(enableParams, true);
+    expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            superpowers: expect.objectContaining({ enabled: true }),
+          }),
+        }),
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reason: "policy-changed",
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+
+    const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg());
+    disableParams.command.senderIsOwner = true;
+
+    const disableResult = await handlePluginsCommand(disableParams, true);
+    expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            superpowers: expect.objectContaining({ enabled: false }),
+          }),
+        }),
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reason: "policy-changed",
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: false }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("resolves write targets by indexed plugin name without loading diagnostics", async () => {
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
+      workspaceDir: "/tmp/plugins-workspace",
+      plugins: [
+        {
+          id: "superpowers",
+          name: "Super Powers",
+          status: "disabled",
+          format: "openclaw",
+          bundleFormat: "claude",
+        },
+      ],
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+
+    const params = buildPluginsParams("/plugins enable Super Powers", buildCfg());
+    params.command.senderIsOwner = true;
+
+    const result = await handlePluginsCommand(params, true);
+    expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 
   it("returns an explicit unauthorized reply for native /plugins list", async () => {

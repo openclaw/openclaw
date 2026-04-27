@@ -6,7 +6,7 @@ Welcome to the lobster tank! 🦞
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
-- **Discord:** https://discord.gg/qkhbAGHRBT
+- **Discord:** https://discord.gg/clawd
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
@@ -59,7 +59,7 @@ Welcome to the lobster tank! 🦞
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
   - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
 
-- **Josh Lehman** - Compaction, Tlon/Urbit subsystem
+- **Josh Lehman** - Compaction, Context Engine
   - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
 - **Radek Sienkiewicz** - Docs, Control UI
@@ -77,10 +77,16 @@ Welcome to the lobster tank! 🦞
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
 
+- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Dingtalk, Feishu
+  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
+
+- **Mason Huang** - Stability, Security, Speed
+  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
-2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
+2. **New features / architecture** → Start a [GitHub Issue](https://github.com/openclaw/openclaw/issues/new/choose) or ask in Discord first. Most features are not accepted and should be third party plugins instead using our plugin SDK.
 3. **Refactor-only PRs** → Don't open a PR. We are not accepting refactor-only changes unless a maintainer explicitly asks for them as part of a concrete fix.
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
@@ -95,6 +101,7 @@ For coordinated change sets that genuinely need more than 10 PRs, join the **#cl
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- For iterative local commits, `scripts/committer --fast "message" <files...>` passes `FAST_COMMIT=1` through to the pre-commit hook so it skips the repo-wide `pnpm check`. Only use it when you've already run equivalent targeted validation for the touched surface.
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
   - `pnpm test:extension --list` to see valid extension ids
@@ -102,6 +109,11 @@ For coordinated change sets that genuinely need more than 10 PRs, join the **#cl
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
   - These commands also cover the shared seam/smoke files that the default unit lane skips
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
+- If you touched bundled-plugin boundaries in shared code, run the matching inventories:
+  - `node scripts/check-src-extension-import-boundary.mjs --json` for `src/**`
+  - `node scripts/check-sdk-package-extension-import-boundary.mjs --json` for `src/plugin-sdk/**` and `packages/**`
+  - `node scripts/check-test-helper-extension-import-boundary.mjs --json` for `test/helpers/**`
+- Shared test helpers must use `src/test-utils/bundled-plugin-public-surface.ts` instead of repo-relative `extensions/**` imports. Keep plugin-local deep mocks inside the owning bundled plugin package.
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.

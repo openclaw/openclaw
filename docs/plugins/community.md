@@ -3,10 +3,8 @@ summary: "Community-maintained OpenClaw plugins: browse, install, and submit you
 read_when:
   - You want to find third-party OpenClaw plugins
   - You want to publish or list your own plugin
-title: "Community Plugins"
+title: "Community plugins"
 ---
-
-# Community Plugins
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
@@ -24,6 +22,19 @@ openclaw plugins install <package-name>
 OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
+
+### Apify
+
+Scrape data from any website with 20,000+ ready-made scrapers. Let your agent
+extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google
+Search, e-commerce sites, and more — just by asking.
+
+- **npm:** `@apify/apify-openclaw-plugin`
+- **repo:** [github.com/apify/apify-openclaw-plugin](https://github.com/apify/apify-openclaw-plugin)
+
+```bash
+openclaw plugins install @apify/apify-openclaw-plugin
+```
 
 ### Codex App Server Bridge
 
@@ -75,11 +86,28 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### Prometheus Avatar
+
+Give your OpenClaw agent a Live2D avatar with real-time lip-sync, emotion
+expressions, and text-to-speech. Includes creator tools for AI asset generation
+and one-click deployment to the Prometheus Marketplace. Currently in alpha.
+
+- **npm:** `@prometheusavatar/openclaw-plugin`
+- **repo:** [github.com/myths-labs/prometheus-avatar](https://github.com/myths-labs/prometheus-avatar)
+
+```bash
+openclaw plugins install @prometheusavatar/openclaw-plugin
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
+
+Current OpenClaw releases bundle QQ Bot. Use the bundled setup in
+[QQ Bot](/channels/qqbot) for normal installs; install this external plugin only
+when you intentionally want the Tencent-maintained standalone package.
 
 - **npm:** `@tencent-connect/openclaw-qqbot`
 - **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)

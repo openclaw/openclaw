@@ -107,6 +107,7 @@ describe("spawnSubagentDirect seam flow", () => {
         agentChannel: "discord",
         agentAccountId: "acct-1",
         agentTo: "user-1",
+        agentThreadId: 42,
         workspaceDir: "/tmp/requester-workspace",
       },
     );
@@ -120,8 +121,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
@@ -132,7 +133,7 @@ describe("spawnSubagentDirect seam flow", () => {
           channel: "discord",
           accountId: "acct-1",
           to: "user-1",
-          threadId: undefined,
+          threadId: 42,
         },
         task: "inspect the spawn seam",
         cleanup: "keep",
@@ -155,11 +156,54 @@ describe("spawnSubagentDirect seam flow", () => {
       provider: "openai-codex",
       model: "gpt-5.4",
     });
-    expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(
-      operations.indexOf("gateway:sessions.patch"),
+    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
+    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
+      operations.lastIndexOf("store:update"),
     );
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: childSessionKey,
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
+  });
+
+  it("omits requesterOrigin threadId when no requester thread is provided", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect unthreaded spawn",
+        model: "openai-codex/gpt-5.4",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "acct-1",
+        agentTo: "user-1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const registerInput = hoisted.registerSubagentRunMock.mock.calls[0]?.[0];
+    expect(registerInput?.requesterOrigin).toMatchObject({
+      channel: "discord",
+      accountId: "acct-1",
+      to: "user-1",
+    });
+    expect(registerInput?.requesterOrigin).not.toHaveProperty("threadId");
   });
 
   it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {
@@ -244,16 +288,9 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("returns an error when the initial model patch is rejected", async () => {
+  it("returns an error when the initial child session patch is rejected", async () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
-        if (request.method === "sessions.patch") {
-          const model = (request.params as { model?: unknown } | undefined)?.model;
-          if (model === "bad-model") {
-            throw new Error("invalid model: bad-model");
-          }
-          return { ok: true };
-        }
         if (request.method === "agent") {
           return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
         }
@@ -263,6 +300,7 @@ describe("spawnSubagentDirect seam flow", () => {
         return {};
       },
     );
+    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
 
     const result = await spawnSubagentDirect(
       {
@@ -279,7 +317,7 @@ describe("spawnSubagentDirect seam flow", () => {
       status: "error",
       childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
     });
-    expect(String(result.error ?? "")).toContain("invalid model");
+    expect(result.error ?? "").toContain("invalid model");
     expect(
       hoisted.callGatewayMock.mock.calls.some(
         (call) => (call[0] as { method?: string }).method === "agent",

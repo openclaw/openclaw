@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import os from "node:os";
-import pathModule from "node:path";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
@@ -29,7 +28,7 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
-  it("keeps Windows dist public artifact loads off Jiti native import", async () => {
+  it("uses transpiled Jiti import for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -80,10 +79,9 @@ describe("bundled plugin public surface loader", () => {
     );
     vi.doMock("node:module", async () => {
       const actual = await vi.importActual<typeof import("node:module")>("node:module");
-      return {
-        ...actual,
+      return Object.assign({}, actual, {
         createRequire: vi.fn(() => requireLoader),
-      };
+      });
     });
 
     const publicSurfaceLoader = await importFreshModule<
@@ -103,7 +101,77 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "secret-contract-api.js",
       }).marker,
     ).toBe("source-require-ok");
-    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(requireLoader).toHaveBeenCalledWith(fs.realpathSync(modulePath));
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("reuses one bundled dist jiti loader across public artifacts with the same native mode", async () => {
+    const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=shared-bundled-jiti");
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const firstPath = path.join(bundledPluginsDir, "demo-a", "api.js");
+    const secondPath = path.join(bundledPluginsDir, "demo-b", "api.js");
+    fs.mkdirSync(path.dirname(firstPath), { recursive: true });
+    fs.mkdirSync(path.dirname(secondPath), { recursive: true });
+    fs.writeFileSync(firstPath, 'export const marker = "demo-a";\n', "utf8");
+    fs.writeFileSync(secondPath, 'export const marker = "demo-b";\n', "utf8");
+
+    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+      dirName: "demo-a",
+      artifactBasename: "api.js",
+    });
+    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+      dirName: "demo-b",
+      artifactBasename: "api.js",
+    });
+
+    expect(createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects public artifacts that change after boundary validation", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=post-validation-identity");
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "demo";\n', "utf8");
+
+    const realStatSync = fs.statSync.bind(fs);
+    const moduleRealPath = fs.realpathSync(modulePath);
+    vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+      const stat = realStatSync(target, options);
+      if (fs.realpathSync(target) !== moduleRealPath) {
+        return stat;
+      }
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: Number(stat.ino) + 1,
+      });
+    });
+
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toThrow(/changed after validation/);
     expect(createJiti).not.toHaveBeenCalled();
   });
 });

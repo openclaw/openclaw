@@ -3,13 +3,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    registerSubagentRunMock,
   };
 });
 
 vi.mock("../subagent-spawn.js", () => ({
+  SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
@@ -21,14 +24,21 @@ vi.mock("../acp-spawn.js", () => ({
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
+vi.mock("../subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+}));
+
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
+let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
 
 describe("sessions_spawn tool", () => {
   beforeAll(async () => {
     ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+    acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
   });
 
   beforeEach(() => {
+    acpRuntimeRegistry.__testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -39,12 +49,121 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
+    hoisted.registerSubagentRunMock.mockReset();
+  });
+
+  function registerAcpBackendForTest() {
+    acpRuntimeRegistry.registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:codex:acp:1",
+          backend: "acpx",
+          runtimeSessionName: "codex",
+        })),
+        async *runTurn() {},
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
+    });
+  }
+
+  it("hides ACP runtime affordances when no ACP backend is loaded", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runtime?: { enum?: string[] };
+        resumeSessionId?: unknown;
+        streamTo?: unknown;
+      };
+    };
+
+    expect(tool.displaySummary).toBe("Spawn sub-agent sessions.");
+    expect(tool.description).not.toContain("ACP");
+    expect(tool.description).not.toContain('runtime="acp"');
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
+    expect(schema.properties?.resumeSessionId).toBeUndefined();
+    expect(schema.properties?.streamTo).toBeUndefined();
+  });
+
+  it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
+    registerAcpBackendForTest();
+
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runtime?: { enum?: string[] };
+        resumeSessionId?: unknown;
+        streamTo?: unknown;
+      };
+    };
+
+    expect(tool.displaySummary).toBe("Spawn sub-agent or ACP sessions.");
+    expect(tool.description).toContain('runtime="acp"');
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+    expect(schema.properties?.resumeSessionId).toBeDefined();
+    expect(schema.properties?.streamTo).toBeDefined();
+  });
+
+  it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
+    acpRuntimeRegistry.registerAcpRuntimeBackend({
+      id: "acpx",
+      healthy: () => false,
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:codex:acp:1",
+          backend: "acpx",
+          runtimeSessionName: "codex",
+        })),
+        async *runTurn() {},
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
+    });
+
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as { properties?: { runtime?: { enum?: string[] } } };
+
+    expect(tool.description).not.toContain("ACP");
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
+  });
+
+  it("rejects stale ACP runtime calls when no ACP backend is loaded", async () => {
+    const tool = createSessionsSpawnTool();
+
+    const result = await tool.execute("call-acp-unavailable", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      role: "codex",
+    });
+    expect(JSON.stringify(result.details)).toContain("no ACP runtime backend is loaded");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("hides ACP runtime affordances when ACP policy is disabled", () => {
+    registerAcpBackendForTest();
+
+    const tool = createSessionsSpawnTool({
+      config: {
+        acp: { enabled: false },
+      },
+    });
+    const schema = tool.parameters as { properties?: { runtime?: { enum?: string[] } } };
+
+    expect(tool.description).not.toContain("ACP");
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
   });
 
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -66,6 +185,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
+    expect(result.details).not.toHaveProperty("role");
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "build feature",
@@ -82,6 +202,46 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "error" as const, error: "spawn failed" },
+    { status: "forbidden" as const, error: "not allowed" },
+  ])("adds requested role to forwarded subagent $status results", async (spawnResult) => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce(spawnResult);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-role-error", {
+      task: "build feature",
+      agentId: "reviewer",
+    });
+
+    expect(result.details).toMatchObject({
+      ...spawnResult,
+      role: "reviewer",
+    });
+  });
+
+  it("does not add role to forwarded failures when agentId is absent", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "spawn failed",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-no-role-error", {
+      task: "build feature",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "spawn failed",
+    });
+    expect(result.details).not.toHaveProperty("role");
   });
 
   it("supports legacy timeoutSeconds alias", async () => {
@@ -142,6 +302,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it('rejects lightContext when runtime is not "subagent"', async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -159,9 +320,10 @@ describe("sessions_spawn tool", () => {
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -172,6 +334,7 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
+      runTimeoutSeconds: 45,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -187,6 +350,7 @@ describe("sessions_spawn tool", () => {
         task: "investigate the failing CI run",
         agentId: "codex",
         cwd: "/workspace",
+        runTimeoutSeconds: 45,
         thread: true,
         mode: "session",
         streamTo: "parent",
@@ -196,12 +360,61 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  it("forwards ACP sandbox options and requester sandbox context", async () => {
+  it("forwards model override to ACP runtime spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2-model", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        model: "github-copilot/claude-sonnet-4.6",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("adds requested role to forwarded ACP failures", async () => {
+    registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-role-error", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+      role: "codex",
+    });
+  });
+
+  it("forwards ACP sandbox options", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
-      sandboxed: true,
     });
 
     await tool.execute("call-2b", {
@@ -218,12 +431,43 @@ describe("sessions_spawn tool", () => {
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:subagent:parent",
-        sandboxed: true,
+      }),
+    );
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:subagent:parent",
+        task: "investigate",
+        cleanup: "keep",
+        spawnMode: "run",
       }),
     );
   });
 
+  it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-sandboxed-acp", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      role: "codex",
+    });
+    expect(JSON.stringify(result.details)).toContain("sandboxed sessions");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("passes resumeSessionId through to ACP spawns", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -261,9 +505,10 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects attachments for ACP runtime", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",

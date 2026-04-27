@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
+import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -39,6 +41,8 @@ import {
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
 } from "./systemd-unit.js";
+
+const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = toPosixPath(resolveHomeDir(env));
@@ -290,6 +294,18 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+function isSystemdUnitMissingDetail(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    (normalized.includes("unit file") && normalized.includes("does not exist")) ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found")
+  );
+}
+
 const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
@@ -449,14 +465,63 @@ async function writeSystemdUnit({
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const stateDirDotEnvVars = Object.fromEntries(
+    Object.entries(readStateDirDotEnvVarsFromStateDir(stateDir)).filter(([key, value]) => {
+      const inlineValue = environment?.[key];
+      if (typeof inlineValue !== "string") {
+        return true;
+      }
+      return inlineValue.trim() === value.trim();
+    }),
+  );
+  const environmentFiles = await writeSystemdGatewayEnvironmentFile({
+    stateDir,
+    dotenvVars: stateDirDotEnvVars,
+  });
+  const environmentSansDotEnvEntries = Object.fromEntries(
+    Object.entries(environment ?? {}).filter(([key, value]) => {
+      if (typeof value !== "string") {
+        return false;
+      }
+      const stateDirValue = stateDirDotEnvVars[key];
+      if (typeof stateDirValue !== "string") {
+        return true;
+      }
+      return value.trim() !== stateDirValue.trim();
+    }),
+  );
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: environmentSansDotEnvEntries,
+    environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
+}
+
+async function writeSystemdGatewayEnvironmentFile(params: {
+  stateDir: string;
+  dotenvVars: Record<string, string>;
+}): Promise<string[]> {
+  const entries = Object.entries(params.dotenvVars);
+  if (entries.length === 0) {
+    return [];
+  }
+  for (const [key, value] of entries) {
+    if (/[\r\n]/.test(value)) {
+      throw new Error(
+        `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
+      );
+    }
+  }
+  const envFilePath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
+  const content = entries.map(([key, value]) => `${key}=${value}`).join("\n");
+  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(envFilePath, 0o600);
+  return [envFilePath];
 }
 
 export async function stageSystemdService({
@@ -486,19 +551,34 @@ export async function stageSystemdService({
 }
 
 async function activateSystemdService(params: { env: GatewayServiceEnv }) {
-  const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reload = await reloadSystemd();
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
+  const runAfterReloadRetry = async (action: "enable" | "restart") => {
+    const result = await execSystemctlUser(params.env, [action, unitName]);
+    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+      return result;
+    }
+    const retryReload = await reloadSystemd();
+    if (retryReload.code !== 0) {
+      throw new Error(
+        `systemctl daemon-reload failed: ${retryReload.stderr || retryReload.stdout}`.trim(),
+      );
+    }
+    return await execSystemctlUser(params.env, [action, unitName]);
+  };
+
+  const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
     throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
-  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
+  const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
@@ -535,7 +615,7 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 

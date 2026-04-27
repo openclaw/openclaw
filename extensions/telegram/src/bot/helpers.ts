@@ -18,9 +18,12 @@ import {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
+  resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
+  type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
@@ -32,11 +35,40 @@ export {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
+const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
+const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
+const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
+
+export function resetTelegramForumFlagCacheForTest(): void {
+  telegramForumFlagByChatId.clear();
+}
+
+function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
+  const cacheKey = String(chatId);
+  if (
+    !telegramForumFlagByChatId.has(cacheKey) &&
+    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
+  ) {
+    const oldestKey = telegramForumFlagByChatId.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramForumFlagByChatId.delete(oldestKey);
+    }
+  }
+  telegramForumFlagByChatId.set(cacheKey, {
+    expiresAtMs: nowMs + TELEGRAM_FORUM_FLAG_CACHE_TTL_MS,
+    isForum,
+  });
+}
+
+function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
+  return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
+}
 
 export type TelegramThreadSpec = {
   id?: number;
@@ -59,13 +91,27 @@ export async function resolveTelegramForumFlag(params: {
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
   if (typeof params.isForum === "boolean") {
+    if (params.isGroup && params.chatType === "supergroup") {
+      cacheTelegramForumFlag(params.chatId, params.isForum);
+    }
     return params.isForum;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
   }
+  const cacheKey = String(params.chatId);
+  const nowMs = Date.now();
+  const cached = telegramForumFlagByChatId.get(cacheKey);
+  if (cached && cached.expiresAtMs > nowMs) {
+    return cached.isForum;
+  }
+  if (cached) {
+    telegramForumFlagByChatId.delete(cacheKey);
+  }
   try {
-    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    cacheTelegramForumFlag(params.chatId, resolved, nowMs);
+    return resolved;
   } catch {
     return false;
   }
@@ -137,7 +183,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
-  const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
     resolvedThreadId,
     dmThreadId,
@@ -328,37 +374,47 @@ export type TelegramReplyTarget = {
   sender: string;
   senderId?: string;
   senderUsername?: string;
-  body: string;
+  body?: string;
   kind: "reply" | "quote";
+  source: "reply_to_message" | "external_reply";
+  quoteText?: string;
+  quotePosition?: number;
+  quoteEntities?: TelegramTextEntity[];
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
+  quoteSourceText?: string;
+  quoteSourceEntities?: TelegramTextEntity[];
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const quoteText =
-    msg.quote?.text ??
-    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+  const quote =
+    msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
+  const rawQuoteText = quote?.text;
+  const quoteText = resolveTelegramTextContent(rawQuoteText);
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
+  const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
 
-  if (typeof quoteText === "string") {
-    body = quoteText.trim();
-    if (body) {
-      kind = "quote";
-    }
+  body = quoteText.trim();
+  if (body) {
+    kind = "quote";
   }
 
   const replyLike = reply ?? externalReply;
+  const rawReplyText =
+    replyLike && typeof replyLike.text === "string"
+      ? replyLike.text
+      : replyLike && typeof replyLike.caption === "string"
+        ? replyLike.caption
+        : undefined;
+  const safeReplyText = resolveTelegramTextContent(rawReplyText);
+  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = (
-      typeof replyLike.text === "string"
-        ? replyLike.text
-        : typeof replyLike.caption === "string"
-          ? replyLike.caption
-          : ""
-    ).trim();
+    const replyBody = safeReplyText.trim();
+    filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
       body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
@@ -370,11 +426,21 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       }
     }
   }
-  if (!body) {
+  if (!body && !replyLike) {
+    return null;
+  }
+  if (!body && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
+  const source = reply ? "reply_to_message" : "external_reply";
+  const quotePosition =
+    kind === "quote" && typeof quote?.position === "number" && Number.isFinite(quote.position)
+      ? Math.trunc(quote.position)
+      : undefined;
+  const quoteEntities =
+    kind === "quote" && Array.isArray(quote?.entities) ? quote.entities : undefined;
 
   // Extract forward context from the resolved reply target (reply_to_message or external_reply).
   const forwardedFrom = replyLike ? (normalizeForwardedContext(replyLike) ?? undefined) : undefined;
@@ -384,8 +450,14 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     sender: senderLabel,
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
-    body,
+    body: body || undefined,
     kind,
+    source,
+    quoteText: kind === "quote" ? quoteText : undefined,
+    quotePosition,
+    quoteEntities,
     forwardedFrom,
+    quoteSourceText: replyTextParts?.text || undefined,
+    quoteSourceEntities: replyTextParts?.entities,
   };
 }

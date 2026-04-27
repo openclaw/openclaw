@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
@@ -367,7 +367,14 @@ function assertAgainstBaseline(params: {
 
   if (params.result.best) {
     const usage = params.result.best.usage;
-    if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
+    if (floor.minCacheReadOrWrite !== undefined) {
+      const cacheReadOrWrite = Math.max(usage.cacheRead ?? 0, usage.cacheWrite ?? 0);
+      if (cacheReadOrWrite < floor.minCacheReadOrWrite) {
+        params.regressions.push(
+          `${params.provider}:${params.lane} cacheReadOrWrite=${cacheReadOrWrite} < min=${floor.minCacheReadOrWrite}`,
+        );
+      }
+    } else if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
       params.regressions.push(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} < min=${floor.minCacheRead}`,
       );
@@ -410,7 +417,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-    preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
+    preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
   });
   const anthropic = await resolveLiveDirectModel({
     provider: "anthropic",

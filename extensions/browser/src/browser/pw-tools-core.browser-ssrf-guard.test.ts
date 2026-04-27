@@ -27,6 +27,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 const pageCdpMocks = vi.hoisted(() => ({
+  markBackendDomRefsOnPage: vi.fn(async () => new Set<string>()),
   withPageScopedCdpClient: vi.fn(
     async ({ fn }: { fn: (send: () => Promise<unknown>) => unknown }) =>
       await fn(async () => ({ nodes: [] })),
@@ -52,8 +53,13 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks click-triggered navigations with the session safety helper", async () => {
-    pageState.page = { url: vi.fn(() => "https://example.com") };
-    pageState.locator = { click: vi.fn(async () => {}) };
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      click: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
 
     await interactions.clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -86,8 +92,13 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks batched click-triggered navigations with the session safety helper", async () => {
-    pageState.page = { url: vi.fn(() => "https://example.com") };
-    pageState.locator = { click: vi.fn(async () => {}) };
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      click: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
 
     await interactions.batchViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -106,9 +117,9 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks current page URL before snapshotting AI content", async () => {
-    const snapshotForAI = vi.fn(async () => ({ full: 'button "Save"' }));
+    const ariaSnapshot = vi.fn(async () => 'button "Save"');
     pageState.page = {
-      _snapshotForAI: snapshotForAI,
+      ariaSnapshot,
       url: vi.fn(() => "https://example.com"),
     };
 
@@ -127,7 +138,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     expect(
       sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(snapshotForAI.mock.invocationCallOrder[0]);
+    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
   });
 
   it("re-checks current page URL before role snapshots", async () => {

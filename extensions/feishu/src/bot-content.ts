@@ -4,7 +4,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import type { FeishuMediaInfo } from "./types.js";
+import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 export type FeishuMention = {
   key: string;
@@ -38,9 +38,7 @@ type FeishuMessageLike = {
 
 export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
-type FeishuLogger = {
-  (...args: unknown[]): void;
-};
+type FeishuLogger = (...args: unknown[]) => void;
 
 export type ResolvedFeishuGroupSession = {
   peerId: string;
@@ -56,6 +54,7 @@ export function resolveFeishuGroupSession(params: {
   messageId: string;
   rootId?: string;
   threadId?: string;
+  chatType?: FeishuChatType;
   groupConfig?: {
     groupSessionScope?: GroupSessionScope;
     topicSessionMode?: "enabled" | "disabled";
@@ -67,7 +66,8 @@ export function resolveFeishuGroupSession(params: {
     replyInThread?: "enabled" | "disabled";
   };
 }): ResolvedFeishuGroupSession {
-  const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
+  const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
+    params;
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
   const threadReply = Boolean(normalizedThreadId || normalizedRootId);
@@ -80,9 +80,14 @@ export function resolveFeishuGroupSession(params: {
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+  const normalizedTopicGroupThreadId =
+    chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
     groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
-      ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))
+      ? (normalizedTopicGroupThreadId ??
+        normalizedRootId ??
+        normalizedThreadId ??
+        (replyInThread ? messageId : null))
       : null;
 
   let peerId = chatId;
@@ -133,6 +138,18 @@ export function parseMessageContent(content: string, messageType: string): strin
     const parsed = JSON.parse(content);
     if (messageType === "text") {
       return parsed.text || "";
+    }
+    if (["image", "file", "audio", "video", "media", "sticker"].includes(messageType)) {
+      if (messageType === "audio") {
+        const speechToText =
+          typeof parsed.speech_to_text === "string" ? parsed.speech_to_text.trim() : "";
+        if (speechToText) {
+          return speechToText;
+        }
+      }
+      const placeholder = inferPlaceholder(messageType);
+      const fileName = typeof parsed.file_name === "string" ? parsed.file_name.trim() : "";
+      return fileName ? `${placeholder} (${fileName})` : placeholder;
     }
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
@@ -215,7 +232,7 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
-    (a, b) => parseInt(a.create_time || "0", 10) - parseInt(b.create_time || "0", 10),
+    (a, b) => Number.parseInt(a.create_time || "0", 10) - Number.parseInt(b.create_time || "0", 10),
   );
 
   const lines = ["[Merged and Forwarded Messages]"];

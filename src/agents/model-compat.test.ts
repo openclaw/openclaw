@@ -5,20 +5,18 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-runtime.js", () => {
   return {
-    ...actual,
     resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
   };
 });
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
 
@@ -67,6 +65,15 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsStrictMode(normalized)).toBe(false);
+}
+
+function expectNativeStreamingSupported(overrides: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsDeveloperRole(normalized)).toBe(false);
+  expect(supportsUsageInStreaming(normalized)).toBe(true);
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
@@ -168,42 +175,24 @@ describe("normalizeModelCompat", () => {
   });
 
   it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "custom-qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "custom-kimi",
       baseUrl: "https://api.moonshot.ai/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("leaves native api.openai.com model untouched", () => {
@@ -397,9 +386,14 @@ describe("isModernModelRef", () => {
   it("includes plugin-advertised modern models", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
       provider === "openai" &&
-      ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(context.modelId)
+      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(
+        context.modelId,
+      )
         ? true
-        : provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-mini"].includes(context.modelId)
+        : provider === "openai-codex" &&
+            ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
+              context.modelId,
+            )
           ? true
           : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
             ? true
@@ -408,11 +402,16 @@ describe("isModernModelRef", () => {
               : undefined,
     );
 
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.5-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
@@ -476,14 +475,92 @@ describe("isHighSignalLiveModelRef", () => {
       true,
     );
   });
+
+  it("keeps only GPT-5.2 OpenAI-family models in the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-3.5-turbo" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-oss-120b" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/o1" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-4.1" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-4o" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.1-chat" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "opencode", id: "gpt-5.1-codex-mini" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
+      true,
+    );
+  });
+
+  it("drops old MiniMax 2.1 models from the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M2.1" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.1" })).toBe(
+      false,
+    );
+    expect(
+      isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.1:free" }),
+    ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M2.7" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.7" })).toBe(
+      true,
+    );
+  });
+
+  it("drops GLM 4.x models from the default live matrix while keeping GLM 5", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-4.7" })).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" }),
+    ).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({
+        provider: "fireworks",
+        id: "accounts/fireworks/models/glm-4p5-air",
+      }),
+    ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-5.1" })).toBe(true);
+    expect(
+      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5" }),
+    ).toBe(true);
+    expect(
+      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }),
+    ).toBe(true);
+  });
+
+  it("keeps DeepSeek V4 models in the default live matrix when the provider marks them modern", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "deepseek" && context.modelId.startsWith("deepseek-v4") ? true : undefined,
+    );
+
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-chat" })).toBe(false);
+  });
 });
 
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
+      { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "openai", id: "gpt-5.2" },
       { provider: "opencode", id: "big-pickle" },
     ];
@@ -496,10 +573,77 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item.provider,
       ),
     ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
-      { provider: "openai", id: "gpt-5.2" },
     ]);
+  });
+
+  it("prioritizes DeepSeek V4 before later fallback providers", () => {
+    const items = [
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
+    ]);
+  });
+
+  it("prioritizes Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+    const items = [
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+      { provider: "fireworks", id: "accounts/fireworks/models/gpt-oss-120b" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        2,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+    ]);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("defaults modern live sweeps to the curated high-signal cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+      }),
+    ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("leaves explicit model lists uncapped unless a cap is provided", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: true,
+      }),
+    ).toBe(0);
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3",
+        useExplicitModels: true,
+      }),
+    ).toBe(3);
   });
 });

@@ -9,14 +9,15 @@ import {
 } from "../plugins/config-state.js";
 import {
   collectRelevantDoctorPluginIds,
+  collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../plugins/manifest-registry.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { collectLegacySecretRefEnvMarkerCandidates } from "../secrets/legacy-secretref-env-marker.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -48,6 +49,18 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+    return raw;
+  }
+  const commands = { ...raw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...raw,
+    commands,
+  };
+}
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
@@ -262,6 +275,99 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function isBindingsIssuePath(pathSegments: readonly ConfigPathSegment[]): boolean {
+  return pathSegments[0] === "bindings" && typeof pathSegments[1] === "number";
+}
+
+function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
+  const issuePath = toConfigPathSegments(issue.path);
+  if (issuePath.length !== 1 || issuePath[0] !== "type") {
+    return false;
+  }
+  if (issue.code !== "invalid_value" || !Array.isArray(issue.values)) {
+    return false;
+  }
+  return issue.values.includes("route");
+}
+
+function extractBindingsSpecificUnionIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
+    return null;
+  }
+
+  let matchingBranchIssue: UnknownIssueRecord | null = null;
+  let matchingBranchIsUnrecognized = false;
+  let matchingBranchPathLen = -1;
+  let sawRouteTypeMismatch = false;
+
+  for (const errGroup of record.errors) {
+    if (!Array.isArray(errGroup)) {
+      continue;
+    }
+
+    const branch = errGroup
+      .map((issue) => toIssueRecord(issue))
+      .filter(Boolean) as UnknownIssueRecord[];
+    if (branch.length === 0) {
+      continue;
+    }
+
+    if (branch.some((issue) => isRouteTypeMismatchIssue(issue))) {
+      sawRouteTypeMismatch = true;
+      continue;
+    }
+
+    let branchBestIssue: UnknownIssueRecord | null = null;
+    let branchBestIsUnrecognized = false;
+    let branchBestPathLen = -1;
+
+    for (const issue of branch) {
+      const issueCode = typeof issue.code === "string" ? issue.code : "";
+      const issuePathLen = toConfigPathSegments(issue.path).length;
+      const issueIsUnrecognized = issueCode === "unrecognized_keys";
+      const issueIsBetter =
+        issuePathLen > branchBestPathLen
+          ? true
+          : issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized;
+
+      if (issueIsBetter) {
+        branchBestIssue = issue;
+        branchBestIsUnrecognized = issueIsUnrecognized;
+        branchBestPathLen = issuePathLen;
+      }
+    }
+
+    if (!branchBestIssue) {
+      continue;
+    }
+
+    if (matchingBranchIssue) {
+      return null;
+    }
+
+    matchingBranchIssue = branchBestIssue;
+    matchingBranchIsUnrecognized = branchBestIsUnrecognized;
+    matchingBranchPathLen = branchBestPathLen;
+  }
+
+  if (!sawRouteTypeMismatch || !matchingBranchIssue) {
+    return null;
+  }
+
+  if (matchingBranchPathLen === 0 && !matchingBranchIsUnrecognized) {
+    return null;
+  }
+
+  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
+  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const subMessage =
+    typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function isObjectSecretRefCandidate(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -347,14 +453,58 @@ function mergeUnsupportedMutableSecretRefIssues(
 }
 
 export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
-  return collectUnsupportedMutableSecretRefIssues(raw);
+  return [
+    ...collectUnsupportedMutableSecretRefIssues(raw),
+    ...collectLegacySecretRefEnvMarkerIssues(raw),
+  ];
+}
+
+function formatLegacySecretRefEnvMarkerMessage(candidate: {
+  value: string;
+  ref: { id: string; provider: string } | null;
+}): string {
+  const replacement = candidate.ref
+    ? JSON.stringify({ source: "env", provider: candidate.ref.provider, id: candidate.ref.id })
+    : '{"source":"env","provider":"default","id":"ENV_VAR"}';
+  return [
+    `${JSON.stringify(candidate.value)} is a legacy SecretRef marker and is not valid openclaw.json config.`,
+    `Use a structured SecretRef object instead, for example ${replacement}.`,
+    'Run "openclaw doctor --fix" to migrate valid secretref-env:<ENV_VAR> markers.',
+    `See ${SECRETREF_POLICY_DOC_URL}.`,
+  ].join(" ");
+}
+
+function collectLegacySecretRefEnvMarkerIssues(raw: unknown): ConfigValidationIssue[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+  return collectLegacySecretRefEnvMarkerCandidates(raw as OpenClawConfig).map((candidate) => ({
+    path: candidate.path,
+    message: formatLegacySecretRefEnvMarkerMessage(candidate),
+  }));
 }
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  // Bindings use a plain union because legacy route bindings may omit `type`.
+  // When an explicit ACP binding fails strict-object checks, Zod collapses the
+  // useful ACP branch issue behind a generic union-level "Invalid input".
+  if (
+    record &&
+    typeof record.code === "string" &&
+    record.code === "invalid_union" &&
+    !allowedValuesSummary
+  ) {
+    const betterIssue = extractBindingsSpecificUnionIssue(record, path);
+    if (betterIssue) {
+      return betterIssue;
+    }
+  }
 
   if (!allowedValuesSummary) {
     return { path, message };
@@ -367,6 +517,10 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
 }
+
+export const __testing = {
+  mapZodIssueToConfigIssue,
+};
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
@@ -457,12 +611,26 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
+  opts?: {
+    touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
+  const doctorPluginIds = opts?.touchedPaths
+    ? collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: normalizedRaw,
+        touchedPaths: opts.touchedPaths,
+      })
+    : collectRelevantDoctorPluginIds(normalizedRaw);
+  const extraLegacyRules = listPluginDoctorLegacyConfigRules({
+    pluginIds: doctorPluginIds,
+  });
   const legacyIssues = findLegacyConfigIssues(
-    raw,
-    raw,
-    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+    normalizedRaw,
+    normalizedRaw,
+    extraLegacyRules,
+    opts?.touchedPaths,
   );
   if (legacyIssues.length > 0) {
     return {
@@ -473,7 +641,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
@@ -538,21 +706,29 @@ type ValidateConfigWithPluginsResult =
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
@@ -560,6 +736,14 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const config = base.config;
+  if (opts.pluginValidation === "skip") {
+    return {
+      ok: true,
+      config,
+      warnings: [],
+    };
+  }
+
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
@@ -574,7 +758,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   type RegistryInfo = {
-    registry: ReturnType<typeof loadPluginManifestRegistry>;
+    registry: PluginManifestRegistry;
     knownIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
@@ -602,24 +786,27 @@ function validateConfigObjectWithPluginsBase(
       return compatPluginIds;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadPluginManifestRegistryForPluginRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+      includeDisabled: true,
+    });
     const overriddenBundledPluginIds = new Set(
-      loadPluginManifestRegistry({
-        config,
-        workspaceDir: workspaceDir ?? undefined,
-        env: opts.env,
-      })
-        .diagnostics.filter((diag) => diag.message.includes("duplicate plugin id detected"))
+      registry.diagnostics
+        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
         .map((diag) => diag.pluginId)
         .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
     );
     compatPluginIds = new Set(
-      resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-        config,
-        workspaceDir: workspaceDir ?? undefined,
-        env: opts.env,
-      }).filter((pluginId) => !overriddenBundledPluginIds.has(pluginId)),
+      registry.plugins
+        .filter(
+          (plugin) =>
+            plugin.origin === "bundled" &&
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            !overriddenBundledPluginIds.has(plugin.id),
+        )
+        .map((plugin) => plugin.id),
     );
     return compatPluginIds;
   };
@@ -652,10 +839,11 @@ function validateConfigObjectWithPluginsBase(
       effectiveConfig,
       resolveDefaultAgentId(effectiveConfig),
     );
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryForPluginRegistry({
       config: effectiveConfig,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
+      includeDisabled: true,
     });
 
     for (const diag of registry.diagnostics) {
@@ -931,7 +1119,20 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      const commandAlias = resolveManifestCommandAliasOwnerInRegistry({
+        command: pluginId,
+        registry,
+      });
+      if (commandAlias?.pluginId && knownIds.has(commandAlias.pluginId)) {
+        warnings.push({
+          path: "plugins.allow",
+          message:
+            `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
+            `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
+        });
+      } else {
+        pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      }
     }
   }
 
@@ -968,11 +1169,7 @@ function validateConfigObjectWithPluginsBase(
     }
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
-    const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
-    const shouldReplacePluginConfig = opts.applyDefaults
-      ? entryExists || entryHasConfig
-      : entryHasConfig;
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -999,7 +1196,8 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryExists || entryHasConfig;
+    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
+    const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({

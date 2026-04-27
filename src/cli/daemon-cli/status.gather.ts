@@ -43,6 +43,7 @@ type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;
+  tlsEnabled?: boolean;
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
@@ -165,6 +166,13 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    kind?: "connect" | "read";
+    capability?: string;
+    auth?: {
+      role?: string | null;
+      scopes?: string[];
+      capability?: string;
+    };
     error?: string;
     url?: string;
     authWarning?: string;
@@ -200,13 +208,18 @@ async function loadDaemonConfigContext(
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const cliIO = createConfigIO({
+    env: process.env,
+    configPath: cliConfigPath,
+    pluginValidation: "skip",
+  });
   const sharesDaemonConfigContext = !serviceEnv && cliConfigPath === daemonConfigPath;
   const daemonIO = sharesDaemonConfigContext
     ? cliIO
     : createConfigIO({
         env: mergedDaemonEnv,
         configPath: daemonConfigPath,
+        pluginValidation: "skip",
       });
 
   const cliSnapshotPromise = cliIO.readConfigFileSnapshot().catch(() => null);
@@ -272,7 +285,8 @@ async function resolveGatewayStatusSummary(params: {
   });
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
-  const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
@@ -288,6 +302,7 @@ async function resolveGatewayStatusSummary(params: {
       bindMode,
       bindHost,
       customBindHost,
+      ...(tlsEnabled ? { tlsEnabled } : {}),
       port: daemonPort,
       portSource,
       probeUrl,
@@ -437,7 +452,7 @@ export async function gatherDaemonStatus(
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && loaded
+    opts.probe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({

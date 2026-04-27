@@ -1,8 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -111,6 +112,15 @@ async function expectResolvedApiKey(params: {
 
 beforeAll(loadOAuthModuleForTest);
 
+afterAll(() => {
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+});
+
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
+}
+
 describe("resolveApiKeyForProfile config compatibility", () => {
   it("accepts token credentials when config mode is oauth", async () => {
     const profileId = "anthropic:token";
@@ -178,7 +188,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
           provider: "anthropic",
           access: "access-123",
           refresh: "refresh-123",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         },
       },
     };
@@ -294,6 +304,26 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
+  it("ignores blank api_key credentials", async () => {
+    const profileId = "openrouter:default";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: "   ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;

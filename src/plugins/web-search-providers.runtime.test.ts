@@ -147,6 +147,9 @@ function createManifestRegistryFixture() {
         manifestPath: "/tmp/brave/openclaw.plugin.json",
         channels: [],
         providers: [],
+        cliBackends: [],
+        syntheticAuthRefs: [],
+        nonSecretAuthMarkers: [],
         skills: [],
         hooks: [],
         configUiHints: { "webSearch.apiKey": { label: "key" } },
@@ -159,6 +162,9 @@ function createManifestRegistryFixture() {
         manifestPath: "/tmp/noise/openclaw.plugin.json",
         channels: [],
         providers: [],
+        cliBackends: [],
+        syntheticAuthRefs: [],
+        nonSecretAuthMarkers: [],
         skills: [],
         hooks: [],
         configUiHints: { unrelated: { label: "nope" } },
@@ -401,19 +407,7 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["brave"],
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["perplexity", "brave"],
-            entries: {
-              brave: { enabled: true },
-            },
-          }),
-        }),
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {

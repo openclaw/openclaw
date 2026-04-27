@@ -19,7 +19,7 @@ const [
   { CURRENT_MESSAGE_MARKER },
   { monitorSlackProvider },
 ] = await Promise.all([
-  import("openclaw/plugin-sdk/reply-runtime"),
+  import("../../../src/auto-reply/reply/inbound-dedupe.js"),
   import("../../../src/auto-reply/reply/history.js"),
   import("../../../src/auto-reply/reply/mentions.js"),
   import("./monitor/provider.js"),
@@ -268,9 +268,7 @@ describe("monitorSlackProvider tool results", () => {
   }
 
   function expectReactionNames(names: string[]) {
-    expect(reactMock.mock.calls.map(([args]) => String((args as { name: string }).name))).toEqual(
-      names,
-    );
+    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {

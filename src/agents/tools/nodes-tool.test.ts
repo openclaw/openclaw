@@ -105,6 +105,9 @@ function expectNodePairApproveScopes(scopes: string[]): void {
 
 describe("createNodesTool screen_record duration guardrails", () => {
   beforeAll(async () => {
+    // The agents lane runs on the shared non-isolated runner, so clear any
+    // cached prior import before wiring this file's gateway/media mocks.
+    vi.resetModules();
     ({ createNodesTool } = await import("./nodes-tool.js"));
   });
 
@@ -316,5 +319,22 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "system.run",
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
+  });
+
+  it("keeps invoke pairing guidance for scope upgrade rejections", async () => {
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "device.status",
+      }),
+    ).rejects.toThrow(
+      "pairing required before node invoke. Approve pairing request req-123 and retry.",
+    );
   });
 });

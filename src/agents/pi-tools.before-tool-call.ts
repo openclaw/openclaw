@@ -1,4 +1,17 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticHttpStatusCode,
+} from "../infra/diagnostic-error-metadata.js";
+import {
+  emitTrustedDiagnosticEvent,
+  type DiagnosticToolParamsSummary,
+} from "../infra/diagnostic-events.js";
+import {
+  createChildDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -17,6 +30,7 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -70,10 +84,43 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
 }
 
 function unwrapErrorCause(err: unknown): unknown {
-  if (err instanceof Error && err.cause !== undefined) {
-    return err.cause;
+  try {
+    if (!(err instanceof Error)) {
+      return err;
+    }
+    const cause = Object.getOwnPropertyDescriptor(err, "cause");
+    if (cause && "value" in cause && cause.value !== undefined) {
+      return cause.value;
+    }
+  } catch {
+    return err;
   }
   return err;
+}
+
+function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
+  if (params === null) {
+    return { kind: "null" };
+  }
+  if (params === undefined) {
+    return { kind: "undefined" };
+  }
+  if (Array.isArray(params)) {
+    return { kind: "array", length: params.length };
+  }
+  if (typeof params === "object") {
+    return { kind: "object" };
+  }
+  if (typeof params === "string") {
+    return { kind: "string", length: params.length };
+  }
+  if (typeof params === "number") {
+    return { kind: "number" };
+  }
+  if (typeof params === "boolean") {
+    return { kind: "boolean" };
+  }
+  return { kind: "other" };
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -163,22 +210,21 @@ export async function runBeforeToolCallHook(args: {
           blocked: true,
           reason: loopResult.message,
         };
-      } else {
-        const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
-        if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
-          logToolLoopAction({
-            sessionKey: args.ctx.sessionKey,
-            sessionId: args.ctx?.agentId,
-            toolName,
-            level: "warning",
-            action: "warn",
-            detector: loopResult.detector,
-            count: loopResult.count,
-            message: loopResult.message,
-            pairedToolName: loopResult.pairedToolName,
-          });
-        }
+      }
+      const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+      if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        logToolLoopAction({
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx?.agentId,
+          toolName,
+          level: "warning",
+          action: "warn",
+          detector: loopResult.detector,
+          count: loopResult.count,
+          message: loopResult.message,
+          pairedToolName: loopResult.pairedToolName,
+        });
       }
     }
 
@@ -198,6 +244,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
       ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -233,11 +280,11 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
-        const requestResult = await callGatewayTool<{
+        const requestResult: {
           id?: string;
           status?: string;
           decision?: string | null;
-        }>(
+        } = await callGatewayTool(
           "plugin.approval.request",
           // Buffer beyond the approval timeout so the gateway can clean up
           // and respond before the client-side RPC timeout fires.
@@ -281,10 +328,10 @@ export async function runBeforeToolCallHook(args: {
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
-          const waitPromise = callGatewayTool<{
+          const waitPromise: Promise<{
             id?: string;
             decision?: string | null;
-          }>(
+          }> = callGatewayTool(
             "plugin.approval.waitDecision",
             // Buffer beyond the approval timeout so the gateway can clean up
             // and respond before the client-side RPC timeout fires.
@@ -350,7 +397,7 @@ export async function runBeforeToolCallHook(args: {
             reason: "Approval cancelled (run aborted)",
           };
         }
-        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
         return {
           blocked: true,
           reason: "Plugin approval required (gateway unavailable)",
@@ -410,8 +457,26 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      const trace = ctx?.trace
+        ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
+        : undefined;
+      const eventBase = {
+        ...(ctx?.runId && { runId: ctx.runId }),
+        ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
+        ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+        ...(trace && { trace }),
+        toolName: normalizedToolName,
+        ...(toolCallId && { toolCallId }),
+        paramsSummary: summarizeToolParams(outcome.params),
+      };
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...eventBase,
+      });
+      const startedAt = Date.now();
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const durationMs = Date.now() - startedAt;
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -419,8 +484,22 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.completed",
+          ...eventBase,
+          durationMs,
+        });
         return result;
       } catch (err) {
+        const cause = unwrapErrorCause(err);
+        const errorCode = diagnosticHttpStatusCode(cause);
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.error",
+          ...eventBase,
+          durationMs: Date.now() - startedAt,
+          errorCategory: diagnosticErrorCategory(cause),
+          ...(errorCode ? { errorCode } : {}),
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,

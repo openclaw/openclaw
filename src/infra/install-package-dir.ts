@@ -3,6 +3,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
@@ -163,7 +164,10 @@ export async function installPackageDir(params: {
   hasDeps: boolean;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string; code?: string }>;
+}): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   await fs.mkdir(installBaseDir, { recursive: true });
@@ -197,6 +201,10 @@ export async function installPackageDir(params: {
     }
     return { ok: false as const, error };
   };
+  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(params.error, cause);
+    return params.code ? { ...failed, code: params.code } : failed;
+  };
   const restoreBackup = async () => {
     if (!backupDir) {
       return;
@@ -211,7 +219,13 @@ export async function installPackageDir(params: {
       candidatePaths: [canonicalTargetDir],
     });
     stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
-    await fs.cp(params.sourceDir, stageDir, { recursive: true });
+    await fs.cp(params.sourceDir, stageDir, {
+      recursive: true,
+      // Keep relative symlinks relative to the staged copy. Node's default
+      // rewrites them toward the source tree, which makes valid vendored
+      // package links look like install-root escapes during post-copy scans.
+      verbatimSymlinks: true,
+    });
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
   }
@@ -236,6 +250,11 @@ export async function installPackageDir(params: {
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
+              env: {
+                ...createNpmProjectInstallEnv(process.env),
+                COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+                NPM_CONFIG_IGNORE_SCRIPTS: "true",
+              },
             },
           );
         } finally {
@@ -247,6 +266,17 @@ export async function installPackageDir(params: {
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
+    }
+  }
+
+  if (params.afterInstall) {
+    try {
+      const postInstallResult = await params.afterInstall(stageDir);
+      if (!postInstallResult.ok) {
+        return await failWithCode(postInstallResult);
+      }
+    } catch (err) {
+      return await fail(`post-install validation failed: ${String(err)}`, err);
     }
   }
 

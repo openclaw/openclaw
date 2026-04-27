@@ -1,12 +1,10 @@
 ---
-title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
-
-# Memory Overview
 
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
 workspace. The model only "remembers" what gets saved to disk -- there is no
@@ -20,8 +18,8 @@ Your agent has three memory-related files:
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
-  summaries for human review.
+- **`DREAMS.md`** (optional) -- Dream Diary and dreaming sweep
+  summaries for human review, including grounded historical backfill entries.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
@@ -114,7 +112,7 @@ important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is an optional background consolidation pass for memory. It collects
 short-term signals, scores candidates, and promotes only qualified items into
@@ -131,7 +129,42 @@ It is designed to keep long-term memory high signal:
   for human review.
 
 For phase behavior, scoring signals, and Dream Diary details, see
-[Dreaming (experimental)](/concepts/dreaming).
+[Dreaming](/concepts/dreaming).
+
+## Grounded backfill and live promotion
+
+The dreaming system now has two closely related review lanes:
+
+- **Live dreaming** works from the short-term dreaming store under
+  `memory/.dreams/` and is what the normal deep phase uses when deciding what
+  can graduate into `MEMORY.md`.
+- **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
+  standalone day files and writes structured review output into `DREAMS.md`.
+
+Grounded backfill is useful when you want to replay older notes and inspect what
+the system thinks is durable without manually editing `MEMORY.md`.
+
+When you use:
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
+```
+
+the grounded durable candidates are not promoted directly. They are staged into
+the same short-term dreaming store the normal deep phase already uses. That
+means:
+
+- `DREAMS.md` stays the human review surface.
+- the short-term store stays the machine-facing ranking surface.
+- `MEMORY.md` is still only written by deep promotion.
+
+If you decide the replay was not useful, you can remove the staged artifacts
+without touching ordinary diary entries or normal recall state:
+
+```bash
+openclaw memory rem-backfill --rollback
+openclaw memory rem-backfill --rollback-short-term
+```
 
 ## CLI
 
@@ -149,7 +182,14 @@ openclaw memory index --force   # Rebuild the index
 - [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
-- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+- [Dreaming](/concepts/dreaming) -- background promotion
   from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory
+
+## Related
+
+- [Active memory](/concepts/active-memory)
+- [Memory search](/concepts/memory-search)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

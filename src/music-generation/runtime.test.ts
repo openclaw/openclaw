@@ -1,67 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetGenerationRuntimeMocks } from "../../test/helpers/media-generation/runtime-test-mocks.js";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  getMediaGenerationRuntimeMocks,
+  resetMusicGenerationRuntimeMocks,
+} from "../../test/helpers/media-generation/runtime-module-mocks.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
 
-const mocks = vi.hoisted(() => {
-  const debug = vi.fn();
-  return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
-    describeFailoverError: vi.fn(),
-    getMusicGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => MusicGenerationProvider | undefined
-    >(() => undefined),
-    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
-    resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
-    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listMusicGenerationProviders: vi.fn<(config?: OpenClawConfig) => MusicGenerationProvider[]>(
-      () => [],
-    ),
-    parseMusicGenerationModelRef: vi.fn<
-      (raw?: string) => { provider: string; model: string } | undefined
-    >((raw?: string) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const slash = trimmed.indexOf("/");
-      if (slash <= 0 || slash === trimmed.length - 1) {
-        return undefined;
-      }
-      return {
-        provider: trimmed.slice(0, slash),
-        model: trimmed.slice(slash + 1),
-      };
-    }),
-    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
-    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
-    debug,
-  };
-});
+const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("../agents/failover-error.js", () => ({
-  describeFailoverError: mocks.describeFailoverError,
-  isFailoverError: mocks.isFailoverError,
-}));
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: mocks.createSubsystemLogger,
-}));
-vi.mock("../secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
 vi.mock("./model-ref.js", () => ({
   parseMusicGenerationModelRef: mocks.parseMusicGenerationModelRef,
 }));
+
 vi.mock("./provider-registry.js", () => ({
   getMusicGenerationProvider: mocks.getMusicGenerationProvider,
   listMusicGenerationProviders: mocks.listMusicGenerationProviders,
@@ -69,23 +20,20 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("music-generation runtime", () => {
   beforeEach(() => {
-    resetGenerationRuntimeMocks({
-      ...mocks,
-      getProvider: mocks.getMusicGenerationProvider,
-      listProviders: mocks.listMusicGenerationProviders,
-      parseModelRef: mocks.parseMusicGenerationModelRef,
-    });
+    resetMusicGenerationRuntimeMocks();
   });
 
   it("generates tracks through the active music-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("music-plugin/track-v1");
     const provider: MusicGenerationProvider = {
       id: "music-plugin",
       capabilities: {},
-      async generateMusic(req: { authStore?: unknown }) {
+      async generateMusic(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           tracks: [
             {
@@ -111,6 +59,7 @@ describe("music-generation runtime", () => {
       prompt: "play a synth line",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("music-plugin");
@@ -118,6 +67,7 @@ describe("music-generation runtime", () => {
     expect(result.attempts).toEqual([]);
     expect(result.ignoredOverrides).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.tracks).toEqual([
       {
         buffer: Buffer.from("mp3-bytes"),
@@ -143,13 +93,13 @@ describe("music-generation runtime", () => {
       if (providerId === "minimax") {
         return {
           id: "minimax",
-          defaultModel: "music-2.5+",
+          defaultModel: "music-2.6",
           capabilities: {},
           isConfigured: () => true,
           async generateMusic() {
             return {
               tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-              model: "music-2.5+",
+              model: "music-2.6",
             };
           },
         };
@@ -166,7 +116,7 @@ describe("music-generation runtime", () => {
       },
       {
         id: "minimax",
-        defaultModel: "music-2.5+",
+        defaultModel: "music-2.6",
         capabilities: {},
         isConfigured: () => true,
         generateMusic: async () => ({ tracks: [] }),
@@ -179,7 +129,7 @@ describe("music-generation runtime", () => {
     });
 
     expect(result.provider).toBe("minimax");
-    expect(result.model).toBe("music-2.5+");
+    expect(result.model).toBe("music-2.6");
     expect(result.attempts).toEqual([
       {
         provider: "google",
@@ -352,7 +302,7 @@ describe("music-generation runtime", () => {
           durationSeconds?: number;
         }
       | undefined;
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.5+");
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.6");
     mocks.getMusicGenerationProvider.mockReturnValue({
       id: "minimax",
       capabilities: {
@@ -367,7 +317,7 @@ describe("music-generation runtime", () => {
         };
         return {
           tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-          model: "music-2.5+",
+          model: "music-2.6",
         };
       },
     });
@@ -376,7 +326,7 @@ describe("music-generation runtime", () => {
       cfg: {
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
       } as OpenClawConfig,

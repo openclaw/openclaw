@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -18,6 +18,7 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -513,6 +514,19 @@ export function registerHooksCli(program: Command): void {
     .action(async (name) =>
       runHooksCliAction(async () => {
         await disableHook(name);
+      }),
+    );
+
+  hooks
+    .command("relay", { hidden: true })
+    .description("Internal native harness hook relay")
+    .requiredOption("--provider <provider>", "Native harness provider")
+    .requiredOption("--relay-id <id>", "Native hook relay id")
+    .requiredOption("--event <event>", "Native hook event")
+    .option("--timeout <ms>", "Gateway timeout in ms", "5000")
+    .action(async (opts: NativeHookRelayCliOptions) =>
+      runHooksCliAction(async () => {
+        process.exitCode = await runNativeHookRelayCli(opts);
       }),
     );
 

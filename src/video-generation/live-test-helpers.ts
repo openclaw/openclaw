@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
@@ -55,6 +55,9 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
     return false;
   }
   if (providerId !== "runway") {
+    if (providerId === "fal") {
+      return params.modelRef.includes("reference-to-video");
+    }
     return true;
   }
   const slash = params.modelRef.indexOf("/");

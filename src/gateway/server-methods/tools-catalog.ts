@@ -11,6 +11,7 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -72,7 +73,7 @@ function buildCoreGroups(): ToolCatalogGroup[] {
 }
 
 function buildPluginGroups(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   existingToolNames: Set<string>;
 }): ToolCatalogGroup[] {
@@ -119,15 +120,14 @@ function buildPluginGroups(params: {
     groups.set(groupId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
+    )
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export function buildToolsCatalogResult(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId?: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 
@@ -57,7 +57,12 @@ const mocks = vi.hoisted(() => ({
     provider: "openai",
     model: "gpt-4.1-mini",
   })),
+  describeImageFileWithModel: vi.fn(async () => ({
+    text: "friendly lobster",
+    model: "gpt-4.1-mini",
+  })),
   generateImage: vi.fn(),
+  generateVideo: vi.fn(),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -68,6 +73,7 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  setTtsPersona: vi.fn(),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -104,6 +110,7 @@ const mocks = vi.hoisted(() => ({
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
+  buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -155,10 +162,17 @@ vi.mock("../agents/memory-search.js", () => ({
     mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
-vi.mock("../commands/models.js", () => ({
+vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
+}));
+
+vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
+}));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand:
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -177,9 +191,16 @@ vi.mock("../gateway/connection-details.js", () => ({
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile:
     mocks.describeImageFile as typeof import("../media-understanding/runtime.js").describeImageFile,
+  describeImageFileWithModel:
+    mocks.describeImageFileWithModel as typeof import("../media-understanding/runtime.js").describeImageFileWithModel,
   describeVideoFile: vi.fn(),
   transcribeAudioFile:
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
+}));
+
+vi.mock("../media-understanding/provider-registry.js", () => ({
+  buildMediaUnderstandingRegistry:
+    mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
@@ -189,11 +210,11 @@ vi.mock("../plugins/memory-embedding-providers.js", () => ({
     mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
 }));
 
-vi.mock("../../extensions/memory-core/runtime-api.js", () => ({
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   createEmbeddingProvider:
-    mocks.createEmbeddingProvider as unknown as typeof import("../../extensions/memory-core/runtime-api.js").createEmbeddingProvider,
+    mocks.createEmbeddingProvider as unknown as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders:
-    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../../extensions/memory-core/runtime-api.js").registerBuiltInMemoryEmbeddingProviders,
+    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").registerBuiltInMemoryEmbeddingProviders,
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({
@@ -202,16 +223,19 @@ vi.mock("../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
-  generateVideo: vi.fn(),
+  generateVideo: mocks.generateVideo,
   listRuntimeVideoGenerationProviders: vi.fn(() => []),
 }));
 
 vi.mock("../tts/tts.js", () => ({
+  getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
+  listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
+  setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
   setTtsProvider: mocks.setTtsProvider as typeof import("../tts/tts.js").setTtsProvider,
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../tts/tts.js").resolveExplicitTtsOverrides,
@@ -238,6 +262,11 @@ vi.mock("../web-fetch/runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
@@ -277,11 +306,14 @@ describe("capability cli", () => {
       return {};
     }) as never);
     mocks.describeImageFile.mockClear();
+    mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
+    mocks.generateVideo.mockReset();
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
+    mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -339,6 +371,41 @@ describe("capability cli", () => {
     );
   });
 
+  it("runs local model probes without chat-agent prompt policy or tools", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: true,
+        modelRun: true,
+        promptMode: "none",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          cleanupBundleMcpOnRunEnd: true,
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
   it("defaults tts status to gateway transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -366,6 +433,37 @@ describe("capability cli", () => {
       expect.objectContaining({
         capability: "image.describe",
         outputs: [expect.objectContaining({ kind: "image.description" })],
+      }),
+    );
+  });
+
+  it("uses the explicit media-understanding provider for image describe model overrides", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "photo.jpg",
+        "--model",
+        "ollama/qwen2.5vl:7b",
+        "--json",
+      ],
+    });
+
+    expect(mocks.describeImageFileWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: expect.stringMatching(/photo\.jpg$/),
+        provider: "ollama",
+        model: "qwen2.5vl:7b",
+      }),
+    );
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        model: "gpt-4.1-mini",
       }),
     );
   });
@@ -434,6 +532,425 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes image generation timeout through to runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--timeout-ms",
+        "180000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "friendly lobster",
+        timeoutMs: 180000,
+      }),
+    );
+  });
+
+  it("passes image output format and generic background hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "transparent sticker",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "transparent sticker",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        background: "transparent",
+        providerOptions: undefined,
+      }),
+    );
+  });
+
+  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent-edit.png",
+        },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make background transparent",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--openai-background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "make background transparent",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        background: undefined,
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(inputPath),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("rejects unsupported image output format and background hints", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--output-format",
+          "gif",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --output-format must be one of png, jpeg, or webp",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --background must be one of transparent, opaque, or auto",
+    );
+  });
+
+  it("forwards size, aspect ratio, and resolution overrides for image edit", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-edit-input-${Date.now()}.png`);
+    const tempOutput = path.join(os.tmpdir(), `openclaw-image-edit-output-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+    await fs.rm(tempOutput, { force: true });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        tempInput,
+        "--prompt",
+        "remove the background object",
+        "--model",
+        "openai/gpt-image-2",
+        "--size",
+        "2160x3840",
+        "--aspect-ratio",
+        "9:16",
+        "--resolution",
+        "4K",
+        "--output",
+        tempOutput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "remove the background object",
+        modelOverride: "openai/gpt-image-2",
+        size: "2160x3840",
+        aspectRatio: "9:16",
+        resolution: "4K",
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(tempInput),
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("reports the expanded image.edit flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.edit", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "image.edit",
+        flags: [
+          "--file",
+          "--prompt",
+          "--model",
+          "--size",
+          "--aspect-ratio",
+          "--resolution",
+          "--output-format",
+          "--background",
+          "--openai-background",
+          "--timeout-ms",
+          "--output",
+          "--json",
+        ],
+      }),
+    );
+  });
+
+  it("streams url-only generated videos to --output paths", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/generated-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-generate-"));
+    const outputBase = path.join(tempDir, "result");
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--output",
+        outputBase,
+        "--json",
+      ],
+    });
+
+    const outputPath = `${outputBase}.mp4`;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/generated-video.mp4",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "video.generate",
+        provider: "vydra",
+        outputs: [
+          expect.objectContaining({
+            path: outputPath,
+            mimeType: "video/mp4",
+            size: 11,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("passes video generation parameters through to runtime", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      attempts: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--model",
+        "minimax/MiniMax-Hailuo-2.3",
+        "--size",
+        "1280x768",
+        "--aspect-ratio",
+        "16:9",
+        "--resolution",
+        "768p",
+        "--duration",
+        "6",
+        "--audio",
+        "--watermark",
+        "--timeout-ms",
+        "300000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateVideo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "friendly lobster",
+        modelOverride: "minimax/MiniMax-Hailuo-2.3",
+        size: "1280x768",
+        aspectRatio: "16:9",
+        resolution: "768P",
+        durationSeconds: 6,
+        audio: true,
+        watermark: true,
+        timeoutMs: 300000,
+      }),
+    );
+  });
+
+  it("fails video generate when a provider returns an undeliverable asset", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [{ mimeType: "video/mp4" }],
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Video asset at index 0 has neither buffer nor url"),
+    );
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -462,6 +979,22 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("surfaces the underlying transcription failure for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockRejectedValueOnce(
+      new Error("Audio transcription response missing text"),
+    );
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Audio transcription response missing text/),
     );
   });
 
@@ -817,6 +1350,55 @@ describe("capability cli", () => {
         registerMemoryEmbeddingProvider: expect.any(Function),
       }),
     );
+  });
+
+  it("marks env-backed audio providers as configured", async () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+        [
+          "groq",
+          {
+            id: "groq",
+            capabilities: ["audio"],
+            defaultModels: { audio: "whisper-large-v3-turbo" },
+          },
+        ],
+      ]),
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "deepgram",
+        capabilities: ["audio"],
+        defaultModels: { audio: "nova-3" },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "groq",
+        capabilities: ["audio"],
+        defaultModels: { audio: "whisper-large-v3-turbo" },
+      },
+    ]);
   });
 
   it("surfaces available, configured, and selected for web providers", async () => {

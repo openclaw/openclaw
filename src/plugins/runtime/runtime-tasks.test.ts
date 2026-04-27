@@ -1,46 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
-} from "../../tasks/task-registry.js";
+  getDetachedTaskLifecycleRuntime,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
+import {
+  getRuntimeTaskMocks,
+  installRuntimeTaskDeliveryMock,
+  resetRuntimeTaskTestState,
+} from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTaskFlows, createRuntimeTaskRuns } from "./runtime-tasks.js";
 
-const hoisted = vi.hoisted(() => {
-  const sendMessageMock = vi.fn();
-  const cancelSessionMock = vi.fn();
-  const killSubagentRunAdminMock = vi.fn();
-  return {
-    sendMessageMock,
-    cancelSessionMock,
-    killSubagentRunAdminMock,
-  };
-});
-
-vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: hoisted.cancelSessionMock,
-  }),
-}));
-
-vi.mock("../../agents/subagent-control.js", () => ({
-  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-}));
+const runtimeTaskMocks = getRuntimeTaskMocks();
 
 afterEach(() => {
-  resetTaskRegistryDeliveryRuntimeForTests();
-  resetTaskRegistryForTests();
-  resetTaskFlowRegistryForTests({ persist: false });
-  vi.clearAllMocks();
+  resetRuntimeTaskTestState();
 });
 
 describe("runtime tasks", () => {
   beforeEach(() => {
-    setTaskRegistryDeliveryRuntimeForTests({
-      sendMessage: hoisted.sendMessageMock,
-    });
+    installRuntimeTaskDeliveryMock();
   });
 
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
@@ -185,7 +164,7 @@ describe("runtime tasks", () => {
       cfg: {} as never,
     });
 
-    expect(hoisted.cancelSessionMock).toHaveBeenCalledWith({
+    expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
@@ -198,6 +177,53 @@ describe("runtime tasks", () => {
         title: "Cancel me",
         status: "cancelled",
       },
+    });
+  });
+
+  it("routes runtime task cancellation through the detached task runtime seam", async () => {
+    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = legacyTaskFlow.createManaged({
+      controllerId: "tests/runtime-tasks",
+      goal: "Cancel through runtime seam",
+    });
+    const child = legacyTaskFlow.runTask({
+      flowId: created.flowId,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-task-cancel-seam",
+      task: "Cancel via seam",
+      status: "running",
+      startedAt: 22,
+      lastEventAt: 23,
+    });
+    if (!child.created) {
+      throw new Error("expected child task creation to succeed");
+    }
+
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const cancelDetachedTaskRunByIdSpy = vi.fn(
+      (...args: Parameters<typeof defaultRuntime.cancelDetachedTaskRunById>) =>
+        defaultRuntime.cancelDetachedTaskRunById(...args),
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+    });
+
+    await taskRuns.cancel({
+      taskId: child.task.taskId,
+      cfg: {} as never,
+    });
+
+    expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+      cfg: {} as never,
+      taskId: child.task.taskId,
     });
   });
 
@@ -232,7 +258,7 @@ describe("runtime tasks", () => {
       cfg: {} as never,
     });
 
-    expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+    expect(runtimeTaskMocks.cancelSessionMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       found: false,
       cancelled: false,

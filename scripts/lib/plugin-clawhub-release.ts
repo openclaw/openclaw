@@ -105,7 +105,7 @@ export function collectClawHubPublishablePluginPackages(
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
 
-  for (const candidate of collectExtensionPackageJsonCandidates<PluginPackageJson>(rootDir)) {
+  for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
     const { extensionId, packageDir, packageJson } = candidate;
     if (packageJson.openclaw?.release?.publishToClawHub !== true) {
       continue;
@@ -352,17 +352,15 @@ export async function collectPluginClawHubReleasePlan(params?: {
   });
 
   const all = await Promise.all(
-    selectedPublishable.map(async (plugin) => ({
-      ...plugin,
-      alreadyPublished: await isPluginVersionPublishedOnClawHub(
-        plugin.packageName,
-        plugin.version,
-        {
-          registryBaseUrl: params?.registryBaseUrl,
-          fetchImpl: params?.fetchImpl,
-        },
-      ),
-    })),
+    selectedPublishable.map(async (plugin) =>
+      Object.assign({}, plugin, {
+        alreadyPublished: await isPluginVersionPublishedOnClawHub(
+          plugin.packageName,
+          plugin.version,
+          { registryBaseUrl: params?.registryBaseUrl, fetchImpl: params?.fetchImpl },
+        ),
+      }),
+    ),
   );
 
   return {

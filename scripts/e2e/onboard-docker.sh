@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="openclaw-onboard-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
 
-echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
 
 echo "Running onboarding E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
@@ -174,7 +174,7 @@ TRASH
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
-    script -q -f -c "$command" "$log_path" < "$input_fifo" &
+    script -q -f -c "$command" "$log_path" < "$input_fifo" >/dev/null 2>&1 &
     wizard_pid=$!
     exec 3> "$input_fifo"
 
@@ -245,6 +245,16 @@ TRASH
     fi
   }
 
+  run_case_logged() {
+    local label="$1"
+    shift
+    local log_path="/tmp/openclaw-onboard-${label}.log"
+    if ! "$@" >"$log_path" 2>&1; then
+      cat "$log_path"
+      exit 1
+    fi
+  }
+
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
     wait_for_log "Enable hooks?" 60
@@ -298,7 +308,7 @@ TRASH
     local home_dir
     home_dir="$(make_home local-basic)"
     set_isolated_openclaw_env "$home_dir"
-    node "$OPENCLAW_ENTRY" onboard \
+    run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -374,7 +384,7 @@ NODE
     home_dir="$(make_home remote-non-interactive)"
     set_isolated_openclaw_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
-	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
 	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
@@ -427,7 +437,7 @@ NODE
 }
 JSON
 
-	    node "$OPENCLAW_ENTRY" onboard \
+	    run_case_logged reset-config node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \

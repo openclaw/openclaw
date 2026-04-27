@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,63 +32,53 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
-async function walkFiles(rootDir) {
-  const out = [];
-  let entries = [];
-  try {
-    entries = await fs.readdir(rootDir, { withFileTypes: true });
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return out;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    const entryPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      if (!ignoredDirNames.has(entry.name)) {
-        out.push(...(await walkFiles(entryPath)));
-      }
-      continue;
-    }
-    if (entry.isFile() && scanExtensions.has(path.extname(entry.name))) {
-      out.push(entryPath);
-    }
-  }
-  return out;
-}
-
-function normalizeRepoPath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
+let webFetchProviderViolationsPromise;
 
 export async function collectWebFetchProviderBoundaryViolations() {
-  const files = await walkFiles(path.join(repoRoot, "src"));
-  const violations = [];
-  for (const filePath of files) {
-    const relativeFile = normalizeRepoPath(filePath);
-    if (allowedFiles.has(relativeFile) || relativeFile.includes(".test.")) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
-        continue;
-      }
-      if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
-        continue;
-      }
-      violations.push({
-        file: relativeFile,
-        line: index + 1,
-        reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+  if (!webFetchProviderViolationsPromise) {
+    webFetchProviderViolationsPromise = (async () => {
+      const violations = [];
+      const files = await collectSourceFileContents({
+        repoRoot,
+        scanRoots: ["src"],
+        scanExtensions,
+        ignoredDirNames,
       });
+      for (const { relativeFile, content } of files) {
+        if (
+          allowedFiles.has(relativeFile) ||
+          relativeFile.includes(".test.") ||
+          relativeFile.includes("test-support")
+        ) {
+          continue;
+        }
+        const lines = content.split(/\r?\n/);
+        for (const [index, line] of lines.entries()) {
+          if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
+            continue;
+          }
+          if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
+            continue;
+          }
+          violations.push({
+            file: relativeFile,
+            line: index + 1,
+            reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+          });
+        }
+      }
+      return violations.toSorted(
+        (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
+      );
+    })();
+    try {
+      return await webFetchProviderViolationsPromise;
+    } catch (error) {
+      webFetchProviderViolationsPromise = undefined;
+      throw error;
     }
   }
-  return violations.toSorted(
-    (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
-  );
+  return await webFetchProviderViolationsPromise;
 }
 
 export async function main(argv = process.argv.slice(2), io) {

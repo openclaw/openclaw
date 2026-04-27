@@ -21,7 +21,20 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["mistral"]
+    "memoryEmbeddingProviders": ["mistral"],
+    "mediaUnderstandingProviders": ["mistral"],
+    "realtimeTranscriptionProviders": ["mistral"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "mistral": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "voxtral-mini-latest"
+      },
+      "autoPriority": {
+        "audio": 50
+      }
+    }
   },
   "configSchema": {
     "type": "object",

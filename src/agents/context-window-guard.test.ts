@@ -4,10 +4,37 @@ import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
+  formatContextWindowBlockMessage,
+  formatContextWindowWarningMessage,
   resolveContextWindowInfo,
 } from "./context-window-guard.js";
 
 describe("context-window-guard", () => {
+  function openRouterModelConfig(params: { contextWindow: number; contextTokens?: number }) {
+    return {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: params.contextWindow,
+                contextTokens: params.contextTokens,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+  }
+
   it("blocks below 16k (model metadata)", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,
@@ -51,27 +78,7 @@ describe("context-window-guard", () => {
   });
 
   it("uses models.providers.*.models[].contextWindow when present", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "tiny",
-                name: "tiny",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 12_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = openRouterModelConfig({ contextWindow: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -86,28 +93,7 @@ describe("context-window-guard", () => {
   });
 
   it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "tiny",
-                name: "tiny",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_050_000,
-                contextTokens: 12_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = openRouterModelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -221,5 +207,88 @@ describe("context-window-guard", () => {
   it("exports thresholds as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
+  });
+
+  it("adds a local-model hint to warning messages for localhost endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 24_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowWarningMessage({
+        provider: "lmstudio",
+        modelId: "qwen3",
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:1234/v1",
+      }),
+    ).toContain("local/self-hosted runs work best at 32000+ tokens");
+  });
+
+  it("does not add local-model hints for generic custom endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 24_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowWarningMessage({
+        provider: "custom",
+        modelId: "hosted-proxy-model",
+        guard,
+        runtimeBaseUrl: "https://models.example.com/v1",
+      }),
+    ).toBe("low context window: custom/hosted-proxy-model ctx=24000 (warn<32000) source=model");
+  });
+
+  it("adds a local-model hint to block messages for localhost endpoints", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toContain("This looks like a local model endpoint.");
+  });
+
+  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "agentContextTokens" },
+    });
+
+    const message = formatContextWindowBlockMessage({
+      guard,
+      runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+    });
+
+    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    expect(message).not.toContain("choose a larger model");
+  });
+
+  it("points model config block remediation at contextWindow/contextTokens", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "modelsConfig" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toContain("Raise contextWindow/contextTokens or choose a larger model.");
+  });
+
+  it("keeps block messages concise for public providers", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 8_000, source: "model" },
+    });
+
+    expect(
+      formatContextWindowBlockMessage({
+        guard,
+        runtimeBaseUrl: "https://api.openai.com/v1",
+      }),
+    ).toBe(`Model context window too small (8000 tokens; source=model). Minimum is 16000.`);
   });
 });

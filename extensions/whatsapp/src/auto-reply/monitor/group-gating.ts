@@ -6,11 +6,12 @@ import {
   getSenderIdentity,
   identitiesOverlap,
 } from "../../identity.js";
+import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
-import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
+import { resolveGroupActivationFor } from "./group-activation.js";
 import {
   hasControlCommand,
   implicitMentionKindWhen,
@@ -32,6 +33,8 @@ export type GroupHistoryEntry = {
 type ApplyGroupGatingParams = {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
+  mentionText?: string;
+  deferMissingMention?: boolean;
   conversationId: string;
   groupHistoryKey: string;
   agentId: string;
@@ -57,6 +60,7 @@ function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
 
 function recordPendingGroupHistoryEntry(params: {
   msg: WebInboundMsg;
+  body?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
   groupHistoryLimit: number;
@@ -75,7 +79,7 @@ function recordPendingGroupHistoryEntry(params: {
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.msg.body,
+      body: params.body ?? params.msg.body,
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: senderIdentity.jid ?? params.msg.senderJid,
@@ -83,10 +87,15 @@ function recordPendingGroupHistoryEntry(params: {
   });
 }
 
-function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verboseMessage: string) {
+function skipGroupMessageAndStoreHistory(
+  params: ApplyGroupGatingParams,
+  verboseMessage: string,
+  body?: string,
+) {
   params.logVerbose(verboseMessage);
   recordPendingGroupHistoryEntry({
     msg: params.msg,
+    body,
     groupHistories: params.groupHistories,
     groupHistoryKey: params.groupHistoryKey,
     groupHistoryLimit: params.groupHistoryLimit,
@@ -94,11 +103,18 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
   return { shouldProcess: false } as const;
 }
 
-export function applyGroupGating(params: ApplyGroupGatingParams) {
+export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const sender = getSenderIdentity(params.msg);
   const self = getSelfIdentity(params.msg, params.authDir);
-  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
-  if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+  const inboundPolicy = resolveWhatsAppInboundPolicy({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+    selfE164: self.e164 ?? null,
+  });
+  const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(
+    params.conversationId,
+  );
+  if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
   }
@@ -110,14 +126,23 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     sender.name ?? undefined,
   );
 
-  const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
+  const baseMentionConfig = {
+    ...params.baseMentionConfig,
+    allowFrom: inboundPolicy.configuredAllowFrom,
+  };
+  const mentionConfig = {
+    ...buildMentionConfig(params.cfg, params.agentId),
+    allowFrom: inboundPolicy.configuredAllowFrom,
+  };
+  const mentionMsg =
+    params.mentionText !== undefined ? { ...params.msg, body: params.mentionText } : params.msg;
   const commandBody = stripMentionsForCommand(
-    params.msg.body,
+    mentionMsg.body,
     mentionConfig.mentionRegexes,
     self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
-  const owner = isOwnerSender(params.baseMentionConfig, params.msg);
+  const owner = isOwnerSender(baseMentionConfig, params.msg);
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
@@ -127,7 +152,7 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     );
   }
 
-  const mentionDebug = debugMention(params.msg, mentionConfig, params.authDir);
+  const mentionDebug = debugMention(mentionMsg, mentionConfig, params.authDir);
   params.replyLogger.debug(
     {
       conversationId: params.conversationId,
@@ -137,8 +162,9 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     "group mention debug",
   );
   const wasMentioned = mentionDebug.wasMentioned;
-  const activation = resolveGroupActivationFor({
+  const activation = await resolveGroupActivationFor({
     cfg: params.cfg,
+    accountId: inboundPolicy.account.accountId,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
@@ -171,13 +197,19 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
       commandAuthorized: false,
     },
   });
-  const effectiveWasMentioned =
-    mentionDecision.effectiveWasMentioned || Boolean(shouldBypassMention);
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
   params.msg.wasMentioned = effectiveWasMentioned;
   if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
+    if (params.deferMissingMention === true) {
+      params.logVerbose(
+        `Deferring group mention skip until audio preflight completes in ${params.conversationId}`,
+      );
+      return { shouldProcess: false, needsMentionText: true } as const;
+    }
     return skipGroupMessageAndStoreHistory(
       params,
-      `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
+      `Group message stored for context (no mention detected) in ${params.conversationId}: ${mentionMsg.body}`,
+      params.mentionText,
     );
   }
 

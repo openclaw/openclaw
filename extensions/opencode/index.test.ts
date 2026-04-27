@@ -1,48 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
+import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import plugin from "./index.js";
 
 describe("opencode provider plugin", () => {
-  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it("registers image media understanding through the OpenCode plugin", async () => {
+    const { mediaProviders } = await registerProviderPlugin({
+      plugin,
+      id: "opencode",
+      name: "OpenCode Zen Provider",
+    });
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "gemini-2.5-pro",
-      } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      sanitizeThoughtSignatures: {
-        allowBase64Only: true,
-        includeCamelCase: true,
-      },
+    expect(mediaProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "opencode",
+          capabilities: ["image"],
+          defaultModels: { image: "gpt-5-nano" },
+          describeImage: expect.any(Function),
+          describeImages: expect.any(Function),
+        }),
+      ]),
+    );
+  });
+
+  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "gemini-2.5-pro",
+      sanitizeThoughtSignatures: true,
     });
   });
 
   it("keeps non-Gemini replay policy minimal on passthrough routes", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "claude-opus-4.6",
-      } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "claude-opus-4.6",
     });
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "claude-opus-4.6",
-      } as never),
-    ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
 });

@@ -9,6 +9,7 @@ import {
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
+import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -101,6 +102,7 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
@@ -185,12 +187,14 @@ export const ModelApiSchema = z.enum(MODEL_APIS);
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
+    supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -198,6 +202,7 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
@@ -280,39 +285,67 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
-  })
+  .object(ConfiguredProviderRequestFields)
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
+    baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z
+      .array(
+        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
+      )
+      .optional(),
     cost: z
       .object({
         input: z.number().optional(),
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        tieredPricing: z
+          .array(
+            z
+              .object({
+                input: z.number(),
+                output: z.number(),
+                cacheRead: z.number(),
+                cacheWrite: z.number(),
+                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 
@@ -469,12 +502,37 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
+const TtsPersonaPromptSchema = z
+  .object({
+    profile: z.string().optional(),
+    scene: z.string().optional(),
+    sampleContext: z.string().optional(),
+    style: z.string().optional(),
+    accent: z.string().optional(),
+    pacing: z.string().optional(),
+    constraints: z.array(z.string()).optional(),
+  })
+  .strict();
+const TtsPersonaSchema = z
+  .object({
+    label: z.string().optional(),
+    description: z.string().optional(),
+    provider: TtsProviderSchema.optional(),
+    fallbackPolicy: z
+      .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
+      .optional(),
+    prompt: TtsPersonaPromptSchema.optional(),
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
+  })
+  .strict();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
     enabled: z.boolean().optional(),
     mode: TtsModeSchema.optional(),
     provider: TtsProviderSchema.optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), TtsPersonaSchema).optional(),
     summaryModel: z.string().optional(),
     modelOverrides: z
       .object({
@@ -521,6 +579,8 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
+    jsonlDialect: z.literal("claude-stream-json").optional(),
+    liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -535,6 +595,9 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileArg: z.string().optional(),
+    systemPromptFileConfigArg: z.string().optional(),
+    systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
     systemPromptWhen: z
       .union([z.literal("first"), z.literal("always"), z.literal("never")])
@@ -761,12 +824,28 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
+    asyncCompletion: z
+      .object({
+        directSend: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
   })
   .strict()
   .optional();
+
+type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
+type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+  ToolsMediaConfigFromSchema["asyncCompletion"],
+  MediaToolsConfig["asyncCompletion"]
+>;
+type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+  MediaToolsConfig["asyncCompletion"],
+  ToolsMediaConfigFromSchema["asyncCompletion"]
+>;
 
 export const LinkModelSchema = z
   .object({

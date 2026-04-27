@@ -47,6 +47,12 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
     create: async () => ({ provider: null }),
   });
   registerMemoryEmbeddingProvider({
+    id: "lmstudio",
+    defaultModel: "text-embedding-nomic-embed-text-v1.5",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
     id: "ollama",
     defaultModel: "nomic-embed-text",
     transport: "remote",
@@ -219,12 +225,30 @@ describe("memory search config", () => {
       watch: false,
       watchDebounceMs: 25,
       intervalMinutes: 3,
+      embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,
         postCompactionForce: false,
       },
     });
+  });
+
+  it("uses configured embeddingBatchTimeoutSeconds when set", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              embeddingBatchTimeoutSeconds: 600,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(600);
   });
 
   it("merges defaults and overrides", () => {
@@ -440,6 +464,13 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectDefaultRemoteBatch(resolved);
     expect(resolved?.model).toBe("mistral-embed");
+  });
+
+  it("includes remote defaults and model default for lmstudio without overrides", () => {
+    const cfg = configWithDefaultProvider("lmstudio");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("text-embedding-nomic-embed-text-v1.5");
   });
 
   it("includes remote defaults and model default for ollama without overrides", () => {

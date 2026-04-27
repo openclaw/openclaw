@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
+import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
-import * as taskExecutor from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -65,16 +65,21 @@ describe("cron service timer seam coverage", () => {
       reason: "cron:main-heartbeat-job",
       agentId: undefined,
       sessionKey: "agent:main:main",
+      heartbeat: { target: "last" },
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: CronJob[];
-    };
+    const persisted = await loadCronStore(storePath);
     const job = persisted.jobs[0];
     expect(job).toBeDefined();
     expect(job?.state.lastStatus).toBe("ok");
     expect(job?.state.runningAtMs).toBeUndefined();
     expect(job?.state.nextRunAtMs).toBe(now + 60_000);
+    expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)).toMatchObject({
+      runtime: "cron",
+      status: "succeeded",
+      endedAt: now,
+      cleanupAfter: expect.any(Number),
+    });
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
@@ -96,7 +101,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskExecutor, "createRunningTaskRun")
+      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
       .mockImplementation(() => {
         throw new Error("disk full");
       });

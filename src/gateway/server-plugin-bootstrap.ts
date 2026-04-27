@@ -1,11 +1,15 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
-import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import {
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+} from "../plugins/runtime/gateway-bindings.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
+  createGatewayNodesRuntime,
   createGatewaySubagentRuntime,
   loadGatewayPlugins,
   setPluginSubagentOverridePolicies,
@@ -19,21 +23,23 @@ type GatewayPluginBootstrapLog = {
 };
 
 type GatewayPluginBootstrapParams = {
-  cfg: ReturnType<typeof loadConfig>;
-  activationSourceConfig?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
+  suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
-function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
+function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
   setPluginSubagentOverridePolicies(cfg);
   setGatewaySubagentRuntime(createGatewaySubagentRuntime());
+  setGatewayNodesRuntime(createGatewayNodesRuntime());
 }
 
 function logGatewayPluginDiagnostics(params: {
@@ -76,6 +82,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    suppressPluginInfoLogs: params.suppressPluginInfoLogs,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });

@@ -1,3 +1,9 @@
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -22,6 +28,7 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
+  replayKeys?: string[];
 };
 
 export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -36,7 +43,10 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
   return ctx.messageChannelId;
 }
 
-export function buildDiscordInboundJob(ctx: DiscordMessagePreflightContext): DiscordInboundJob {
+export function buildDiscordInboundJob(
+  ctx: DiscordMessagePreflightContext,
+  options?: { replayKeys?: readonly string[] },
+): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
@@ -70,6 +80,7 @@ export function buildDiscordInboundJob(ctx: DiscordMessagePreflightContext): Dis
       threadBindings,
       discordRestFetch,
     },
+    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
   };
 }
 
@@ -96,16 +107,18 @@ function normalizeDiscordThreadChannel(
   if (!threadChannel) {
     return null;
   }
+  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   return {
     id: threadChannel.id,
-    name: threadChannel.name,
-    parentId: threadChannel.parentId,
-    parent: threadChannel.parent
+    name: channelInfo.name,
+    parentId: channelInfo.parentId,
+    parent: parent
       ? {
-          id: threadChannel.parent.id,
-          name: threadChannel.parent.name,
+          id: resolveDiscordChannelIdSafe(parent),
+          name: resolveDiscordChannelNameSafe(parent),
         }
       : undefined,
-    ownerId: threadChannel.ownerId,
+    ownerId: channelInfo.ownerId,
   };
 }

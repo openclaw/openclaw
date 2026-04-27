@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type RealtimeVoiceProviderId = string;
 
@@ -51,6 +51,22 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   providerConfig: RealtimeVoiceProviderConfig;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
+};
+
+export type RealtimeVoiceBrowserSessionCreateRequest = {
+  providerConfig: RealtimeVoiceProviderConfig;
+  instructions?: string;
+  tools?: RealtimeVoiceTool[];
+  model?: string;
+  voice?: string;
+};
+
+export type RealtimeVoiceBrowserSession = {
+  provider: RealtimeVoiceProviderId;
+  clientSecret: string;
+  model?: string;
+  voice?: string;
+  expiresAt?: number;
 };
 
 export type RealtimeVoiceBridge = {
