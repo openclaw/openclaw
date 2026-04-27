@@ -20,7 +20,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import { detectSetupMigrationSources, runSetupMigrationImport } from "./setup.migration-import.js";
+import {
+  detectSetupMigrationSources,
+  runSetupMigrationImport,
+  type SetupMigrationDetection,
+} from "./setup.migration-import.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   SECURITY_CONFIRM_MESSAGE,
@@ -30,6 +34,7 @@ import {
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 
 type SetupFlowChoice = WizardFlow | "import";
+type SetupMigrationChoice = { kind: "import"; providerId: string } | { kind: "fresh" };
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
@@ -176,6 +181,52 @@ async function requireRiskAcknowledgement(params: {
   }
 }
 
+async function promptDetectedMigrationChoice(params: {
+  detections: readonly SetupMigrationDetection[];
+  prompter: WizardPrompter;
+}): Promise<SetupMigrationChoice> {
+  const selected = await params.prompter.select({
+    message:
+      params.detections.length === 1
+        ? "Existing agent setup detected"
+        : "Existing agent setups detected",
+    options: [
+      ...params.detections.map((detection) => ({
+        value: detection.providerId,
+        label: `Import from ${detection.label}`,
+        ...(detection.source || detection.message
+          ? { hint: detection.source ?? detection.message }
+          : {}),
+      })),
+      {
+        value: "__fresh__",
+        label: "Set up fresh OpenClaw",
+        hint: "Continue to QuickStart or Manual setup",
+      },
+    ],
+    initialValue: params.detections[0]?.providerId,
+  });
+  if (selected === "__fresh__") {
+    return { kind: "fresh" };
+  }
+  return { kind: "import", providerId: selected };
+}
+
+async function promptSetupFlow(params: {
+  prompter: WizardPrompter;
+  quickstartHint: string;
+  manualHint: string;
+}): Promise<SetupFlowChoice> {
+  return await params.prompter.select({
+    message: "Setup mode",
+    options: [
+      { value: "quickstart", label: "QuickStart", hint: params.quickstartHint },
+      { value: "advanced", label: "Manual", hint: params.manualHint },
+    ],
+    initialValue: "quickstart",
+  });
+}
+
 export async function runSetupWizard(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -236,14 +287,6 @@ export async function runSetupWizard(
   const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
   const manualHint = "Configure port, network, Tailscale, and auth options.";
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
-  const firstMigrationDetection = migrationDetections[0];
-  const importOption = firstMigrationDetection
-    ? {
-        value: "import" as const,
-        label: `Import from ${firstMigrationDetection.label}`,
-        ...(firstMigrationDetection.source ? { hint: firstMigrationDetection.source } : {}),
-      }
-    : undefined;
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
@@ -256,23 +299,31 @@ export async function runSetupWizard(
     runtime.exit(1);
     return;
   }
+  const hasExplicitImportProvider = Boolean(opts.importFrom?.trim());
   const explicitFlow: SetupFlowChoice | undefined =
     normalizedExplicitFlow === "quickstart" ||
     normalizedExplicitFlow === "advanced" ||
     normalizedExplicitFlow === "import"
       ? normalizedExplicitFlow
-      : undefined;
-  let flow: SetupFlowChoice =
-    explicitFlow ??
-    (await prompter.select({
-      message: "Setup mode",
-      options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
-        ...(importOption ? [importOption] : []),
-      ],
-      initialValue: "quickstart",
-    }));
+      : hasExplicitImportProvider
+        ? "import"
+        : undefined;
+  let migrationChoice: SetupMigrationChoice | undefined;
+  let flow: SetupFlowChoice;
+  if (explicitFlow) {
+    flow = explicitFlow;
+  } else if (migrationDetections.length > 0) {
+    migrationChoice = await promptDetectedMigrationChoice({
+      detections: migrationDetections,
+      prompter,
+    });
+    flow =
+      migrationChoice.kind === "import"
+        ? "import"
+        : await promptSetupFlow({ prompter, quickstartHint, manualHint });
+  } else {
+    flow = await promptSetupFlow({ prompter, quickstartHint, manualHint });
+  }
 
   if (opts.mode === "remote" && flow === "quickstart") {
     await prompter.note(
@@ -321,7 +372,10 @@ export async function runSetupWizard(
 
   if (opts.importFrom || flow === "import") {
     await runSetupMigrationImport({
-      opts,
+      opts:
+        migrationChoice?.kind === "import"
+          ? { ...opts, importFrom: migrationChoice.providerId }
+          : opts,
       baseConfig,
       detections: migrationDetections,
       prompter,

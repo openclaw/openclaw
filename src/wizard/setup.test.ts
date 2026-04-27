@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -92,6 +93,12 @@ const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const resolvePluginMigrationProviders = vi.hoisted(() =>
+  vi.fn((): MigrationProviderPlugin[] => []),
+);
+const resolvePluginMigrationProvider = vi.hoisted(() =>
+  vi.fn((_params: { providerId: string }) => undefined as MigrationProviderPlugin | undefined),
+);
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -255,6 +262,11 @@ vi.mock("../plugins/status.js", () => ({
   formatPluginCompatibilityNotice,
 }));
 
+vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  resolvePluginMigrationProviders,
+  resolvePluginMigrationProvider,
+}));
+
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins,
 }));
@@ -297,12 +309,55 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   };
 }
 
+function migrationProviderStub(
+  overrides: Partial<MigrationProviderPlugin> & Pick<MigrationProviderPlugin, "id" | "label">,
+): MigrationProviderPlugin {
+  return {
+    description: "migration provider",
+    detect: vi.fn(async () => ({ found: false })),
+    plan: vi.fn(async () => ({
+      providerId: overrides.id,
+      source: "/tmp/source",
+      summary: {
+        total: 0,
+        planned: 0,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [],
+    })),
+    apply: vi.fn(async () => ({
+      providerId: overrides.id,
+      source: "/tmp/source",
+      summary: {
+        total: 0,
+        planned: 0,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [],
+    })),
+    ...overrides,
+  };
+}
+
 describe("runSetupWizard", () => {
   let suiteRoot = "";
   let suiteCase = 0;
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-suite-"));
+  });
+
+  beforeEach(() => {
+    resolvePluginMigrationProviders.mockReturnValue([]);
+    resolvePluginMigrationProvider.mockReturnValue(undefined);
   });
 
   afterAll(async () => {
@@ -454,6 +509,105 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("asks about detected migration sources before the normal setup mode", async () => {
+    resolvePluginMigrationProviders.mockReturnValueOnce([
+      migrationProviderStub({
+        id: "claude",
+        label: "Claude",
+        detect: vi.fn(async () => ({
+          found: true,
+          source: "/tmp/claude-home",
+          label: "Claude",
+          confidence: "high",
+        })),
+      }),
+    ]);
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Existing agent setup detected") {
+        expect(params.options.map((option) => option.value)).toEqual(["claude", "__fresh__"]);
+        expect(params.options[0]).toEqual(
+          expect.objectContaining({
+            label: "Import from Claude",
+            hint: "/tmp/claude-home",
+          }),
+        );
+        return "__fresh__";
+      }
+      if (params.message === "Setup mode") {
+        expect(params.options.map((option) => option.value)).toEqual(["quickstart", "advanced"]);
+        return "quickstart";
+      }
+      return "skip";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(select).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        message: "Existing agent setup detected",
+        initialValue: "claude",
+      }),
+    );
+    expect(select).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        message: "Setup mode",
+        initialValue: "quickstart",
+      }),
+    );
+  });
+
+  it("keeps the first setup screen unchanged when no migration source is detected", async () => {
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Setup mode") {
+        expect(params.options.map((option) => option.value)).toEqual(["quickstart", "advanced"]);
+        return "quickstart";
+      }
+      return "skip";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(select).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Setup mode",
+        initialValue: "quickstart",
+      }),
+    );
   });
 
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
