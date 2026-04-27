@@ -7,6 +7,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Run docs list first: `pnpm docs:list` if available; read relevant docs only.
+- Operating policy: branch-first work, atomic commits, risk escalation, verification before completion, and review packs are required.
 - High-confidence answers only when fixing/triaging: verify source, tests, shipped/current behavior, and dependency contracts before deciding.
 - Dependency-backed behavior: read upstream dependency docs/source/types first. Do not assume APIs, defaults, errors, timing, or runtime behavior.
 - Live-verify when feasible. Check env/`~/.profile` for keys before assuming live tests are blocked; keep secret output redacted.
@@ -147,6 +148,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Commit via `scripts/committer "<msg>" <file...>`; stage intended files only. It formats staged files; still run gates.
 - Commits: conventional-ish, concise, grouped.
+- Atomic commits required: one commit equals one reviewable intent. Do not mix unrelated behavior, tests, docs, formatting, dependency changes, generated files, CI changes, or config changes.
+- Before editing, state objective, expected blast radius, likely files, commit plan, verification plan, and risk level.
+- Work on a branch for production, company, client, and community repositories. Do not merge without explicit human approval.
+- Return this review pack at handoff: Repo, Branch, PR, Task, Status, Summary, Commits, Files changed, Verification, Risk level, Rollback plan, Human decision needed, Next recommended task.
 - No manual stash/autostash unless explicit. No branch/worktree changes unless requested.
 - `main`: no merge commits; rebase on latest `origin/main` before push. Do not
   keep chasing `main` with repeated full gates after one green run plus a clean
@@ -159,6 +164,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Security / Release
 
 - Never commit real phone numbers, videos, credentials, live config.
+- Stop and ask before auth, security, payments, billing, Stripe, production data, data deletion, migrations, secrets, environment variables, public API compatibility, licensing, telemetry/privacy behavior, destructive commands, production configuration, or major dependency upgrades.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 - Env keys: check `~/.profile`.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm.patchedDependencies` exact versions only.
