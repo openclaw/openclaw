@@ -60,6 +60,8 @@ const BUNDLED_RUNTIME_DEPS_LOCK_WAIT_MS = 100;
 const BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS = 5 * 60_000;
 const BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
+const MIRRORED_PACKAGE_RUNTIME_DEP_NAMES = ["tslog"] as const;
+const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
 
@@ -403,6 +405,37 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
     ...(packageJson.dependencies as Record<string, unknown> | undefined),
     ...(packageJson.optionalDependencies as Record<string, unknown> | undefined),
   };
+}
+
+function collectMirroredPackageRuntimeDeps(packageRoot: string | null): {
+  name: string;
+  version: string;
+}[] {
+  if (!packageRoot) {
+    return [];
+  }
+  const packageJson = readJsonObject(path.join(packageRoot, "package.json"));
+  if (!packageJson) {
+    return [];
+  }
+  const runtimeDeps = collectRuntimeDeps(packageJson);
+  return MIRRORED_PACKAGE_RUNTIME_DEP_NAMES.flatMap((name) => {
+    const dep = parseInstallableRuntimeDep(name, runtimeDeps[name]);
+    return dep ? [dep] : [];
+  });
+}
+
+function mergeInstallableRuntimeDeps(
+  deps: readonly { name: string; version: string }[],
+): { name: string; version: string }[] {
+  const bySpec = new Map<string, { name: string; version: string }>();
+  for (const dep of deps) {
+    bySpec.set(`${dep.name}@${dep.version}`, dep);
+  }
+  return [...bySpec.values()].toSorted((left, right) => {
+    const nameOrder = left.name.localeCompare(right.name);
+    return nameOrder === 0 ? left.version.localeCompare(right.version) : nameOrder;
+  });
 }
 
 function isSourceCheckoutRoot(packageRoot: string): boolean {
@@ -1137,22 +1170,36 @@ export function scanBundledPluginRuntimeDeps(params: {
     pluginIds: normalizePluginIdSet(params.pluginIds),
     includeConfiguredChannels: params.includeConfiguredChannels,
   });
+  const packageRuntimeDeps =
+    deps.length > 0
+      ? collectMirroredPackageRuntimeDeps(params.packageRoot).map((dep) => ({
+          ...dep,
+          pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID],
+        }))
+      : [];
+  const allDeps = [...deps, ...packageRuntimeDeps].toSorted((left, right) =>
+    left.name.localeCompare(right.name),
+  );
   const packageInstallRoot = resolveBundledRuntimeDependencyPackageInstallRoot(params.packageRoot, {
     env: params.env,
   });
   const packageSearchRoots = [packageInstallRoot];
-  const missing = deps.filter(
-    (dep) =>
-      !hasDependencySentinel(packageSearchRoots, dep) &&
-      dep.pluginIds.every((pluginId) => {
-        const pluginRoot = path.join(extensionsDir, pluginId);
-        const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
-          env: params.env,
-        });
-        return !hasDependencySentinel([installRoot], dep);
-      }),
-  );
-  return { deps, missing, conflicts };
+  const missing = allDeps.filter((dep) => {
+    if (hasDependencySentinel(packageSearchRoots, dep)) {
+      return false;
+    }
+    if (dep.pluginIds.includes(MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID)) {
+      return true;
+    }
+    return dep.pluginIds.every((pluginId) => {
+      const pluginRoot = path.join(extensionsDir, pluginId);
+      const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+        env: params.env,
+      });
+      return !hasDependencySentinel([installRoot], dep);
+    });
+  });
+  return { deps: allDeps, missing, conflicts };
 }
 
 export function resolveBundledRuntimeDependencyPackageInstallRoot(
@@ -1377,16 +1424,22 @@ export function ensureBundledPluginRuntimeDeps(params: {
   if (!packageJson) {
     return { installedSpecs: [], retainSpecs: [] };
   }
-  const deps = Object.entries(collectRuntimeDeps(packageJson))
+  const pluginDeps = Object.entries(collectRuntimeDeps(packageJson))
     .map(([name, rawVersion]) => parseInstallableRuntimeDep(name, rawVersion))
     .filter((entry): entry is { name: string; version: string } => Boolean(entry));
-  if (deps.length === 0) {
-    return { installedSpecs: [], retainSpecs: [] };
-  }
 
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, {
     env: params.env,
   });
+  const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
+  const packageRuntimeDeps =
+    packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot)
+      ? collectMirroredPackageRuntimeDeps(packageRoot)
+      : [];
+  const deps = mergeInstallableRuntimeDeps([...pluginDeps, ...packageRuntimeDeps]);
+  if (deps.length === 0) {
+    return { installedSpecs: [], retainSpecs: [] };
+  }
   return withBundledRuntimeDepsInstallRootLock(installRoot, () => {
     const persistRetainedManifest = shouldPersistRetainedRuntimeDepsManifest({
       pluginRoot: params.pluginRoot,
