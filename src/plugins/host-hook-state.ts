@@ -179,6 +179,11 @@ function loadPluginHostHookSessionEntry(sessionKey: string): {
   };
 }
 
+function isPluginPromptInjectionEnabled(pluginId: string): boolean {
+  const entry = loadConfig().plugins?.entries?.[pluginId];
+  return entry?.hooks?.allowPromptInjection !== false;
+}
+
 function toPluginNextTurnInjectionRecord(params: {
   pluginId: string;
   pluginName?: string;
@@ -319,7 +324,7 @@ export async function drainPluginNextTurnInjections(params: {
     );
     const drained: PluginNextTurnInjectionRecord[] = [];
     for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-      if (!activePluginIds.has(pluginId)) {
+      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(pluginId)) {
         continue;
       }
       // Guard against malformed/hand-edited persisted state — a non-array value

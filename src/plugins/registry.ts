@@ -1690,12 +1690,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     subscription: PluginAgentEventSubscriptionRegistration,
   ) => {
     const id = normalizePluginHostHookId(subscription.id);
-    if (!id) {
+    if (!id || typeof subscription.handle !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "agent event subscription registration missing id",
+        message: "agent event subscription registration requires id and handle",
       });
       return;
     }

@@ -490,6 +490,11 @@ describe("host-hook fixture plugin contract", () => {
           streams: ["error"],
           handle: () => undefined,
         });
+        api.registerAgentEventSubscription({
+          id: "missing-handler",
+          streams: ["tool"],
+          handle: "not-a-function" as never,
+        });
       },
     });
 
@@ -504,6 +509,10 @@ describe("host-hook fixture plugin contract", () => {
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
           message: "agent event subscription already registered: events",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "agent event subscription registration requires id and handle",
         }),
       ]),
     );
@@ -903,6 +912,11 @@ describe("host-hook fixture plugin contract", () => {
         name: "Disabled Injector",
         status: "disabled",
       }),
+      createPluginRecord({
+        id: "policy-blocked-injector",
+        name: "Policy Blocked Injector",
+        status: "loaded",
+      }),
     );
     setActivePluginRegistry(registry);
     const stateDir = await fs.mkdtemp(
@@ -915,6 +929,13 @@ describe("host-hook fixture plugin contract", () => {
       await withTempConfig({
         cfg: {
           session: { store: storePath },
+          plugins: {
+            entries: {
+              "policy-blocked-injector": {
+                hooks: { allowPromptInjection: false },
+              },
+            },
+          },
         },
         run: async () => {
           await updateSessionStore(storePath, (store) => {
@@ -936,6 +957,15 @@ describe("host-hook fixture plugin contract", () => {
                     id: "stale",
                     pluginId: "disabled-injector",
                     text: "stale prompt contribution",
+                    placement: "prepend_context",
+                    createdAt: 1,
+                  },
+                ],
+                "policy-blocked-injector": [
+                  {
+                    id: "policy-blocked",
+                    pluginId: "policy-blocked-injector",
+                    text: "policy blocked prompt contribution",
                     placement: "prepend_context",
                     createdAt: 1,
                   },
