@@ -47,11 +47,58 @@ type PreparedMatrixTarget = {
   roomId: string;
   threadId?: string;
 };
+type MatrixApprovalMetadataAction = {
+  decision: ExecApprovalReplyDecision;
+  label: string;
+  style: PendingApprovalView["actions"][number]["style"];
+  command: string;
+};
+type MatrixApprovalMetadataBase = {
+  version: 1;
+  type: "approval.request";
+  id: string;
+  state: "pending";
+  kind: PendingApprovalView["approvalKind"];
+  phase: "pending";
+  title: string;
+  description?: string;
+  expiresAtMs: number;
+  metadata: PendingApprovalView["metadata"];
+  allowedDecisions: ExecApprovalReplyDecision[];
+  actions: MatrixApprovalMetadataAction[];
+};
+type MatrixExecApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "exec";
+  ask?: string;
+  agentId?: string;
+  commandText: string;
+  commandPreview?: string;
+  cwd?: string;
+  envKeys?: readonly string[];
+  host?: string;
+  nodeId?: string;
+  sessionKey?: string;
+};
+type MatrixPluginApprovalSeverity = Extract<
+  PendingApprovalView,
+  { approvalKind: "plugin" }
+>["severity"];
+type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "plugin";
+  agentId?: string;
+  pluginId?: string;
+  toolName?: string;
+  severity: MatrixPluginApprovalSeverity;
+};
+type MatrixApprovalMetadata = MatrixExecApprovalMetadata | MatrixPluginApprovalMetadata;
+type MatrixApprovalExtraContent = {
+  [MATRIX_APPROVAL_METADATA_KEY]: MatrixApprovalMetadata;
+};
 type PendingApprovalContent = {
   approvalId: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
-  extraContent: Record<string, unknown>;
+  extraContent: MatrixApprovalExtraContent;
 };
 type ReactionTargetRef = {
   roomId: string;
@@ -159,15 +206,11 @@ async function prepareTarget(
   };
 }
 
-function removeUndefinedValues(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
-}
-
 function buildMatrixApprovalMetadata(params: {
   view: PendingApprovalView;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): Record<string, unknown> {
-  const base = removeUndefinedValues({
+}): MatrixApprovalMetadata {
+  const base: MatrixApprovalMetadataBase = {
     version: 1,
     type: "approval.request",
     id: params.view.approvalId,
@@ -185,30 +228,33 @@ function buildMatrixApprovalMetadata(params: {
       style: action.style,
       command: action.command,
     })),
-  });
+    ...(params.view.description != null ? { description: params.view.description } : {}),
+  };
 
   if (params.view.approvalKind === "plugin") {
-    return removeUndefinedValues({
+    return {
       ...base,
-      agentId: params.view.agentId ?? undefined,
-      pluginId: params.view.pluginId ?? undefined,
-      toolName: params.view.toolName ?? undefined,
+      kind: "plugin",
       severity: params.view.severity,
-    });
+      ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+      ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
+      ...(params.view.toolName != null ? { toolName: params.view.toolName } : {}),
+    };
   }
 
-  return removeUndefinedValues({
+  return {
     ...base,
-    ask: params.view.ask ?? undefined,
-    agentId: params.view.agentId ?? undefined,
+    kind: "exec",
     commandText: params.view.commandText,
-    commandPreview: params.view.commandPreview ?? undefined,
-    cwd: params.view.cwd ?? undefined,
-    envKeys: params.view.envKeys,
-    host: params.view.host ?? undefined,
-    nodeId: params.view.nodeId ?? undefined,
-    sessionKey: params.view.sessionKey ?? undefined,
-  });
+    ...(params.view.ask != null ? { ask: params.view.ask } : {}),
+    ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+    ...(params.view.commandPreview != null ? { commandPreview: params.view.commandPreview } : {}),
+    ...(params.view.cwd != null ? { cwd: params.view.cwd } : {}),
+    ...(params.view.envKeys != null ? { envKeys: params.view.envKeys } : {}),
+    ...(params.view.host != null ? { host: params.view.host } : {}),
+    ...(params.view.nodeId != null ? { nodeId: params.view.nodeId } : {}),
+    ...(params.view.sessionKey != null ? { sessionKey: params.view.sessionKey } : {}),
+  };
 }
 
 function buildPendingApprovalContent(params: {
