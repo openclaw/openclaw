@@ -672,6 +672,7 @@ export function resolveManagedFlowResidue(params: {
           },
         }),
         updatedAt,
+        endedAt: updatedAt,
       },
     });
     if (result.applied) {
