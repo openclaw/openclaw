@@ -1,8 +1,7 @@
+import { isSuppressedControlReplyText } from "../../../src/gateway/control-reply-text.js";
 import { extractText } from "./chat/message-extract.ts";
 import type { ChatEventPayload } from "./controllers/chat.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
-
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 function hasRenderableAssistantFinalMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -17,7 +16,7 @@ function hasRenderableAssistantFinalMessage(message: unknown): boolean {
     return false;
   }
   const text = extractText(message);
-  return typeof text === "string" && text.trim() !== "" && !SILENT_REPLY_PATTERN.test(text);
+  return typeof text === "string" && text.trim() !== "" && !isSuppressedControlReplyText(text);
 }
 
 export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {

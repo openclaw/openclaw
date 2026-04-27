@@ -47,16 +47,20 @@ function createActiveStreamingState() {
   });
 }
 
-function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
+function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
   return {
     runId: "run-announce",
     sessionKey: "main",
     state: "final",
     message: {
       role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
+      content: [{ type: "text", text }],
     },
   };
+}
+
+function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
+  return createOtherRunSilentFinalPayload("NO_REPLY");
 }
 
 describe("handleChatEvent", () => {
@@ -143,6 +147,20 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(123);
     expect(state.chatMessages).toEqual([]);
   });
+
+  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "drops %s final payload from another run without clearing active stream",
+    (text) => {
+      const state = createActiveStreamingState();
+      const payload = createOtherRunSilentFinalPayload(text);
+
+      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(state.chatRunId).toBe("run-user");
+      expect(state.chatStream).toBe("Working...");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
 
   it("replaces the stream when a delta snapshot gets shorter", () => {
     const state = createState({
@@ -440,6 +458,32 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
+  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "drops %s final payload from own run",
+    (text) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: text,
+        chatStreamStartedAt: 100,
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+        },
+      };
+
+      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(state.chatMessages).toEqual([]);
+      expect(state.chatRunId).toBe(null);
+      expect(state.chatStream).toBe(null);
+    },
+  );
+
   it("does not persist NO_REPLY stream text on final without message", () => {
     const state = createState({
       sessionKey: "main",
@@ -522,10 +566,13 @@ describe("handleChatEvent", () => {
 });
 
 describe("loadChatHistory", () => {
-  it("filters NO_REPLY assistant messages from history", async () => {
+  it("filters suppressed-control assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
       { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      { role: "assistant", content: [{ type: "text", text: "no_reply" }] },
+      { role: "assistant", content: [{ type: "text", text: "ANNOUNCE_SKIP" }] },
+      { role: "assistant", content: [{ type: "text", text: "REPLY_SKIP" }] },
       { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
       { role: "assistant", text: "  NO_REPLY  " },
     ];
@@ -541,7 +588,7 @@ describe("loadChatHistory", () => {
 
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(messages[0]);
-    expect(state.chatMessages[1]).toEqual(messages[2]);
+    expect(state.chatMessages[1]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });

@@ -908,6 +908,39 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "replays deferred session.message reloads after silent final payload %s",
+    (text) => {
+      const { host, client } = connectHostGateway();
+      host.chatRunId = "main-run-silent";
+      loadChatHistoryMock.mockClear();
+
+      client.emitEvent({
+        event: "session.message",
+        payload: {
+          sessionKey: "main",
+        },
+      });
+      client.emitEvent({
+        event: "chat",
+        payload: {
+          runId: "main-run-silent",
+          sessionKey: "main",
+          state: "final",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+          },
+        },
+      });
+
+      expect(host.chatRunId).toBeNull();
+      expect(host.chatMessages).toEqual([]);
+      expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    },
+  );
+
   it("keeps deferred session.message reload pending across unrelated terminal events", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-5";

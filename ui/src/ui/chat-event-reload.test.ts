@@ -45,16 +45,19 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(false);
   });
 
-  it("returns true when final event includes a silent assistant payload", () => {
-    expect(
-      shouldReloadHistoryForFinalEvent({
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-      }),
-    ).toBe(true);
-  });
+  it.each(["NO_REPLY", "no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "returns true when final event includes silent assistant payload %s",
+    (text) => {
+      expect(
+        shouldReloadHistoryForFinalEvent({
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("returns true when final event message role is non-assistant", () => {
     expect(
