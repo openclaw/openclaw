@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
@@ -63,6 +64,22 @@ function pathIsInside(parent: string, child: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function realpathIfExists(filePath: string): string | null {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function lstatIfExists(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
 function resolveCovenHome(raw: string | undefined, baseDir: string): string {
   const fromConfig = raw?.trim();
   if (fromConfig) {
@@ -80,6 +97,19 @@ function resolveSocketPath(covenHome: string, raw: string | undefined, baseDir: 
     ? resolveConfiguredPath(raw, baseDir)
     : path.join(covenHome, "coven.sock");
   if (!pathIsInside(covenHome, socketPath)) {
+    throw new Error("Coven socketPath must stay inside covenHome");
+  }
+  const socketStat = lstatIfExists(socketPath);
+  if (socketStat?.isSymbolicLink()) {
+    throw new Error("Coven socketPath must not be a symlink");
+  }
+  const realCovenHome = realpathIfExists(covenHome);
+  const realSocketDir = realpathIfExists(path.dirname(socketPath));
+  if (realCovenHome && realSocketDir && !pathIsInside(realCovenHome, realSocketDir)) {
+    throw new Error("Coven socketPath must stay inside covenHome");
+  }
+  const realSocketPath = realpathIfExists(socketPath);
+  if (realCovenHome && realSocketPath && !pathIsInside(realCovenHome, realSocketPath)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
   return socketPath;

@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 export type CovenSessionRecord = {
   id: string;
@@ -55,6 +57,7 @@ export type CovenListEventsOptions = {
 
 type RequestOptions = {
   socketPath: string;
+  socketRoot?: string;
   method: "GET" | "POST";
   path: string;
   body?: unknown;
@@ -81,10 +84,44 @@ export class CovenApiError extends Error {
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 
+function pathIsInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function lstatIfExists(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function validateSocketPathForUse(socketPath: string, socketRoot: string | undefined): void {
+  if (!socketRoot) {
+    return;
+  }
+  const socketStat = lstatIfExists(socketPath);
+  if (socketStat?.isSymbolicLink()) {
+    throw new Error("Coven socketPath must not be a symlink");
+  }
+  const realSocketRoot = fs.realpathSync.native(socketRoot);
+  const realSocketDir = fs.realpathSync.native(path.dirname(socketPath));
+  if (!pathIsInside(realSocketRoot, realSocketDir)) {
+    throw new Error("Coven socketPath must stay inside covenHome");
+  }
+}
+
 function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
       reject(options.signal.reason ?? new Error("request aborted"));
+      return;
+    }
+    try {
+      validateSocketPathForUse(options.socketPath, options.socketRoot);
+    } catch (error) {
+      reject(error);
       return;
     }
 
@@ -168,11 +205,15 @@ async function requestJson<T>(options: RequestOptions): Promise<T> {
   }
 }
 
-export function createCovenClient(socketPath: string): CovenClient {
+export function createCovenClient(
+  socketPath: string,
+  clientOptions: { socketRoot?: string } = {},
+): CovenClient {
   return {
     health(signal) {
       return requestJson<CovenHealthResponse>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "GET",
         path: "/health",
         signal,
@@ -181,6 +222,7 @@ export function createCovenClient(socketPath: string): CovenClient {
     launchSession(input, signal) {
       return requestJson<CovenSessionRecord>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "POST",
         path: "/sessions",
         body: input,
@@ -190,6 +232,7 @@ export function createCovenClient(socketPath: string): CovenClient {
     getSession(sessionId, signal) {
       return requestJson<CovenSessionRecord>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "GET",
         path: `/sessions/${encodeURIComponent(sessionId)}`,
         signal,
@@ -203,6 +246,7 @@ export function createCovenClient(socketPath: string): CovenClient {
       }
       return requestJson<CovenEventRecord[]>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "GET",
         path: `/events?${params.toString()}`,
         signal,
@@ -211,6 +255,7 @@ export function createCovenClient(socketPath: string): CovenClient {
     async sendInput(sessionId, data, signal) {
       await requestJson<unknown>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "POST",
         path: `/sessions/${encodeURIComponent(sessionId)}/input`,
         body: { data },
@@ -220,6 +265,7 @@ export function createCovenClient(socketPath: string): CovenClient {
     async killSession(sessionId, signal) {
       await requestJson<unknown>({
         socketPath,
+        socketRoot: clientOptions.socketRoot,
         method: "POST",
         path: `/sessions/${encodeURIComponent(sessionId)}/kill`,
         signal,

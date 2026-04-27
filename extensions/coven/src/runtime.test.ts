@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
@@ -239,6 +242,39 @@ describe("CovenAcpRuntime", () => {
     ).rejects.toThrow(/outside workspace/);
   });
 
+  it("rejects Coven cwd symlinks that resolve outside the workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-workspace-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-outside-"));
+    const symlinkPath = path.join(workspaceDir, "outside");
+    await fs.symlink(outsideDir, symlinkPath);
+    try {
+      const runtime = new CovenAcpRuntime({
+        config: { ...config, workspaceDir },
+        client: fakeClient(),
+      });
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:test",
+        agent: "codex",
+        mode: "oneshot",
+        cwd: symlinkPath,
+      });
+
+      await expect(
+        collect(
+          runtime.runTurn({
+            handle,
+            text: "Fix tests",
+            mode: "prompt",
+            requestId: "req-1",
+          }),
+        ),
+      ).rejects.toThrow(/outside workspace/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("requests incremental events after the last processed Coven event", async () => {
     const client = fakeClient({
       listEvents: vi
@@ -309,9 +345,36 @@ describe("CovenAcpRuntime", () => {
   });
 
   it("strips terminal escape and control characters from Coven output", () => {
-    expect(__testing.sanitizeTerminalText("\u001b]0;spoof\u0007hi\u001b[31m!\u001b[0m\r\n")).toBe(
-      "hi!\n",
+    expect(
+      __testing.sanitizeTerminalText(
+        "\u001b]0;spoof\u0007hi\u001b[31m!\u001b[0m\u001b7\u001bc\r\n",
+      ),
+    ).toBe("hi!\n");
+  });
+
+  it("sanitizes prompt-derived session titles", () => {
+    expect(__testing.titleFromPrompt("\u001b]0;spoof\u0007Fix\u001b[31m tests\r\nnow")).toBe(
+      "Fix tests now",
     );
+  });
+
+  it("normalizes untrusted Coven exit status into bounded stop reasons", () => {
+    expect(__testing.normalizeStopReason("completed")).toBe("completed");
+    expect(__testing.normalizeStopReason("killed")).toBe("cancelled");
+    expect(__testing.normalizeStopReason("refusal")).toBe("completed");
+
+    expect(
+      __testing.eventToRuntimeEvents(
+        event({
+          kind: "exit",
+          payloadJson: JSON.stringify({ status: "refusal", exitCode: 0 }),
+        }),
+      ),
+    ).toContainEqual(expect.objectContaining({ type: "done", stopReason: "completed" }));
+  });
+
+  it("rejects oversized Coven runtime session metadata", () => {
+    expect(__testing.decodeRuntimeSessionName(`coven:${"a".repeat(2_049)}`)).toBeNull();
   });
 
   it("preserves direct fallback when Coven launch fails after detection", async () => {

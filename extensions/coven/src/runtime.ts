@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   AcpRuntimeError,
@@ -32,6 +33,7 @@ const DEFAULT_HARNESSES: Record<string, string> = {
 };
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const MAX_TRACKED_EVENT_IDS = 10_000;
+const MAX_RUNTIME_SESSION_NAME_BYTES = 2_048;
 
 type CovenRuntimeSessionState = {
   agent: string;
@@ -57,13 +59,19 @@ function encodeRuntimeSessionName(state: CovenRuntimeSessionState): string {
 
 function decodeRuntimeSessionName(value: string): CovenRuntimeSessionState | null {
   const encoded = value.startsWith("coven:") ? value.slice("coven:".length) : "";
-  if (!encoded) {
+  if (!encoded || encoded.length > MAX_RUNTIME_SESSION_NAME_BYTES) {
     return null;
   }
   try {
-    const parsed = JSON.parse(
-      Buffer.from(encoded, "base64url").toString("utf8"),
-    ) as Partial<CovenRuntimeSessionState>;
+    const decoded = Buffer.from(encoded, "base64url");
+    if (decoded.byteLength > MAX_RUNTIME_SESSION_NAME_BYTES) {
+      return null;
+    }
+    const jsonText = decoded.toString("utf8");
+    if (Buffer.byteLength(jsonText, "utf8") > MAX_RUNTIME_SESSION_NAME_BYTES) {
+      return null;
+    }
+    const parsed = JSON.parse(jsonText) as Partial<CovenRuntimeSessionState>;
     const agent = normalizeAgentId(typeof parsed.agent === "string" ? parsed.agent : undefined);
     return {
       agent,
@@ -95,7 +103,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 function titleFromPrompt(prompt: string): string {
-  const compact = prompt.replace(/\s+/g, " ").trim();
+  const compact = sanitizeStatusText(prompt);
   return compact.slice(0, 80) || "OpenClaw task";
 }
 
@@ -118,7 +126,7 @@ const del = String.fromCharCode(0x7f);
 const c1Start = String.fromCharCode(0x80);
 const c1End = String.fromCharCode(0x9f);
 const ANSI_ESCAPE_REGEX = new RegExp(
-  `${ESC}(?:\\[[\\x20-\\x3f]*[\\x40-\\x7e]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|[\\x40-\\x5f])`,
+  `${ESC}(?:\\][\\s\\S]*?(?:${BEL}|${ESC}\\\\)|P[\\s\\S]*?${ESC}\\\\|\\[[\\x20-\\x3f]*[\\x40-\\x7e]|[\\x20-\\x2f]*[\\x30-\\x7e])`,
   "g",
 );
 const TEXT_CONTROL_REGEX = new RegExp(
@@ -130,6 +138,25 @@ function sanitizeTerminalText(input: string): string {
   return input.replace(ANSI_ESCAPE_REGEX, "").replace(TEXT_CONTROL_REGEX, "");
 }
 
+function sanitizeStatusText(input: string): string {
+  return sanitizeTerminalText(input).replace(/\s+/g, " ").trim();
+}
+
+function normalizeStopReason(value: unknown): string {
+  const normalized =
+    typeof value === "string" ? sanitizeStatusText(value).toLowerCase() : "completed";
+  if (normalized === "completed" || normalized === "complete" || normalized === "success") {
+    return "completed";
+  }
+  if (normalized === "killed" || normalized === "cancelled" || normalized === "canceled") {
+    return "cancelled";
+  }
+  if (normalized === "failed" || normalized === "failure" || normalized === "error") {
+    return "error";
+  }
+  return "completed";
+}
+
 function eventToRuntimeEvents(event: CovenEventRecord): AcpRuntimeEvent[] {
   const payload = parsePayload(event);
   if (event.kind === "output") {
@@ -137,7 +164,9 @@ function eventToRuntimeEvents(event: CovenEventRecord): AcpRuntimeEvent[] {
     return text ? [{ type: "text_delta", text, stream: "output", tag: "agent_message_chunk" }] : [];
   }
   if (event.kind === "exit") {
-    const status = typeof payload.status === "string" ? payload.status : "completed";
+    const status = sanitizeStatusText(
+      typeof payload.status === "string" ? payload.status : "completed",
+    );
     const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
     return [
       {
@@ -145,13 +174,13 @@ function eventToRuntimeEvents(event: CovenEventRecord): AcpRuntimeEvent[] {
         text: `coven session ${status}${exitCode == null ? "" : ` exitCode=${exitCode}`}`,
         tag: "session_info_update",
       },
-      { type: "done", stopReason: status },
+      { type: "done", stopReason: normalizeStopReason(status) },
     ];
   }
   if (event.kind === "kill") {
     return [
       { type: "status", text: "coven session killed", tag: "session_info_update" },
-      { type: "done", stopReason: "killed" },
+      { type: "done", stopReason: "cancelled" },
     ];
   }
   return [];
@@ -162,9 +191,10 @@ function sessionIsTerminal(session: CovenSessionRecord): boolean {
 }
 
 function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
+  const status = sanitizeStatusText(session.status);
   return {
     type: "status",
-    text: `coven session ${session.status}${session.exitCode == null ? "" : ` exitCode=${session.exitCode}`}`,
+    text: `coven session ${status}${session.exitCode == null ? "" : ` exitCode=${session.exitCode}`}`,
     tag: "session_info_update",
   };
 }
@@ -172,6 +202,14 @@ function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
 function pathIsInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function realpathIfExists(filePath: string): string | null {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    return null;
+  }
 }
 
 export class CovenAcpRuntime implements AcpRuntime {
@@ -184,7 +222,9 @@ export class CovenAcpRuntime implements AcpRuntime {
   constructor(params: CovenAcpRuntimeParams) {
     this.config = params.config;
     this.logger = params.logger;
-    this.client = params.client ?? createCovenClient(params.config.socketPath);
+    this.client =
+      params.client ??
+      createCovenClient(params.config.socketPath, { socketRoot: params.config.covenHome });
     this.sleep = params.sleep ?? defaultSleep;
   }
 
@@ -295,7 +335,7 @@ export class CovenAcpRuntime implements AcpRuntime {
         const latest = await this.client.getSession(session.id, input.signal);
         if (sessionIsTerminal(latest)) {
           yield terminalStatusEvent(latest);
-          yield { type: "done", stopReason: latest.status };
+          yield { type: "done", stopReason: normalizeStopReason(latest.status) };
           this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
           return;
         }
@@ -337,7 +377,7 @@ export class CovenAcpRuntime implements AcpRuntime {
     }
     const session = await this.client.getSession(sessionId, input.signal);
     return {
-      summary: `${session.status} ${session.harness} ${session.title}`,
+      summary: `${sanitizeStatusText(session.status)} ${sanitizeStatusText(session.harness)} ${sanitizeStatusText(session.title)}`,
       backendSessionId: session.id,
       agentSessionId: session.id,
       details: {
@@ -468,10 +508,14 @@ export class CovenAcpRuntime implements AcpRuntime {
 
   private resolveWorkspaceCwd(candidate: string | undefined): string {
     const cwd = path.resolve(candidate ?? this.config.workspaceDir);
-    if (!pathIsInside(this.config.workspaceDir, cwd)) {
+    const workspaceReal = realpathIfExists(this.config.workspaceDir);
+    const cwdReal = realpathIfExists(cwd);
+    const boundary = workspaceReal ?? this.config.workspaceDir;
+    const checkedCwd = cwdReal ?? cwd;
+    if (!pathIsInside(boundary, checkedCwd)) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd is outside workspace.");
     }
-    return cwd;
+    return checkedCwd;
   }
 
   private async killActiveSession(sessionId: string, signal?: AbortSignal): Promise<void> {
@@ -483,5 +527,7 @@ export const __testing = {
   decodeRuntimeSessionName,
   encodeRuntimeSessionName,
   eventToRuntimeEvents,
+  normalizeStopReason,
   sanitizeTerminalText,
+  titleFromPrompt,
 };

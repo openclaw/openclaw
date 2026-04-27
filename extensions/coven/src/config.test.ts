@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +52,27 @@ describe("resolveCovenPluginConfig", () => {
         workspaceDir: "/repo",
       }),
     ).toThrow(/socketPath must stay inside covenHome/);
+  });
+
+  it("rejects socket paths that are symlinks", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-config-"));
+    const covenHome = path.join(workspaceDir, ".coven");
+    await fs.mkdir(covenHome);
+    const socketPath = path.join(covenHome, "coven.sock");
+    await fs.symlink("/var/run/docker.sock", socketPath);
+    try {
+      expect(() =>
+        resolveCovenPluginConfig({
+          rawConfig: {
+            covenHome,
+            socketPath,
+          },
+          workspaceDir,
+        }),
+      ).toThrow(/must not be a symlink/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("uses COVEN_HOME with tilde expansion for the default socket path", () => {
