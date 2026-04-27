@@ -176,7 +176,16 @@ function isCompleteAllowlistedEmotionBody(body: string): boolean {
   return words.length > 0 && words.every((word) => EMOTION_TAG_WORDS.has(word));
 }
 
-function isFollowedByNonEmotionReferenceLink(text: string, afterIndex: number): boolean {
+function hasNonWhitespaceBeforeOnLine(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  return /\S/u.test(text.slice(lineStart, index));
+}
+
+function isFollowedByMarkdownReferenceLink(
+  text: string,
+  index: number,
+  afterIndex: number,
+): boolean {
   if (text[afterIndex] !== "[") {
     return false;
   }
@@ -184,8 +193,21 @@ function isFollowedByNonEmotionReferenceLink(text: string, afterIndex: number): 
   if (closingIndex === -1) {
     return false;
   }
-  const referenceBody = text.slice(afterIndex + 1, closingIndex);
-  return !isCompleteAllowlistedEmotionBody(referenceBody);
+  return hasNonWhitespaceBeforeOnLine(text, index);
+}
+
+function isSecondLabelInMarkdownReferenceLink(text: string, index: number): boolean {
+  if (index < 2 || text[index - 1] !== "]") {
+    return false;
+  }
+  const previousOpenIndex = text.lastIndexOf("[", index - 2);
+  if (previousOpenIndex === -1) {
+    return false;
+  }
+  if (text.slice(previousOpenIndex + 1, index - 1).includes("\n")) {
+    return false;
+  }
+  return hasNonWhitespaceBeforeOnLine(text, previousOpenIndex);
 }
 
 function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: string): boolean {
@@ -205,7 +227,10 @@ function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: s
   }
   const before = index > 0 ? text[index - 1] : undefined;
   const after = text[index + rawTag.length];
-  if (after === "[" && isFollowedByNonEmotionReferenceLink(text, index + rawTag.length)) {
+  if (isSecondLabelInMarkdownReferenceLink(text, index)) {
+    return false;
+  }
+  if (after === "[" && isFollowedByMarkdownReferenceLink(text, index, index + rawTag.length)) {
     return false;
   }
   return isEmotionTagBoundary(before, "before") && isEmotionTagBoundary(after, "after");
