@@ -5,6 +5,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { recordCliMessagingToolSend } from "../agents/cli-runner/messaging-tool-tracker.js";
+import { isCoreMessageToolSendAction } from "../agents/messaging-tool-send-actions.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -97,13 +98,7 @@ function recordMcpMessagingToolSend(params: {
     return;
   }
   const action = readStringField(params.args, "action") ?? "send";
-  if (
-    action !== "send" &&
-    action !== "thread-reply" &&
-    action !== "reply" &&
-    action !== "sendAttachment" &&
-    action !== "upload-file"
-  ) {
+  if (!isCoreMessageToolSendAction(action)) {
     return;
   }
   const provider =
