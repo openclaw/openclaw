@@ -221,6 +221,35 @@ function buildFeishuPayloadCard(params: {
   };
 }
 
+function renderFeishuPresentationPayload({
+  payload,
+  presentation,
+  ctx,
+}: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
+  const card = buildFeishuPayloadCard({
+    payload,
+    text: payload.text,
+    identity: ctx.identity,
+  });
+  if (!card) {
+    return null;
+  }
+  const existingFeishuData = isRecord(payload.channelData?.feishu)
+    ? payload.channelData.feishu
+    : undefined;
+  return {
+    ...payload,
+    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    channelData: {
+      ...payload.channelData,
+      feishu: {
+        ...existingFeishuData,
+        card,
+      },
+    },
+  };
+}
+
 function resolveReplyToMessageId(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -320,7 +349,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     context: true,
     divider: true,
   },
-  renderPresentation: ({ payload }) => payload,
+  renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
     const card = buildFeishuPayloadCard({
       payload: ctx.payload,

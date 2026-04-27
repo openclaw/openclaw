@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -233,6 +234,85 @@ describe("feishuOutbound.sendPayload native cards", () => {
     await fs.writeFile(file, "image-data");
     return { dir, file };
   }
+
+  it("renders presentation-only payloads into Feishu channelData cards for core delivery", async () => {
+    const presentation: MessagePresentation = {
+      title: "Approval",
+      tone: "success",
+      blocks: [
+        { type: "text", text: "Approve the request?" },
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Approve", value: "/approve req_1 allow-once", style: "success" as const },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    expect(rendered).toEqual(
+      expect.objectContaining({
+        text: "Approval\n\nApprove the request?\n\n- Approve",
+        channelData: {
+          feishu: {
+            card: expect.objectContaining({
+              schema: "2.0",
+              header: {
+                title: { tag: "plain_text", content: "Approval" },
+                template: "green",
+              },
+              body: {
+                elements: expect.arrayContaining([
+                  { tag: "markdown", content: "Approve the request?" },
+                  expect.objectContaining({ tag: "action" }),
+                ]),
+              },
+            }),
+          },
+        },
+      }),
+    );
+
+    if (!rendered) {
+      throw new Error("expected Feishu presentation renderer to return a payload");
+    }
+    const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: coreRenderedPayload.text ?? "",
+      accountId: "main",
+      payload: coreRenderedPayload,
+    });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        card: expect.objectContaining({
+          header: {
+            title: { tag: "plain_text", content: "Approval" },
+            template: "green",
+          },
+        }),
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({ channel: "feishu", messageId: "native_card_msg" }),
+    );
+  });
 
   it("sends interactive button payloads as native Feishu cards", async () => {
     const result = await feishuOutbound.sendPayload?.({

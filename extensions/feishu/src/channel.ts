@@ -1290,7 +1290,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         context: true,
         divider: true,
       },
-      renderPresentation: ({ payload }) => payload,
+      renderPresentation: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const renderPresentation = runtime.feishuOutbound.renderPresentation;
+        return renderPresentation ? await renderPresentation(ctx) : null;
+      },
       sendPayload: async (ctx) => {
         const runtime = await loadFeishuChannelRuntime();
         const sendPayload = runtime.feishuOutbound.sendPayload;
