@@ -93,6 +93,9 @@ function resolveCovenHome(raw: string | undefined, baseDir: string): string {
 }
 
 function resolveSocketPath(covenHome: string, raw: string | undefined, baseDir: string): string {
+  if (lstatIfExists(covenHome)?.isSymbolicLink()) {
+    throw new Error("Coven covenHome must not be a symlink");
+  }
   const socketPath = raw?.trim()
     ? resolveConfiguredPath(raw, baseDir)
     : path.join(covenHome, "coven.sock");

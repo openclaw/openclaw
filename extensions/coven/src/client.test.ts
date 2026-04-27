@@ -97,4 +97,15 @@ describe("createCovenClient", () => {
       /must not be a symlink/,
     );
   });
+
+  it("rejects a socket root that resolves through a symlink", async () => {
+    const realHome = path.join(tmpDir, "real-coven");
+    const symlinkHome = path.join(tmpDir, "symlink-coven");
+    await fs.mkdir(realHome);
+    await fs.symlink(realHome, symlinkHome);
+
+    await expect(
+      createCovenClient(path.join(symlinkHome, "coven.sock"), { socketRoot: symlinkHome }).health(),
+    ).rejects.toThrow(/covenHome must not be a symlink/);
+  });
 });

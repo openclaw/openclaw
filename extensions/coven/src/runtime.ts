@@ -58,8 +58,12 @@ function encodeRuntimeSessionName(state: CovenRuntimeSessionState): string {
 }
 
 function decodeRuntimeSessionName(value: string): CovenRuntimeSessionState | null {
-  const encoded = value.startsWith("coven:") ? value.slice("coven:".length) : "";
-  if (!encoded || encoded.length > MAX_RUNTIME_SESSION_NAME_BYTES) {
+  const prefix = "coven:";
+  if (!value.startsWith(prefix) || value.length > prefix.length + MAX_RUNTIME_SESSION_NAME_BYTES) {
+    return null;
+  }
+  const encoded = value.slice(prefix.length);
+  if (!encoded) {
     return null;
   }
   try {
@@ -125,6 +129,7 @@ const c0UnitSeparator = String.fromCharCode(0x1f);
 const del = String.fromCharCode(0x7f);
 const c1Start = String.fromCharCode(0x80);
 const c1End = String.fromCharCode(0x9f);
+const BIDI_CONTROL_REGEX = /\p{Bidi_Control}/gu;
 const ANSI_ESCAPE_REGEX = new RegExp(
   `${ESC}(?:\\][\\s\\S]*?(?:${BEL}|${ESC}\\\\)|P[\\s\\S]*?${ESC}\\\\|\\[[\\x20-\\x3f]*[\\x40-\\x7e]|[\\x20-\\x2f]*[\\x30-\\x7e])`,
   "g",
@@ -135,7 +140,10 @@ const TEXT_CONTROL_REGEX = new RegExp(
 );
 
 function sanitizeTerminalText(input: string): string {
-  return input.replace(ANSI_ESCAPE_REGEX, "").replace(TEXT_CONTROL_REGEX, "");
+  return input
+    .replace(ANSI_ESCAPE_REGEX, "")
+    .replace(TEXT_CONTROL_REGEX, "")
+    .replace(BIDI_CONTROL_REGEX, "");
 }
 
 function sanitizeStatusText(input: string): string {
@@ -296,7 +304,7 @@ export class CovenAcpRuntime implements AcpRuntime {
     let lastSeenEventId: string | undefined;
     while (true) {
       if (input.signal?.aborted) {
-        await this.killActiveSession(session.id, input.signal).catch(() => undefined);
+        await this.killActiveSession(session.id).catch(() => undefined);
         throw input.signal.reason ?? new Error("Coven turn aborted");
       }
 
@@ -341,7 +349,7 @@ export class CovenAcpRuntime implements AcpRuntime {
         }
       } catch (error) {
         if (input.signal?.aborted) {
-          await this.killActiveSession(session.id, input.signal).catch(() => undefined);
+          await this.killActiveSession(session.id).catch(() => undefined);
           throw input.signal.reason ?? error;
         }
         this.logger?.warn(`coven polling failed: ${String(error)}`);
@@ -381,9 +389,9 @@ export class CovenAcpRuntime implements AcpRuntime {
       backendSessionId: session.id,
       agentSessionId: session.id,
       details: {
-        projectRoot: session.projectRoot,
-        harness: session.harness,
-        status: session.status,
+        projectRoot: sanitizeStatusText(session.projectRoot),
+        harness: sanitizeStatusText(session.harness),
+        status: sanitizeStatusText(session.status),
         exitCode: session.exitCode,
       },
     };
@@ -510,12 +518,10 @@ export class CovenAcpRuntime implements AcpRuntime {
     const cwd = path.resolve(candidate ?? this.config.workspaceDir);
     const workspaceReal = realpathIfExists(this.config.workspaceDir);
     const cwdReal = realpathIfExists(cwd);
-    const boundary = workspaceReal ?? this.config.workspaceDir;
-    const checkedCwd = cwdReal ?? cwd;
-    if (!pathIsInside(boundary, checkedCwd)) {
+    if (!workspaceReal || !cwdReal || !pathIsInside(workspaceReal, cwdReal)) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd is outside workspace.");
     }
-    return checkedCwd;
+    return cwdReal;
   }
 
   private async killActiveSession(sessionId: string, signal?: AbortSignal): Promise<void> {

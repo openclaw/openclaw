@@ -101,6 +101,9 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   if (!socketRoot) {
     return;
   }
+  if (lstatIfExists(socketRoot)?.isSymbolicLink()) {
+    throw new Error("Coven covenHome must not be a symlink");
+  }
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {
     throw new Error("Coven socketPath must not be a symlink");

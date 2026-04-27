@@ -75,6 +75,26 @@ describe("resolveCovenPluginConfig", () => {
     }
   });
 
+  it("rejects covenHome when it is a symlink", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-config-"));
+    const realHome = path.join(workspaceDir, "real-coven");
+    const symlinkHome = path.join(workspaceDir, "symlink-coven");
+    await fs.mkdir(realHome);
+    await fs.symlink(realHome, symlinkHome);
+    try {
+      expect(() =>
+        resolveCovenPluginConfig({
+          rawConfig: {
+            covenHome: symlinkHome,
+          },
+          workspaceDir,
+        }),
+      ).toThrow(/covenHome must not be a symlink/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses COVEN_HOME with tilde expansion for the default socket path", () => {
     process.env.COVEN_HOME = "~/.custom-coven";
 

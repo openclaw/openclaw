@@ -8,24 +8,41 @@ import {
   type AcpRuntimeEvent,
   type AcpRuntimeHandle,
 } from "openclaw/plugin-sdk/acp-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CovenClient, CovenEventRecord, CovenSessionRecord } from "./client.js";
 import type { ResolvedCovenPluginConfig } from "./config.js";
 import { __testing, CovenAcpRuntime } from "./runtime.js";
 
-const config: ResolvedCovenPluginConfig = {
-  covenHome: "/tmp/coven",
-  socketPath: "/tmp/coven/coven.sock",
-  workspaceDir: "/repo",
+const baseConfig: ResolvedCovenPluginConfig = {
+  covenHome: "",
+  socketPath: "",
+  workspaceDir: "",
   fallbackBackend: "acpx",
   pollIntervalMs: 1,
   harnesses: {},
 };
 
+let workspaceDir: string;
+let config: ResolvedCovenPluginConfig;
+
+beforeEach(async () => {
+  workspaceDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-workspace-")),
+  );
+  const covenHome = path.join(workspaceDir, ".coven");
+  await fs.mkdir(covenHome);
+  config = {
+    ...baseConfig,
+    covenHome,
+    socketPath: path.join(covenHome, "coven.sock"),
+    workspaceDir,
+  };
+});
+
 function session(overrides: Partial<CovenSessionRecord> = {}): CovenSessionRecord {
   return {
     id: "session-1",
-    projectRoot: "/repo",
+    projectRoot: workspaceDir,
     harness: "codex",
     title: "Fix tests",
     status: "running",
@@ -79,7 +96,7 @@ function fallbackRuntime(): AcpRuntime {
     sessionKey: "agent:codex:test",
     backend: "acpx",
     runtimeSessionName: "fallback-session",
-    cwd: "/repo",
+    cwd: workspaceDir,
   };
   return {
     ensureSession: vi.fn(async () => handle),
@@ -96,6 +113,7 @@ function fallbackRuntime(): AcpRuntime {
 afterEach(() => {
   vi.useRealTimers();
   unregisterAcpRuntimeBackend("acpx");
+  return fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
 describe("CovenAcpRuntime", () => {
@@ -115,7 +133,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
 
     expect(handle.backend).toBe("acpx");
@@ -142,7 +160,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
     await vi.advanceTimersByTimeAsync(5_000);
     const handle = await pending;
@@ -157,7 +175,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
 
     const events = await collect(
@@ -171,8 +189,8 @@ describe("CovenAcpRuntime", () => {
 
     expect(client.launchSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        projectRoot: "/repo",
-        cwd: "/repo",
+        projectRoot: workspaceDir,
+        cwd: workspaceDir,
         harness: "codex",
         prompt: "Fix tests",
       }),
@@ -194,7 +212,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
     handle.runtimeSessionName = __testing.encodeRuntimeSessionName({
       agent: "codex",
@@ -213,8 +231,8 @@ describe("CovenAcpRuntime", () => {
 
     expect(client.launchSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        projectRoot: "/repo",
-        cwd: "/repo",
+        projectRoot: workspaceDir,
+        cwd: workspaceDir,
       }),
       undefined,
     );
@@ -226,7 +244,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
     handle.cwd = "/tmp/attacker";
 
@@ -300,7 +318,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
 
     await collect(
@@ -329,7 +347,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
 
     const events = await collect(
@@ -347,7 +365,7 @@ describe("CovenAcpRuntime", () => {
   it("strips terminal escape and control characters from Coven output", () => {
     expect(
       __testing.sanitizeTerminalText(
-        "\u001b]0;spoof\u0007hi\u001b[31m!\u001b[0m\u001b7\u001bc\r\n",
+        "\u001b]0;spoof\u0007hi\u001b[31m!\u001b[0m\u001b7\u001bc\u202e\r\n",
       ),
     ).toBe("hi!\n");
   });
@@ -377,6 +395,35 @@ describe("CovenAcpRuntime", () => {
     expect(__testing.decodeRuntimeSessionName(`coven:${"a".repeat(2_049)}`)).toBeNull();
   });
 
+  it("rejects missing Coven cwd paths before launching", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-workspace-"));
+    try {
+      const runtime = new CovenAcpRuntime({
+        config: { ...config, workspaceDir },
+        client: fakeClient(),
+      });
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:test",
+        agent: "codex",
+        mode: "oneshot",
+        cwd: path.join(workspaceDir, "missing"),
+      });
+
+      await expect(
+        collect(
+          runtime.runTurn({
+            handle,
+            text: "Fix tests",
+            mode: "prompt",
+            requestId: "req-1",
+          }),
+        ),
+      ).rejects.toThrow(/outside workspace/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves direct fallback when Coven launch fails after detection", async () => {
     const fallback = fallbackRuntime();
     registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
@@ -392,7 +439,7 @@ describe("CovenAcpRuntime", () => {
       sessionKey: "agent:codex:test",
       agent: "codex",
       mode: "oneshot",
-      cwd: "/repo",
+      cwd: workspaceDir,
     });
 
     const events = await collect(
