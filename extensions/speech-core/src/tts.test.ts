@@ -891,6 +891,41 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("falls back from empty per-variant directive text to cleaned variant text", async () => {
+    const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesize: plainSynthesize,
+      }),
+    ]);
+    const cfg = createTtsConfig("openclaw-tts-empty-variant-directive-test");
+    const payload = setReplyPayloadMetadata({ text: "visible reply" } satisfies ReplyPayload, {
+      ttsPlainText: "[[tts:text]]   [[/tts:text]] plain fallback text",
+    });
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "plain fallback text" }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("skips plain fallback providers when an explicit plain variant is empty", async () => {
     const elevenSynthesize = vi.fn(async () => {
       throw new Error("elevenlabs unavailable");

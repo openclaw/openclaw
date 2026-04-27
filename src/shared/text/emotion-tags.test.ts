@@ -21,10 +21,15 @@ describe("stripEmotionTags", () => {
   test("strips uppercase emotion tags while preserving bracketed technical content", () => {
     const uppercase = stripEmotionTags("[Warmly] hello there");
     const technical = stripEmotionTags("Keep [SOFTLY_TYPED] as a literal token");
+    const spacedLink = stripEmotionTags("[Warmly] (https://example.test)");
 
     expect(uppercase).toEqual({ text: "hello there", changed: true });
     expect(technical).toEqual({
       text: "Keep [SOFTLY_TYPED] as a literal token",
+      changed: false,
+    });
+    expect(spacedLink).toEqual({
+      text: "[Warmly] (https://example.test)",
       changed: false,
     });
   });
