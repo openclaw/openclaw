@@ -41,14 +41,14 @@ const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
 
 /**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
+ * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
  */
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
-  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
 async function readWorkspaceFileWithGuards(params: {

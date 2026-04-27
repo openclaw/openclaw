@@ -74,6 +74,41 @@ describe("workspace bootstrap file caching", () => {
     expectAgentsContent(agentsFile2, content2);
   });
 
+  it("invalidates cache when ctime changes with same inode, size, and mtime", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const content1 = "# old-content";
+    const content2 = "# new-content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+
+    expect(content2).toHaveLength(content1.length);
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+    const pinnedTime = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    await fs.utimes(filePath, pinnedTime, pinnedTime);
+    const originalStat = await fs.stat(filePath);
+
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content1);
+
+    await fs.writeFile(filePath, content2, "utf-8");
+    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+    const updatedStat = await fs.stat(filePath);
+
+    expect(updatedStat.dev).toBe(originalStat.dev);
+    expect(updatedStat.ino).toBe(originalStat.ino);
+    expect(updatedStat.size).toBe(originalStat.size);
+    expect(updatedStat.mtimeMs).toBe(originalStat.mtimeMs);
+    expect(updatedStat.ctimeMs).not.toBe(originalStat.ctimeMs);
+
+    const agentsFile2 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile2, content2);
+  });
+
   it("invalidates cache when inode changes with same mtime", async () => {
     if (process.platform === "win32") {
       return;
