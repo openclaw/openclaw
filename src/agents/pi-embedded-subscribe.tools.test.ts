@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as loggingConfigModule from "../logging/config.js";
 import {
   extractToolErrorMessage,
   sanitizeToolArgs,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("extractToolErrorMessage", () => {
   it("ignores non-error status values", () => {
@@ -145,6 +150,21 @@ describe("sanitizeToolResult", () => {
     };
     expect(sanitized.details.config.apiKey).not.toContain("sk-1234567890abcdefXYZ");
     expect(sanitized.details.config.model).toBe("gpt-4");
+  });
+
+  it("applies configured redact patterns to Control UI tool payloads", () => {
+    vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
+      redactSensitive: "off",
+      redactPatterns: [String.raw`\bcustom-secret-[A-Za-z0-9]+\b`],
+    });
+
+    const result = {
+      content: [{ type: "text", text: "value custom-secret-abc123" }],
+    };
+    const text = getTextContent(sanitizeToolResult(result));
+
+    expect(text).not.toContain("custom-secret-abc123");
+    expect(text).toContain("custom…c123");
   });
 });
 
