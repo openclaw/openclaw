@@ -38,6 +38,20 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
+export function isIMessageRpcPermissionDeniedText(value: unknown): boolean {
+  const text = String(value ?? "").toLowerCase();
+  if (!text) {
+    return false;
+  }
+  const mentionsMessagesDb = text.includes("chat.db") || text.includes("library/messages");
+  const permissionDenied =
+    text.includes("permissiondenied") ||
+    text.includes("permission denied") ||
+    text.includes("authorization denied") ||
+    text.includes("operation not permitted");
+  return mentionsMessagesDb && permissionDenied;
+}
+
 function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
     return true;
@@ -96,10 +110,15 @@ export class IMessageRpcClient {
     child.stderr?.on("data", (chunk) => {
       const lines = chunk.toString().split(/\r?\n/);
       for (const line of lines) {
-        if (!line.trim()) {
+        const trimmed = line.trim();
+        if (!trimmed) {
           continue;
         }
-        this.runtime?.error?.(`imsg rpc: ${line.trim()}`);
+        if (isIMessageRpcPermissionDeniedText(trimmed)) {
+          this.failFatalStartupError(new Error(`imsg rpc permission denied: ${trimmed}`));
+          continue;
+        }
+        this.runtime?.error?.(`imsg rpc: ${trimmed}`);
       }
     });
 
@@ -189,6 +208,10 @@ export class IMessageRpcClient {
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
     } catch (err) {
+      if (isIMessageRpcPermissionDeniedText(line)) {
+        this.failFatalStartupError(new Error(`imsg rpc permission denied: ${line}`));
+        return;
+      }
       const detail = formatErrorMessage(err);
       this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
       return;
@@ -234,6 +257,12 @@ export class IMessageRpcClient {
         params: parsed.params,
       });
     }
+  }
+
+  private failFatalStartupError(err: Error) {
+    this.runtime?.error?.(`imsg rpc: ${err.message}`);
+    this.failAll(err);
+    this.child?.kill("SIGTERM");
   }
 
   private failAll(err: Error) {
