@@ -13,6 +13,14 @@ type ProviderContractEntry = {
   provider: ProviderPlugin;
 };
 
+function providerMatchesManifestId(provider: ProviderPlugin, providerId: string): boolean {
+  return (
+    provider.id === providerId ||
+    (provider.aliases ?? []).includes(providerId) ||
+    (provider.hookAliases ?? []).includes(providerId)
+  );
+}
+
 function resolveProviderContractProvidersFromPublicArtifact(
   pluginId: string,
 ): ProviderContractEntry[] | null {
@@ -48,7 +56,9 @@ export function describeProviderContracts(pluginId: string) {
       // does not race provider contract collection against other file imports.
       installProviderPluginContractSuite({
         provider: () => {
-          const entry = resolveProviderEntries().find((entry) => entry.provider.id === providerId);
+          const entry = resolveProviderEntries().find((entry) =>
+            providerMatchesManifestId(entry.provider, providerId),
+          );
           if (!entry) {
             throw new Error(`provider contract entry missing for ${pluginId}:${providerId}`);
           }
