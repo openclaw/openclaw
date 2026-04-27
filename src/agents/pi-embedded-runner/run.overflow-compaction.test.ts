@@ -49,6 +49,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       internalEvents,
+      emotionMode: "full",
     },
     expected: {
       toolsAllow: ["exec", "read"],
@@ -57,6 +58,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      emotionMode: "full",
     },
   } satisfies {
     runId: string;

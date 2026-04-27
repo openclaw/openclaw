@@ -903,6 +903,7 @@ export async function runEmbeddedPiAgent(
             thinkLevel,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
+            emotionMode: params.emotionMode,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             execOverrides: params.execOverrides,
