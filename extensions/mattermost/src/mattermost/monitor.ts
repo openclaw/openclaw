@@ -41,6 +41,7 @@ import {
 import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 import {
   formatInboundFromLabel,
@@ -94,6 +95,7 @@ import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js"
 export {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 export type {
   MattermostMentionGateInput,
@@ -1218,8 +1220,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
 
         const channelInfo = await resolveChannelInfo(channelId);
-        const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
-        const kind = mapMattermostChannelTypeToChatType(channelType);
+        const kind = resolveMattermostTrustedChatKind({
+          channelType: channelInfo?.type,
+        });
         const chatType = channelChatType(kind);
 
         const senderName =
