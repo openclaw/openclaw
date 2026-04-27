@@ -87,34 +87,51 @@ describe("github-copilot plugin", () => {
       baseUrl: "https://api.githubcopilot.live",
     });
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    const result = await provider.catalog.run({
-      config: {
-        plugins: {
-          entries: {
-            "github-copilot": {
-              config: {
-                discovery: { enabled: true },
+    try {
+      const result = await provider.catalog.run({
+        config: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                config: {
+                  discovery: { enabled: true },
+                },
               },
             },
           },
         },
-      },
-      agentDir: "/tmp/agent",
-      env: { GH_TOKEN: "gh_test_token" },
-      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
-    } as never);
+        agentDir: "/tmp/agent",
+        env: { GH_TOKEN: "gh_test_token" },
+        resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      } as never);
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "gh_test_token",
-      env: { GH_TOKEN: "gh_test_token" },
-    });
-    expect(result).toEqual({
-      provider: {
-        baseUrl: "https://api.githubcopilot.live",
-        models: [],
-      },
-    });
+      expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+        githubToken: "gh_test_token",
+        env: { GH_TOKEN: "gh_test_token" },
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.githubcopilot.live/models",
+        expect.any(Object),
+      );
+      expect(result).toEqual({
+        provider: {
+          baseUrl: "https://api.githubcopilot.live",
+          models: [],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("maps Copilot /models capabilities into provider catalog metadata", () => {
