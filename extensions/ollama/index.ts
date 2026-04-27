@@ -39,6 +39,7 @@ import {
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
+import { checkWsl2CrashLoopRisk } from "./src/wsl2-crash-loop-check.js";
 
 function usesOllamaOpenAICompatTransport(model: {
   api?: unknown;
@@ -60,6 +61,9 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    if (api.registrationMode === "full") {
+      void checkWsl2CrashLoopRisk(api.logger);
+    }
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
     const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;

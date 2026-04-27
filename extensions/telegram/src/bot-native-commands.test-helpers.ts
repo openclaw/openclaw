@@ -138,7 +138,7 @@ export function createNativeCommandsHarness(params?: {
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
   const telegramDeps = {
-    loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
+    getRuntimeConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
     readChannelAllowFromStore: vi.fn(async () => []),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,

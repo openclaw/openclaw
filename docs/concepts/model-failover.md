@@ -33,7 +33,7 @@ For a normal text run, OpenClaw evaluates candidates in this order:
     If that provider is exhausted with a failover-worthy error, move to the next model candidate.
   </Step>
   <Step title="Persist fallback override">
-    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use.
+    Persist the selected fallback override before the retry starts so other session readers see the same provider/model the runner is about to use. The persisted model override is marked `modelOverrideSource: "auto"`.
   </Step>
   <Step title="Roll back narrowly on failure">
     If the fallback candidate fails, roll back only the fallback-owned session override fields when they still match that failed candidate.
@@ -47,6 +47,7 @@ This is intentionally narrower than "save and restore the whole session". The re
 
 - `providerOverride`
 - `modelOverride`
+- `modelOverrideSource`
 - `authProfileOverride`
 - `authProfileOverrideSource`
 - `authProfileOverrideCompactionCount`
@@ -202,7 +203,7 @@ Defaults:
 
 ## Model fallback
 
-If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and timeouts that exhausted profile rotation (other errors do not advance fallback).
+If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and timeouts that exhausted profile rotation (other errors do not advance fallback). Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns. By default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting. Provider-busy signals such as `ModelNotReadyException` land in that overloaded bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`, `auth.cooldowns.overloadedBackoffMs`, and `auth.cooldowns.rateLimitedProfileRotations`.
 
@@ -264,6 +265,8 @@ That means fallback retries have to coordinate with live model switching:
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
+- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides and return the session to the configured default.
+- `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
 - If the fallback attempt fails, the runner rolls back only the override fields it wrote, and only if they still match that failed candidate.
@@ -298,6 +301,8 @@ The persisted fallback override closes that window, and the narrow rollback keep
 - reason (`rate_limit`, `overloaded`, `billing`, `auth`, `model_not_found`, and similar failover reasons)
 - optional status/code
 - human-readable error summary
+
+Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
 
 When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer reply runner can use that to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 

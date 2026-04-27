@@ -30,6 +30,7 @@ export {
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/channel-config-schema-legacy";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   isDangerousNameMatchingEnabled,
@@ -41,11 +42,7 @@ export { fetchRemoteMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-s
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-export {
-  GoogleChatConfigSchema,
-  type GoogleChatAccountConfig,
-  type GoogleChatConfig,
-} from "openclaw/plugin-sdk/googlechat-runtime-shared";
+export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-runtime";
 export { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";

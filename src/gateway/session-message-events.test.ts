@@ -19,6 +19,7 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
+const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
@@ -30,13 +31,18 @@ beforeAll(async () => {
   delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
-  await connectOk(subscribedOperatorWs, { scopes: ["operator.read"] });
-  await rpcReq(subscribedOperatorWs, "sessions.subscribe");
-});
+  await connectOk(subscribedOperatorWs, {
+    scopes: ["operator.read"],
+    timeoutMs: SETUP_RPC_TIMEOUT_MS,
+  });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
+}, 60_000);
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
-  await harness.close();
+  if (harness) {
+    await harness.close();
+  }
   if (previousMinimalGateway === undefined) {
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   } else {
@@ -70,6 +76,7 @@ async function withOperatorSessionSubscriber<T>(
 function waitForSessionMessageEvent(
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
   sessionKey: string,
+  timeoutMs = 2_000,
 ) {
   return onceMessage(
     ws,
@@ -77,12 +84,14 @@ function waitForSessionMessageEvent(
       message.type === "event" &&
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
   );
 }
 
 function waitForSessionsChangedMessagePhase(
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
   sessionKey: string,
+  timeoutMs = 2_000,
 ) {
   return onceMessage(
     ws,
@@ -92,6 +101,7 @@ function waitForSessionsChangedMessagePhase(
       (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
         "message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
   );
 }
 
@@ -167,6 +177,7 @@ describe("session.message websocket events", () => {
           message.event === "sessions.changed" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
 
       emitSessionLifecycleEvent({
@@ -409,6 +420,7 @@ describe("session.message websocket events", () => {
           message.event === "session.message" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
       const changedEventPromise = onceMessage(
         ws,
@@ -419,6 +431,7 @@ describe("session.message websocket events", () => {
             "message" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
 
       emitSessionTranscriptUpdate({

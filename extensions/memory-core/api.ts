@@ -1,4 +1,4 @@
-export type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,

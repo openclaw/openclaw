@@ -27,6 +27,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
@@ -499,10 +500,12 @@ export async function runPreparedReply(
     ? baseBodyForPrompt
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
   const transcriptBodyBase = isHeartbeat
-    ? ""
-    : hasUserBody
-      ? baseBodyFinal
-      : "[User sent media without caption]";
+    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    : isBareSessionReset
+      ? softResetTail
+      : hasUserBody
+        ? baseBodyFinal
+        : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,

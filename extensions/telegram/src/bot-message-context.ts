@@ -222,7 +222,7 @@ export const buildTelegramMessageContext = async ({
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const freshCfg =
     loadFreshConfig?.() ??
-    (runtime?.loadConfig ?? (await loadTelegramMessageContextRuntime()).loadConfig)();
+    (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,

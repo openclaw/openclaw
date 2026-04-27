@@ -449,7 +449,7 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards proxy environment variables for launchd/systemd runtime", () => {
+  it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -462,11 +462,11 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
 
-    expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
-    expect(env.http_proxy).toBe("http://proxy.local:7890");
-    expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.all_proxy).toBeUndefined();
   });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
@@ -529,7 +529,7 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
-  it("forwards proxy environment variables for node services", () => {
+  it("does not persist ambient proxy environment variables for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -538,8 +538,8 @@ describe("buildNodeServiceEnvironment", () => {
       },
     });
 
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.no_proxy).toBe("localhost,127.0.0.1");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
   });
 
   it("forwards TMPDIR for node services on Linux", () => {

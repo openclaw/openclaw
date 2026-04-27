@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -80,7 +80,7 @@ export function buildGatewayCronService(params: {
   };
 
   const resolveCronAgent = (requested?: string | null) => {
-    const runtimeConfig = loadConfig();
+    const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
     const effectiveConfig =
@@ -136,7 +136,7 @@ export function buildGatewayCronService(params: {
       (opts?.sessionKey
         ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
         : undefined);
-    const runtimeConfigBase = loadConfig();
+    const runtimeConfigBase = getRuntimeConfig();
     const runtimeConfig =
       derivedAgentId !== undefined
         ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
@@ -221,7 +221,7 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+    runIsolatedAgentJob: async ({ job, message, abortSignal, onExecutionStarted }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       try {
@@ -231,6 +231,7 @@ export function buildGatewayCronService(params: {
           job,
           message,
           abortSignal,
+          onExecutionStarted,
           agentId,
           sessionKey,
           lane: "cron",

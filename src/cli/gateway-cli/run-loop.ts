@@ -1,18 +1,24 @@
+import net from "node:net";
 import {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
+import {
+  respawnGatewayProcessForUpdate,
+  restartGatewayProcessWithFreshPid,
+} from "../../infra/process-respawn.js";
+import { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   consumeGatewayRestartIntentSync,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  peekGatewaySigusr1RestartReason,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -35,9 +41,51 @@ const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
+const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
+const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
+
+async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      finish(false);
+    }, UPDATE_RESPAWN_HEALTH_POLL_MS);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+async function waitForHealthyGatewayChild(
+  port: number,
+  _pid?: number,
+  host = "127.0.0.1",
+  timeoutMs = UPDATE_RESPAWN_HEALTH_TIMEOUT_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await waitForGatewayPortReady(host, port)) {
+      return true;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, UPDATE_RESPAWN_HEALTH_POLL_MS);
+    });
+  }
+  return false;
+}
 
 export async function runGatewayLoop(params: {
   start: (params?: {
@@ -45,12 +93,15 @@ export async function runGatewayLoop(params: {
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   lockPort?: number;
+  healthHost?: string;
+  waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
   let startupStartedAt = Date.now();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
+  const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
 
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
@@ -86,8 +137,73 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
-  const handleRestartAfterServerClose = async () => {
+  const handleRestartAfterServerClose = async (restartReason?: string) => {
     const hadLock = await releaseLockIfHeld();
+    const isUpdateRestart = restartReason === "update.run";
+
+    if (isUpdateRestart) {
+      const respawn = respawnGatewayProcessForUpdate();
+      if (respawn.mode === "spawned") {
+        const port = params.lockPort;
+        const healthy =
+          typeof port === "number"
+            ? await waitForHealthyChild(port, respawn.pid, params.healthHost ?? "127.0.0.1")
+            : false;
+        if (healthy) {
+          gatewayLog.info(
+            `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
+          );
+          exitProcess(0);
+          return;
+        }
+        gatewayLog.warn(
+          `update respawn child did not become healthy (${respawn.pid ?? "unknown"}); falling back to in-process restart`,
+        );
+        try {
+          respawn.child?.kill();
+        } catch {
+          // Best-effort; parent fallback keeps the gateway reachable for recovery.
+        }
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
+        });
+        if (hadLock && !(await reacquireLockForInProcessRestart())) {
+          return;
+        }
+        shuttingDown = false;
+        restartResolver?.();
+        return;
+      }
+      if (respawn.mode === "supervised") {
+        gatewayLog.info("restart mode: update process respawn (supervisor restart)");
+        if (detectRespawnSupervisor(process.env, process.platform) === "launchd") {
+          await new Promise((resolve) => {
+            setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+          });
+        }
+        exitProcess(0);
+        return;
+      }
+      if (respawn.mode === "failed") {
+        gatewayLog.warn(
+          `update respawn failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+        );
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
+        });
+      } else {
+        gatewayLog.info(
+          `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+        );
+      }
+      if (hadLock && !(await reacquireLockForInProcessRestart())) {
+        return;
+      }
+      shuttingDown = false;
+      restartResolver?.();
+      return;
+    }
+
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const respawn = restartGatewayProcessWithFreshPid();
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
@@ -134,7 +250,7 @@ export async function runGatewayLoop(params: {
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = (): RestartDrainTimeoutMs => {
     try {
-      const timeoutMs = loadConfig().gateway?.reload?.deferralTimeoutMs;
+      const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
       return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
         ? timeoutMs
         : undefined;
@@ -143,7 +259,7 @@ export async function runGatewayLoop(params: {
     }
   };
 
-  const request = (action: GatewayRunSignalAction, signal: string) => {
+  const request = (action: GatewayRunSignalAction, signal: string, restartReason?: string) => {
     if (shuttingDown) {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
@@ -257,7 +373,7 @@ export async function runGatewayLoop(params: {
         clearForceExitTimer();
         server = null;
         if (isRestart) {
-          await handleRestartAfterServerClose();
+          await handleRestartAfterServerClose(restartReason);
         } else {
           await handleStopAfterServerClose();
         }
@@ -292,8 +408,9 @@ export async function runGatewayLoop(params: {
       scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
       return;
     }
+    const restartReason = peekGatewaySigusr1RestartReason();
     markGatewaySigusr1RestartHandled();
-    request("restart", "SIGUSR1");
+    request("restart", "SIGUSR1", restartReason);
   };
 
   process.on("SIGTERM", onSigterm);

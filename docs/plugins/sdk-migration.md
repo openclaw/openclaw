@@ -56,14 +56,11 @@ The old approach caused problems:
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
 
-Legacy provider convenience seams for bundled channels are also gone. Imports
-such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`,
-channel-branded helper seams, and
-`openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
-stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
-bundled plugin workspace, keep provider-owned helpers in that plugin's own
-`api.ts` or `runtime-api.ts`.
+Legacy provider convenience seams for bundled channels are also gone.
+Channel-branded helper seams were private mono-repo shortcuts, not stable
+plugin contracts. Use narrow generic SDK subpaths instead. Inside the bundled
+plugin workspace, keep provider-owned helpers in that plugin's own `api.ts` or
+`runtime-api.ts`.
 
 Current bundled provider examples:
 
@@ -93,6 +90,47 @@ releases.
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate runtime config load/write helpers">
+    Bundled plugins should stop calling
+    `api.runtime.config.loadConfig()` and
+    `api.runtime.config.writeConfigFile(...)` directly. Prefer config that was
+    already passed into the active call path. Long-lived handlers that need the
+    current process snapshot can use `api.runtime.config.current()`. Long-lived
+    agent tools should use the tool context's `ctx.getRuntimeConfig()` inside
+    `execute` so a tool created before a config write still sees the refreshed
+    runtime config.
+
+    Config writes must go through the transactional helpers and choose an
+    after-write policy:
+
+    ```typescript
+    await api.runtime.config.mutateConfigFile({
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        draft.plugins ??= {};
+      },
+    });
+    ```
+
+    Use `afterWrite: { mode: "restart", reason: "..." }` when the caller knows
+    the change requires a clean gateway restart, and
+    `afterWrite: { mode: "none", reason: "..." }` only when the caller owns the
+    follow-up and deliberately wants to suppress the reload planner.
+    Mutation results include a typed `followUp` summary for tests and logging;
+    the gateway remains responsible for applying or scheduling the restart.
+    `loadConfig` and `writeConfigFile` remain as deprecated compatibility
+    helpers for external plugins during the migration window and warn once with
+    the `runtime-config-load-write` compatibility code. Bundled plugins and repo
+    runtime code are protected by scanner guardrails in
+    `pnpm check:deprecated-internal-config-api` and
+    `pnpm check:no-runtime-action-load-config`: new production plugin usage
+    fails outright, direct config writes fail, gateway server methods must use
+    the request runtime snapshot, runtime channel send/action/client helpers
+    must receive config from their boundary, and long-lived runtime modules have
+    zero allowed ambient `loadConfig()` calls.
+
+  </Step>
+
   <Step title="Migrate Pi tool-result extensions to middleware">
     Bundled plugins must replace Pi-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
@@ -254,7 +292,8 @@ releases.
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
   | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
-  | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives; bundled-channel-named schema exports are legacy compatibility only |
+  | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
+  | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Bundled compatibility only; new plugins must define plugin-local schemas |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |

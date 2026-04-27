@@ -22,7 +22,7 @@ import {
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -593,7 +593,7 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const startupStartedAt = Date.now();
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const account = (resolveDiscordAccountForTesting ?? resolveDiscordAccount)({
     cfg,
     accountId: opts.accountId,

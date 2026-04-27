@@ -1,6 +1,6 @@
 export {
+  getRuntimeConfig,
   isDangerousNameMatchingEnabled,
-  loadConfig,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,

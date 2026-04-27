@@ -9,9 +9,10 @@ import {
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
+  replaceConfigFile,
+  isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
@@ -55,10 +56,13 @@ type GatewayStartupConfigOverrides = {
   tailscale?: GatewayTailscaleConfig;
 };
 
+type GatewayStartupConfigMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
   degradedProviderApi?: boolean;
+  degradedPluginConfig?: boolean;
 };
 
 const MODEL_PROVIDER_API_PATH_RE = /^models\.providers\.([^.]+)\.api$/;
@@ -151,13 +155,47 @@ function resolveGatewayStartupConfigWithoutInvalidModelProviders(params: {
   };
 }
 
+function resolveGatewayStartupConfigWithoutInvalidPluginEntries(params: {
+  snapshot: ConfigFileSnapshot;
+  log: GatewayStartupLog;
+}): ConfigFileSnapshot | null {
+  if (!isPluginLocalInvalidConfigSnapshot(params.snapshot)) {
+    return null;
+  }
+  const validated = validateConfigObjectWithPlugins(params.snapshot.sourceConfig, {
+    pluginValidation: "skip",
+  });
+  if (!validated.ok) {
+    return null;
+  }
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
+  for (const issue of params.snapshot.issues) {
+    params.log.warn(
+      `gateway: skipped plugin config validation issue at ${issue.path}: ${issue.message}. Run "openclaw doctor --fix" to quarantine the plugin config.`,
+    );
+  }
+  return {
+    ...params.snapshot,
+    sourceConfig: asResolvedSourceConfig(validated.config),
+    resolved: asResolvedSourceConfig(validated.config),
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    issues: [],
+    warnings: [...params.snapshot.warnings, ...params.snapshot.issues],
+  };
+}
+
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
+  measure?: GatewayStartupConfigMeasure;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
-  let configSnapshot = await readConfigFileSnapshot();
+  const measure = params.measure ?? (async (_name, run) => await run());
+  let configSnapshot = await measure("config.snapshot.read", () => readConfigFileSnapshot());
   let wroteConfig = false;
   let degradedStartupConfig = false;
+  let degradedPluginConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
@@ -172,6 +210,16 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       if (providerApiPrunedSnapshot) {
         degradedStartupConfig = true;
         configSnapshot = providerApiPrunedSnapshot;
+      }
+    }
+    if (!configSnapshot.valid) {
+      const pluginConfigDegradedSnapshot = resolveGatewayStartupConfigWithoutInvalidPluginEntries({
+        snapshot: configSnapshot,
+        log: params.log,
+      });
+      if (pluginConfigDegradedSnapshot) {
+        degradedPluginConfig = true;
+        configSnapshot = pluginConfigDegradedSnapshot;
       }
     }
     if (!configSnapshot.valid) {
@@ -192,7 +240,9 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         params.log.warn(
           `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
         );
-        configSnapshot = await readConfigFileSnapshot();
+        configSnapshot = await measure("config.snapshot.recovery-read", () =>
+          readConfigFileSnapshot(),
+        );
         if (configSnapshot.valid) {
           enqueueConfigRecoveryNotice({
             cfg: configSnapshot.config,
@@ -207,28 +257,38 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         params.log.warn(
           `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
         );
-        configSnapshot = await readConfigFileSnapshot();
+        configSnapshot = await measure("config.snapshot.prefix-recovery-read", () =>
+          readConfigFileSnapshot(),
+        );
       }
     }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
   const autoEnable =
-    params.minimalTestGateway || degradedStartupConfig
+    params.minimalTestGateway || degradedStartupConfig || degradedPluginConfig
       ? { config: configSnapshot.config, changes: [] as string[] }
-      : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+      : await measure("config.snapshot.auto-enable", () =>
+          applyPluginAutoEnable({ config: configSnapshot.sourceConfig, env: process.env }),
+        );
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
       wroteConfig,
       ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
+      ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
     };
   }
 
   try {
-    await writeConfigFile(autoEnable.config);
+    await replaceConfigFile({
+      nextConfig: autoEnable.config,
+      afterWrite: { mode: "auto" },
+    });
     wroteConfig = true;
-    configSnapshot = await readConfigFileSnapshot();
+    configSnapshot = await measure("config.snapshot.auto-enable-read", () =>
+      readConfigFileSnapshot(),
+    );
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(
       `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
@@ -241,6 +301,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     snapshot: configSnapshot,
     wroteConfig,
     ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
+    ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
   };
 }
 

@@ -160,7 +160,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      ca-certificates procps hostname curl git lsof openssl && \
+    update-ca-certificates
 
 RUN chown node:node /app
 
@@ -252,6 +253,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
+
+# Pre-create the default state dir so first-run Docker named volumes mounted
+# here inherit node ownership instead of starting as root-owned state.
+RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 

@@ -817,6 +817,7 @@ export function runBundledPluginPostinstall(params = {}) {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });

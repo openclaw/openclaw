@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: createPerSenderSessionConfig(),
 };
 
@@ -10,7 +10,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
     resolveGatewayPort: () => 18789,
   };
 });

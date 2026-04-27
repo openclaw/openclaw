@@ -43,20 +43,7 @@ JSON
 if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" = \"1\" ]; then
   cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
 {
-  \"plugins\": {
-    \"installs\": {
-      \"lossless-claw\": {
-        \"source\": \"npm\",
-        \"spec\": \"@example/lossless-claw@0.9.0\",
-        \"installPath\": \"~/.openclaw/extensions/lossless-claw\",
-        \"resolvedName\": \"@example/lossless-claw\",
-        \"resolvedVersion\": \"0.9.0\",
-        \"resolvedSpec\": \"@example/lossless-claw@0.9.0\",
-        \"integrity\": \"sha512-same\",
-        \"shasum\": \"same\"
-      }
-    }
-  }
+  \"plugins\": {}
 }
 JSON
 else

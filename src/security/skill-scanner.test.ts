@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
@@ -16,17 +16,11 @@ import type { SkillScanOptions } from "./skill-scanner.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-let fixtureRoot = "";
+const fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
 let fixtureId = 0;
 
-beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
-});
-
 afterAll(() => {
-  if (fixtureRoot) {
-    fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 function makeTmpDir(): string {

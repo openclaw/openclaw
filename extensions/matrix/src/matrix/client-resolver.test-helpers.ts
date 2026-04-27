@@ -81,7 +81,7 @@ export function primeMatrixClientResolverMocks(params?: {
   loadConfigMock.mockReturnValue(cfg);
   getMatrixRuntimeMock.mockReturnValue({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   });
   getActiveMatrixClientMock.mockReturnValue(null);

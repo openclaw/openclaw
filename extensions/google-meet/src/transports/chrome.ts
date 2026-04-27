@@ -1,5 +1,5 @@
-import { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "../config.js";
@@ -93,6 +93,7 @@ export async function launchChromeMeet(params: {
   audioBridge?:
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
+  browser?: GoogleMeetChromeHealth;
 }> {
   await assertBlackHole2chAvailable({
     runtime: params.runtime,
@@ -151,12 +152,6 @@ export async function launchChromeMeet(params: {
     return { launched: false, audioBridge };
   }
 
-  const argv = ["open", "-a", "Google Chrome"];
-  if (params.config.chrome.browserProfile) {
-    argv.push("--args", `--profile-directory=${params.config.chrome.browserProfile}`);
-  }
-  argv.push(params.url);
-
   let commandPairBridgeStopped = false;
   const stopCommandPairBridge = async () => {
     if (commandPairBridgeStopped) {
@@ -169,16 +164,12 @@ export async function launchChromeMeet(params: {
   };
 
   try {
-    const result = await params.runtime.system.runCommandWithTimeout(argv, {
-      timeoutMs: params.config.chrome.joinTimeoutMs,
+    const result = await openMeetWithBrowserRequest({
+      callBrowser: callLocalBrowserRequest,
+      config: params.config,
+      url: params.url,
     });
-    if (result.code === 0) {
-      return { launched: true, audioBridge };
-    }
-    await stopCommandPairBridge();
-    throw new Error(
-      `failed to launch Chrome for Meet: ${result.stderr || result.stdout || result.code}`,
-    );
+    return { ...result, audioBridge };
   } catch (error) {
     await stopCommandPairBridge();
     throw error;
@@ -329,6 +320,26 @@ async function openMeetWithBrowserProxy(params: {
   config: GoogleMeetConfig;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+  return await openMeetWithBrowserRequest({
+    callBrowser: async (request) =>
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId: params.nodeId,
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        timeoutMs: request.timeoutMs,
+      }),
+    config: params.config,
+    url: params.url,
+  });
+}
+
+async function openMeetWithBrowserRequest(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  url: string;
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   if (!params.config.chrome.launch) {
     return { launched: false };
   }
@@ -338,9 +349,7 @@ async function openMeetWithBrowserProxy(params: {
   let tab: BrowserTab | undefined;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "GET",
         path: "/tabs",
         timeoutMs: Math.min(timeoutMs, 5_000),
@@ -349,9 +358,7 @@ async function openMeetWithBrowserProxy(params: {
     tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
     targetId = tab?.targetId;
     if (targetId) {
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "POST",
         path: "/tabs/focus",
         body: { targetId },
@@ -361,9 +368,7 @@ async function openMeetWithBrowserProxy(params: {
   }
   if (!targetId) {
     tab = readBrowserTab(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
         body: { url: params.url },
@@ -392,9 +397,7 @@ async function openMeetWithBrowserProxy(params: {
   };
   do {
     try {
-      const evaluated = await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      const evaluated = await params.callBrowser({
         method: "POST",
         path: "/act",
         body: {

@@ -9,6 +9,8 @@ const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const LIVE_CLI_BACKEND_DOCKER_PATH = "scripts/test-live-cli-backend-docker.sh";
 const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
+const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
+  "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
@@ -82,7 +84,10 @@ describe("docker build helper", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=both pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e"',
+    );
+    expect(scenarios).toContain(
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
     );
   });
 
@@ -90,6 +95,8 @@ describe("docker build helper", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
     expect(scenarios).toContain('"plugins-offline"');
+    expect(scenarios).toContain("`bundled-plugin-install-uninstall-${index}`");
+    expect(scenarios).toContain("pnpm test:docker:bundled-plugin-install-uninstall");
     expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
     expect(scenarios).toContain('"bundled-channel-deps-compat"');
     expect(scenarios).toContain("test:docker:bundled-channel-deps:fast");
@@ -123,6 +130,19 @@ describe("docker build helper", () => {
     expect(scripts.join("\n")).toContain(
       "expected modern installRecords in installed plugin index",
     );
+  });
+
+  it("keeps bundled plugin install/uninstall sweep chunkable", () => {
+    const runner = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH, "utf8");
+
+    expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
+    expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
+    expect(runner).toContain('"openclaw.plugin.json"');
+    expect(runner).toContain("read -r plugin_id plugin_dir requires_config");
+    expect(runner).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
+    expect(runner).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
+    expect(runner).toContain("assert_installed");
+    expect(runner).toContain("assert_uninstalled");
   });
 
   it("passes installer tag env to bash, not curl", () => {

@@ -105,7 +105,7 @@ describe("gateway multi-instance e2e", () => {
       const idempotencyKey = `idem-${randomUUID()}`;
       const sendRes = await chatClient.request("chat.send", {
         sessionKey,
-        message: "/context list",
+        message: "/whoami",
         idempotencyKey,
       });
       expect(sendRes.status).toBe("started");

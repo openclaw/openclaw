@@ -1,7 +1,7 @@
 export { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
 export {
   canonicalizeMainSessionAlias,
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   resolveSessionKey,
   resolveStorePath,

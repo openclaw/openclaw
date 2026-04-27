@@ -43,7 +43,7 @@ OpenClaw creates a self-contained QMD home under
 `~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
 automatically -- collections, updates, and embedding runs are handled for you.
 It prefers current QMD collection and MCP query shapes, but still falls back to
-legacy `--mask` collection flags and older MCP tool names when needed.
+alternate collection pattern flags and older MCP tool names when needed.
 Boot-time reconciliation also recreates stale managed collections back to their
 canonical patterns when an older QMD collection with the same name is still
 present.
@@ -51,13 +51,15 @@ present.
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
-  configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
-  and periodically (default every 5 minutes).
+  configured `memory.qmd.paths`, then runs `qmd update` on boot and
+  periodically (default every 5 minutes). Semantic modes also run `qmd embed`.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
-  `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
+  `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
+  vector readiness probes and embedding maintenance in that mode. If a mode
+  fails, OpenClaw retries with `qmd query`.
 - If QMD fails entirely, OpenClaw falls back to the builtin SQLite engine.
 
 <Info>
@@ -163,6 +165,11 @@ runs as a service, create a symlink:
 
 **First search very slow?** QMD downloads GGUF models on first use. Pre-warm
 with `qmd query "test"` using the same XDG dirs OpenClaw uses.
+
+**BM25-only QMD still trying to build llama.cpp?** Set
+`memory.qmd.searchMode = "search"`. OpenClaw treats that mode as lexical-only,
+does not run QMD vector status probes or embedding maintenance, and leaves
+semantic readiness checks to `vsearch` or `query` setups.
 
 **Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
 Set to `120000` for slower hardware.

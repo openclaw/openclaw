@@ -6,6 +6,7 @@ import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
+  forcedUnitFastTestFiles,
   getUnitFastTestFiles,
   isUnitFastTestFile,
   resolveUnitFastTestIncludePattern,
@@ -42,6 +43,7 @@ describe("unit-fast vitest lane", () => {
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/tts/status-config.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",
@@ -57,6 +59,19 @@ describe("unit-fast vitest lane", () => {
     expect(resolveUnitFastTestIncludePattern("src/commands/status-overview-values.ts")).toBe(
       "src/commands/status-overview-values.test.ts",
     );
+  });
+
+  it("routes audited stateful-looking tests through the fast lane", () => {
+    const analysis = collectUnitFastTestFileAnalysis();
+    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const unitFastTestFiles = getUnitFastTestFiles();
+
+    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
+    for (const file of forcedUnitFastTestFiles) {
+      expect(unitFastTestFiles).toContain(file);
+      expect(isUnitFastTestFile(file)).toBe(true);
+    }
+    expect(forcedAnalysis.every((entry) => entry.forced && entry.unitFast)).toBe(true);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

@@ -109,6 +109,14 @@ export const uk: TranslationMap = {
       lightningHelp: "Lightning-адреса для чайових (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Завантаження панелі",
+    errorTitle: "Не вдалося завантажити панель",
+    errorSubtitle:
+      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    retry: "Повторити",
+    unknownError: "Невідома помилка завантаження модуля.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Завантажте конфігурацію, щоб редагувати прив’язки.",
@@ -352,6 +360,15 @@ export const uk: TranslationMap = {
       refreshing: "Оновлення…",
       on: "Сновидіння увімкнено",
       off: "Сновидіння вимкнено",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Сновидіння активне",

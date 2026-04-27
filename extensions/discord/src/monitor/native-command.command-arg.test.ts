@@ -73,7 +73,9 @@ describe("discord command argument fallback", () => {
   it("preserves public slash command visibility for selected argument follow-ups", async () => {
     const commandDefinition = createCommandDefinition();
     vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockReturnValue(commandDefinition);
-    const dispatchSpy = vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue();
+    const dispatchSpy = vi
+      .fn<DispatchDiscordCommandInteraction>()
+      .mockResolvedValue({ accepted: true });
     const button = createDiscordCommandArgFallbackButton({
       ctx: createContext({ slashCommand: { ephemeral: false } }),
       safeInteractionCall,

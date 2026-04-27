@@ -212,16 +212,18 @@ export class GoogleMeetRuntime {
         session.transport === transport &&
         session.mode === mode,
     );
+    const speechInstructions = request.message ?? this.params.config.realtime.introMessage;
     if (reusable) {
       reusable.notes = [
         ...reusable.notes.filter((note) => note !== "Reused existing active Meet session."),
         "Reused existing active Meet session.",
       ];
       reusable.updatedAt = nowIso();
-      if (request.message || this.params.config.realtime.introMessage) {
-        this.speak(reusable.id, request.message);
-      }
-      return { session: reusable };
+      const spoken =
+        mode === "realtime" && speechInstructions
+          ? this.speak(reusable.id, speechInstructions).spoken
+          : false;
+      return { session: reusable, spoken };
     }
     const createdAt = nowIso();
 
@@ -347,10 +349,11 @@ export class GoogleMeetRuntime {
     }
 
     this.#sessions.set(session.id, session);
-    if (mode === "realtime" && this.params.config.realtime.introMessage) {
-      this.speak(session.id, request.message);
-    }
-    return { session };
+    const spoken =
+      mode === "realtime" && speechInstructions
+        ? this.speak(session.id, speechInstructions).spoken
+        : false;
+    return { session, spoken };
   }
 
   async leave(sessionId: string): Promise<{ found: boolean; session?: GoogleMeetSession }> {
@@ -398,11 +401,10 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession;
   }> {
     const before = new Set(this.list().map((session) => session.id));
-    const result = await this.join(request);
-    const spoken = this.speak(
-      result.session.id,
-      request.message ?? "Say exactly: Google Meet speech test complete.",
-    ).spoken;
+    const result = await this.join({
+      ...request,
+      message: request.message ?? "Say exactly: Google Meet speech test complete.",
+    });
     const health = result.session.chrome?.health;
     return {
       createdSession: !before.has(result.session.id),
@@ -410,7 +412,7 @@ export class GoogleMeetRuntime {
       manualActionRequired: health?.manualActionRequired,
       manualActionReason: health?.manualActionReason,
       manualActionMessage: health?.manualActionMessage,
-      spoken,
+      spoken: result.spoken ?? false,
       session: result.session,
     };
   }

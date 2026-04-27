@@ -136,7 +136,10 @@ describe("tryRouteCli", () => {
       true,
     );
 
-    expect(findRoutedCommandMock).toHaveBeenCalledWith(["status"]);
+    expect(findRoutedCommandMock).toHaveBeenCalledWith(
+      ["status"],
+      ["node", "openclaw", "--log-level", "debug", "status"],
+    );
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: expect.any(Object),
       commandPath: ["status"],
@@ -150,5 +153,19 @@ describe("tryRouteCli", () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back before bootstrap when the route cannot parse the argv", async () => {
+    findRoutedCommandMock.mockReturnValue({
+      canRun: () => false,
+      loadPlugins: true,
+      run: runRouteMock,
+    });
+
+    await expect(tryRouteCli(["node", "openclaw", "tasks", "list"])).resolves.toBe(false);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(runRouteMock).not.toHaveBeenCalled();
   });
 });

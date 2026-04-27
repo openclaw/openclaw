@@ -58,6 +58,35 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readPluginToolName(tool: unknown): string {
+  if (!isRecord(tool)) {
+    return "";
+  }
+  // Optional-tool allowlists need a best-effort name before full shape validation.
+  return typeof tool.name === "string" ? tool.name.trim() : "";
+}
+
+function describeMalformedPluginTool(tool: unknown): string | undefined {
+  if (!isRecord(tool)) {
+    return "tool must be an object";
+  }
+  const name = readPluginToolName(tool);
+  if (!name) {
+    return "missing non-empty name";
+  }
+  if (typeof tool.execute !== "function") {
+    return `${name} missing execute function`;
+  }
+  if (!isRecord(tool.parameters)) {
+    return `${name} missing parameters object`;
+  }
+  return undefined;
+}
+
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
@@ -146,11 +175,11 @@ export function resolvePluginTools(params: {
       }
       continue;
     }
-    const listRaw = Array.isArray(resolved) ? resolved : [resolved];
+    const listRaw: unknown[] = Array.isArray(resolved) ? resolved : [resolved];
     const list = entry.optional
       ? listRaw.filter((tool) =>
           isOptionalToolAllowed({
-            toolName: tool.name,
+            toolName: readPluginToolName(tool),
             pluginId: entry.pluginId,
             allowlist,
           }),
@@ -160,7 +189,22 @@ export function resolvePluginTools(params: {
       continue;
     }
     const nameSet = new Set<string>();
-    for (const tool of list) {
+    for (const toolRaw of list) {
+      // Plugin factories run at request time and can return arbitrary values; isolate
+      // malformed tools here so one bad plugin tool cannot poison every provider.
+      const malformedReason = describeMalformedPluginTool(toolRaw);
+      if (malformedReason) {
+        const message = `plugin tool is malformed (${entry.pluginId}): ${malformedReason}`;
+        context.logger.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+        continue;
+      }
+      const tool = toolRaw as AnyAgentTool;
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {
