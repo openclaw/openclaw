@@ -1696,8 +1696,7 @@ export async function maybeApplyTtsToPayload(params: {
   // Per-variant text extraction: plain providers prefer ttsPlainText then visible
   // text; tag-aware providers prefer ttsSourceText then visible. Either can fall
   // back to the directives' [[tts]] block when present.
-  const plainSpeechText =
-    visibleTtsOverride ?? plainVariantText ?? visibleCleanedText.trim() ?? visibleText;
+  const plainSpeechText = visibleTtsOverride ?? plainVariantText ?? visibleText;
   const expressiveSpeechText = visibleTtsOverride ?? expressiveVariantText ?? plainSpeechText;
   // Initial routing uses the same persona-merged config as synthesis so
   // model-aware capability gates (e.g. ElevenLabs `expressiveTagsModels: ["eleven_v3"]`)

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  cloneReplyPayloadMetadata,
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
   setReplyPayloadMetadata,
@@ -75,7 +76,7 @@ function normalizeFollowupPayloadForDelivery(
     return [taggedPayload];
   }
 
-  let nextPayload: FollowupEmotionTaggedPayload = payload;
+  let nextPayload: FollowupEmotionTaggedPayload = payload as FollowupEmotionTaggedPayload;
   if (text.includes("HEARTBEAT_OK")) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -83,16 +84,24 @@ function normalizeFollowupPayloadForDelivery(
       return [];
     }
     text = stripped.text;
-    nextPayload = { ...payload, text };
+    // Per chatgpt-codex P2 review on followup-runner.ts:95 — spreads create a
+    // new object identity, so any WeakMap-keyed `ReplyPayloadMetadata` (e.g.
+    // `assistantMessageIndex` consumed by queued block delivery in
+    // `dispatch-from-config.ts`) is dropped. Clone metadata onto the rewritten
+    // payload so downstream consumers keep seeing it.
+    nextPayload = cloneReplyPayloadMetadata(payload, {
+      ...payload,
+      text,
+    }) as FollowupEmotionTaggedPayload;
   }
 
   const normalizedEmotionMode = emotionMode ?? "off";
   const rawEmotionTtsText = isEmotionModeEnabled(normalizedEmotionMode) ? text : undefined;
   const emotionSanitized = sanitizeEmotionTagsForMode(text, normalizedEmotionMode);
-  nextPayload = {
+  nextPayload = cloneReplyPayloadMetadata(nextPayload, {
     ...nextPayload,
     text: emotionSanitized.text,
-  };
+  }) as FollowupEmotionTaggedPayload;
 
   if (typeof rawEmotionTtsText === "string" && rawEmotionTtsText.trim().length > 0) {
     nextPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY] = rawEmotionTtsText;
@@ -107,9 +116,12 @@ function finalizeFollowupPayloadEmotionMetadata(
 ): ReplyPayload {
   const taggedPayload = payload as FollowupEmotionTaggedPayload;
   const rawEmotionTtsText = taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
-  // Always strip the marker so it does not leak forward, but only honor its
-  // value when emotion mode is enabled — the key is a normal string property
-  // and untrusted upstream payloads (plugin/tool/LLM) could spoof it.
+  // Always strip the marker so it does not leak forward. Only honor the
+  // captured value when emotion mode is enabled: the marker is a module-private
+  // Symbol, so ordinary untrusted upstream JSON / structured payloads cannot
+  // spoof it (Symbols don't survive JSON.stringify and you need a reference to
+  // this exact module-private value to set the property), and the emotionMode
+  // gate is defense-in-depth.
   delete taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
   if (!isEmotionModeEnabled(emotionMode)) {
     return taggedPayload;
