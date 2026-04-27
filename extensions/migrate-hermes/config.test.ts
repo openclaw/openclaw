@@ -183,4 +183,42 @@ describe("Hermes migration config mapping", () => {
       },
     });
   });
+
+  it("uses the provider runtime for CLI-applied config items", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const config: Record<string, unknown> = {
+      agents: { defaults: { workspace: workspaceDir } },
+    };
+    await writeFile(
+      path.join(source, "config.yaml"),
+      [
+        "mcp_servers:",
+        "  time:",
+        "    command: npx",
+        "    env:",
+        "      OPENAI_API_KEY: short-dev-key",
+        "",
+      ].join("\n"),
+    );
+
+    const provider = buildHermesMigrationProvider({ runtime: makeConfigRuntime(config) });
+    const result = await provider.apply(makeContext({ source, stateDir, workspaceDir }));
+
+    expect(result.summary.errors).toBe(0);
+    expect(config).toMatchObject({
+      mcp: {
+        servers: {
+          time: {
+            command: "npx",
+            env: {
+              OPENAI_API_KEY: "short-dev-key",
+            },
+          },
+        },
+      },
+    });
+  });
 });

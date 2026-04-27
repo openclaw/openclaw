@@ -40,7 +40,12 @@ export async function applyHermesPlan(params: {
         ),
       );
     } else if (item.kind === "config") {
-      items.push(await applyConfigItem(params.ctx, item));
+      items.push(
+        await applyConfigItem(
+          { ...params.ctx, runtime: params.ctx.runtime ?? params.runtime },
+          item,
+        ),
+      );
     } else if (item.kind === "manual") {
       items.push(applyManualItem(item));
     } else if (item.action === "archive") {
