@@ -453,7 +453,9 @@ export async function handleBashChatCommand(params: {
     if (result.details?.status === "failed") {
       const exitLabel = result.details.timedOut
         ? "timeout"
-        : `code ${String(result.details.exitCode ?? 1)}`;
+        : typeof result.details.exitCode === "number"
+          ? `code ${result.details.exitCode}`
+          : "failed";
       const output = outputFromContent() || result.details.aggregated;
       return {
         text: [

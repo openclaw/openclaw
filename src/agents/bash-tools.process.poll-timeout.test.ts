@@ -189,6 +189,7 @@ test("process poll includes timeout guidance when a waited poll observes exit", 
     expect(text).toContain("Process exited with timeout.");
     expect(text).not.toContain("code 0");
     expect((poll.details as { aggregated?: string }).aggregated).toBe("");
+    expect((poll.details as { exitCode?: number | null }).exitCode).toBeNull();
   } finally {
     vi.useRealTimers();
   }

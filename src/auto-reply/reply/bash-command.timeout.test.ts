@@ -170,6 +170,25 @@ describe("handleBashChatCommand timeout handling", () => {
     expect(result.text).toContain("Command timed out after 1 seconds.");
   });
 
+  it("does not invent an exit code for foreground chat bash failures without one", async () => {
+    executeMock.mockResolvedValueOnce({
+      content: [{ type: "text", text: "Command aborted by signal SIGTERM." }],
+      details: {
+        status: "failed",
+        exitCode: null,
+        durationMs: 1000,
+        aggregated: "",
+      },
+    });
+
+    const result = await handleBashChatCommand(buildParams("/bash sleep 999"));
+
+    expect(result.text).toContain("bash failed");
+    expect(result.text).toContain("Exit: failed");
+    expect(result.text).toContain("Command aborted by signal SIGTERM.");
+    expect(result.text).not.toContain("Exit: code 1");
+  });
+
   it("shows timeout exit reasons when polling finished chat bash jobs", async () => {
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue({

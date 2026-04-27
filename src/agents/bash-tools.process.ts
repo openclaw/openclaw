@@ -380,8 +380,8 @@ export function createProcessTool(
           }
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
+          const exitCode = scopedSession.exitCode ?? null;
+          const exitSignal = scopedSession.exitSignal ?? null;
           const exitReason = scopedSession.exitReason;
           if (exited) {
             const status =
