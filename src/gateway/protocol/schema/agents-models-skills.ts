@@ -62,6 +62,13 @@ export const AgentsCreateParamsSchema = Type.Object(
     model: Type.Optional(NonEmptyString),
     emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
+    /**
+     * When omitted or `true`, brand-new workspaces are initialized as a
+     * local git repo (`git init`). Pass `false` to skip git init — useful
+     * for hosts that manage versioning/backups outside git or that don't
+     * want agents to perceive the workspace as a tracked repository.
+     */
+    gitInit: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
