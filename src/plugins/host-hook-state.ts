@@ -443,7 +443,10 @@ export async function projectPluginSessionExtensions(params: {
       discardUnexpectedPromiseProjection(projected);
       continue;
     }
-    if (projected !== undefined && isPluginJsonValue(projected)) {
+    if (
+      projected !== undefined &&
+      (registration.extension.project === undefined || isPluginJsonValue(projected))
+    ) {
       projections.push({
         pluginId: registration.pluginId,
         namespace: registration.extension.namespace,
@@ -522,7 +525,10 @@ export function projectPluginSessionExtensionsSync(params: {
       discardUnexpectedPromiseProjection(projected);
       continue;
     }
-    if (projected === undefined || !isPluginJsonValue(projected)) {
+    if (
+      projected === undefined ||
+      (registration.extension.project !== undefined && !isPluginJsonValue(projected))
+    ) {
       continue;
     }
     projections.push({

@@ -468,6 +468,47 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
+  it("rejects duplicate runtime lifecycle and agent event subscription ids", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "duplicate-host-hook-fixture",
+        name: "Duplicate Host Hook Fixture",
+      }),
+      register(api) {
+        api.registerRuntimeLifecycle({ id: "cleanup", cleanup: () => undefined });
+        api.registerRuntimeLifecycle({ id: "cleanup", cleanup: () => undefined });
+        api.registerAgentEventSubscription({
+          id: "events",
+          streams: ["tool"],
+          handle: () => undefined,
+        });
+        api.registerAgentEventSubscription({
+          id: "events",
+          streams: ["error"],
+          handle: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
+    expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "runtime lifecycle already registered: cleanup",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "agent event subscription already registered: events",
+        }),
+      ]),
+    );
+  });
+
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

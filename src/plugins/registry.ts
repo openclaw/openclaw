@@ -1664,6 +1664,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existing = (registry.runtimeLifecycles ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.lifecycle.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `runtime lifecycle already registered: ${id}`,
+      });
+      return;
+    }
     (registry.runtimeLifecycles ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1684,6 +1696,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "agent event subscription registration missing id",
+      });
+      return;
+    }
+    const existing = (registry.agentEventSubscriptions ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.subscription.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent event subscription already registered: ${id}`,
       });
       return;
     }
