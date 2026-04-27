@@ -120,10 +120,8 @@ function resolveLocalGatewayCredentials(params: {
   });
   const localPasswordCanWin =
     params.plan.authMode === "password" ||
-    (params.plan.authMode !== "token" &&
-      params.plan.authMode !== "none" &&
-      params.plan.authMode !== "trusted-proxy" &&
-      !localResolved.token);
+    params.plan.authMode === "trusted-proxy" ||
+    (params.plan.authMode !== "token" && params.plan.authMode !== "none" && !localResolved.token);
   const localTokenCanWin =
     params.plan.authMode === "token" ||
     (params.plan.authMode !== "password" &&
