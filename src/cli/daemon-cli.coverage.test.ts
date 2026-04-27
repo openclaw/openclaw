@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
@@ -41,25 +44,9 @@ const buildGatewayInstallPlan = vi.fn(
   }),
 );
 
-const mocks = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn(),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return { runtimeLogs, defaultRuntime };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi);
 });
 
 const { runtimeLogs } = mocks;
@@ -155,17 +142,19 @@ function parseFirstJsonRuntimeLine<T>() {
 
 describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tmpDir: string;
 
   beforeEach(() => {
     daemonProgram = createDaemonProgram();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-cli-"));
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_PROFILE",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tmpDir, "openclaw.json");
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
@@ -176,6 +165,7 @@ describe("daemon-cli coverage", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("probes gateway status by default", async () => {

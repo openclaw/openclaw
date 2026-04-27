@@ -7,6 +7,10 @@ import {
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
 import { resolveStateDir } from "./paths.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 export type ObserveRecoveryDeps = {
@@ -441,6 +445,15 @@ function resolveSuspiciousSignature(
   return `${current.hash}:${suspicious.join(",")}`;
 }
 
+function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
+  return (
+    reason === "missing-meta-vs-last-good" ||
+    reason === "gateway-mode-missing-vs-last-good" ||
+    reason === "update-channel-only-root" ||
+    reason.startsWith("size-drop-vs-last-good:")
+  );
+}
+
 function resolveConfigReadRecoveryContext(params: {
   current: ConfigHealthFingerprint;
   parsed: unknown;
@@ -454,7 +467,7 @@ function resolveConfigReadRecoveryContext(params: {
     parsed: params.parsed,
     lastKnownGood: params.backupBaseline,
   });
-  if (!suspicious.includes("update-channel-only-root")) {
+  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
     return null;
   }
   const suspiciousSignature = resolveSuspiciousSignature(params.current, suspicious);
@@ -1003,6 +1016,14 @@ export async function recoverConfigFromLastKnownGood(params: {
 }): Promise<boolean> {
   const { deps, snapshot } = params;
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
+    if (isPluginLocalInvalidConfigSnapshot(snapshot)) {
+      deps.logger.warn(
+        `Config last-known-good recovery skipped: invalidity is scoped to plugin entries (${params.reason})`,
+      );
+    }
     return false;
   }
   const healthState = await readConfigHealthState(deps);

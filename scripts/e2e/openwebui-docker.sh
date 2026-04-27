@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+# Runs Open WebUI against a Dockerized OpenClaw Gateway and verifies the proxied
+# chat path with a real OpenAI-compatible request.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="openclaw-openwebui-e2e"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
 # Keep the default on a broadly available non-reasoning OpenAI model for
 # Open WebUI compatibility smoke. Callers can still override this explicitly.
@@ -19,6 +21,12 @@ ADMIN_PASSWORD="${OPENCLAW_OPENWEBUI_ADMIN_PASSWORD:-OpenWebUI-E2E-Password-$(da
 NET_NAME="openclaw-openwebui-e2e-$$"
 GW_NAME="openclaw-openwebui-gateway-$$"
 OW_NAME="openclaw-openwebui-$$"
+DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-600s}"
+DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
+
+docker_cmd() {
+  timeout "$DOCKER_COMMAND_TIMEOUT" "$@"
+}
 
 OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
 if [[ "$OPENAI_API_KEY_VALUE" == "undefined" || "$OPENAI_API_KEY_VALUE" == "null" ]]; then
@@ -34,29 +42,35 @@ if [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
 fi
 
 cleanup() {
-  docker rm -f "$OW_NAME" >/dev/null 2>&1 || true
-  docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
-  docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+  docker_cmd docker rm -f "$OW_NAME" >/dev/null 2>&1 || true
+  docker_cmd docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
+  docker_cmd docker network rm "$NET_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-echo "Building Docker image..."
-run_logged openwebui-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
+docker_e2e_harness_mount_args
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
-docker pull "$OPENWEBUI_IMAGE" >/dev/null
+timeout "$DOCKER_PULL_TIMEOUT" docker pull "$OPENWEBUI_IMAGE" >/dev/null
 
 echo "Creating Docker network..."
-docker network create "$NET_NAME" >/dev/null
+docker_cmd docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
-docker run -d \
+# Harness files are mounted read-only; the app under test comes from /app/dist.
+docker_cmd docker run -d \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_OPENWEBUI_MODEL=$MODEL" \
+  -e "OPENCLAW_SKIP_CHANNELS=1" \
+  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+  -e "OPENCLAW_SKIP_CRON=1" \
+  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e OPENAI_API_KEY \
   ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
@@ -111,11 +125,11 @@ EOF
 
 echo "Waiting for gateway HTTP surface..."
 gateway_ready=0
-for _ in $(seq 1 60); do
-  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
+for _ in $(seq 1 240); do
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
-  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
     const res = await fetch(\"http://127.0.0.1:$PORT/v1/models\", {
       headers: { authorization: \"Bearer $TOKEN\" },
     }).catch(() => null);
@@ -129,17 +143,21 @@ done
 
 if [ "$gateway_ready" -ne 1 ]; then
   echo "Gateway failed to start"
-  docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
+  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  fi
+  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 
 echo "Starting Open WebUI container..."
-docker run -d \
+docker_cmd docker run -d \
   --name "$OW_NAME" \
   --network "$NET_NAME" \
   -e ENV=prod \
   -e WEBUI_NAME="OpenClaw E2E" \
-  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret" \
+  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret-key-v1" \
   -e OFFLINE_MODE=True \
   -e ENABLE_VERSION_UPDATE_CHECK=False \
   -e ENABLE_PERSISTENT_CONFIG=False \
@@ -159,11 +177,11 @@ docker run -d \
 
 echo "Waiting for Open WebUI..."
 ow_ready=0
-for _ in $(seq 1 90); do
-  if [ "$(docker inspect -f '{{.State.Running}}' "$OW_NAME" 2>/dev/null || echo false)" != "true" ]; then
+for _ in $(seq 1 240); do
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$OW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
-  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
     const res = await fetch(\"http://$OW_NAME:$WEBUI_PORT/\").catch(() => null);
     process.exit(res && res.status < 500 ? 0 : 1);
   ' >/dev/null 2>&1"; then
@@ -175,24 +193,68 @@ done
 
 if [ "$ow_ready" -ne 1 ]; then
   echo "Open WebUI failed to start"
-  docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  exit 1
+fi
+
+echo "Waiting for gateway model endpoint after Open WebUI startup..."
+gateway_model_ready=0
+for _ in $(seq 1 90); do
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
+    break
+  fi
+  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(\"http://$GW_NAME:$PORT/v1/models\", {
+        headers: { authorization: \"Bearer $TOKEN\" },
+        signal: controller.signal,
+      });
+      process.exit(res.status === 200 ? 0 : 1);
+    } catch {
+      process.exit(1);
+    } finally {
+      clearTimeout(timeout);
+    }
+  ' >/dev/null 2>&1"; then
+    gateway_model_ready=1
+    break
+  fi
+  sleep 5
+done
+
+if [ "$gateway_model_ready" -ne 1 ]; then
+  echo "Gateway model endpoint did not stay reachable after Open WebUI startup"
+  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  fi
+  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
+  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 
 echo "Running Open WebUI -> OpenClaw smoke..."
-if ! docker exec \
+if ! docker_cmd docker exec \
   -e "OPENWEBUI_BASE_URL=http://$OW_NAME:$WEBUI_PORT" \
   -e "OPENWEBUI_ADMIN_EMAIL=$ADMIN_EMAIL" \
   -e "OPENWEBUI_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
   -e "OPENWEBUI_EXPECTED_NONCE=$PROMPT_NONCE" \
   -e "OPENWEBUI_PROMPT=$PROMPT" \
+  -e "OPENWEBUI_MODEL_ATTEMPTS=72" \
+  -e "OPENWEBUI_MODEL_RETRY_MS=5000" \
   "$GW_NAME" \
   node /app/scripts/e2e/openwebui-probe.mjs >/tmp/openwebui-probe.log 2>&1; then
   cat /tmp/openwebui-probe.log 2>/dev/null || true
   echo "Open WebUI probe failed; gateway log tail:"
-  docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  fi
+  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
   echo "Open WebUI container logs:"
-  docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 

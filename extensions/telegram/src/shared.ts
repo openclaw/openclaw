@@ -19,7 +19,9 @@ import {
 import {
   buildTelegramCommandsListChannelData,
   buildTelegramModelBrowseChannelData,
+  buildTelegramModelsAddProviderChannelData,
   buildTelegramModelsListChannelData,
+  buildTelegramModelsMenuChannelData,
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
@@ -140,6 +142,11 @@ export function createTelegramPluginBase(params: {
       reactions: true,
       threads: true,
       media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+        },
+      },
       polls: true,
       nativeCommands: true,
       blockStreaming: true,
@@ -148,7 +155,9 @@ export function createTelegramPluginBase(params: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,
+      buildModelsMenuChannelData: buildTelegramModelsMenuChannelData,
       buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+      buildModelsAddProviderChannelData: buildTelegramModelsAddProviderChannelData,
       buildModelsListChannelData: buildTelegramModelsListChannelData,
       buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
     },

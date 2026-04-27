@@ -9,7 +9,7 @@ import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCommandSpecs } from "../../plugins/command-registry-state.js";
+import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { CommandEntry, CommandsListResult } from "../protocol/index.js";
@@ -172,9 +172,10 @@ function mapCommand(
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
+  cfg: OpenClawConfig;
 }): CommandEntry[] {
   const pluginTextSpecs = listPluginCommands();
-  const pluginNativeSpecs = getPluginCommandSpecs(params.provider);
+  const pluginNativeSpecs = getPluginCommandSpecs(params.provider, { config: params.cfg });
   const entries: CommandEntry[] = [];
 
   for (const [index, textSpec] of pluginTextSpecs.entries()) {
@@ -233,7 +234,7 @@ export function buildCommandsListResult(params: {
     );
   }
 
-  commands.push(...buildPluginCommandEntries({ provider, nameSurface }));
+  commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
 
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }

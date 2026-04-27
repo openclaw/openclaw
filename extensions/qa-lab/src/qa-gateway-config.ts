@@ -20,6 +20,8 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
@@ -96,7 +98,9 @@ export function buildQaGatewayConfig(params: {
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
   );
-  const allowedPlugins = [...new Set(["memory-core", ...selectedPluginIds, ...transportPluginIds])];
+  const allowedPlugins = [
+    ...new Set([...QA_BASE_RUNTIME_PLUGIN_IDS, ...selectedPluginIds, ...transportPluginIds]),
+  ];
   const resolveModelParams = (modelRef: string) =>
     provider.resolveModelParams({
       modelRef,
@@ -114,7 +118,11 @@ export function buildQaGatewayConfig(params: {
       allow: allowedPlugins,
       entries: {
         acpx: {
-          enabled: false,
+          enabled: true,
+          config: {
+            pluginToolsMcpBridge: true,
+            openClawToolsMcpBridge: true,
+          },
         },
         "memory-core": {
           enabled: true,
@@ -174,11 +182,20 @@ export function buildQaGatewayConfig(params: {
           subagents: {
             allowAgents: ["*"],
           },
+          tools: {
+            profile: "coding",
+          },
         },
       ],
     },
     memory: {
       backend: "builtin",
+    },
+    tools: {
+      // The parity scenarios are code-agent contracts: they must always expose
+      // file, image, memory, and subagent tools even when the surrounding
+      // environment defaults to a messaging-only profile.
+      profile: "coding",
     },
     ...(gatewayModels
       ? {

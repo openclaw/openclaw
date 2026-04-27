@@ -66,12 +66,14 @@ function mockNodeGatewayPlanFixture(
   } = {},
 ) {
   const {
-    workingDirectory = "/Users/me",
     version = "22.0.0",
     supported = true,
     warning,
     serviceEnvironment = { OPENCLAW_PORT: "3000" },
   } = params;
+  const workingDirectory = Object.hasOwn(params, "workingDirectory")
+    ? params.workingDirectory
+    : "/Users/me";
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
     programArguments: ["node", "gateway"],
@@ -164,6 +166,43 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(warn).toHaveBeenCalledWith("Node too old", "Gateway runtime");
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
+  });
+
+  it("uses the state dir as the default macOS launchd working directory", async () => {
+    mockNodeGatewayPlanFixture({
+      workingDirectory: undefined,
+      serviceEnvironment: {},
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "darwin",
+      }),
+    );
+  });
+
+  it("does not invent a working directory for non-macOS service installs", async () => {
+    mockNodeGatewayPlanFixture({
+      workingDirectory: undefined,
+      serviceEnvironment: {},
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+    });
+
+    expect(plan.workingDirectory).toBeUndefined();
   });
 
   it("merges safe config env while dropping unsafe values and keeping service precedence", async () => {

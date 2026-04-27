@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveGatewayStateDir } from "../daemon/paths.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
@@ -212,6 +213,20 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
+function resolveGatewayInstallWorkingDirectory(params: {
+  env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+  workingDirectory: string | undefined;
+}): string | undefined {
+  if (params.workingDirectory) {
+    return params.workingDirectory;
+  }
+  if (params.platform !== "darwin") {
+    return undefined;
+  }
+  return resolveGatewayStateDir(params.env);
+}
+
 async function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
@@ -261,11 +276,13 @@ export async function buildGatewayInstallPlan(params: {
   existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
+  platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
+  const platform = params.platform ?? process.platform;
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
@@ -289,16 +306,21 @@ export async function buildGatewayInstallPlan(params: {
     env: params.env,
     port: params.port,
     launchdLabel:
-      process.platform === "darwin"
+      platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    platform,
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
   // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
     programArguments,
-    workingDirectory,
+    workingDirectory: resolveGatewayInstallWorkingDirectory({
+      env: params.env,
+      platform,
+      workingDirectory,
+    }),
     environment: await buildGatewayInstallEnvironment({
       env: params.env,
       config: params.config,

@@ -1,23 +1,23 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import {
+  hasUsableCustomProviderApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
 import { toModelRow as toModelRowBase } from "./list.model-row.js";
-import {
-  discoverAuthStorage,
-  discoverModels,
-  hasUsableCustomProviderApiKey,
-  listProfilesForProvider,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-  resolveOpenClawAgentDir,
-} from "./list.runtime.js";
 import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
@@ -39,6 +39,9 @@ const hasAuthForProvider = (
     return true;
   }
   if (hasUsableCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
+  if (resolveRuntimeSyntheticAuthProviderRefs().includes(provider)) {
     return true;
   }
   return false;
@@ -104,13 +107,12 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
   }
 }
 
-export async function loadModelRegistry(
-  cfg: OpenClawConfig,
-  _opts?: { sourceConfig?: OpenClawConfig },
-) {
+export async function loadModelRegistry(cfg: OpenClawConfig, opts?: { providerFilter?: string }) {
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
+  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+  });
   const models = registry.getAll().filter(
     (model) =>
       !shouldSuppressBuiltInModel({

@@ -205,8 +205,10 @@ describe("gatherDaemonStatus", () => {
       }),
     );
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
@@ -542,7 +544,12 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc).toBeUndefined();
   });
 
-  it("surfaces stale gateway listener pids from restart health inspection", async () => {
+  it("surfaces stale gateway listener pids from restart health inspection when probe fails", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:19001",
+      error: "timeout",
+    });
     inspectGatewayRestart.mockResolvedValueOnce({
       runtime: { status: "running", pid: 8000 },
       portUsage: {

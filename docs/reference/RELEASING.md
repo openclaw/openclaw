@@ -1,12 +1,10 @@
 ---
-title: "Release Policy"
 summary: "Public release channels, version naming, and cadence"
+title: "Release policy"
 read_when:
   - Looking for public release channel definitions
   - Looking for version naming and cadence
 ---
-
-# Release Policy
 
 OpenClaw has three public release lanes:
 
@@ -51,9 +49,23 @@ OpenClaw has three public release lanes:
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
+- Run the manual `CI` workflow before release approval when you need full normal
+  CI coverage for the release candidate. Manual CI dispatches bypass changed
+  scoping and force the Linux Node shards, bundled-plugin shards, channel
+  contracts, Node 22 compatibility, `check`, `check-additional`, build smoke,
+  docs checks, Python skills, Windows, macOS, Android, and Control UI i18n
+  lanes.
+  Example: `gh workflow run ci.yml --ref release/YYYY.M.D`
+- Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
+  QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
+  span names, bounded attributes, and content/identifier redaction without
+  requiring Opik, Langfuse, or another external collector.
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
+- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the live
+  Matrix and Telegram QA lanes before release approval. The live lanes use the
+  `qa-live-shared` environment; Telegram also uses Convex CI credential leases.
 - Cross-OS install and upgrade runtime validation is dispatched from the
   private caller workflow
   `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
@@ -87,6 +99,14 @@ OpenClaw has three public release lanes:
   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
   (or the matching beta/correction version) to verify the published registry
   install path in a fresh temp prefix
+- After a beta publish, run `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@YYYY.M.D-beta.N OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci pnpm test:docker:npm-telegram-live`
+  to verify installed-package onboarding, Telegram setup, and real Telegram E2E
+  against the published npm package using the shared leased Telegram credential
+  pool. Local maintainer one-offs may omit the Convex vars and pass the three
+  `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- Maintainers can run the same post-publish check from GitHub Actions via the
+  manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
+  does not run on every merge.
 - Maintainer release automation now uses preflight-then-promote:
   - real npm publish must pass a successful npm `preflight_run_id`
   - the real npm publish must be dispatched from the same `main` or
@@ -109,6 +129,11 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
+- Post-publish verification also checks that the published registry install
+  contains non-empty bundled plugin runtime deps under the root `dist/*`
+  layout. A release that ships with missing or empty bundled plugin
+  dependency payloads fails the postpublish verifier and cannot be promoted
+  to `latest`.
 - `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on
   the candidate update tarball, so installer e2e catches accidental pack bloat
   before the release publish path
@@ -164,18 +189,20 @@ When cutting a stable npm release:
      SHA for a validation-only dry run of the preflight workflow
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
-3. Run `OpenClaw Release Checks` separately with the same tag or the
-   full current workflow-branch commit SHA when you want live prompt cache
-   coverage
+3. Run the manual `CI` workflow on the release ref when you want full normal CI
+   coverage instead of smart-scoped merge coverage
+4. Run `OpenClaw Release Checks` separately with the same tag or the
+   full current workflow-branch commit SHA when you want live prompt cache,
+   QA Lab parity, Matrix, and Telegram coverage
    - This is separate on purpose so live coverage stays available without
      recoupling long-running or flaky checks to the publish workflow
-4. Save the successful `preflight_run_id`
-5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+5. Save the successful `preflight_run_id`
+6. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
-6. If the release landed on `beta`, use the private
+7. If the release landed on `beta`, use the private
    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
    workflow to promote that stable version from `beta` to `latest`
-7. If the release intentionally published directly to `latest` and `beta`
+8. If the release intentionally published directly to `latest` and `beta`
    should follow the same stable build immediately, use that same private
    workflow to point both dist-tags at the stable version, or let its scheduled
    self-healing sync move `beta` later
@@ -185,6 +212,11 @@ requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
+
+If a maintainer must fall back to local npm authentication, run any 1Password
+CLI (`op`) commands only inside a dedicated tmux session. Do not call `op`
+directly from the main agent shell; keeping it inside tmux makes prompts,
+alerts, and OTP handling observable and prevents repeated host alerts.
 
 ## Public references
 
@@ -198,3 +230,7 @@ documented and operator-visible.
 Maintainers use the private release docs in
 [`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
 for the actual runbook.
+
+## Related
+
+- [Release channels](/install/development-channels)
