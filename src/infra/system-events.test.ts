@@ -226,6 +226,64 @@ describe("system events (session routing)", () => {
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
   });
+
+  it("returns false for non-consecutive duplicate events with the same context", () => {
+    const key = "agent:main:test-noncons-dupe";
+    const first = enqueueSystemEvent("exec approval: ps aux | grep openclaw", {
+      sessionKey: key,
+      contextKey: "exec:befadc79",
+    });
+    const interleaved = enqueueSystemEvent("Node connected", { sessionKey: key });
+    const failoverRetry = enqueueSystemEvent("exec approval: ps aux | grep openclaw", {
+      sessionKey: key,
+      contextKey: "exec:befadc79",
+    });
+
+    expect(first).toBe(true);
+    expect(interleaved).toBe(true);
+    expect(failoverRetry).toBe(false);
+    expect(peekSystemEvents(key)).toEqual([
+      "exec approval: ps aux | grep openclaw",
+      "Node connected",
+    ]);
+  });
+
+  it("allows the same text under a different context key", () => {
+    const key = "agent:main:test-context-disambiguates";
+    const reactionA = enqueueSystemEvent("Discord reaction added: ✅", {
+      sessionKey: key,
+      contextKey: "discord:reaction:msg-1",
+    });
+    const reactionB = enqueueSystemEvent("Discord reaction added: ✅", {
+      sessionKey: key,
+      contextKey: "discord:reaction:msg-2",
+    });
+
+    expect(reactionA).toBe(true);
+    expect(reactionB).toBe(true);
+    expect(peekSystemEventEntries(key)).toHaveLength(2);
+  });
+
+  it("preserves lastContextKey when a duplicate is skipped", () => {
+    const key = "agent:main:test-context-preserved";
+    enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+
+    const skipped = enqueueSystemEvent("Node connected", {
+      sessionKey: key,
+      contextKey: "build:123",
+    });
+
+    expect(skipped).toBe(false);
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+  });
+
+  it("does not overwrite lastContextKey when the caller omits a contextKey", () => {
+    const key = "agent:main:test-no-context-clobber";
+    enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+    enqueueSystemEvent("Heartbeat tick", { sessionKey: key });
+
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+  });
 });
 
 describe("isCronSystemEvent", () => {

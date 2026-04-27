@@ -87,6 +87,25 @@ export function isSystemEventContextChanged(
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
+function findDuplicateInQueue(
+  queue: readonly SystemEvent[],
+  text: string,
+  contextKey: string | null,
+): SystemEvent | undefined {
+  for (const event of queue) {
+    if (event.text === text && (event.contextKey ?? null) === contextKey) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
+  if (incomingContextKey !== null) {
+    entry.lastContextKey = incomingContextKey;
+  }
+}
+
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options?.sessionKey);
   const entry = getOrCreateSessionQueue(key);
@@ -96,10 +115,10 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey)) {
     return false;
-  } // skip consecutive duplicates
+  }
+  applyContextKeyPolicy(entry, normalizedContextKey);
   entry.lastText = cleaned;
   entry.queue.push({
     text: cleaned,
