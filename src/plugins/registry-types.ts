@@ -336,6 +336,7 @@ export type PluginRegistry = {
 export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
+  coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
   activateGlobalSideEffects?: boolean;
 };

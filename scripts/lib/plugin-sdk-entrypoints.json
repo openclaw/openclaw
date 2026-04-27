@@ -246,8 +246,6 @@
   "native-command-registry",
   "nextcloud-talk",
   "nostr",
-  "qa-channel",
-  "qa-channel-protocol",
   "provider-auth",
   "provider-auth-runtime",
   "provider-auth-api-key",

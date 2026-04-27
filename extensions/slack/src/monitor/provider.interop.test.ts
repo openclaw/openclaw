@@ -168,6 +168,7 @@ describe("createSlackBoltApp", () => {
       receiver,
       clientOptions,
       ignoreSelf: false,
+      tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
@@ -198,6 +199,7 @@ describe("createSlackBoltApp", () => {
       receiver,
       clientOptions,
       ignoreSelf: false,
+      tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -205,6 +206,38 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("auto-disables Bonjour in detected containers", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("honors explicit Bonjour opt-in inside detected containers", async () => {
+    enableAdvertiserUnitMode();
+    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
   });
 
   it("attaches conflict listeners for services", async () => {

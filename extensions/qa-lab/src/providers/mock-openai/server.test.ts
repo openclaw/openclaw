@@ -1657,6 +1657,129 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("uses exact marker directives from request context when the latest user text is generic", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "@qa-sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TEST",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Continue with the QA scenario plan and report worked, failed, and blocked items.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "MATRIX_QA_CANARY_TEST" }],
+        },
+      ],
+    });
+  });
+
+  it("uses image generation directives from request context when the latest user text is generic", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const matrixPrompt =
+      "@qa-sut:matrix-qa.test Image generation check: generate a QA lighthouse image and summarize it in one short sentence.";
+    const genericPrompt =
+      "Continue with the QA scenario plan and report worked, failed, and blocked items.";
+
+    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [makeUserInput(matrixPrompt), makeUserInput(genericPrompt)],
+      }),
+    });
+
+    expect(toolPlan.status).toBe(200);
+    expect(await toolPlan.json()).toMatchObject({
+      output: [
+        {
+          type: "function_call",
+          name: "image_generate",
+          arguments: expect.stringContaining("qa-lighthouse.png"),
+        },
+      ],
+    });
+
+    const toolResult = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          makeUserInput(matrixPrompt),
+          makeUserInput(genericPrompt),
+          {
+            type: "function_call",
+            name: "image_generate",
+            call_id: "call_mock_image_generate_1",
+            arguments: JSON.stringify({
+              prompt: "A QA lighthouse",
+              filename: "qa-lighthouse.png",
+            }),
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_mock_image_generate_1",
+            output: "MEDIA:/tmp/qa-lighthouse.png",
+          },
+        ],
+      }),
+    });
+
+    expect(toolResult.status).toBe(200);
+    expect(await toolResult.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: expect.stringContaining("MEDIA:/tmp/qa-lighthouse.png") }],
+        },
+      ],
+    });
+  });
+
   it("records image inputs and describes attached images", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
