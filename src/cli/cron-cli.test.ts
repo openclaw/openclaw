@@ -119,6 +119,22 @@ async function runCronAddAndGetParams(addArgs: string[]): Promise<CronAddParams>
   return (addCall?.[2] ?? {}) as CronAddParams;
 }
 
+async function captureStderrDuring(run: () => Promise<void>): Promise<string> {
+  let output = "";
+  const writeSpy = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation((chunk: string | Uint8Array) => {
+      output += chunk.toString();
+      return true;
+    });
+  try {
+    await run();
+  } finally {
+    writeSpy.mockRestore();
+  }
+  return output;
+}
+
 async function runCronSimpleAndGetUpdatePatch(
   command: "enable" | "disable",
 ): Promise<{ enabled?: boolean }> {
@@ -282,6 +298,27 @@ describe("cron cli", () => {
     const params = addCall?.[2] as { delivery?: { mode?: string } };
 
     expect(params?.delivery?.mode).toBe("announce");
+  });
+
+  it("warns when cron add systemEvent on main session looks like a shell command", async () => {
+    const stderr = await captureStderrDuring(() =>
+      runCronCommand([
+        "cron",
+        "add",
+        "--name",
+        "Main script",
+        "--cron",
+        "* * * * *",
+        "--session",
+        "main",
+        "--system-event",
+        "./run.sh",
+      ]),
+    );
+
+    expect(stderr).toContain("--system-event on --session main does not execute shell commands");
+    expect(stderr).toContain("--message");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(true);
   });
 
   it("infers sessionTarget from payload when --session is omitted", async () => {
@@ -457,6 +494,39 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.payload?.model).toBe("opus");
     expect(patch?.patch?.payload?.thinking).toBe("low");
+  });
+
+  it("warns when cron edit systemEvent keeps an existing main session and looks like a shell command", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              {
+                id: "job-1",
+                sessionTarget: "main",
+                schedule: { kind: "cron", expr: "* * * * *" },
+              },
+            ],
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    const stderr = await captureStderrDuring(() =>
+      program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
+        from: "user",
+      }),
+    );
+
+    expect(stderr).toContain("--system-event on --session main does not execute shell commands");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.update")).toBe(true);
   });
 
   it("sets and clears lightContext on cron edit", async () => {

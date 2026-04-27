@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, printCronList } from "./shared.js";
+import { getCronChannelOptions, looksLikeShellCommand, printCronList } from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -190,5 +190,16 @@ describe("getCronChannelOptions", () => {
   it("lists discovered channel plugin ids when plugins are available", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
     expect(getCronChannelOptions()).toBe("last|telegram|signal");
+  });
+});
+
+describe("looksLikeShellCommand", () => {
+  it("matches relative script invocations", () => {
+    expect(looksLikeShellCommand("./run.sh")).toBe(true);
+    expect(looksLikeShellCommand("please run ./deploy.sh now")).toBe(true);
+  });
+
+  it("does not match plain prose", () => {
+    expect(looksLikeShellCommand("summarize the daily runbook")).toBe(false);
   });
 });
