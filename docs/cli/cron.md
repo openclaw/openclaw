@@ -145,6 +145,8 @@ Retention and pruning are controlled in config:
 
 <Note>
 If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is configured.
+
+Hand-authored jobs that omit both `id` and legacy `jobId` are assigned stable ids the next time the Gateway loads the cron store. This keeps runtime state keyed per job instead of allowing multiple id-less rows to share one state slot.
 </Note>
 
 ## Common edits

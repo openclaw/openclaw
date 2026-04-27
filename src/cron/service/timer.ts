@@ -648,6 +648,13 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   if (!store) {
     return;
   }
+  if (typeof result.jobId !== "string" || result.jobId.trim().length === 0) {
+    state.deps.log.error(
+      { jobId: result.jobId },
+      "cron: refusing to apply run outcome without a valid job id",
+    );
+    return;
+  }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
