@@ -103,7 +103,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     expect(schema.properties?.resumeSessionId).toBeDefined();
     expect(schema.properties?.streamTo).toBeDefined();
-    expect(schema.properties?.streamTo?.description).toContain('Requires runtime="acp"');
+    expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -490,14 +490,16 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("ignores resumeSessionId without runtime=acp", async () => {
+  it("ignores ACP-only fields for subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     const result = await tool.execute("call-guard", {
+      runtime: "subagent",
       task: "resume prior work",
       resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+      streamTo: "parent",
     });
 
     expect(result.details).toMatchObject({
@@ -509,11 +511,14 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         task: "resume prior work",
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+      }),
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
       "resumeSessionId",
     );
+    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
@@ -542,13 +547,12 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it('ignores streamTo when runtime is not "acp"', async () => {
+  it('ignores streamTo when runtime is omitted and defaults to "subagent"', async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     const result = await tool.execute("call-3b", {
-      runtime: "subagent",
       task: "analyze file",
       streamTo: "parent",
     });
