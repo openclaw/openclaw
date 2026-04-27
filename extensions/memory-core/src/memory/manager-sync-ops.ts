@@ -308,7 +308,7 @@ export abstract class MemoryManagerSyncOps {
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
   }
 
-  private seedEmbeddingCache(sourceDb: DatabaseSync): void {
+  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
     if (!this.cache.enabled) {
       return;
     }
@@ -317,7 +317,7 @@ export abstract class MemoryManagerSyncOps {
         .prepare(
           `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
         )
-        .all() as Array<{
+        .iterate() as IterableIterator<{
         provider: string;
         model: string;
         provider_key: string;
@@ -326,9 +326,6 @@ export abstract class MemoryManagerSyncOps {
         dims: number | null;
         updated_at: number;
       }>;
-      if (!rows.length) {
-        return;
-      }
       const insert = this.db.prepare(
         `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -338,6 +335,9 @@ export abstract class MemoryManagerSyncOps {
            updated_at=excluded.updated_at`,
       );
       this.db.exec("BEGIN");
+      // Keep gateway health probes responsive while rebuilding large caches.
+      const SEED_EMBEDDING_YIELD_EVERY = 1000;
+      let rowCount = 0;
       for (const row of rows) {
         insert.run(
           row.provider,
@@ -348,6 +348,12 @@ export abstract class MemoryManagerSyncOps {
           row.dims,
           row.updated_at,
         );
+        rowCount += 1;
+        if (rowCount % SEED_EMBEDDING_YIELD_EVERY === 0) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
       }
       this.db.exec("COMMIT");
     } catch (err) {
@@ -1167,7 +1173,7 @@ export abstract class MemoryManagerSyncOps {
         targetPath: dbPath,
         tempPath: tempDbPath,
         build: async () => {
-          this.seedEmbeddingCache(originalDb);
+          await this.seedEmbeddingCache(originalDb);
           const shouldSyncMemory = this.sources.has("memory");
           const shouldSyncSessions = this.shouldSyncSessions(
             { reason: params.reason, force: params.force },
