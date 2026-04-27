@@ -20,8 +20,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
-  await import("./commands-compact.runtime.js");
+const {
+  compactEmbeddedPiSession,
+  incrementCompactionCount,
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePathOptions,
+} = await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
 function buildCompactParams(
@@ -151,7 +155,11 @@ describe("handleCompactCommand", () => {
         senderUsername: "alice_u",
         senderE164: "+15551234567",
         agentDir: "/tmp/openclaw-agent-compact",
+        currentTokenCount: 12_345,
       }),
+    );
+    expect(vi.mocked(resolveFreshSessionTotalTokens)).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-1" }),
     );
   });
 

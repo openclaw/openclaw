@@ -682,6 +682,56 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     ).toBe(true);
   });
 
+  it("does not skip tool-heavy compaction slices when observed tokens exceed threshold", () => {
+    const toolOnlySlice = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
+      ...Array.from({ length: 25 }, (_, index) => ({
+        role: "toolResult",
+        toolCallId: `t${index}`,
+        toolName: "exec",
+        content: [{ type: "text", text: `checked ${index}` }],
+      })),
+    ] as AgentMessage[];
+
+    expect(compactTesting.containsRealConversationMessages(toolOnlySlice)).toBe(false);
+    expect(
+      compactTesting.shouldSkipCompactionForNoRealConversation({
+        messages: toolOnlySlice,
+        observedTokenCount: 8_000,
+        contextWindowTokens: 10_000,
+        reserveTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("still skips tool-only compaction slices below threshold or without observed tokens", () => {
+    const toolOnlySlice = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+
+    expect(
+      compactTesting.shouldSkipCompactionForNoRealConversation({
+        messages: toolOnlySlice,
+        observedTokenCount: 7_999,
+        contextWindowTokens: 10_000,
+        reserveTokens: 2_000,
+      }),
+    ).toBe(true);
+    expect(
+      compactTesting.shouldSkipCompactionForNoRealConversation({
+        messages: toolOnlySlice,
+        contextWindowTokens: 10_000,
+        reserveTokens: 2_000,
+      }),
+    ).toBe(true);
+  });
+
   it("registers the Ollama api provider before compaction", async () => {
     const streamFn = vi.fn();
     registerProviderStreamForModelMock.mockReturnValue(streamFn);

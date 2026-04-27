@@ -116,6 +116,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
+  const currentTokenCount = runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -153,6 +154,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     },
     customInstructions,
     trigger: "manual",
+    currentTokenCount,
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
@@ -182,8 +184,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const totalTokens = tokensAfterCompaction ?? currentTokenCount;
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? targetSessionEntry.contextTokens ?? null,
