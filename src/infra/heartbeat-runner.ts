@@ -110,7 +110,6 @@ import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
-import { normalizeEventRoutingKey } from "../security/dm-policy-shared.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -244,16 +243,17 @@ function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
-function resolveHeartbeatSession(
-  cfg: OpenClawConfig,
+export function resolveHeartbeatSession(
+  cfg: any, 
   agentId?: string,
-  heartbeat?: HeartbeatConfig,
+  heartbeat?: any,
   forcedSessionKey?: string,
 ) {
   const sessionCfg = cfg?.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey = scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
+  
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
@@ -263,37 +263,31 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: false };
   }
 
-  const forced = forcedSessionKey?.trim();
-  if (forced) {
-    if (isSubagentSessionKey(forced)) {
-      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: true };
-    }
-    
-    const forcedCandidate = toAgentStoreSessionKey({ agentId: resolvedAgentId, requestKey: forced, mainKey: cfg.session?.mainKey });
-    const forcedCanonical = canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgentId, sessionKey: forcedCandidate });
+  const candidateKey = forcedSessionKey?.trim() || heartbeat?.session?.trim();
 
-    if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
-      const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
-      if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-        const agentsCfg = (cfg as any)?.agents;
-        const finalSessionKey = normalizeEventRoutingKey({
-          sessionKey: forcedCanonical,
-          dmScope: cfg.session?.scope,
-          allowFrom: agentsCfg?.defaults?.allowFrom ?? [], 
-          normalizeEntry: (entry) => entry.toLowerCase(),
-          resolveAgentMainSessionKey: () => resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
-        });
-        
-        return { sessionKey: finalSessionKey, storePath, store, entry: store[forcedCanonical], suppressOriginatingContext: false };
-      }
-    }
+  if (candidateKey) {
+    const isSub = isSubagentSessionKey(candidateKey);
+    return {
+      sessionKey: isSub ? mainSessionKey : candidateKey,
+      storePath,
+      store,
+      entry: isSub ? mainEntry : (store[candidateKey] || mainEntry),
+      suppressOriginatingContext: isSub,
+    };
   }
 
-  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: false };
+  return {
+    sessionKey: mainSessionKey,
+    storePath,
+    store,
+    entry: mainEntry,
+    suppressOriginatingContext: false,
+  };
 }
 
 function resolveIsolatedHeartbeatSessionKey(params: {
   sessionKey: string;
+
   configuredSessionKey: string;
   sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
 }) {
@@ -312,12 +306,6 @@ function resolveIsolatedHeartbeatSessionKey(params: {
     }
   }
 
-  // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
-  // The guard on configuredSessionKey ensures we do not strip a legitimate single
-  // `:heartbeat` suffix that is part of the user-configured base key itself
-  // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
-  // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
-  // must be treated as a new base rather than an existing isolated key.
   const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
   if (
     params.sessionKey.startsWith(params.configuredSessionKey) &&

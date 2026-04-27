@@ -319,7 +319,7 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
 
   const sKey = session.sessionKey;
   if (!sKey) {
-    session.exitNotified = true; 
+    session.exitNotified = true;
     return;
   }
 
@@ -335,15 +335,7 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
   session.exitNotified = true;
 
   const { contextKey, deliveryContext, scopeKey } = session;
-
-  let text = "";
-  if (signal) {
-    text = `Process exited with signal ${signal}`;
-  } else if (exitCode !== 0 && exitCode !== undefined) {
-    text = `Exec failed (exit code ${exitCode})`;
-  } else {
-    text = `Exec completed (exit code ${exitCode ?? 0})`;
-  }
+  let text = signal ? `Process exited with signal ${signal}` : `Exec ${status} (exit code ${exitCode ?? 0})`;
 
   const cfg = loadConfig() || {};
   if (!scopeKey) {
@@ -353,13 +345,11 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
 
   const agentId = normalizeAgentId(scopeKey);
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  
-  const agentsCfg = (cfg as any).agents;
-  const allowFrom = agentsCfg?.defaults?.allowFrom ?? [];
+  const allowFrom = (cfg as any)?.agents?.defaults?.allowFrom ?? [];
 
   const finalSessionKey = normalizeEventRoutingKey({
     sessionKey: sKey,
-    dmScope: (cfg as any).session?.scope,
+    dmScope: (cfg as any)?.session?.scope,
     allowFrom,
     normalizeEntry: (entry: string) => entry.toLowerCase(),
     resolveAgentMainSessionKey: () => mainSessionKey,
