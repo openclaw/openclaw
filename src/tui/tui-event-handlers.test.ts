@@ -555,6 +555,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
 
     noteLocalRunId("run-local-empty");
+    loadHistory.mockImplementation(() => {
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.activityStatus).toBe("idle");
+    });
+
     handleChatEvent({
       runId: "run-local-empty",
       sessionKey: state.currentSessionKey,
@@ -562,6 +567,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });

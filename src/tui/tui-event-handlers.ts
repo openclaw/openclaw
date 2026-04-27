@@ -205,6 +205,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     state.activeChatRunId = null;
+    state.activityStatus = "idle";
     setActivityStatus("idle");
     clearStreamingWatchdog();
     flushPendingHistoryRefreshIfIdle();
