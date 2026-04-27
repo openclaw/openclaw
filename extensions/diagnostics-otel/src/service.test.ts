@@ -305,6 +305,23 @@ describe("diagnostics-otel service", () => {
       queueDepth: 2,
     });
     emitDiagnosticEvent({
+      type: "message.received",
+      channel: "telegram",
+      source: "webhook",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "telegram",
+      source: "webhook",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "telegram",
+      source: "webhook",
+      durationMs: 25,
+      outcome: "completed",
+    });
+    emitDiagnosticEvent({
       type: "message.processed",
       channel: "telegram",
       outcome: "completed",
@@ -332,6 +349,36 @@ describe("diagnostics-otel service", () => {
       telemetryState.histograms.get("openclaw.webhook.duration_ms")?.record,
     ).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("openclaw.message.received")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "webhook",
+    });
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.started")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "webhook",
+    });
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.completed")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.source": "webhook",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.message.dispatch.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      25,
+      expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.source": "webhook",
+      }),
+    );
     expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
     expect(
       telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
@@ -342,6 +389,22 @@ describe("diagnostics-otel service", () => {
       telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record,
     ).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalled();
+
+    emitDiagnosticEvent({
+      type: "session.turn.created",
+      runId: "run-1",
+      agentId: "agent.default",
+      channel: "telegram",
+      trigger: "user",
+    });
+    expect(telemetryState.counters.get("openclaw.session.turn.created")?.add).toHaveBeenCalledWith(
+      1,
+      {
+        "openclaw.agent": "agent.default",
+        "openclaw.channel": "telegram",
+        "openclaw.trigger": "user",
+      },
+    );
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toContain("openclaw.webhook.processed");
