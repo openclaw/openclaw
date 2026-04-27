@@ -61,18 +61,24 @@ vi.mock("../../../plugins/provider-model-compat.js", () => ({
   resolveToolCallArgumentsEncoding: vi.fn(() => "default"),
 }));
 
-vi.mock("../pi-embedded-helpers.js", () => ({
+vi.mock("../../pi-embedded-helpers.js", () => ({
   downgradeOpenAIFunctionCallReasoningPairs: vi.fn((m) => m),
   downgradeOpenAIReasoningBlocks: vi.fn((m) => m),
 }));
 
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
+import {
+  downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
+} from "../../pi-embedded-helpers.js";
+import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import { applyAttemptStreamWrappers } from "./attempt-stream-wrappers.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
+import { sanitizeReplayToolCallIdsForStream } from "./attempt.tool-call-normalization.js";
 
 type WrapperSession = { agent: { streamFn: ReturnType<typeof makeStreamFn> } };
 
@@ -135,6 +141,14 @@ function buildParams(
       shouldReturnYieldAbortedResponse: overrides.shouldReturnYieldAbortedResponse ?? (() => false),
     },
   };
+}
+
+async function invokeWrappedStream(params: ReturnType<typeof buildParams>["params"]) {
+  await params.activeSession.agent.streamFn(
+    params.model,
+    { messages: [{ role: "assistant", content: "hello" }] } as never,
+    {} as never,
+  );
 }
 
 describe("applyAttemptStreamWrappers", () => {
@@ -227,50 +241,49 @@ describe("applyAttemptStreamWrappers", () => {
       expect(cacheTrace.wrapStreamFn).toHaveBeenCalledTimes(1);
     });
 
-    it("applies dropThinkingBlocks wrapper when transcriptPolicy.dropThinkingBlocks is true", () => {
-      const { params, session } = buildParams({
+    it("applies dropThinkingBlocks wrapper when transcriptPolicy.dropThinkingBlocks is true", async () => {
+      const { params } = buildParams({
         transcriptPolicy: { dropThinkingBlocks: true } as Partial<TranscriptPolicy>,
       });
-      const original = session.agent.streamFn;
       applyAttemptStreamWrappers(params);
-      // The wrapper replaces streamFn — identity changes.
-      expect(session.agent.streamFn).not.toBe(original);
+      await invokeWrappedStream(params);
+      expect(dropThinkingBlocks).toHaveBeenCalledTimes(1);
+      expect(dropReasoningFromHistory).not.toHaveBeenCalled();
     });
 
-    it("applies dropThinkingBlocks wrapper when only dropReasoningFromHistory is true", () => {
-      const { params, session } = buildParams({
+    it("applies dropThinkingBlocks wrapper when only dropReasoningFromHistory is true", async () => {
+      const { params } = buildParams({
         transcriptPolicy: { dropReasoningFromHistory: true } as Partial<TranscriptPolicy>,
       });
-      const original = session.agent.streamFn;
       applyAttemptStreamWrappers(params);
-      expect(session.agent.streamFn).not.toBe(original);
+      await invokeWrappedStream(params);
+      expect(dropReasoningFromHistory).toHaveBeenCalledTimes(1);
+      expect(dropThinkingBlocks).not.toHaveBeenCalled();
     });
 
-    it("skips dropThinkingBlocks wrapper when both flags are false", () => {
-      const { params, session } = buildParams();
-      const original = session.agent.streamFn;
+    it("skips dropThinkingBlocks wrapper when both flags are false", async () => {
+      const { params } = buildParams();
       applyAttemptStreamWrappers(params);
-      // Other always-on wrappers still wrap, so identity changes; assert the
-      // function is the same TYPE but not via dropThinkingBlocks specifically
-      // by checking that thinking-module functions weren't called.
-      expect(session.agent.streamFn).not.toBe(original);
+      await invokeWrappedStream(params);
+      expect(dropThinkingBlocks).not.toHaveBeenCalled();
+      expect(dropReasoningFromHistory).not.toHaveBeenCalled();
     });
 
-    it("applies sanitizeReplayToolCallIds wrapper only when all three conditions hold", () => {
+    it("applies sanitizeReplayToolCallIds wrapper only when all three conditions hold", async () => {
       // sanitizeToolCallIds=true, mode set, isOpenAIResponsesApi=false
-      const { params: paramsAllTrue, session: sessAllTrue } = buildParams({
+      const { params: paramsAllTrue } = buildParams({
         transcriptPolicy: {
           sanitizeToolCallIds: true,
           toolCallIdMode: "strict",
         } as Partial<TranscriptPolicy>,
         isOpenAIResponsesApi: false,
       });
-      const origAllTrue = sessAllTrue.agent.streamFn;
       applyAttemptStreamWrappers(paramsAllTrue);
-      expect(sessAllTrue.agent.streamFn).not.toBe(origAllTrue);
+      await invokeWrappedStream(paramsAllTrue);
+      expect(sanitizeReplayToolCallIdsForStream).toHaveBeenCalledTimes(1);
 
       // isOpenAIResponsesApi=true blocks the sanitizer
-      wrapperCalls.events = [];
+      vi.clearAllMocks();
       const { params: paramsOpenAI } = buildParams({
         transcriptPolicy: {
           sanitizeToolCallIds: true,
@@ -279,17 +292,18 @@ describe("applyAttemptStreamWrappers", () => {
         isOpenAIResponsesApi: true,
       });
       applyAttemptStreamWrappers(paramsOpenAI);
-      // the OpenAI-responses downgrade IS applied, but no event tracks it via
-      // mocks (it's an internal helper). The presence of the always-on
-      // wrappers in events asserts apply was invoked.
-      expect(wrapperCalls.events).toContain("sanitizeMalformedToolCalls");
+      await invokeWrappedStream(paramsOpenAI);
+      expect(sanitizeReplayToolCallIdsForStream).not.toHaveBeenCalled();
+      expect(downgradeOpenAIReasoningBlocks).toHaveBeenCalledTimes(1);
+      expect(downgradeOpenAIFunctionCallReasoningPairs).toHaveBeenCalledTimes(1);
     });
 
-    it("applies downgradeOpenAIResponses wrapper when isOpenAIResponsesApi is true", () => {
-      const { params, session } = buildParams({ isOpenAIResponsesApi: true });
-      const original = session.agent.streamFn;
+    it("applies downgradeOpenAIResponses wrapper when isOpenAIResponsesApi is true", async () => {
+      const { params } = buildParams({ isOpenAIResponsesApi: true });
       applyAttemptStreamWrappers(params);
-      expect(session.agent.streamFn).not.toBe(original);
+      await invokeWrappedStream(params);
+      expect(downgradeOpenAIReasoningBlocks).toHaveBeenCalledTimes(1);
+      expect(downgradeOpenAIFunctionCallReasoningPairs).toHaveBeenCalledTimes(1);
     });
 
     it("applies repair wrapper only when shouldRepairMalformedToolCallArguments returns true", () => {

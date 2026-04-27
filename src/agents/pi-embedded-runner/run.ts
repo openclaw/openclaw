@@ -711,6 +711,8 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttemptWithBackend(
             buildEmbeddedRunAttemptInput({
               runParams: params,
+              activeSessionId,
+              activeSessionFile,
               resolvedSessionKey,
               resolvedWorkspace,
               agentDir,

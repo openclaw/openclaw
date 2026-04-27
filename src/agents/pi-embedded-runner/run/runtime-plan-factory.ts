@@ -84,6 +84,8 @@ export function buildAttemptRuntimePlan(params: {
 
 export function buildEmbeddedRunAttemptInput(params: {
   runParams: RunEmbeddedPiAgentParams;
+  activeSessionId?: string;
+  activeSessionFile?: string;
   resolvedSessionKey?: string;
   resolvedWorkspace: string;
   agentDir: string;
@@ -130,7 +132,7 @@ export function buildEmbeddedRunAttemptInput(params: {
     fastMode: params.runParams.fastMode,
   });
   return {
-    sessionId: params.runParams.sessionId,
+    sessionId: params.activeSessionId ?? params.runParams.sessionId,
     sessionKey: params.resolvedSessionKey,
     sandboxSessionKey: params.runParams.sandboxSessionKey,
     trigger: params.runParams.trigger,
@@ -156,7 +158,7 @@ export function buildEmbeddedRunAttemptInput(params: {
     currentMessageId: params.runParams.currentMessageId,
     replyToMode: params.runParams.replyToMode,
     hasRepliedRef: params.runParams.hasRepliedRef,
-    sessionFile: params.runParams.sessionFile,
+    sessionFile: params.activeSessionFile ?? params.runParams.sessionFile,
     workspaceDir: params.resolvedWorkspace,
     agentDir: params.agentDir,
     config: params.runParams.config,
