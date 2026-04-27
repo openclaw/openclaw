@@ -117,7 +117,9 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
     });
-    const message = projectChatDisplayMessage(rawMessage, { emotionMode: sessionRow?.emotionMode });
+    const message = projectChatDisplayMessage(rawMessage, {
+      emotionMode: sessionRow?.emotionMode ?? "off",
+    });
     if (message) {
       params.broadcastToConnIds(
         "session.message",
