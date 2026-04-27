@@ -480,6 +480,10 @@ describe("host-hook fixture plugin contract", () => {
       register(api) {
         api.registerRuntimeLifecycle({ id: "cleanup", cleanup: () => undefined });
         api.registerRuntimeLifecycle({ id: "cleanup", cleanup: () => undefined });
+        api.registerRuntimeLifecycle({
+          id: "bad-cleanup",
+          cleanup: "not-a-function" as never,
+        });
         api.registerAgentEventSubscription({
           id: "events",
           streams: ["tool"],
@@ -495,6 +499,12 @@ describe("host-hook fixture plugin contract", () => {
           streams: ["tool"],
           handle: "not-a-function" as never,
         });
+        api.registerSessionSchedulerJob({
+          id: "bad-scheduler-cleanup",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: "not-a-function" as never,
+        });
       },
     });
 
@@ -508,11 +518,19 @@ describe("host-hook fixture plugin contract", () => {
         }),
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
+          message: "runtime lifecycle cleanup must be a function: bad-cleanup",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
           message: "agent event subscription already registered: events",
         }),
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
           message: "agent event subscription registration requires id and handle",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "session scheduler job cleanup must be a function: bad-scheduler-cleanup",
         }),
       ]),
     );

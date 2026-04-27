@@ -1676,6 +1676,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (lifecycle.cleanup !== undefined && typeof lifecycle.cleanup !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `runtime lifecycle cleanup must be a function: ${id}`,
+      });
+      return;
+    }
     (registry.runtimeLifecycles ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1747,6 +1756,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "session scheduler job registration requires unique id, sessionKey, and kind",
+      });
+      return undefined;
+    }
+    if (job.cleanup !== undefined && typeof job.cleanup !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session scheduler job cleanup must be a function: ${jobId}`,
       });
       return undefined;
     }
