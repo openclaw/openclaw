@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as bundledRuntimeDepsActivityTesting,
+  getActiveBundledRuntimeDepsInstallCount,
+  waitForBundledRuntimeDepsInstallIdle,
+} from "./bundled-runtime-deps-activity.js";
+import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
@@ -12,8 +17,10 @@ import {
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   isWritableDirectory,
+  repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
+  scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -41,9 +48,50 @@ function writeInstalledPackage(rootDir: string, packageName: string, version: st
   );
 }
 
+function writeBundledPluginPackage(params: {
+  packageRoot: string;
+  pluginId: string;
+  deps: Record<string, string>;
+  enabledByDefault?: boolean;
+  channels?: string[];
+}): string {
+  const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify({ dependencies: params.deps }),
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      enabledByDefault: params.enabledByDefault === true,
+      ...(params.channels ? { channels: params.channels } : {}),
+    }),
+  );
+  return pluginRoot;
+}
+
+function statfsFixture(params: {
+  bavail: number;
+  bsize?: number;
+  blocks?: number;
+}): ReturnType<typeof fs.statfsSync> {
+  return {
+    type: 0,
+    bsize: params.bsize ?? 1024,
+    blocks: params.blocks ?? 2_000_000,
+    bfree: params.bavail,
+    bavail: params.bavail,
+    files: 0,
+    ffree: 0,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
+  bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -273,6 +321,41 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         cwd: installRoot,
       }),
+    );
+  });
+
+  it("warns but still installs bundled runtime deps when disk space looks low", () => {
+    const installRoot = makeTempDir();
+    const warn = vi.fn();
+    vi.spyOn(fs, "statfsSync").mockReturnValue(
+      statfsFixture({
+        bavail: 256,
+        bsize: 1024 * 1024,
+      }),
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["acpx@0.5.3"],
+      env: {},
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Low disk space near"));
+    expect(spawnSyncMock).toHaveBeenCalled();
+    expect(fs.existsSync(path.join(installRoot, "node_modules", "acpx", "package.json"))).toBe(
+      true,
     );
   });
 
@@ -533,6 +616,203 @@ describe("installBundledRuntimeDeps", () => {
         env: {},
       }),
     ).toThrow("spawn npm ENOENT");
+  });
+});
+
+describe("scanBundledPluginRuntimeDeps config policy", () => {
+  type RuntimeDepsConfigCase = {
+    name: string;
+    config: Parameters<typeof scanBundledPluginRuntimeDeps>[0]["config"];
+    includeConfiguredChannels: boolean;
+    expectedDeps: string[];
+  };
+
+  function setupPolicyPackageRoot(): string {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "telegram",
+      deps: { "telegram-runtime": "2.0.0" },
+      channels: ["telegram"],
+    });
+    return packageRoot;
+  }
+
+  const cases: RuntimeDepsConfigCase[] = [
+    {
+      name: "includes default-enabled bundled plugins",
+      config: {},
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "keeps default-enabled bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "does not let explicit plugin entries bypass restrictive allowlists",
+      config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets deny override default-enabled bundled plugins",
+      config: { plugins: { deny: ["alpha"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets disabled entries override default-enabled bundled plugins",
+      config: { plugins: { entries: { alpha: { enabled: false } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets plugin deny override explicit bundled channel enablement",
+      config: {
+        plugins: { deny: ["telegram"] },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "lets the plugin master toggle suppress explicit bundled channel enablement",
+      config: {
+        plugins: { enabled: false },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets plugin entry disablement override explicit bundled channel enablement",
+      config: {
+        plugins: { entries: { telegram: { enabled: false } } },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["telegram-runtime@2.0.0"],
+    },
+    {
+      name: "keeps channel recovery behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { botToken: "123:abc" } },
+      },
+      includeConfiguredChannels: true,
+      expectedDeps: [],
+    },
+    {
+      name: "includes configured channels during recovery without restrictive allowlists",
+      config: { channels: { telegram: { botToken: "123:abc" } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0", "telegram-runtime@2.0.0"],
+    },
+    {
+      name: "lets explicit channel disable override recovery",
+      config: { channels: { telegram: { botToken: "123:abc", enabled: false } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+  ];
+
+  it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: setupPolicyPackageRoot(),
+      config,
+      includeConfiguredChannels,
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("honors deny and disabled entries when scanning an explicit effective plugin set", () => {
+    const packageRoot = setupPolicyPackageRoot();
+
+    const denied = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { deny: ["telegram"] },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+    const disabled = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { entries: { telegram: { enabled: false } } },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+    const allowed = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { entries: { telegram: { enabled: true } } },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+
+    expect(denied.deps).toEqual([]);
+    expect(disabled.deps).toEqual([]);
+    expect(allowed.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "telegram-runtime@2.0.0",
+    ]);
+  });
+
+  it("trusts preselected startup plugin ids without reapplying config policy", () => {
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: setupPolicyPackageRoot(),
+      selectedPluginIds: ["telegram"],
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { botToken: "123:abc" } },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "telegram-runtime@2.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reads each bundled plugin manifest once per runtime-deps scan", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+      channels: ["alpha"],
+    });
+    const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    scanBundledPluginRuntimeDeps({ packageRoot, config: {} });
+
+    expect(
+      readFileSyncSpy.mock.calls.filter((call) => path.resolve(String(call[0])) === manifestPath),
+    ).toHaveLength(1);
   });
 });
 
@@ -958,6 +1238,67 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
+  });
+
+  it("tracks active runtime-deps installs until the installer returns", async () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "browser");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { "browser-runtime": "1.0.0" } }),
+    );
+
+    let idleWait: Promise<{ drained: boolean; active: number }> | null = null;
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+        idleWait = waitForBundledRuntimeDepsInstallIdle();
+        writeInstalledPackage(params.installRoot, "browser-runtime", "1.0.0");
+      },
+      pluginId: "browser",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["browser-runtime@1.0.0"],
+      retainSpecs: ["browser-runtime@1.0.0"],
+    });
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
+    await expect(idleWait).resolves.toEqual({ drained: true, active: 0 });
+  });
+
+  it("keeps async repair locks and activity active until npm staging settles", async () => {
+    const installRoot = makeTempDir();
+    const lockDir = path.join(installRoot, ".openclaw-runtime-deps.lock");
+    let releaseInstall!: () => void;
+    const repair = repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["browser-runtime@1.0.0"],
+      installSpecs: ["browser-runtime@1.0.0"],
+      env: {},
+      installDeps: async (params) => {
+        expect(fs.existsSync(lockDir)).toBe(true);
+        expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+        await new Promise<void>((resolve) => {
+          releaseInstall = () => {
+            writeInstalledPackage(params.installRoot, "browser-runtime", "1.0.0");
+            resolve();
+          };
+        });
+      },
+    });
+
+    await Promise.resolve();
+    expect(fs.existsSync(lockDir)).toBe(true);
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+
+    releaseInstall();
+    await expect(repair).resolves.toEqual({ installSpecs: ["browser-runtime@1.0.0"] });
+    expect(fs.existsSync(lockDir)).toBe(false);
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
   });
 
   it("does not expire active runtime-deps install locks by age alone", () => {

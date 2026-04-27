@@ -97,6 +97,25 @@ Anthropic's current public docs:
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
     </Note>
 
+    ### Config example
+
+    Prefer the canonical Anthropic model ref plus a CLI runtime override:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    }
+    ```
+
+    Legacy `claude-cli/claude-opus-4-7` model refs still work for
+    compatibility, but new config should keep provider/model selection as
+    `anthropic/*` and put the execution backend in `agentRuntime.id`.
+
     <Tip>
     If you want the clearest billing path, use an Anthropic API key instead. OpenClaw also supports subscription-style options from [OpenAI Codex](/providers/openai), [Qwen Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI / GLM](/providers/glm).
     </Tip>

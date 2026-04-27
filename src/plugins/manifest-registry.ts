@@ -32,6 +32,7 @@ import {
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
+  type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
@@ -148,6 +149,7 @@ export type PluginManifestRecord = {
     label?: string;
     blurb?: string;
     preferOver?: readonly string[];
+    commands?: PluginManifestChannelCommandDefaults;
   };
 };
 
@@ -155,6 +157,12 @@ export type PluginManifestRegistry = {
   plugins: PluginManifestRecord[];
   diagnostics: PluginDiagnostic[];
 };
+
+export type BundledChannelConfigCollector = (params: {
+  pluginDir: string;
+  manifest: PluginManifest;
+  packageManifest?: OpenClawPackageManifest;
+}) => Record<string, PluginManifestChannelConfig> | undefined;
 
 const registryCache = pluginManifestRegistryCache as Map<
   string,
@@ -220,6 +228,29 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
+function normalizePackageChannelCommands(
+  commands: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return undefined;
+  }
+  const record = commands as Record<string, unknown>;
+  const nativeCommandsAutoEnabled =
+    typeof record.nativeCommandsAutoEnabled === "boolean"
+      ? record.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof record.nativeSkillsAutoEnabled === "boolean"
+      ? record.nativeSkillsAutoEnabled
+      : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
+}
+
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -243,6 +274,8 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+  const commands =
+    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
 
   const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, value] of Object.entries(params.channelConfigs)) {
@@ -255,6 +288,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
     ...(label ? { label } : {}),
     ...(description ? { description } : {}),
     ...(preferOver?.length ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
   };
   return merged;
 }
@@ -265,11 +299,23 @@ function buildRecord(params: {
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRecord {
+  const manifestChannelConfigs =
+    params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
+      ? params.bundledChannelConfigCollector({
+          pluginDir: params.candidate.packageDir ?? params.candidate.rootDir,
+          manifest: params.manifest,
+          packageManifest: params.candidate.packageManifest,
+        })
+      : params.manifest.channelConfigs;
   const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
-    channelConfigs: params.manifest.channelConfigs,
+    channelConfigs: manifestChannelConfigs,
     packageChannel: params.candidate.packageManifest?.channel,
   });
+  const packageChannelCommands = normalizePackageChannelCommands(
+    params.candidate.packageManifest?.channel?.commands,
+  );
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -335,6 +381,7 @@ function buildRecord(params: {
             ...(params.candidate.packageManifest.channel.preferOver
               ? { preferOver: params.candidate.packageManifest.channel.preferOver }
               : {}),
+            ...(packageChannelCommands ? { commands: packageChannelCommands } : {}),
           },
         }
       : {}),
@@ -510,6 +557,7 @@ export function loadPluginManifestRegistry(
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
+    bundledChannelConfigCollector?: BundledChannelConfigCollector;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
@@ -517,7 +565,10 @@ export function loadPluginManifestRegistry(
   const env = params.env ?? process.env;
   const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
   const cacheEnabled =
-    params.cache !== false && !params.installRecords && shouldUseManifestCache(env);
+    params.cache !== false &&
+    !params.installRecords &&
+    !params.bundledChannelConfigCollector &&
+    shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -627,6 +678,9 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           schemaCacheKey,
           configSchema,
+          ...(params.bundledChannelConfigCollector
+            ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+            : {}),
         });
 
     const existing = seenIds.get(manifest.id);

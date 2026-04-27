@@ -38,6 +38,34 @@ vi.mock("../infra/package-update-utils.js", () => ({
 
 vi.mock("../plugins/config-state.js", () => ({
   normalizePluginId: (id: string) => id,
+  resolveEffectiveEnableState: (params: {
+    config?: {
+      enabled?: boolean;
+      deny?: string[];
+      allow?: string[];
+      entries?: Record<string, { enabled?: boolean }>;
+    };
+    id: string;
+    enabledByDefault?: boolean;
+  }) => {
+    const entry = params.config?.entries?.[params.id];
+    const denied = params.config?.deny?.includes(params.id) === true;
+    const allowed =
+      !params.config?.allow?.length ||
+      params.config.allow.includes(params.id) ||
+      params.config.allow.includes("group:plugins");
+    const enabled =
+      params.config?.enabled !== false &&
+      !denied &&
+      allowed &&
+      entry?.enabled !== false &&
+      (entry?.enabled === true || params.enabledByDefault === true);
+    return {
+      enabled,
+      activated: enabled,
+      reason: enabled ? "enabled" : "disabled",
+    };
+  },
   normalizePluginsConfig: (
     config:
       | {
@@ -55,11 +83,26 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
-  getLoadedChannelPlugin: () => undefined,
-  listChannelPlugins: () => mockChannelPlugins,
-  normalizeChannelId: (id: unknown) => (typeof id === "string" && id ? id : null),
+vi.mock("../plugins/plugin-registry.js", () => ({
+  createPluginRegistryIdNormalizer: () => (id: string) => id,
+  loadPluginRegistrySnapshot: () => ({
+    diagnostics: [],
+    plugins: [{ pluginId: "discord" }],
+  }),
+}));
+
+vi.mock("../config/commands.js", () => ({
+  resolveNativeSkillsEnabled: ({
+    globalSetting,
+    providerSetting,
+  }: {
+    globalSetting?: boolean | "auto";
+    providerSetting?: boolean | "auto";
+  }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => mockChannelPlugins,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({

@@ -13,7 +13,6 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -583,6 +582,8 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        modelRun: true,
+        promptMode: "none",
         cleanupBundleMcpOnRunEnd: true,
       },
       {
@@ -619,6 +620,8 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      modelRun: true,
+      promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
@@ -679,6 +682,7 @@ async function buildModelProviders() {
 
 async function runModelAuthStatus() {
   const captured: string[] = [];
+  const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
   await modelsStatusCommand(
     { json: true },
     {
@@ -1518,6 +1522,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--provider <id>", "Provider id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
       });
     });

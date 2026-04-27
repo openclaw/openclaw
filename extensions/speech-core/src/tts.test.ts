@@ -30,6 +30,22 @@ const getSpeechProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
+  resolveChannelTtsVoiceDelivery: (channel: string | undefined) => {
+    const normalized = channel?.trim().toLowerCase();
+    if (normalized === "bluebubbles") {
+      return {
+        synthesisTarget: "audio-file",
+        audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+      };
+    }
+    if (normalized === "feishu" || normalized === "whatsapp") {
+      return { synthesisTarget: "voice-note", transcodesAudio: true };
+    }
+    if (normalized === "discord" || normalized === "matrix" || normalized === "telegram") {
+      return { synthesisTarget: "voice-note" };
+    }
+    return undefined;
+  },
 }));
 
 vi.mock("../api.js", async () => {
@@ -68,7 +84,14 @@ const {
   textToSpeechTelephony,
 } = await import("./tts.js");
 
-const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
+const nativeVoiceNoteChannels = [
+  "bluebubbles",
+  "discord",
+  "feishu",
+  "matrix",
+  "telegram",
+  "whatsapp",
+] as const;
 
 function createMockSpeechProvider(
   id = "mock",
@@ -145,7 +168,7 @@ describe("speech-core native voice-note routing", () => {
     installSpeechProviders([createMockSpeechProvider()]);
   });
 
-  it("keeps native voice-note channel support centralized", () => {
+  it("resolves voice delivery support from channel capabilities", () => {
     for (const channel of nativeVoiceNoteChannels) {
       expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
       expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
@@ -161,6 +184,33 @@ describe("speech-core native voice-note routing", () => {
       text: "This Discord reply should be delivered as a native voice note.",
       target: "voice-note",
       audioAsVoice: true,
+    });
+  });
+
+  it("keeps BlueBubbles synthesis on mp3 audio-file output but delivers it as a voice memo", async () => {
+    await expectTtsPayloadResult({
+      channel: "bluebubbles",
+      prefsName: "openclaw-speech-core-tts-bluebubbles-mp3-test",
+      text: "This BlueBubbles reply should be delivered as an iMessage voice memo.",
+      target: "audio-file",
+      audioAsVoice: true,
+      mediaExtension: "mp3",
+      providerResult: {
+        audioBuffer: Buffer.from("mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      },
+    });
+  });
+
+  it("does not mark unsupported BlueBubbles audio-file output as a voice memo", async () => {
+    await expectTtsPayloadResult({
+      channel: "bluebubbles",
+      prefsName: "openclaw-speech-core-tts-bluebubbles-ogg-test",
+      text: "This BlueBubbles reply should stay a regular audio attachment.",
+      target: "audio-file",
+      audioAsVoice: undefined,
     });
   });
 

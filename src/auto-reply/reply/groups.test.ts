@@ -124,7 +124,7 @@ describe("group runtime loading", () => {
     expect(rewritten).not.toContain("Be extremely selective");
   });
 
-  it("marks empty assistant replies silent only for always-on groups with silence allowed", async () => {
+  it("marks non-visible assistant replies silent for groups with silence allowed", async () => {
     const groups = await import("./groups.js");
 
     expect(
@@ -139,7 +139,7 @@ describe("group runtime loading", () => {
         defaultActivation: "mention",
         silentReplyPolicy: "allow",
       }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       groups.resolveGroupSilentReplyBehavior({
@@ -147,7 +147,7 @@ describe("group runtime loading", () => {
         defaultActivation: "always",
         silentReplyPolicy: "allow",
       }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       groups.resolveGroupSilentReplyBehavior({

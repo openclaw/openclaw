@@ -1247,6 +1247,7 @@
                   "tools/tokenjuice",
                   "tools/loop-detection",
                   "tools/trajectory",
+                  "tools/tts",
                   "tools/video-generation",
                   {
                     "group": "Web browser",
@@ -1450,6 +1451,7 @@
                       "gateway/doctor",
                       "logging",
                       "gateway/opentelemetry",
+                      "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
                       "gateway/troubleshooting"

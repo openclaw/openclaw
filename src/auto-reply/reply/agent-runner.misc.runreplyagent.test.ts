@@ -1667,7 +1667,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { embeddedHarness: { runtime: "claude-cli" } } } },
+        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus-4-7",

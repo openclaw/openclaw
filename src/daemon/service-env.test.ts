@@ -24,6 +24,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
     expect(result).toContain("/home/testuser/.nvm/current/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).toContain("/home/testuser/.fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
@@ -96,6 +99,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
     expect(result).toContain("/opt/nvm/current/bin");
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
@@ -302,6 +306,7 @@ describe("buildMinimalServicePath", () => {
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
+    expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
@@ -393,18 +398,41 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards TMPDIR from the host environment", () => {
+  it("passes through OPENCLAW_WRAPPER for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_WRAPPER: " /usr/local/bin/openclaw-doppler ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
+  });
+
+  it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
-  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS LaunchAgents", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -514,16 +542,26 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.no_proxy).toBe("localhost,127.0.0.1");
   });
 
-  it("forwards TMPDIR for node services", () => {
+  it("forwards TMPDIR for node services on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
   });
 
-  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });

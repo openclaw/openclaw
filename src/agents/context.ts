@@ -2,6 +2,7 @@
 // the agent reports a model id. This includes custom models.json entries.
 
 import path from "node:path";
+import { isHelpOrVersionInvocation } from "../cli/argv.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -133,6 +134,7 @@ function getCommandPathFromArgv(argv: string[]): string[] {
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "agent",
   "backup",
+  "browser",
   "completion",
   "config",
   "directory",
@@ -142,8 +144,10 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "models",
+  "pairing",
   "plugins",
   "secrets",
+  "sessions",
   "status",
   "update",
   "webhooks",
@@ -158,6 +162,9 @@ export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv)
   // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
   // plugin discovery and breaks dist/source singleton assumptions.
   if (!isLikelyOpenClawCliProcess(argv)) {
+    return false;
+  }
+  if (isHelpOrVersionInvocation(argv)) {
     return false;
   }
   const [primary] = getCommandPathFromArgv(argv);

@@ -5,7 +5,6 @@ import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.j
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
 import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
@@ -37,14 +36,6 @@ async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
     JSON.stringify({ name: "openclaw", version }),
     "utf-8",
   );
-}
-
-async function writeCompatSidecars(packageRoot: string) {
-  for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-    const absolutePath = path.join(packageRoot, relativePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-  }
 }
 
 async function writeBundledPluginPackageJson(
@@ -399,7 +390,6 @@ describe("update global helpers", () => {
   it("checks installed dist against the packaged inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-pkg-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
-      await writeCompatSidecars(packageRoot);
       for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
         const absolutePath = path.join(packageRoot, relativePath);
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -425,10 +415,36 @@ describe("update global helpers", () => {
     });
   });
 
+  it("ignores bundled plugin install stages during installed dist verification", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-plugin-stage-" }, async (packageRoot) => {
+      await writeGlobalPackageJson(packageRoot);
+      await fs.mkdir(path.join(packageRoot, "dist", "extensions", "brave"), { recursive: true });
+      await writePackageDistInventory(packageRoot);
+
+      for (const stageDir of [".openclaw-install-stage", ".openclaw-install-stage-retry"]) {
+        const stagedFile = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "brave",
+          stageDir,
+          "node_modules",
+          "typebox",
+          "build",
+          "compile",
+          "code.mjs",
+        );
+        await fs.mkdir(path.dirname(stagedFile), { recursive: true });
+        await fs.writeFile(stagedFile, "export {};\n", "utf8");
+      }
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+    });
+  });
+
   it("does not require private QA sidecars when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
-      await writeCompatSidecars(packageRoot);
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
     });
@@ -439,7 +455,6 @@ describe("update global helpers", () => {
       { prefix: "openclaw-update-global-missing-inventory-new-" },
       async (packageRoot) => {
         await writeGlobalPackageJson(packageRoot, "2026.4.15");
-        await writeCompatSidecars(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
           `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
@@ -483,7 +498,6 @@ describe("update global helpers", () => {
       { prefix: "openclaw-update-global-critical-sidecars-" },
       async (packageRoot) => {
         await writeGlobalPackageJson(packageRoot, "2026.4.15");
-        await writeCompatSidecars(packageRoot);
         await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
         await writePackageDistInventory(packageRoot);
 
@@ -499,7 +513,6 @@ describe("update global helpers", () => {
       { prefix: "openclaw-update-global-stale-private-qa-" },
       async (packageRoot) => {
         await writeGlobalPackageJson(packageRoot, "2026.4.15");
-        await writeCompatSidecars(packageRoot);
         await writeBundledPluginPackageJson(packageRoot, "qa-lab", "@openclaw/qa-lab");
         await writePackageDistInventory(packageRoot);
 

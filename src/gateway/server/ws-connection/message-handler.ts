@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
@@ -27,12 +27,17 @@ import {
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
 import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import {
   getPairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
@@ -50,8 +55,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayAuthResult } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -99,7 +103,6 @@ import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
 } from "../../server-constants.js";
-import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -321,7 +324,7 @@ export function attachGatewayWsMessageHandler(params: {
     authRateLimiter,
   } = browserSecurity;
 
-  socket.on("message", async (data) => {
+  const handleMessage = async (data: RawData) => {
     if (isClosed()) {
       return;
     }
@@ -844,6 +847,7 @@ export function attachGatewayWsMessageHandler(params: {
           role,
           trustedProxyAuthOk,
           resolvedAuth.mode,
+          authMethod,
         );
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
@@ -1413,6 +1417,17 @@ export function attachGatewayWsMessageHandler(params: {
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
             );
+          void loadVoiceWakeRoutingConfig()
+            .then((routing) => {
+              context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
+                config: routing,
+              });
+            })
+            .catch((err) =>
+              logGateway.warn(
+                `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
+            );
         }
 
         try {
@@ -1545,6 +1560,7 @@ export function attachGatewayWsMessageHandler(params: {
       };
 
       void (async () => {
+        const { handleGatewayRequest } = await import("../../server-methods.js");
         await handleGatewayRequest({
           req,
           respond,
@@ -1564,6 +1580,10 @@ export function attachGatewayWsMessageHandler(params: {
         close();
       }
     }
+  };
+
+  socket.on("message", (data) => {
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
   });
 }
 

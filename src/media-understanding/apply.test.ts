@@ -984,6 +984,51 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("fallback transcript");
   });
 
+  it("skips audio STT for attachments marked transcribed by channel preflight", async () => {
+    const dir = await createTempMediaDir();
+    const audioPath = path.join(dir, "voice.ogg");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    const transcribeAudio = vi.fn(async () => ({ text: "duplicate transcript" }));
+    const ctx: MsgContext = {
+      Body: "preflight transcript",
+      Transcript: "preflight transcript",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+      MediaTranscribedIndexes: [0],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio,
+        },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(false);
+    expect(ctx.Transcript).toBe("preflight transcript");
+    expect(result.decisions).toContainEqual(
+      expect.objectContaining({
+        capability: "audio",
+        outcome: "no-attachment",
+      }),
+    );
+  });
+
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const dir = await createTempMediaDir();
     const audioBytes = createSafeAudioFixtureBuffer(2048);

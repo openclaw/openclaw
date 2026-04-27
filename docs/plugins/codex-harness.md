@@ -26,7 +26,7 @@ The bundled `codex` plugin contributes several separate capabilities:
 
 | Capability                        | How you use it                                      | What it does                                                                  |
 | --------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Native embedded runtime           | `embeddedHarness.runtime: "codex"`                  | Runs OpenClaw embedded agent turns through Codex app-server.                  |
+| Native embedded runtime           | `agentRuntime.id: "codex"`                          | Runs OpenClaw embedded agent turns through Codex app-server.                  |
 | Native chat-control commands      | `/codex bind`, `/codex resume`, `/codex steer`, ... | Binds and controls Codex app-server threads from a messaging conversation.    |
 | Codex app-server provider/catalog | `codex` internals, surfaced through the harness     | Lets the runtime discover and validate app-server models.                     |
 | Codex media-understanding path    | `codex/*` image-model compatibility paths           | Runs bounded Codex app-server turns for supported image understanding models. |
@@ -69,7 +69,7 @@ and [Plugin guard behavior](/tools/plugin).
 
 The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
-`embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
+`agentRuntime.id: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
 want native app-server execution. Legacy `codex/*` model refs still auto-select
 the harness for compatibility, but runtime-backed legacy provider prefixes are
 not shown as normal model/provider choices.
@@ -87,14 +87,14 @@ Use this table before changing config:
 | ------------------------------------------- | -------------------------- | -------------------------------------- | --------------------------- | ------------------------------ |
 | OpenAI API through normal OpenClaw runner   | `openai/gpt-*`             | omitted or `runtime: "pi"`             | OpenAI provider             | `Runtime: OpenClaw Pi Default` |
 | Codex OAuth/subscription through PI         | `openai-codex/gpt-*`       | omitted or `runtime: "pi"`             | OpenAI Codex OAuth provider | `Runtime: OpenClaw Pi Default` |
-| Native Codex app-server embedded turns      | `openai/gpt-*`             | `embeddedHarness.runtime: "codex"`     | `codex` plugin              | `Runtime: OpenAI Codex`        |
-| Mixed providers with conservative auto mode | provider-specific refs     | `runtime: "auto", fallback: "pi"`      | Optional plugin runtimes    | Depends on selected runtime    |
+| Native Codex app-server embedded turns      | `openai/gpt-*`             | `agentRuntime.id: "codex"`             | `codex` plugin              | `Runtime: OpenAI Codex`        |
+| Mixed providers with conservative auto mode | provider-specific refs     | `agentRuntime.id: "auto"`              | Optional plugin runtimes    | Depends on selected runtime    |
 | Explicit Codex ACP adapter session          | ACP prompt/model dependent | `sessions_spawn` with `runtime: "acp"` | healthy `acpx` backend      | ACP task/session status        |
 
 The important split is provider versus runtime:
 
 - `openai-codex/*` answers "which provider/auth route should PI use?"
-- `embeddedHarness.runtime: "codex"` answers "which loop should execute this
+- `agentRuntime.id: "codex"` answers "which loop should execute this
   embedded turn?"
 - `/codex ...` answers "which native Codex conversation should this chat bind
   or control?"
@@ -106,11 +106,11 @@ OpenAI-family routes are prefix-specific. Use `openai-codex/*` when you want
 Codex OAuth through PI; use `openai/*` when you want direct OpenAI API access or
 when you are forcing the native Codex app-server harness:
 
-| Model ref                                             | Runtime path                                 | Use when                                                                  |
-| ----------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------- |
-| `openai/gpt-5.4`                                      | OpenAI provider through OpenClaw/PI plumbing | You want current direct OpenAI Platform API access with `OPENAI_API_KEY`. |
-| `openai-codex/gpt-5.5`                                | OpenAI Codex OAuth through OpenClaw/PI       | You want ChatGPT/Codex subscription auth with the default PI runner.      |
-| `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness                     | You want native Codex app-server execution for the embedded agent turn.   |
+| Model ref                                     | Runtime path                                 | Use when                                                                  |
+| --------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------- |
+| `openai/gpt-5.4`                              | OpenAI provider through OpenClaw/PI plumbing | You want current direct OpenAI Platform API access with `OPENAI_API_KEY`. |
+| `openai-codex/gpt-5.5`                        | OpenAI Codex OAuth through OpenClaw/PI       | You want ChatGPT/Codex subscription auth with the default PI runner.      |
+| `openai/gpt-5.5` + `agentRuntime.id: "codex"` | Codex app-server harness                     | You want native Codex app-server execution for the embedded agent turn.   |
 
 GPT-5.5 is currently subscription/OAuth-only in OpenClaw. Use
 `openai-codex/gpt-5.5` for PI OAuth, or `openai/gpt-5.5` with the Codex
@@ -123,7 +123,7 @@ refs and records the runtime policy separately, while fallback-only legacy refs
 are left unchanged because runtime is configured for the whole agent container.
 New PI Codex OAuth configs should use `openai-codex/gpt-*`; new native
 app-server harness configs should use `openai/gpt-*` plus
-`embeddedHarness.runtime: "codex"`.
+`agentRuntime.id: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
 `openai-codex/gpt-*` when image understanding should run through the OpenAI
@@ -152,14 +152,14 @@ means:
 
 - **No change is required** if you intended ChatGPT/Codex OAuth through PI.
 - Change the model to `openai/<model>` and set
-  `embeddedHarness.runtime: "codex"` if you intended native app-server
+  `agentRuntime.id: "codex"` if you intended native app-server
   execution.
 - Existing sessions still need `/new` or `/reset` after a runtime change,
   because session runtime pins are sticky.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for
-later turns in the same session id. Change `embeddedHarness` config or
+later turns in the same session id. Change `agentRuntime` config or
 `OPENCLAW_AGENT_RUNTIME` when you want future sessions to use another harness;
 use `/new` or `/reset` to start a fresh session before switching an existing
 conversation between PI and Codex. This avoids replaying one transcript through
@@ -205,8 +205,8 @@ Use `openai/gpt-5.5`, enable the bundled plugin, and force the `codex` harness:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      embeddedHarness: {
-        runtime: "codex",
+      agentRuntime: {
+        id: "codex",
       },
     },
   },
@@ -230,11 +230,11 @@ If your config uses `plugins.allow`, include `codex` there too:
 
 Legacy configs that set `agents.defaults.model` or an agent model to
 `codex/<model>` still auto-enable the bundled `codex` plugin. New configs should
-prefer `openai/<model>` plus the explicit `embeddedHarness` entry above.
+prefer `openai/<model>` plus the explicit `agentRuntime` entry above.
 
 ## Add Codex alongside other models
 
-Do not set `runtime: "codex"` globally if the same agent should freely switch
+Do not set `agentRuntime.id: "codex"` globally if the same agent should freely switch
 between Codex and non-Codex provider models. A forced runtime applies to every
 embedded turn for that agent or session. If you select an Anthropic model while
 that runtime is forced, OpenClaw still tries the Codex harness and fails closed
@@ -242,8 +242,8 @@ instead of silently routing that turn through PI.
 
 Use one of these shapes instead:
 
-- Put Codex on a dedicated agent with `embeddedHarness.runtime: "codex"`.
-- Keep the default agent on `runtime: "auto"` and PI fallback for normal mixed
+- Put Codex on a dedicated agent with `agentRuntime.id: "codex"`.
+- Keep the default agent on `agentRuntime.id: "auto"` and PI fallback for normal mixed
   provider usage.
 - Use legacy `codex/*` refs only for compatibility. New configs should prefer
   `openai/*` plus an explicit Codex runtime policy.
@@ -262,8 +262,8 @@ adds a separate Codex agent:
   },
   agents: {
     defaults: {
-      embeddedHarness: {
-        runtime: "auto",
+      agentRuntime: {
+        id: "auto",
         fallback: "pi",
       },
     },
@@ -277,8 +277,8 @@ adds a separate Codex agent:
         id: "codex",
         name: "Codex",
         model: "openai/gpt-5.5",
-        embeddedHarness: {
-          runtime: "codex",
+        agentRuntime: {
+          id: "codex",
         },
       },
     ],
@@ -302,7 +302,7 @@ Agents should route user requests by intent, not by the word "Codex" alone:
 | "Bind this chat to Codex"                                | `/codex bind`                                    |
 | "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                             |
 | "Show Codex threads"                                     | `/codex threads`                                 |
-| "Use Codex as the runtime for this agent"                | config change to `embeddedHarness.runtime`       |
+| "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`               |
 | "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                      |
 | "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`    |
 | "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents |
@@ -323,8 +323,8 @@ uses Codex. Explicit plugin runtimes default to no PI fallback, so
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      embeddedHarness: {
-        runtime: "codex",
+      agentRuntime: {
+        id: "codex",
         fallback: "none",
       },
     },
@@ -352,8 +352,8 @@ auto-selection:
 {
   agents: {
     defaults: {
-      embeddedHarness: {
-        runtime: "auto",
+      agentRuntime: {
+        id: "auto",
         fallback: "pi",
       },
     },
@@ -367,8 +367,8 @@ auto-selection:
         id: "codex",
         name: "Codex",
         model: "openai/gpt-5.5",
-        embeddedHarness: {
-          runtime: "codex",
+        agentRuntime: {
+          id: "codex",
           fallback: "none",
         },
       },
@@ -542,6 +542,72 @@ Environment overrides remain available for local testing:
 preferred for repeatable deployments because it keeps the plugin behavior in the
 same reviewed file as the rest of the Codex harness setup.
 
+## Computer Use
+
+Computer Use is a Codex-native MCP plugin. OpenClaw does not vendor the desktop
+control app or execute desktop actions itself; it enables Codex app-server
+plugins, installs the configured Codex marketplace plugin when requested, checks
+that the `computer-use` MCP server is available, and then lets Codex handle the
+native MCP tool calls during Codex-mode turns.
+
+Set `plugins.entries.codex.config.computerUse` when you want Codex-mode turns to
+require Computer Use:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          computerUse: {
+            autoInstall: true,
+          },
+        },
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: "openai/gpt-5.5",
+      embeddedHarness: {
+        runtime: "codex",
+      },
+    },
+  },
+}
+```
+
+With no marketplace fields, OpenClaw asks Codex app-server to use its discovered
+marketplaces. On a fresh Codex home, app-server seeds the official curated
+marketplace and OpenClaw follows the same loading shape as Codex: it polls
+`plugin/list` during install before treating Computer Use as unavailable. The
+default discovery wait is 60 seconds and can be tuned with
+`marketplaceDiscoveryTimeoutMs`. If multiple known Codex marketplaces contain
+Computer Use, OpenClaw uses the Codex marketplace preference order before
+failing closed for unknown ambiguous matches.
+
+Use `marketplaceSource` for a non-default Codex marketplace source that
+app-server can add, or `marketplacePath` for a local marketplace file that
+already exists on the machine. If the marketplace is already registered with
+Codex app-server, use `marketplaceName` instead. The defaults are
+`pluginName: "computer-use"` and `mcpServerName: "computer-use"`.
+For safety, turn-start auto-install only uses marketplaces app-server has
+already discovered. Use `/codex computer-use install` for explicit installs from
+a configured `marketplaceSource` or `marketplacePath`.
+
+The same setup can be checked or installed from the command surface:
+
+- `/codex computer-use status`
+- `/codex computer-use install`
+- `/codex computer-use install --source <marketplace-source>`
+- `/codex computer-use install --marketplace-path <path>`
+
+Computer Use is macOS-specific and may require local OS permissions before the
+Codex MCP server can control apps. If `computerUse.enabled` is true and the MCP
+server is unavailable, Codex-mode turns fail before the thread starts instead of
+silently running without the native Computer Use tools.
+
 ## Common recipes
 
 Local Codex with default stdio transport:
@@ -565,8 +631,8 @@ Codex-only harness validation:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      embeddedHarness: {
-        runtime: "codex",
+      agentRuntime: {
+        id: "codex",
       },
     },
   },
@@ -644,6 +710,8 @@ Common forms:
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an existing Codex thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
 - `/codex review` starts Codex native review for the attached thread.
+- `/codex computer-use status` checks the configured Computer Use plugin and MCP server.
+- `/codex computer-use install` installs the configured Computer Use plugin and reloads MCP servers.
 - `/codex account` shows account and rate-limit status.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
@@ -772,15 +840,15 @@ understanding continue to use the matching provider/model settings such as
 
 **Codex does not appear as a normal `/model` provider:** that is expected for
 new configs. Select an `openai/gpt-*` model with
-`embeddedHarness.runtime: "codex"` (or a legacy `codex/*` ref), enable
+`agentRuntime.id: "codex"` (or a legacy `codex/*` ref), enable
 `plugins.entries.codex.enabled`, and check whether `plugins.allow` excludes
 `codex`.
 
-**OpenClaw uses PI instead of Codex:** `runtime: "auto"` can still use PI as the
+**OpenClaw uses PI instead of Codex:** `agentRuntime.id: "auto"` can still use PI as the
 compatibility backend when no Codex harness claims the run. Set
-`embeddedHarness.runtime: "codex"` to force Codex selection while testing. A
+`agentRuntime.id: "codex"` to force Codex selection while testing. A
 forced Codex runtime now fails instead of falling back to PI unless you
-explicitly set `embeddedHarness.fallback: "pi"`. Once Codex app-server is
+explicitly set `agentRuntime.fallback: "pi"`. Once Codex app-server is
 selected, its failures surface directly without extra fallback config.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
@@ -795,9 +863,9 @@ or disable discovery.
 and that the remote app-server speaks the same Codex app-server protocol version.
 
 **A non-Codex model uses PI:** that is expected unless you forced
-`embeddedHarness.runtime: "codex"` for that agent or selected a legacy
+`agentRuntime.id: "codex"` for that agent or selected a legacy
 `codex/*` ref. Plain `openai/gpt-*` and other provider refs stay on their normal
-provider path in `auto` mode. If you force `runtime: "codex"`, every embedded
+provider path in `auto` mode. If you force `agentRuntime.id: "codex"`, every embedded
 turn for that agent must be a Codex-supported OpenAI model.
 
 ## Related

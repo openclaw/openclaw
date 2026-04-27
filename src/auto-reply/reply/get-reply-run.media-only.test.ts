@@ -90,8 +90,7 @@ vi.mock("./groups.js", () => ({
       return {
         activation,
         canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent:
-          activation === "always" && params.silentReplyPolicy === "allow",
+        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
       };
     },
   ),
@@ -284,7 +283,7 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it("propagates empty-assistant silence only for always-on group runs", async () => {
+  it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 
     let call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
@@ -297,7 +296,7 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
-    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
   it("does not propagate empty-assistant silence for direct runs", async () => {
@@ -986,6 +985,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
+  });
+
+  it("keeps heartbeat prompts out of visible transcript prompt", async () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: heartbeatPrompt,
+          RawBody: heartbeatPrompt,
+          CommandBody: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: heartbeatPrompt,
+          BodyStripped: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain(heartbeatPrompt);
+    expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

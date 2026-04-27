@@ -65,9 +65,14 @@ Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
 plugin config, legacy channel config, or a default-enabled manifest, startup
 repairs only that plugin's declared runtime dependencies before importing it.
+Persisted channel auth state alone does not activate a bundled channel for
+Gateway startup runtime-dependency repair.
 Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
 `plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
 prevent automatic bundled runtime-dependency repair for that plugin/channel.
+A non-empty `plugins.allow` also bounds default-enabled bundled runtime-dependency
+repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
+still repair that channel's plugin dependencies.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
 
@@ -84,6 +89,28 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 
 If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
 and the [Plugin SDK Overview](/plugins/sdk-overview).
+
+## Package Entrypoints
+
+Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
+Each entry must stay inside the package directory and resolve to a readable
+runtime file, or to a TypeScript source file with an inferred built JavaScript
+peer such as `src/index.ts` to `dist/index.js`.
+
+Use `openclaw.runtimeExtensions` when published runtime files do not live at the
+same paths as the source entries. When present, `runtimeExtensions` must contain
+exactly one entry for every `extensions` entry. Mismatched lists fail install and
+plugin discovery rather than silently falling back to source paths.
+
+```json
+{
+  "name": "@acme/openclaw-plugin",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  }
+}
+```
 
 ## Official plugins
 
@@ -197,6 +224,16 @@ OpenClaw scans for plugins in this order (first match wins):
   </Step>
 </Steps>
 
+Packaged installs and Docker images normally resolve bundled plugins from the
+compiled `dist/extensions` tree. If a bundled plugin source directory is
+bind-mounted over the matching packaged source path, for example
+`/app/extensions/synology-chat`, OpenClaw treats that mounted source directory
+as a bundled source overlay and discovers it before the packaged
+`/app/dist/extensions/synology-chat` bundle. This keeps maintainer container
+loops working without switching every bundled plugin back to TypeScript source.
+Set `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS=1` to force packaged dist bundles
+even when source overlay mounts are present.
+
 ### Enablement rules
 
 - `plugins.enabled: false` disables all plugins
@@ -210,7 +247,7 @@ OpenClaw scans for plugins in this order (first match wins):
   runtime
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
   `codex/*` model refs
 
 ## Troubleshooting runtime hooks
@@ -335,8 +372,9 @@ plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
 
 When `plugins.allow` is already set, `openclaw plugins install` adds the
-installed plugin id to that allowlist before enabling it, so installs are
-immediately loadable after restart.
+installed plugin id to that allowlist before enabling it. If the same plugin id
+is present in `plugins.deny`, install removes that stale deny entry so the
+explicit install is immediately loadable after restart.
 
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,

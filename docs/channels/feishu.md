@@ -16,7 +16,9 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.25 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+<Note>
+Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
+</Note>
 
 <Steps>
   <Step title="Run the channel setup wizard">
@@ -169,7 +171,9 @@ openclaw pairing list feishu
 | `/reset`  | Reset the current session   |
 | `/model`  | Show or switch the AI model |
 
-> Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
+<Note>
+Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
+</Note>
 
 ---
 
@@ -213,6 +217,11 @@ openclaw pairing list feishu
           appId: "cli_xxx",
           appSecret: "xxx",
           name: "Primary bot",
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
         },
         backup: {
           appId: "cli_yyy",
@@ -227,6 +236,10 @@ openclaw pairing list feishu
 ```
 
 `defaultAccount` controls which account is used when outbound APIs do not specify an `accountId`.
+`accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over
+global TTS config, so multi-bot Feishu setups can keep shared provider
+credentials globally while overriding only voice, model, persona, or auto mode
+per account.
 
 ### Message limits
 
@@ -386,6 +399,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`             | App ID                                     | —                |
 | `channels.feishu.accounts.<id>.appSecret`         | App Secret                                 | —                |
 | `channels.feishu.accounts.<id>.domain`            | Per-account domain override                | `feishu`         |
+| `channels.feishu.accounts.<id>.tts`               | Per-account TTS override                   | `messages.tts`   |
 | `channels.feishu.dmPolicy`                        | DM policy                                  | `allowlist`      |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                | [BotOwnerId]     |
 | `channels.feishu.groupPolicy`                     | Group policy                               | `allowlist`      |
