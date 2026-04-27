@@ -107,6 +107,40 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 
+  it("does not cache pre-migration or pre-normalization disk JSON", () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "session:1": {
+          sessionId: "id-1",
+          updatedAt: Date.now(),
+          provider: "telegram",
+          room: "room-1",
+          modelProvider: " openai ",
+          model: " gpt-5.4 ",
+        },
+      }),
+    );
+
+    const loaded1 = loadSessionStore(storePath);
+    const entry1 = loaded1["session:1"] as SessionEntry & { provider?: string; room?: string };
+    expect(entry1.channel).toBe("telegram");
+    expect(entry1.groupChannel).toBe("room-1");
+    expect(entry1.provider).toBeUndefined();
+    expect(entry1.room).toBeUndefined();
+    expect(entry1.modelProvider).toBe("openai");
+    expect(entry1.model).toBe("gpt-5.4");
+
+    const loaded2 = loadSessionStore(storePath);
+    const entry2 = loaded2["session:1"] as SessionEntry & { provider?: string; room?: string };
+    expect(entry2.channel).toBe("telegram");
+    expect(entry2.groupChannel).toBe("room-1");
+    expect(entry2.provider).toBeUndefined();
+    expect(entry2.room).toBeUndefined();
+    expect(entry2.modelProvider).toBe("openai");
+    expect(entry2.model).toBe("gpt-5.4");
+  });
+
   it("isolates cached session stores without structuredClone", async () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const testStore = createSingleSessionStore(
