@@ -31,15 +31,15 @@
       "kind": "channel",
       "openclaw": {
         "channel": {
-          "id": "yuanbao",
+          "id": "openclaw-plugin-yuanbao",
           "label": "Yuanbao",
-          "selectionLabel": "Yuanbao (Tencent Yuanbao)",
+          "selectionLabel": "Yuanbao (元宝)",
           "detailLabel": "Yuanbao",
           "docsPath": "/plugins/community#yuanbao",
           "docsLabel": "yuanbao",
           "blurb": "Tencent Yuanbao AI assistant conversation channel.",
-          "aliases": ["yb", "tencent-yuanbao"],
-          "order": 78
+          "aliases": ["yb", "tencent-yuanbao", "元宝"],
+          "order": 85
         },
         "install": {
           "npmSpec": "openclaw-plugin-yuanbao",
