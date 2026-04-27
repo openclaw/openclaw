@@ -61,6 +61,7 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
@@ -139,6 +140,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private embeddingProbeCache: { result: MemoryEmbeddingProbeResult; expireAt: number } | null =
+    null;
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -814,21 +817,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.ensureVectorReady();
   }
 
+  private cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
+    this.embeddingProbeCache = { result, expireAt: Date.now() + EMBEDDING_PROBE_CACHE_TTL_MS };
+    return result;
+  }
+
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    const cached = this.embeddingProbeCache;
+    if (cached && Date.now() < cached.expireAt) {
+      return cached.result;
+    }
     await this.ensureProviderInitialized();
     // FTS-only mode: embeddings not available but search still works
     if (!this.provider) {
-      return {
+      return this.cacheProbeResult({
         ok: false,
         error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      };
+      });
     }
     try {
       await this.embedBatchWithRetry(["ping"]);
-      return { ok: true };
+      return this.cacheProbeResult({ ok: true });
     } catch (err) {
       const message = formatErrorMessage(err);
-      return { ok: false, error: message };
+      return this.cacheProbeResult({ ok: false, error: message });
     }
   }
 
