@@ -161,6 +161,9 @@ export type CronStatusSummary = {
   storePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
+  /** Gateway-resolved IANA timezone — used by clients (e.g. Control UI cron timeline)
+   *  as the fallback for tz-less cron jobs so markers match runtime evaluation. */
+  gatewayTimezone: string;
 };
 
 export type CronRunResult =
