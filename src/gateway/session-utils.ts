@@ -1529,7 +1529,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1582,24 +1582,11 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    });
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    entries = entries.filter(([key, entry]) => {
+      const fields = [entry?.displayName, entry?.label, entry?.subject, entry?.sessionId, key];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1608,13 +1595,28 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
+
+  entries = entries.toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    entries = entries.slice(0, limit);
   }
+
+  const sessions = entries.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,

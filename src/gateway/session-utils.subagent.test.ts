@@ -32,6 +32,56 @@ describe("listSessionsFromStore subagent metadata", () => {
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
 
+  test("applies sessions.list limit before transcript-backed row enrichment", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-limit-"));
+    const storePath = path.join(dir, "sessions.json");
+    const store: Record<string, SessionEntry> = {};
+    for (let i = 0; i < 5; i += 1) {
+      const sessionId = i === 4 ? "old-session" : `new-session-${i}`;
+      store[`agent:main:${sessionId}`] = {
+        sessionId,
+        sessionFile: `${sessionId}.jsonl`,
+        updatedAt: 10_000 - i,
+      } as SessionEntry;
+      fs.writeFileSync(
+        path.join(dir, `${sessionId}.jsonl`),
+        JSON.stringify({ message: { role: "user", content: `hello ${sessionId}` } }) + "\n",
+        "utf8",
+      );
+    }
+
+    const originalExistsSync = fs.existsSync;
+    let oldTranscriptLookups = 0;
+    Object.defineProperty(fs, "existsSync", {
+      configurable: true,
+      value: (filePath: fs.PathLike) => {
+        if (String(filePath).includes("old-session")) {
+          oldTranscriptLookups += 1;
+        }
+        return originalExistsSync(filePath);
+      },
+    });
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store,
+        opts: { limit: 2, includeLastMessage: true },
+      });
+      expect(result.sessions.map((session) => session.sessionId)).toEqual([
+        "new-session-0",
+        "new-session-1",
+      ]);
+      expect(oldTranscriptLookups).toBe(0);
+    } finally {
+      Object.defineProperty(fs, "existsSync", {
+        configurable: true,
+        value: originalExistsSync,
+      });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("includes subagent status timing and direct child session keys", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
