@@ -120,6 +120,26 @@ describe("plugin contract registry", () => {
     }
   });
 
+  it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
+    const registry = loadPluginManifestRegistry({});
+    const plugin = registry.plugins.find(
+      (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
+    );
+
+    expect(plugin?.providerAuthChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "github-copilot",
+          method: "device",
+          choiceId: "github-copilot",
+          optionKey: "githubCopilotToken",
+          cliFlag: "--github-copilot-token",
+          cliOption: "--github-copilot-token <token>",
+        }),
+      ]),
+    );
+  });
+
   it("covers every bundled speech plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: pluginRegistrationContractRegistry
