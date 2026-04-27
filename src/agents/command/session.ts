@@ -21,7 +21,12 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  toAgentRequestSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
@@ -145,14 +150,15 @@ export function resolveSessionKeyForRequest(opts: {
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
-  const explicitSessionKey =
-    opts.sessionKey?.trim() ||
-    (!requestedSessionId
+  const requestTo = opts.to?.trim();
+  const explicitSessionKey = opts.sessionKey?.trim() || undefined;
+  const explicitAgentSessionKey =
+    !explicitSessionKey && !requestedSessionId && !requestTo
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
           agentId: requestedAgentId,
         })
-      : undefined);
+      : undefined;
   const storeAgentId = explicitSessionKey
     ? resolveAgentIdFromSessionKey(explicitSessionKey)
     : (requestedAgentId ?? normalizeAgentId(undefined));
@@ -161,9 +167,21 @@ export function resolveSessionKeyForRequest(opts: {
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const ctx: MsgContext | undefined = requestTo ? { From: requestTo } : undefined;
+  const agentScopedRequestKey =
+    requestedAgentId && requestTo ? (toAgentRequestSessionKey(requestTo) ?? requestTo) : requestTo;
+  const derivedToSessionKey =
+    !explicitSessionKey && requestTo
+      ? requestedAgentId
+        ? toAgentStoreSessionKey({
+            agentId: requestedAgentId,
+            requestKey: agentScopedRequestKey,
+            mainKey,
+          })
+        : resolveSessionKey(scope, ctx as MsgContext, mainKey)
+      : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+    explicitSessionKey ?? derivedToSessionKey ?? explicitAgentSessionKey;
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
   // derived. When duplicates exist across agent stores, pick the same deterministic best match used
