@@ -4,7 +4,9 @@ import { callGatewayTool } from "../agents/tools/gateway.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { registerPluginSessionSchedulerJob } from "./host-hook-runtime.js";
 import {
@@ -20,6 +22,7 @@ import {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const log = createSubsystemLogger("plugins/host-workflow");
 
 function normalizePluginEventData(params: {
   pluginId: string;
@@ -93,8 +96,11 @@ async function validateAttachmentFiles(
 }
 
 export async function sendPluginSessionAttachment(
-  params: PluginSessionAttachmentParams,
+  params: PluginSessionAttachmentParams & { origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {
+  if (params.origin !== "bundled") {
+    return { ok: false, error: "session attachments are restricted to bundled plugins" };
+  }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return { ok: false, error: "sessionKey is required" };
@@ -114,17 +120,22 @@ export async function sendPluginSessionAttachment(
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
-  const result = await sendMessage({
-    to: deliveryContext.to,
-    content: params.text ?? "",
-    channel: deliveryContext.channel,
-    accountId: deliveryContext.accountId,
-    threadId: params.threadId ?? deliveryContext.threadId ?? threadId,
-    requesterSessionKey: sessionKey,
-    mediaUrls: validated,
-    forceDocument: params.forceDocument,
-    bestEffort: true,
-  });
+  let result: Awaited<ReturnType<typeof sendMessage>>;
+  try {
+    result = await sendMessage({
+      to: deliveryContext.to,
+      content: params.text ?? "",
+      channel: deliveryContext.channel,
+      accountId: deliveryContext.accountId,
+      threadId: params.threadId ?? deliveryContext.threadId ?? threadId,
+      requesterSessionKey: sessionKey,
+      mediaUrls: validated,
+      forceDocument: params.forceDocument,
+      bestEffort: true,
+    });
+  } catch (error) {
+    return { ok: false, error: `attachment delivery failed: ${formatErrorMessage(error)}` };
+  }
   return {
     ok: true,
     channel: result.channel,
@@ -142,9 +153,15 @@ function resolveSchedule(params: PluginSessionTurnScheduleParams) {
     };
   }
   if ("delayMs" in params) {
+    if (!Number.isFinite(params.delayMs)) {
+      return undefined;
+    }
     return { kind: "at", at: new Date(Date.now() + Math.max(1, params.delayMs)).toISOString() };
   }
   const at = params.at instanceof Date ? params.at : new Date(params.at);
+  if (!Number.isFinite(at.getTime())) {
+    return undefined;
+  }
   return { kind: "at", at: at.toISOString() };
 }
 
@@ -164,8 +181,12 @@ function extractCronJobId(value: unknown): string | undefined {
 export async function schedulePluginSessionTurn(params: {
   pluginId: string;
   pluginName?: string;
+  origin?: PluginOrigin;
   schedule: PluginSessionTurnScheduleParams;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
+  if (params.origin !== "bundled") {
+    return undefined;
+  }
   const sessionKey = normalizeOptionalString(params.schedule.sessionKey);
   const message = normalizeOptionalString(params.schedule.message);
   if (!sessionKey || !message) {
@@ -175,30 +196,39 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   const schedule = resolveSchedule(params.schedule);
+  if (!schedule) {
+    return undefined;
+  }
   const name =
     normalizeOptionalString(params.schedule.name) ??
     `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
-  const result = await callGatewayTool(
-    "cron.add",
-    {},
-    {
-      name,
-      schedule,
-      sessionTarget: `session:${sessionKey}`,
-      payload: {
-        kind: "agentTurn",
-        message,
-        pluginId: params.pluginId,
-        ...(params.schedule.payload !== undefined
-          ? { pluginPayload: params.schedule.payload }
-          : {}),
+  let result: unknown;
+  try {
+    result = await callGatewayTool(
+      "cron.add",
+      {},
+      {
+        name,
+        schedule,
+        sessionTarget: `session:${sessionKey}`,
+        payload: {
+          kind: "agentTurn",
+          message,
+          pluginId: params.pluginId,
+          ...(params.schedule.payload !== undefined
+            ? { pluginPayload: params.schedule.payload }
+            : {}),
+        },
+        ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
+        deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
+        delivery: { mode: params.schedule.deliveryMode ?? "default" },
       },
-      ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
-      deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
-      delivery: { mode: params.schedule.deliveryMode ?? "default" },
-    },
-    { scopes: [ADMIN_SCOPE] },
-  );
+      { scopes: [ADMIN_SCOPE] },
+    );
+  } catch (error) {
+    log.warn(`plugin session turn scheduling failed: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
   const jobId = extractCronJobId(result);
   if (!jobId) {
     return undefined;
@@ -211,7 +241,11 @@ export async function schedulePluginSessionTurn(params: {
       sessionKey,
       kind: "session-turn",
       cleanup: async () => {
-        await callGatewayTool("cron.remove", {}, { id: jobId }, { scopes: [ADMIN_SCOPE] });
+        try {
+          await callGatewayTool("cron.remove", {}, { id: jobId }, { scopes: [ADMIN_SCOPE] });
+        } catch (error) {
+          log.warn(`plugin session turn cleanup failed: ${formatErrorMessage(error)}`);
+        }
       },
     },
   });

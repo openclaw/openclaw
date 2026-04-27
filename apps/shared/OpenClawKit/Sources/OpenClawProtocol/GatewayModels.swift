@@ -4392,6 +4392,9 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     public let label: String
     public let description: String?
     public let placement: String?
+    public let renderer: String?
+    public let statenamespace: String?
+    public let actionids: [String]?
     public let schema: AnyCodable?
     public let requiredscopes: [String]?
 
@@ -4403,6 +4406,9 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         label: String,
         description: String?,
         placement: String?,
+        renderer: String?,
+        statenamespace: String?,
+        actionids: [String]?,
         schema: AnyCodable?,
         requiredscopes: [String]?)
     {
@@ -4413,6 +4419,9 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         self.label = label
         self.description = description
         self.placement = placement
+        self.renderer = renderer
+        self.statenamespace = statenamespace
+        self.actionids = actionids
         self.schema = schema
         self.requiredscopes = requiredscopes
     }
@@ -4425,6 +4434,9 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case label
         case description
         case placement
+        case renderer
+        case statenamespace = "stateNamespace"
+        case actionids = "actionIds"
         case schema
         case requiredscopes = "requiredScopes"
     }
@@ -4447,6 +4459,58 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case descriptors
+    }
+}
+
+public struct PluginsSessionActionParams: Codable, Sendable {
+    public let pluginid: String
+    public let actionid: String
+    public let sessionkey: String?
+    public let payload: AnyCodable?
+
+    public init(
+        pluginid: String,
+        actionid: String,
+        sessionkey: String?,
+        payload: AnyCodable?)
+    {
+        self.pluginid = pluginid
+        self.actionid = actionid
+        self.sessionkey = sessionkey
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case actionid = "actionId"
+        case sessionkey = "sessionKey"
+        case payload
+    }
+}
+
+public struct PluginsSessionActionResult: Codable, Sendable {
+    public let ok: Bool
+    public let result: AnyCodable?
+    public let continueagent: Bool?
+    public let reply: AnyCodable?
+
+    public init(
+        ok: Bool,
+        result: AnyCodable?,
+        continueagent: Bool?,
+        reply: AnyCodable?)
+    {
+        self.ok = ok
+        self.result = result
+        self.continueagent = continueagent
+        self.reply = reply
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case result
+        case continueagent = "continueAgent"
+        case reply
     }
 }
 
