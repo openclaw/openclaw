@@ -136,6 +136,7 @@ function createHost(): TestGatewayHost {
     clientInstanceId: "instance-test",
     client: null,
     connected: false,
+    hasEverConnected: false,
     hello: null,
     lastError: null,
     lastErrorCode: null,
@@ -301,6 +302,90 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("sets hasEverConnected sticky flag on first hello and keeps it across transient closes", () => {
+    const host = createHost();
+    expect(host.hasEverConnected).toBe(false);
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    expect(host.connected).toBe(true);
+    expect(host.hasEverConnected).toBe(true);
+
+    // Tab focus / network blip / 1012 service restart should NOT reset the
+    // sticky flag — the renderer keeps the chat UI mounted across these.
+    client.emitClose({ code: 1006 });
+    expect(host.connected).toBe(false);
+    expect(host.hasEverConnected).toBe(true);
+
+    // Reconnect cycle restores connected without ever flipping the gate.
+    connectGateway(host);
+    expect(host.connected).toBe(false);
+    expect(host.hasEverConnected).toBe(true);
+    const reconnect = gatewayClientInstances[1];
+    reconnect.emitHello();
+    expect(host.connected).toBe(true);
+    expect(host.hasEverConnected).toBe(true);
+  });
+
+  it("clears hasEverConnected on explicit auth-failure close codes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    client.emitHello();
+    expect(host.hasEverConnected).toBe(true);
+
+    client.emitClose({
+      code: 4001,
+      reason: "unauthorized",
+      error: { code: "AUTH_TOKEN_MISMATCH", message: "bad token" },
+    });
+    expect(host.connected).toBe(false);
+    expect(host.hasEverConnected).toBe(false);
+    expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("clears hasEverConnected on PAIRING_REQUIRED close", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    client.emitHello();
+    expect(host.hasEverConnected).toBe(true);
+
+    client.emitClose({
+      code: 4003,
+      reason: "pairing required",
+      error: { code: "PAIRING_REQUIRED", message: "pair first" },
+    });
+    expect(host.hasEverConnected).toBe(false);
+  });
+
+  it.each([
+    "AUTH_RATE_LIMITED",
+    "AUTH_TAILSCALE_WHOIS_FAILED",
+    "AUTH_TAILSCALE_PROXY_MISSING",
+    "AUTH_TAILSCALE_IDENTITY_MISSING",
+  ])("keeps hasEverConnected on transient infra code %s", (code) => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    client.emitHello();
+    expect(host.hasEverConnected).toBe(true);
+
+    client.emitClose({
+      code: 1006,
+      reason: "transient",
+      error: { code, message: "transient" },
+    });
+    expect(host.connected).toBe(false);
+    expect(host.hasEverConnected).toBe(true);
   });
 
   it("preserves pending approval requests across reconnect", () => {

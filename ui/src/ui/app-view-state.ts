@@ -56,6 +56,12 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+  /**
+   * Sticky flag set on the first successful hello handshake in this tab. Lets
+   * the renderer keep showing the chat UI during transient reconnects instead
+   * of flashing the credentials gate. Cleared on explicit auth failures.
+   */
+  hasEverConnected: boolean;
   theme: ThemeName;
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;

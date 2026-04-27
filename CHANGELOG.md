@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI webchat: keep the chat UI mounted across transient WebSocket reconnects (tab refocus, gateway restart, network blips) instead of flashing the full credentials gate every cycle. Track a sticky per-tab `hasEverConnected` flag set on the first successful hello; reset it only on explicit auth or pairing failures so the gate still appears for genuine re-auth. Fixes #72500. Thanks @brandco.
 - Cron: classify isolated runs as errors when final output narrates known execution-denial markers such as `SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, or approval-binding refusal phrases, so blocked commands no longer appear green in cron history. Fixes #67172; carries forward #67186. Thanks @oc-gh-dr, @hclsys, and @1yihui.
 - Gateway/install: add a validated `--wrapper`/`OPENCLAW_WRAPPER` service install path that persists executable LaunchAgent/systemd wrappers across forced reinstalls, updates, and doctor repairs instead of falling back to raw node/bun `ProgramArguments`. Fixes #69400. (#72445) Thanks @willtmc.
 - macOS Gateway: write launchd services with a state-dir `WorkingDirectory`, use a durable state-dir temp path instead of freezing macOS session `TMPDIR`, create that temp directory before bootstrap, and label abort-shaped launchd exits as `SIGABRT/abort` in status output. Fixes #53679 and #70223; refs #71848. Thanks @dlturock, @stammi922, and @palladius.
