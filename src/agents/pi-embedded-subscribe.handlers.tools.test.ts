@@ -1075,4 +1075,35 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
     expect(serialized).toContain("gpt-4");
   });
+
+  it("redacts primitive string results before emitting the tool result event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-string-secret",
+        isError: false,
+        result: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    expect(resultEvent).toBeDefined();
+    const emittedResult = resultEvent?.data?.result;
+    expect(typeof emittedResult).toBe("string");
+    if (typeof emittedResult !== "string") {
+      throw new Error("expected string result");
+    }
+    expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(emittedResult).toContain("OPENROUTER_API_KEY=");
+  });
 });

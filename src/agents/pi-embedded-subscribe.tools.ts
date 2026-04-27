@@ -115,17 +115,25 @@ function isHostDenialToolText(text: string): boolean {
   return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
-function redactStringsDeep(value: unknown): unknown {
+function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
   }
   if (Array.isArray(value)) {
-    return value.map(redactStringsDeep);
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((item) => redactStringsDeep(item, seen));
   }
   if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = redactStringsDeep(child);
+      out[key] = redactStringsDeep(child, seen);
     }
     return out;
   }
@@ -137,6 +145,12 @@ export function sanitizeToolArgs(args: unknown): unknown {
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
+  if (typeof result === "string") {
+    return redactToolPayloadText(result);
+  }
+  if (Array.isArray(result)) {
+    return redactStringsDeep(result);
+  }
   if (!result || typeof result !== "object") {
     return result;
   }

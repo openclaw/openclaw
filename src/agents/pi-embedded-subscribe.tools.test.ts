@@ -152,6 +152,25 @@ describe("sanitizeToolResult", () => {
     expect(sanitized.details.config.model).toBe("gpt-4");
   });
 
+  it("redacts primitive string results", () => {
+    const sanitized = sanitizeToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789") as string;
+
+    expect(sanitized).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(sanitized).toContain("OPENROUTER_API_KEY=");
+  });
+
+  it("preserves top-level arrays while redacting nested strings", () => {
+    const sanitized = sanitizeToolResult([
+      { output: "Authorization: Bearer abcdef0123456789QWERTY=" },
+      "apiKey=sk-1234567890abcdefXYZ",
+    ]) as Array<{ output: string } | string>;
+
+    expect(Array.isArray(sanitized)).toBe(true);
+    expect(JSON.stringify(sanitized)).not.toContain("abcdef0123456789QWERTY=");
+    expect(JSON.stringify(sanitized)).not.toContain("sk-1234567890abcdefXYZ");
+    expect((sanitized[0] as { output: string }).output).toContain("Authorization: Bearer");
+  });
+
   it("applies configured redact patterns to Control UI tool payloads", () => {
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
       redactSensitive: "off",
