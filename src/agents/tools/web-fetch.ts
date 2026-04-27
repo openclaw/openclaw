@@ -458,6 +458,11 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  // Caller-supplied AbortSignal so a tool-call cancel (session abort, run
+  // timeout, etc.) actually unblocks an in-flight fetch instead of leaving
+  // the agent loop hung. fetchWithWebToolsNetworkGuard already merges this
+  // with its own timeoutSeconds-derived signal in fetch-guard.ts:111-142.
+  signal?: AbortSignal;
 };
 
 function toFirecrawlContentParams(
@@ -539,6 +544,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -767,7 +773,7 @@ export function createWebFetchTool(options?: {
     description:
       "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
     parameters: WebFetchSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
@@ -795,6 +801,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        signal,
       });
       return jsonResult(result);
     },
