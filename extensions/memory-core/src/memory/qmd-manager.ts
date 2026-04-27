@@ -671,7 +671,23 @@ export class QmdMemoryManager implements MemorySearchManager {
       conflictName = this.findCollectionByPathPattern(collection, existing);
     }
 
-    conflictName ??= this.parseConflictingCollectionNameFromAddError(addErrorMessage);
+    if (!conflictName) {
+      const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
+      const parsedDetails = parsedConflictName ? existing.get(parsedConflictName) : undefined;
+      if (
+        parsedConflictName &&
+        parsedDetails?.path &&
+        typeof parsedDetails.pattern === "string" &&
+        this.pathsMatch(parsedDetails.path, collection.path) &&
+        this.patternsMatchForManagedCollection(
+          collection.path,
+          parsedDetails.pattern,
+          collection.pattern,
+        )
+      ) {
+        conflictName = parsedConflictName;
+      }
+    }
 
     if (!conflictName) {
       return false;

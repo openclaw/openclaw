@@ -1049,7 +1049,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("rebinds a path-pattern conflict when qmd add reports the stale collection name", async () => {
+  it("refuses to rebind a stderr-only path-pattern conflict without collection metadata", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1111,10 +1111,10 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(removeCalls).toEqual(["workspace-legacy"]);
-    expect(addCalls).toEqual(["workspace-main", "workspace-main"]);
-    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
-    expect(logWarnMock).not.toHaveBeenCalledWith(
+    expect(removeCalls).toEqual([]);
+    expect(addCalls).toEqual(["workspace-main"]);
+    expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+    expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("qmd collection add skipped for workspace-main"),
     );
   });
