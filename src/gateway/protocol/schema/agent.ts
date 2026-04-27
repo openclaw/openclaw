@@ -169,6 +169,8 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    /** Paperclip-originated wake payloads include a `paperclip` context object. */
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
