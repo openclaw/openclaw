@@ -50,7 +50,7 @@ export function buildGoogleVertexExpressProvider(): ProviderPlugin {
   return {
     id: VERTEX_EXPRESS_PROVIDER_ID,
     label: "Google Vertex AI (Express Mode)",
-    docsPath: "/providers/models",
+    docsPath: "/providers/google-vertex-express",
     envVars: ["GOOGLE_VERTEX_EXPRESS_API_KEY"],
 
     // Auth: API key entry in the wizard, non-interactive CLI flag support.

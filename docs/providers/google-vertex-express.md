@@ -10,7 +10,7 @@ The Google Vertex AI (Express Mode) extension provides access to Gemini models t
 
 - Provider: `google-vertex-express`
 - Auth: `GOOGLE_VERTEX_EXPRESS_API_KEY`
-- Endpoint: `https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:streamGenerateContent` (handled automatically)
+- Endpoint: `https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:streamGenerateContent` (handled automatically)
 
 ## Getting started
 
