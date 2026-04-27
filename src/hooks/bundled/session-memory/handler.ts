@@ -346,10 +346,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
         data: entry,
         encoding: "utf-8",
       });
-      log.debug("Memory file written successfully");
+      // "inline write completed" — not yet final. The post-hook drain
+      // (registered below) may still retract this file (blockSessionSave
+      // set late) or overwrite it (sessionSaveContent set late). Operators
+      // grepping for save success should filter on the post-drain
+      // "Session context saved to" / "Session save retracted" lines
+      // emitted from the post-hook callback, not on these inline logs.
+      log.debug("Memory file written inline (pre-post-hook, may be retracted/replaced)");
 
       const relPath = memoryFilePath.replace(os.homedir(), "~");
-      log.info(`Session context saved to ${relPath}`);
+      log.info(`Session context staged at ${relPath} (final disposition decided by post-hook drain)`);
     }
 
     // Defer retraction/replacement to post-hook phase so that hooks
@@ -376,11 +382,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
           // Only warn when transcript was actually loaded and potentially
           // sent to the LLM for slug generation. When sessionFile was null
           // or sessionContent failed to load, no data left the device.
+          // PRIVACY: surface this loudly so operators can assess data
+          // egress. The transcript was already sent to the slug-
+          // generation LLM BEFORE the late blockSessionSave hook fired.
+          // The memory file gets retracted from disk, but that does NOT
+          // un-send the data from the model provider's logs / training
+          // pipeline. To prevent transcript egress entirely, hooks must
+          // set blockSessionSave BEFORE the session-memory handler runs.
+          // We log the byte count and the relative file path so operators
+          // can correlate against their slug-generation provider's audit
+          // logs.
           log.warn(
-            "blockSessionSave was set by a late hook — memory file will be retracted, but " +
-              "transcript content may have already been sent to the LLM provider for slug generation. " +
-              "To prevent transcript processing entirely, set blockSessionSave before the " +
-              "session-memory handler runs.",
+            `PRIVACY: blockSessionSave was set by a late hook — memory file ` +
+              `will be retracted from ${memoryFilePath.replace(os.homedir(), "~")}, ` +
+              `BUT transcript content (${sessionContent?.length ?? 0} chars) was ` +
+              `already sent to the configured slug-generation LLM and cannot be ` +
+              `un-sent. To prevent egress entirely, set blockSessionSave BEFORE ` +
+              `the session-memory handler runs.`,
           );
         }
         // Verify we're reverting our own write before touching the file.
