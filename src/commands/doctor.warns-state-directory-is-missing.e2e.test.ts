@@ -6,6 +6,7 @@ import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
+  resolveGatewayAuthTokenForService,
 } from "./doctor.e2e-harness.js";
 import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
@@ -370,5 +371,87 @@ describe("doctor command", () => {
     expect(String(gatewayAuthNote?.[0])).toContain(
       "Doctor will not overwrite gateway.auth.token with a plaintext value.",
     );
+  });
+
+  it("does not warn when a SecretRef-managed gateway token resolves successfully", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "CUSTOM_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    mockDoctorConfigSnapshot({
+      config: cfg,
+      parsed: cfg,
+    });
+
+    const previousCustomToken = process.env.CUSTOM_GATEWAY_TOKEN;
+    process.env.CUSTOM_GATEWAY_TOKEN = "resolved-token";
+    resolveGatewayAuthTokenForService.mockResolvedValueOnce({ token: "resolved-token" });
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousCustomToken === undefined) {
+        delete process.env.CUSTOM_GATEWAY_TOKEN;
+      } else {
+        process.env.CUSTOM_GATEWAY_TOKEN = previousCustomToken;
+      }
+    }
+
+    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
+    const gatewayAuthMessage =
+      typeof gatewayAuthNote?.[0] === "string"
+        ? gatewayAuthNote[0]
+        : (JSON.stringify(gatewayAuthNote?.[0]) ?? "");
+    expect(gatewayAuthMessage).not.toContain(
+      "Gateway token is managed via SecretRef and is currently unavailable.",
+    );
+  });
+
+  it("does not resolve SecretRef gateway tokens for non-token auth modes", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "trusted-proxy",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "CUSTOM_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    mockDoctorConfigSnapshot({
+      config: cfg,
+      parsed: cfg,
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    expect(resolveGatewayAuthTokenForService).not.toHaveBeenCalled();
   });
 });
