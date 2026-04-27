@@ -22,6 +22,7 @@ import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { memoizeToolFactory } from "./tools/memoize-tool-factory.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -142,59 +143,116 @@ export function createOpenClawTools(
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
   const imageTool = options?.agentDir?.trim()
-    ? createImageTool({
+    ? memoizeToolFactory(
+        "createImageTool",
+        options?.config,
+        [
+          options?.agentDir,
+          options?.workspaceDir,
+          options?.sandboxRoot ?? null,
+          !!options?.modelHasVision,
+        ],
+        () =>
+          createImageTool({
+            config: options?.config,
+            agentDir: options.agentDir,
+            workspaceDir,
+            sandbox,
+            fsPolicy: options?.fsPolicy,
+            modelHasVision: options?.modelHasVision,
+          }),
+      )
+    : null;
+  const imageGenerateTool = memoizeToolFactory(
+    "createImageGenerateTool",
+    options?.config,
+    [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
+    () =>
+      createImageGenerateTool({
         config: options?.config,
-        agentDir: options.agentDir,
+        agentDir: options?.agentDir,
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
-        modelHasVision: options?.modelHasVision,
-      })
-    : null;
-  const imageGenerateTool = createImageGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
-  const videoGenerateTool = createVideoGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
-  const musicGenerateTool = createMusicGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
+      }),
+  );
+  const videoGenerateTool = memoizeToolFactory(
+    "createVideoGenerateTool",
+    options?.config,
+    [
+      options?.agentDir,
+      options?.agentSessionKey,
+      options?.workspaceDir,
+      options?.sandboxRoot ?? null,
+    ],
+    () =>
+      createVideoGenerateTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        agentSessionKey: options?.agentSessionKey,
+        requesterOrigin: deliveryContext ?? undefined,
+        workspaceDir,
+        sandbox,
+        fsPolicy: options?.fsPolicy,
+      }),
+  );
+  const musicGenerateTool = memoizeToolFactory(
+    "createMusicGenerateTool",
+    options?.config,
+    [
+      options?.agentDir,
+      options?.agentSessionKey,
+      options?.workspaceDir,
+      options?.sandboxRoot ?? null,
+    ],
+    () =>
+      createMusicGenerateTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        agentSessionKey: options?.agentSessionKey,
+        requesterOrigin: deliveryContext ?? undefined,
+        workspaceDir,
+        sandbox,
+        fsPolicy: options?.fsPolicy,
+      }),
+  );
   const pdfTool = options?.agentDir?.trim()
-    ? createPdfTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-      })
+    ? memoizeToolFactory(
+        "createPdfTool",
+        options?.config,
+        [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
+        () =>
+          createPdfTool({
+            config: options?.config,
+            agentDir: options.agentDir,
+            workspaceDir,
+            sandbox,
+            fsPolicy: options?.fsPolicy,
+          }),
+      )
     : null;
-  const webSearchTool = createWebSearchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebSearch: runtimeWebTools?.search,
-  });
-  const webFetchTool = createWebFetchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebFetch: runtimeWebTools?.fetch,
-  });
+  const webSearchTool = memoizeToolFactory(
+    "createWebSearchTool",
+    options?.config,
+    [options?.agentDir, !!options?.sandboxed],
+    () =>
+      createWebSearchTool({
+        config: options?.config,
+        sandboxed: options?.sandboxed,
+        runtimeWebSearch: runtimeWebTools?.search,
+      }),
+  );
+  const webFetchTool = memoizeToolFactory(
+    "createWebFetchTool",
+    options?.config,
+    [options?.agentDir, !!options?.sandboxed],
+    () =>
+      createWebFetchTool({
+        config: options?.config,
+        sandboxed: options?.sandboxed,
+        runtimeWebFetch: runtimeWebTools?.fetch,
+      }),
+  );
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
