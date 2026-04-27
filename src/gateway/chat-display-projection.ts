@@ -1,10 +1,11 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { EmotionMode } from "../emotion-mode.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { stripEmotionTags } from "../shared/text/emotion-tags.js";
+import { sanitizeEmotionTagsForMode } from "../shared/text/emotion-tags.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -59,7 +60,11 @@ export function isToolHistoryBlockType(type: unknown): boolean {
 
 function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number; stripEmotionTags?: boolean },
+  opts?: {
+    preserveExactToolPayload?: boolean;
+    maxChars?: number;
+    emotionMode?: EmotionMode;
+  },
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -71,10 +76,10 @@ function sanitizeChatHistoryContentBlock(
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const stripDisplayText = (text: string) => {
     const stripped = stripInlineDirectiveTagsForDisplay(text);
-    if (preserveExactToolPayload || opts?.stripEmotionTags !== true) {
+    if (preserveExactToolPayload || opts?.emotionMode === undefined) {
       return stripped;
     }
-    const sanitized = stripEmotionTags(stripped.text);
+    const sanitized = sanitizeEmotionTagsForMode(stripped.text, opts.emotionMode);
     return {
       text: sanitized.text,
       changed: stripped.changed || sanitized.changed,
@@ -226,6 +231,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  emotionMode?: EmotionMode,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -242,12 +248,13 @@ function sanitizeChatHistoryMessage(
     typeof entry.tool_name === "string" ||
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string";
+  const messageEmotionMode = role === "assistant" ? (emotionMode ?? "off") : undefined;
   const stripDisplayText = (text: string) => {
     const stripped = stripInlineDirectiveTagsForDisplay(text);
-    if (role !== "assistant" || preserveExactToolPayload) {
+    if (messageEmotionMode === undefined || preserveExactToolPayload) {
       return stripped;
     }
-    const sanitized = stripEmotionTags(stripped.text);
+    const sanitized = sanitizeEmotionTagsForMode(stripped.text, messageEmotionMode);
     return {
       text: sanitized.text,
       changed: stripped.changed || sanitized.changed,
@@ -304,7 +311,7 @@ function sanitizeChatHistoryMessage(
       sanitizeChatHistoryContentBlock(block, {
         preserveExactToolPayload,
         maxChars,
-        stripEmotionTags: role === "assistant",
+        emotionMode: messageEmotionMode,
       }),
     );
     if (updated.some((item) => item.changed)) {
@@ -401,6 +408,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  emotionMode?: EmotionMode,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -412,7 +420,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, emotionMode);
     changed ||= res.changed;
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
@@ -526,12 +534,16 @@ function filterVisibleProjectedHistoryMessages(
 
 export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; emotionMode?: EmotionMode },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   return filterVisibleProjectedHistoryMessages(
     toProjectedMessages(
-      sanitizeChatHistoryMessages(source, options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS),
+      sanitizeChatHistoryMessages(
+        source,
+        options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+        options?.emotionMode,
+      ),
     ),
   );
 }
@@ -550,7 +562,12 @@ export function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number)
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: {
+    maxChars?: number;
+    maxMessages?: number;
+    stripEnvelope?: boolean;
+    emotionMode?: EmotionMode;
+  },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -560,7 +577,7 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; emotionMode?: EmotionMode },
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }
