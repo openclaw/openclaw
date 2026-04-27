@@ -191,6 +191,20 @@ function primeHookPackNpmFallback() {
   return { cfg, installedCfg };
 }
 
+function primeBlockedNpmPluginInstall(params: {
+  spec: string;
+  pluginId: string;
+  code?: "security_scan_blocked" | "security_scan_failed";
+}) {
+  loadConfig.mockReturnValue({} as OpenClawConfig);
+  mockClawHubPackageNotFound(params.spec);
+  installPluginFromNpmSpec.mockResolvedValue({
+    ok: false,
+    error: `Plugin "${params.pluginId}" installation blocked: dangerous code patterns detected: finding details`,
+    code: params.code ?? "security_scan_blocked",
+  });
+}
+
 function primeHookPackPathFallback(params: {
   tmpRoot: string;
   pluginInstallError: string;
@@ -394,8 +408,9 @@ describe("plugins cli install", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       demo: expect.objectContaining({
         source: "clawhub",
-        spec: "clawhub:demo@1.2.3",
+        spec: "clawhub:demo",
         installPath: cliInstallPath("demo"),
+        version: "1.2.3",
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
@@ -404,6 +419,42 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogs.some((line) => line.includes("Installed plugin: demo"))).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
+  it("does not persist incomplete config entries for config-gated bundled installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {},
+            },
+          },
+        },
+        load: {
+          paths: ["/existing/plugin"],
+        },
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(cfg);
+
+    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+
+    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(writtenConfig.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
+    expect(writtenConfig.plugins?.load?.paths).toEqual(
+      expect.arrayContaining(["/existing/plugin", expect.stringContaining("memory-lancedb")]),
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      "memory-lancedb": expect.objectContaining({
+        source: "path",
+        sourcePath: expect.stringContaining("memory-lancedb"),
+        installPath: expect.stringContaining("memory-lancedb"),
+      }),
+    });
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
+    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {
@@ -441,6 +492,48 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("keeps explicit ClawHub versions pinned in install records", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo", version: "1.2.3" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "clawhub:demo@1.2.3"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo@1.2.3",
+      }),
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "clawhub",
+        spec: "clawhub:demo@1.2.3",
+        installPath: cliInstallPath("demo"),
+        version: "1.2.3",
+        clawhubPackage: "demo",
+      }),
+    });
+  });
+
   it("prefers ClawHub before npm for bare plugin specs", async () => {
     const cfg = {
       plugins: {
@@ -474,12 +567,52 @@ describe("plugins cli install", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       demo: expect.objectContaining({
         source: "clawhub",
-        spec: "clawhub:demo@1.2.3",
+        spec: "clawhub:demo",
         installPath: cliInstallPath("demo"),
+        version: "1.2.3",
         clawhubPackage: "demo",
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("keeps explicit bare ClawHub selectors in install records", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3-beta.1",
+        channel: "community",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo@beta"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo@beta",
+      }),
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "clawhub",
+        spec: "clawhub:demo@beta",
+        version: "1.2.3-beta.1",
+        clawhubPackage: "demo",
+      }),
+    });
   });
 
   it("falls back to npm when ClawHub does not have the package", async () => {
@@ -497,6 +630,120 @@ describe("plugins cli install", () => {
         spec: "demo",
       }),
     );
+  });
+
+  it("installs directly from npm when npm: prefix is used", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "npm:demo"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        mode: "install",
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "npm",
+        spec: "demo",
+        installPath: cliInstallPath("demo"),
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("passes npm: prefix installs through npm options without ClawHub lookup", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "npm:demo",
+      "--force",
+      "--dangerously-force-unsafe-install",
+    ]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        mode: "update",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
+  it("reports npm install failures without trying ClawHub when npm: prefix is used", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "npm install failed",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:demo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("npm install failed");
+  });
+
+  it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {
+    loadConfig.mockReturnValue({ plugins: { load: { paths: [] } } } as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "Package not found on npm: memory-lancedb.",
+      code: "npm_package_not_found",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:memory-lancedb"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "memory-lancedb",
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("Package not found on npm: memory-lancedb.");
+  });
+
+  it("rejects empty npm: prefix installs before resolver lookup", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:"])).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("unsupported npm: spec: missing package");
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {
@@ -604,6 +851,30 @@ describe("plugins cli install", () => {
         dangerouslyForceUnsafeInstall: true,
       }),
     );
+  });
+
+  it("does not fall back to hook pack for linked path when a no-flag security scan blocks", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
+    const pluginInstallError = "plugin blocked by security scan";
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_blocked",
+    });
+
+    try {
+      await expect(
+        runPluginsCommand(["plugins", "install", localPluginDir, "--link"]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("passes dangerous force unsafe install to local hook-pack fallback installs", async () => {
@@ -740,6 +1011,30 @@ describe("plugins cli install", () => {
     ).toBe(true);
   });
 
+  it("does not fall back to hook pack for local path when a no-flag security scan fails", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+    const pluginInstallError = "plugin security scan failed";
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_failed",
+    });
+
+    try {
+      await expect(runPluginsCommand(["plugins", "install", localPluginDir])).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("does not fall back to hook pack for local path when dangerous force unsafe install is set", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
     const cfg = {} as OpenClawConfig;
@@ -820,6 +1115,21 @@ describe("plugins cli install", () => {
 
     expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+  });
+
+  it("does not fall back to hook pack for npm installs when a no-flag security scan blocks", async () => {
+    primeBlockedNpmPluginInstall({
+      spec: "@acme/unsafe-plugin",
+      pluginId: "unsafe-plugin",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "@acme/unsafe-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain('Plugin "unsafe-plugin" installation blocked');
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("does not fall back to hook pack for npm installs when security scan fails under dangerous force unsafe install", async () => {

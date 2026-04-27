@@ -268,6 +268,24 @@ async function fetchLocalGatewayHealth(params: {
   }
 }
 
+async function waitForQaGatewayRestartBoundary(params: {
+  logs: () => string;
+  offset: number;
+  pollMs?: number;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const pollMs = params.pollMs ?? 100;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (params.logs().slice(params.offset).includes("restart mode:")) {
+      return;
+    }
+    await sleep(pollMs);
+  }
+  throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
+}
+
 export const __testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
@@ -283,6 +301,7 @@ export const __testing = {
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
+  waitForQaGatewayRestartBoundary,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginSourceDir,
   resolveQaRuntimeHostVersion,
@@ -816,7 +835,20 @@ export async function startQaGatewayChild(params: {
         if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
         }
+        const restartLogOffset = logs().length;
         process.kill(activeChild.pid, signal);
+        if (signal === "SIGUSR1") {
+          await waitForQaGatewayRestartBoundary({
+            logs,
+            offset: restartLogOffset,
+          });
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: activeChild,
+            timeoutMs: 120_000,
+          });
+        }
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,

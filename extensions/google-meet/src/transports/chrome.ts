@@ -620,6 +620,24 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
   });
+  try {
+    await params.runtime.nodes.invoke({
+      nodeId,
+      command: "googlemeet.chrome",
+      params: {
+        action: "stopByUrl",
+        url: params.url,
+        mode: params.mode,
+      },
+      timeoutMs: 5_000,
+    });
+  } catch (error) {
+    params.logger.debug?.(
+      `[google-meet] node bridge cleanup before join ignored: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const browserControl = await openMeetWithBrowserProxy({
     runtime: params.runtime,
     nodeId,

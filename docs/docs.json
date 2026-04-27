@@ -1016,6 +1016,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-hermes",
                   "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
@@ -1549,6 +1550,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",

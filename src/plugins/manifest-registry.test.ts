@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -419,9 +421,50 @@ describe("loadPluginManifestRegistry", () => {
         {
           endpointClass: "openai-public",
           hosts: ["API.OPENAI.COM", ""],
+          hostSuffixes: [".openai.azure.com"],
           baseUrls: ["https://api.openai.com/v1"],
+          googleVertexRegion: "global",
+          googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
         },
       ],
+      modelIdNormalization: {
+        providers: {
+          openai: {
+            aliases: {
+              "gpt-latest": "gpt-5.4",
+            },
+            stripPrefixes: ["openai/"],
+            prefixWhenBare: "openai",
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "gpt-",
+                prefix: "openai",
+              },
+              {
+                modelPrefix: "",
+                prefix: "ignored",
+              },
+            ],
+          },
+          ignored: {
+            prefixWhenBare: "ignored",
+          },
+        },
+      },
+      providerRequest: {
+        providers: {
+          openai: {
+            family: "openai-family",
+            compatibilityFamily: "moonshot",
+            openAICompletions: {
+              supportsStreamingUsage: true,
+            },
+          },
+          ignored: {
+            family: "ignored",
+          },
+        },
+      },
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
@@ -453,9 +496,40 @@ describe("loadPluginManifestRegistry", () => {
       {
         endpointClass: "openai-public",
         hosts: ["api.openai.com"],
+        hostSuffixes: [".openai.azure.com"],
         baseUrls: ["https://api.openai.com/v1"],
+        googleVertexRegion: "global",
+        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
     ]);
+    expect(registry.plugins[0]?.modelIdNormalization).toEqual({
+      providers: {
+        openai: {
+          aliases: {
+            "gpt-latest": "gpt-5.4",
+          },
+          stripPrefixes: ["openai/"],
+          prefixWhenBare: "openai",
+          prefixWhenBareAfterAliasStartsWith: [
+            {
+              modelPrefix: "gpt-",
+              prefix: "openai",
+            },
+          ],
+        },
+      },
+    });
+    expect(registry.plugins[0]?.providerRequest).toEqual({
+      providers: {
+        openai: {
+          family: "openai-family",
+          compatibilityFamily: "moonshot",
+          openAICompletions: {
+            supportsStreamingUsage: true,
+          },
+        },
+      },
+    });
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
@@ -561,6 +635,22 @@ describe("loadPluginManifestRegistry", () => {
           ignored: "unknown",
         },
       },
+      modelPricing: {
+        providers: {
+          moonshot: {
+            openRouter: {
+              provider: "moonshotai",
+              modelIdTransforms: ["version-dots", "unknown"],
+            },
+            liteLLM: {
+              provider: "moonshot",
+            },
+          },
+          openai: {
+            external: false,
+          },
+        },
+      },
       configSchema: { type: "object" },
     });
 
@@ -628,6 +718,120 @@ describe("loadPluginManifestRegistry", () => {
         moonshot: "static",
       },
     });
+    expect(registry.plugins[0]?.modelPricing).toEqual({
+      providers: {
+        moonshot: {
+          openRouter: {
+            provider: "moonshotai",
+            modelIdTransforms: ["version-dots"],
+          },
+          liteLLM: {
+            provider: "moonshot",
+          },
+        },
+      },
+    });
+  });
+
+  it("hydrates bundled channel config metadata from plugin-local config surfaces", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        alpha: {
+          schema: {
+            type: "object",
+            properties: {
+              manifestOnly: { type: "boolean" },
+            },
+          },
+          uiHints: {
+            manifestOnly: { help: "manifest hint" },
+          },
+        },
+      },
+    });
+    writeTextFile(dir, "index.ts", "export {};\n");
+    writeTextFile(
+      dir,
+      "src/config-schema.js",
+      [
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: {",
+        "      generatedOnly: { type: 'string' },",
+        "    },",
+        "    additionalProperties: false,",
+        "  },",
+        "  uiHints: {",
+        "    generatedOnly: { label: 'Generated only' },",
+        "  },",
+        "};",
+      ].join("\n"),
+    );
+
+    const candidate = createPluginCandidate({
+      idHint: "alpha",
+      rootDir: dir,
+      origin: "bundled",
+      packageDir: dir,
+      packageManifest: {
+        channel: {
+          id: "alpha",
+          label: "Alpha",
+          blurb: "Alpha channel",
+        },
+      },
+    });
+    expect(loadRegistry([candidate]).plugins[0]?.channelConfigs?.alpha?.schema).toEqual({
+      type: "object",
+      properties: {
+        manifestOnly: { type: "boolean" },
+      },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      bundledChannelConfigCollector: collectBundledChannelConfigs,
+      candidates: [candidate],
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          generatedOnly: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      label: "Alpha",
+      description: "Alpha channel",
+      uiHints: {
+        generatedOnly: { label: "Generated only" },
+        manifestOnly: { help: "manifest hint" },
+      },
+    });
+    expect(collectChannelSchemaMetadata(registry)).toEqual([
+      {
+        id: "alpha",
+        label: "Alpha",
+        description: "Alpha channel",
+        configSchema: {
+          type: "object",
+          properties: {
+            generatedOnly: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        configUiHints: {
+          generatedOnly: { label: "Generated only" },
+          manifestOnly: { help: "manifest hint" },
+        },
+      },
+    ]);
   });
 
   it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
@@ -859,6 +1063,7 @@ describe("loadPluginManifestRegistry", () => {
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
+        onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       },
       setup: {
@@ -887,6 +1092,7 @@ describe("loadPluginManifestRegistry", () => {
       onCommands: ["models"],
       onChannels: ["web"],
       onRoutes: ["gateway-webhook"],
+      onConfigPaths: ["browser"],
       onCapabilities: ["provider", "tool"],
     });
     expect(registry.plugins[0]?.setup).toEqual({

@@ -54,7 +54,8 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, or bare package spec (ClawHub first, then npm fallback).
+`clawhub:<pkg>`, explicit `npm:<pkg>`, or bare package spec (ClawHub first, then
+npm fallback).
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -90,7 +91,7 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
 and the [Plugin SDK Overview](/plugins/sdk-overview).
 
-## Package Entrypoints
+## Package entrypoints
 
 Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable
@@ -343,6 +344,7 @@ openclaw doctor --fix                      # repair plugin registry state
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
+openclaw plugins install npm:<pkg>         # install from npm only
 openclaw plugins install <spec> --force    # overwrite existing install
 openclaw plugins install <path>            # install from local path
 openclaw plugins install -l <path>         # link (no copy) for dev

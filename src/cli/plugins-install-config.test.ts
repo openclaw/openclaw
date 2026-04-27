@@ -120,6 +120,37 @@ describe("loadConfigForInstall", () => {
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
 
+  it("allows npm:-prefixed bundled-plugin reinstall recovery", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { matrix: { source: "path", installPath: "/gone" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { matrix: {} } } },
+        config: snapshotCfg,
+        issues: [
+          { path: "channels.matrix", message: "unknown channel id: matrix" },
+          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "npm:@openclaw/matrix",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    expect(request.request).toMatchObject({
+      bundledPluginId: "matrix",
+      allowInvalidConfigRecovery: true,
+    });
+    const result = await loadConfigForInstall(request.request);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
+  });
+
   it("allows explicit repo-checkout bundled-plugin reinstall recovery", async () => {
     const snapshotCfg = { plugins: {} } as OpenClawConfig;
     readConfigFileSnapshotMock.mockResolvedValue(

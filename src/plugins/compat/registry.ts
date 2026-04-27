@@ -172,6 +172,17 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
+    code: "activation-config-path-hint",
+    status: "active",
+    owner: "plugin-execution",
+    introduced: "2026-04-27",
+    replacement: "manifest contribution ownership for root config surfaces",
+    docsPath: "/plugins/manifest",
+    surfaces: ["activation.onConfigPaths", "startup plugin selection"],
+    diagnostics: ["activation plan compat reason"],
+    tests: ["src/plugins/channel-plugin-ids.test.ts"],
+  },
+  {
     code: "activation-capability-hint",
     status: "active",
     owner: "plugin-execution",

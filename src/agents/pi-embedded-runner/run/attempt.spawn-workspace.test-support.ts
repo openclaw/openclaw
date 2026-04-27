@@ -612,6 +612,7 @@ vi.mock("../sandbox-info.js", () => ({
 }));
 
 vi.mock("../thinking.js", () => ({
+  dropReasoningFromHistory: <T>(messages: T) => messages,
   dropThinkingBlocks: <T>(messages: T) => messages,
 }));
 

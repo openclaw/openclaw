@@ -12,6 +12,7 @@ import {
   emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  peekGatewaySigusr1RestartReason,
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
@@ -96,6 +97,24 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1);
         const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
         expect(sigusr1Emits.length).toBe(1);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("preserves update restart reason when a scheduled restart coalesces", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "update.run" });
+
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
