@@ -615,15 +615,20 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `projected outer frame bytes bounds real serialized node invoke result frame`() throws {
-        // Sanity check that `projectedOuterFrameBytes(forPayloadJSON:)` stays
-        // above the real serialized size of a `node.invoke.result`-shaped
-        // frame that wraps the inner payloadJSON as a JSON string. The inner
-        // payload is deliberately seeded with `"`, `\`, and `/` bytes so the
-        // outer encoder has to emit escapes — this is the regression case the
+        // Sanity check that `projectedOuterFrameBytes(...)` stays above the
+        // real serialized size of a `node.invoke.result`-shaped frame that
+        // wraps the inner payloadJSON as a JSON string. The inner payload is
+        // deliberately seeded with `"`, `\`, and `/` bytes so the outer
+        // encoder has to emit escapes — this is the regression case the
         // Codex P1/P2 comments flagged, where raw-byte ceilings alone miss
         // the JSON escape expansion applied at wrap time.
         let inner = #"{"format":"png","base64":"///AAA\/\\","width":1,"height":1,"capturedAtMs":0}"#
-        let projected = MacNodeRuntime.projectedOuterFrameBytes(forPayloadJSON: inner)
+        let innerId = UUID().uuidString
+        let outerNodeId = UUID().uuidString
+        let projected = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: inner,
+            requestId: innerId,
+            nodeId: outerNodeId)
 
         struct Frame: Encodable {
             let type: String
@@ -642,13 +647,77 @@ struct MacNodeRuntimeTests {
             id: UUID().uuidString,
             method: "node.invoke.result",
             params: Frame.Params(
-                id: UUID().uuidString,
-                nodeId: UUID().uuidString,
+                id: innerId,
+                nodeId: outerNodeId,
                 ok: true,
                 payloadJSON: inner))
         let serialized = try JSONEncoder().encode(frame)
 
         #expect(projected >= serialized.count)
+    }
+
+    @Test
+    func `projected outer frame bytes scales with dynamic id and nodeId lengths`() throws {
+        // Codex P2 (2026-04-21) flagged that a fixed envelope reserve cannot
+        // cover gateway node ids, which are only `NonEmptyString` on the wire
+        // and so unbounded in length. This test pins the budgeting to the
+        // dynamic id/nodeId surface: a much longer nodeId must move the
+        // projection up by at least the extra UTF-8 byte count, and the
+        // projection must still bound the real serialized frame for an
+        // ASCII-only id pair. The inner payload is JSON-escape-free here so
+        // the test isolates the id/nodeId contribution from payload escape
+        // behavior already covered above.
+        let inner = #"{"format":"png","width":1,"height":1,"capturedAtMs":0}"#
+        let baseId = "req-1"
+        let baseNodeId = "node-1"
+        let longNodeId = String(repeating: "a", count: 100_000)
+
+        let baseProjection = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: inner,
+            requestId: baseId,
+            nodeId: baseNodeId)
+        let longProjection = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: inner,
+            requestId: baseId,
+            nodeId: longNodeId)
+        let extraNodeIdBytes = longNodeId.utf8.count - baseNodeId.utf8.count
+        #expect(longProjection - baseProjection >= extraNodeIdBytes)
+
+        struct Frame: Encodable {
+            let type: String
+            let id: String
+            let method: String
+            let params: Params
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+        let longFrame = Frame(
+            type: "req",
+            id: UUID().uuidString,
+            method: "node.invoke.result",
+            params: Frame.Params(
+                id: baseId,
+                nodeId: longNodeId,
+                ok: true,
+                payloadJSON: inner))
+        let serializedLong = try JSONEncoder().encode(longFrame)
+        #expect(longProjection >= serializedLong.count)
+
+        // A near-25 MiB nodeId on its own must push the projection past the
+        // gateway transport ceiling so the snapshot guard rejects the request
+        // before it reaches the WebSocket. This is the false-accept case in
+        // the original review: previously the projection only added a fixed
+        // 1 KiB envelope reserve, so this would have been treated as in-budget.
+        let oversizedNodeId = String(repeating: "n", count: 25 * 1024 * 1024)
+        let oversizedProjection = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: "{}",
+            requestId: baseId,
+            nodeId: oversizedNodeId)
+        #expect(oversizedProjection > 25 * 1024 * 1024)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

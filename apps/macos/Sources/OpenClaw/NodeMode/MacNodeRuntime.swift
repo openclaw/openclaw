@@ -5,11 +5,15 @@ import OpenClawKit
 
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
-    // Fixed budget reserved for the outer `node.invoke.result` RequestFrame
-    // envelope (type/id/method/params/id/nodeId/ok/payloadJSON keys, braces,
-    // quotes, and UUID-shaped values). Comfortably overestimates the ~350 B
-    // typical envelope so the precise post-encode check has slack for longer
-    // nodeId or error-object drift.
+    // Fixed budget reserved for the static parts of the outer
+    // `node.invoke.result` RequestFrame envelope: the constant keys
+    // (`type`/`id`/`method`/`params`/`id`/`nodeId`/`ok`/`payloadJSON`), the
+    // method-name literal, braces, quotes, the per-frame top-level request id
+    // (UUID-shaped), and the `ok: true|false` literal. The per-request `id`
+    // and `nodeId` strings are added on top of this reserve by
+    // `projectedOuterFrameBytes(forPayloadJSON:requestId:nodeId:)` because
+    // gateway node ids are only `NonEmptyString` (no upper length bound) and
+    // can grow large enough to overflow a fixed reserve on their own.
     private static let maxScreenSnapshotOuterFrameReserveBytes = 1024
     // Cheap lower-bound used to short-circuit obviously over-budget raw
     // snapshots before we pay for base64 + JSON encoding. Anything at or above
@@ -442,7 +446,11 @@ actor MacNodeRuntime {
             height: res.height,
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
-        if Self.projectedOuterFrameBytes(forPayloadJSON: payload) > Self.maxGatewayPayloadBytes {
+        if Self.projectedOuterFrameBytes(
+            forPayloadJSON: payload,
+            requestId: req.id,
+            nodeId: req.nodeId) > Self.maxGatewayPayloadBytes
+        {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
@@ -1049,23 +1057,40 @@ extension MacNodeRuntime {
 
     // Project the serialized byte count of the outer `node.invoke.result`
     // RequestFrame when `payload` is embedded as a JSON string in its
-    // `payloadJSON` field. The outer `JSONEncoder` escapes `"`, `\`, and `/`
-    // by default, so every such byte in `payload` consumes 2 outer bytes
-    // instead of 1. This captures both the JSON-string wrapping of the inner
-    // payload and any `\/` sequences the inner encoder already emitted for
-    // base64 `/` characters, so the result stays above the actual serialized
-    // WebSocket frame size regardless of per-platform JSONEncoder escape
-    // settings.
-    static func projectedOuterFrameBytes(forPayloadJSON payload: String) -> Int {
-        let utf8 = payload.utf8
-        var escapeOverhead = 0
-        for byte in utf8 where byte == UInt8(ascii: "\"")
+    // `payloadJSON` field, the per-request `id` is echoed in the inner
+    // `params.id` field, and the gateway-supplied `nodeId` is echoed in
+    // `params.nodeId`. The outer `JSONEncoder` escapes `"`, `\`, and `/` by
+    // default, so every such byte in any of those three strings consumes 2
+    // outer bytes instead of 1. Including `id` and `nodeId` byte counts here
+    // matters because gateway node ids are only `NonEmptyString` on the wire
+    // (no upper length bound), so a long node id paired with a near-budget
+    // payload could otherwise pass a fixed-reserve guard and still overflow
+    // the 25 MiB transport ceiling at send time.
+    static func projectedOuterFrameBytes(
+        forPayloadJSON payload: String,
+        requestId: String,
+        nodeId: String?) -> Int
+    {
+        let payloadBytes = payload.utf8.count + Self.jsonStringEscapeOverhead(payload)
+        let idBytes = requestId.utf8.count + Self.jsonStringEscapeOverhead(requestId)
+        let nodeIdBytes = nodeId
+            .map { $0.utf8.count + Self.jsonStringEscapeOverhead($0) } ?? 0
+        return maxScreenSnapshotOuterFrameReserveBytes + payloadBytes + idBytes + nodeIdBytes
+    }
+
+    // Count of extra bytes the outer `JSONEncoder` emits when `s` is wrapped
+    // as a JSON string value: every `"`, `\`, and `/` byte costs one extra
+    // backslash on the wire. Used by `projectedOuterFrameBytes` to project
+    // the post-encode length without paying for a real outer encode pass.
+    static func jsonStringEscapeOverhead(_ s: String) -> Int {
+        var overhead = 0
+        for byte in s.utf8 where byte == UInt8(ascii: "\"")
             || byte == UInt8(ascii: "\\")
             || byte == UInt8(ascii: "/")
         {
-            escapeOverhead += 1
+            overhead += 1
         }
-        return maxScreenSnapshotOuterFrameReserveBytes + utf8.count + escapeOverhead
+        return overhead
     }
 
     private nonisolated static func canvasEnabled() -> Bool {

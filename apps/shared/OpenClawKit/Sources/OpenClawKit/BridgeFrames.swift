@@ -13,12 +13,25 @@ public struct BridgeInvokeRequest: Codable, Sendable {
     public let id: String
     public let command: String
     public let paramsJSON: String?
+    // Echoes the gateway-side `node.invoke.request.nodeId` so handlers that
+    // need to reason about the outgoing `node.invoke.result` envelope (for
+    // example a payload-size guard) can see the same string the gateway will
+    // echo back. Optional and defaulted so existing call sites that build a
+    // request without the gateway plumbing continue to compile.
+    public let nodeId: String?
 
-    public init(type: String = "invoke", id: String, command: String, paramsJSON: String? = nil) {
+    public init(
+        type: String = "invoke",
+        id: String,
+        command: String,
+        paramsJSON: String? = nil,
+        nodeId: String? = nil)
+    {
         self.type = type
         self.id = id
         self.command = command
         self.paramsJSON = paramsJSON
+        self.nodeId = nodeId
     }
 }
 

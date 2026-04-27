@@ -10,7 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- macOS/screen snapshots: reject malformed `screen.snapshot` params, bound large snapshot payloads against the projected outer `node.invoke.result` frame size (accounting for JSON escape and envelope overhead, not just base64 expansion), surface caller-facing validation errors (invalid `screenIndex`, no attached displays) as `INVALID_REQUEST` instead of a generic capture failure, and return stable capture-failure errors instead of leaking framework detail. (#68186) Thanks @shaun0927.
+- macOS/screen snapshots: reject malformed `screen.snapshot` params, bound large snapshot payloads against the projected outer `node.invoke.result` frame size (accounting for JSON escape, envelope overhead, and the dynamic per-request `id`/`nodeId` byte lengths in addition to base64 expansion so unbounded gateway node ids cannot bypass the guard), surface caller-facing validation errors (invalid `screenIndex`, no attached displays) as `INVALID_REQUEST` instead of a generic capture failure, and return stable capture-failure errors instead of leaking framework detail. (#68186) Thanks @shaun0927.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
 - Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
