@@ -60,7 +60,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     const configuredCustomBindHost = customBindHost?.trim();
     if (!configuredCustomBindHost) {
       throw new Error(
-        'gateway.bind=custom requires gateway.customBindHost.\nFix: add "customBindHost": "<your-ip>" to the gateway section in openclaw.json.',
+        'gateway.bind=custom requires gateway.customBindHost.\nFix: add "customBindHost": "YOUR_IP" to the gateway section in openclaw.json.',
       );
     }
     if (!isValidIPv4(configuredCustomBindHost)) {
@@ -153,7 +153,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (authMode === "trusted-proxy") {
     if (trustedProxies.length === 0) {
       throw new Error(
-        'gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP.\nFix: add "trustedProxies": ["<proxy-ip>"] to the gateway section in openclaw.json.',
+        'gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP.\nFix: add "trustedProxies": ["PROXY_IP"] to the gateway section in openclaw.json.',
       );
     }
     if (isLoopbackHost(bindHost)) {

@@ -74,7 +74,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
         },
         expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+          /gateway auth mode=trusted-proxy requires gateway\.trustedProxies to be configured[\s\S]*Fix: add "trustedProxies":/,
       },
       {
         name: "loopback binding without loopback trusted proxy",
@@ -86,7 +86,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         expectedMessage:
-          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
+          /gateway auth mode=trusted-proxy with bind=loopback requires gateway\.trustedProxies to include 127\.0\.0\.1[\s\S]*Fix: add "127\.0\.0\.1" to the gateway\.trustedProxies array/,
       },
       {
         name: "lan binding without trusted proxies",
@@ -99,7 +99,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         expectedMessage:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+          /gateway auth mode=trusted-proxy requires gateway\.trustedProxies to be configured[\s\S]*Fix: add "trustedProxies":/,
       },
     ])("rejects $name", async ({ cfg, expectedMessage }) => {
       await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
@@ -159,18 +159,18 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "lan binding with explicit none auth",
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
-        expectedMessage: "refusing to bind gateway",
+        expectedMessage: /refusing to bind gateway[\s\S]*Fix: run `openclaw config set gateway\.auth\.mode token`/,
       },
       {
         name: "loopback binding that resolves to non-loopback host",
         cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
         host: "0.0.0.0",
-        expectedMessage: "gateway bind=loopback resolved to non-loopback host",
+        expectedMessage: /gateway bind=loopback resolved to non-loopback host[\s\S]*Fix: remove the --host flag override/,
       },
       {
         name: "custom bind without customBindHost",
         cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
-        expectedMessage: "gateway.bind=custom requires gateway.customBindHost",
+        expectedMessage: /gateway\.bind=custom requires gateway\.customBindHost[\s\S]*Fix: add "customBindHost": "YOUR_IP"/,
       },
       {
         name: "custom bind with invalid customBindHost",
@@ -181,7 +181,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: TOKEN_AUTH,
           },
         },
-        expectedMessage: "gateway.bind=custom requires a valid IPv4 customBindHost",
+        expectedMessage: /gateway\.bind=custom requires a valid IPv4 customBindHost[\s\S]*Fix: use a valid IPv4 address like "192\.168\.1\.100"/,
       },
       {
         name: "custom bind with mismatched resolved host",
@@ -193,7 +193,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         host: "0.0.0.0",
-        expectedMessage: "gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0",
+        expectedMessage: /gateway bind=custom requested 192\.168\.1\.100 but resolved 0\.0\.0\.0[\s\S]*Fix: remove the --host flag/,
       },
     ])("rejects $name", async ({ cfg, host, expectedMessage }) => {
       await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
@@ -212,7 +212,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
           port: 18789,
         }),
-      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
+      ).rejects.toThrow(/non-loopback Control UI requires gateway\.controlUi\.allowedOrigins[\s\S]*Fix: add "allowedOrigins": \["https:\/\/your-domain\.com"\]/);
     });
 
     it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
