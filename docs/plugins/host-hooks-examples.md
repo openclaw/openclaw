@@ -96,9 +96,9 @@ not participate in that category.
 
 ---
 
-# Recipe gallery (one section per contract)
+## Recipe gallery (one section per contract)
 
-## 1. Plugin-owned session state: `api.registerSessionExtension(...)`
+### 1. Plugin-owned session state: `api.registerSessionExtension(...)`
 
 **What it does**
 
@@ -246,7 +246,7 @@ export default definePluginEntry({
 
 ---
 
-## 2. Patching session state from clients: `sessions.pluginPatch`
+### 2. Patching session state from clients: `sessions.pluginPatch`
 
 **What it does**
 
@@ -345,7 +345,7 @@ async function denyDeploy(sessionKey: string, reason: string) {
 
 ---
 
-## 3. Durable next-turn context: `api.enqueueNextTurnInjection(...)`
+### 3. Durable next-turn context: `api.enqueueNextTurnInjection(...)`
 
 **What it does**
 
@@ -392,7 +392,7 @@ api.registerCommand({
       sessionKey: ctx.sessionKey,
       text: `[note saved] previous answer captured at ${new Date().toISOString()}`,
       placement: "prepend_context",
-      idempotencyKey: `note-save:${ctx.sessionKey ?? "unknown"}:${ctx.args ?? "default"}`,
+      idempotencyKey: `note-save:${ctx.sessionKey ?? "unknown"}`,
       ttlMs: 5 * 60_000, // 5 min
     });
     return { content: "Saved.", continueAgent: false };
@@ -474,7 +474,7 @@ idempotencyKey)`.
 
 ---
 
-## 4. Same-turn context from drained injections: `agent_turn_prepare`
+### 4. Same-turn context from drained injections: `agent_turn_prepare`
 
 **What it does**
 
@@ -571,7 +571,7 @@ api.on(
 
 ---
 
-## 5. Heartbeat-only prompt context: `heartbeat_prompt_contribution`
+### 5. Heartbeat-only prompt context: `heartbeat_prompt_contribution`
 
 **What it does**
 
@@ -686,7 +686,7 @@ export default definePluginEntry({
 
 ---
 
-## 6. Bundled-only pre-plugin policy: `api.registerTrustedToolPolicy(...)`
+### 6. Bundled-only pre-plugin policy: `api.registerTrustedToolPolicy(...)`
 
 **What it does**
 
@@ -719,13 +719,23 @@ params, requireApproval}`.
 **Minimal example**
 
 ```typescript
+import fs from "node:fs/promises";
+import path from "node:path";
+
 api.registerTrustedToolPolicy({
   id: "workspace-policy",
   description: "Block writes outside the configured workspace root",
-  evaluate: (event) => {
+  evaluate: async (event) => {
     if (event.toolName !== "write_file") return;
-    const path = String(event.params?.path ?? "");
-    if (!path.startsWith("/Users/me/work/")) {
+    const workspaceRoot = await fs.realpath("/Users/me/work");
+    let targetPath: string;
+    try {
+      targetPath = await fs.realpath(String(event.params?.path ?? ""));
+    } catch {
+      return { allow: false, reason: "path is not readable" };
+    }
+    const relative = path.relative(workspaceRoot, targetPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
       return { allow: false, reason: "path outside workspace root" };
     }
     return undefined;
@@ -823,7 +833,7 @@ export default definePluginEntry({
 
 ---
 
-## 7. Tool catalog and inventory metadata: `api.registerToolMetadata(...)`
+### 7. Tool catalog and inventory metadata: `api.registerToolMetadata(...)`
 
 **What it does**
 
@@ -917,7 +927,7 @@ export default definePluginEntry({
 
 ---
 
-## 8. Scoped commands with continuation: `api.registerCommand(...)`
+### 8. Scoped commands with continuation: `api.registerCommand(...)`
 
 **What it does**
 
@@ -1068,7 +1078,7 @@ export default definePluginEntry({
 
 ---
 
-## 9. Command-then-continue: `PluginCommandResult.continueAgent`
+### 9. Command-then-continue: `PluginCommandResult.continueAgent`
 
 **What it does**
 
@@ -1135,7 +1145,7 @@ sequenceDiagram
 
 ---
 
-## 10. Data-only Control UI surfaces: `api.registerControlUiDescriptor(...)`
+### 10. Data-only Control UI surfaces: `api.registerControlUiDescriptor(...)`
 
 **What it does**
 
@@ -1228,7 +1238,7 @@ row. The plugin only ships data — never UI code.
 
 ---
 
-## 11. Sanitized event subscriptions: `api.registerAgentEventSubscription(...)`
+### 11. Sanitized event subscriptions: `api.registerAgentEventSubscription(...)`
 
 **What it does**
 
@@ -1359,7 +1369,7 @@ export default definePluginEntry({
 
 ---
 
-## 12. Per-run plugin context: `setRunContext` / `getRunContext` / `clearRunContext`
+### 12. Per-run plugin context: `setRunContext` / `getRunContext` / `clearRunContext`
 
 **What it does**
 
@@ -1464,7 +1474,7 @@ sequenceDiagram
 
 ---
 
-## 13. Session scheduler jobs: `api.registerSessionSchedulerJob(...)`
+### 13. Session scheduler jobs: `api.registerSessionSchedulerJob(...)`
 
 **What it does**
 
@@ -1592,7 +1602,7 @@ jobId)` — duplicates within that triple are rejected.
 
 ---
 
-## 14. Runtime lifecycle cleanup: `api.registerRuntimeLifecycle(...)`
+### 14. Runtime lifecycle cleanup: `api.registerRuntimeLifecycle(...)`
 
 **What it does**
 
@@ -1657,7 +1667,7 @@ flowchart TD
 
 ---
 
-## 15. The cleanup matrix at a glance
+### 15. The cleanup matrix at a glance
 
 The four `PluginHostCleanupReason` values fire different combinations of
 host-driven cleanup. This table is the contract:
@@ -1679,13 +1689,13 @@ host-driven cleanup. This table is the contract:
 
 ---
 
-# Composition recipes
+## Composition recipes
 
 The single-hook recipes above show how each contract behaves alone. Real
 plugins compose 2–6 hooks. Here are the canonical archetypes, fully
 worked.
 
-## Recipe A: Approval workflow plugin
+### Recipe A: Approval workflow plugin
 
 **Goal.** Operator runs a sensitive command (deploy, release, escalation).
 The plugin pauses execution, opens an approval card in Control UI, and
@@ -1848,7 +1858,7 @@ async function markPending(_sessionKey: string, _version: string): Promise<void>
 
 ---
 
-## Recipe B: Workspace policy gate
+### Recipe B: Workspace policy gate
 
 **Goal.** Bundled-only host policy. Block any tool call whose path argument
 escapes the configured workspace root, before any third-party plugin can
@@ -1922,7 +1932,7 @@ function normalize(p: string): string {
 
 ---
 
-## Recipe C: Background lifecycle monitor
+### Recipe C: Background lifecycle monitor
 
 **Goal.** Watch long-running runs. Open an incident timeline, schedule
 periodic ticks, surface elapsed time only on heartbeats, clean up on
@@ -2063,7 +2073,7 @@ export default definePluginEntry({
 
 ---
 
-## Recipe D: Setup / onboarding wizard
+### Recipe D: Setup / onboarding wizard
 
 **Goal.** First-run onboarding flow that walks the operator through provider
 auth, workspace selection, and a smoke test. Each step persists progress so
@@ -2143,7 +2153,7 @@ export default definePluginEntry({
 
 ---
 
-## Recipe E: Review assistant
+### Recipe E: Review assistant
 
 **Goal.** Watch tool failures, queue diagnostic context for the next turn,
 tag review-relevant tools in the catalog, surface session review status.
@@ -2220,7 +2230,7 @@ async function summarizeFailure(_event: unknown): Promise<string> {
 
 ---
 
-# Patterns and pitfalls
+## Patterns and pitfalls
 
 ## Compose, don't subclass
 
@@ -2284,7 +2294,7 @@ mirror its assertions in your own tests:
 
 ---
 
-# Cleanup matrix end-to-end
+## Cleanup matrix end-to-end
 
 This sequence is the canonical "operator disables a plugin that uses every
 host-hook contract":
@@ -2334,7 +2344,7 @@ sequenceDiagram
 
 ---
 
-# Testing your plugin against host hooks
+## Testing your plugin against host hooks
 
 The contract test file (`src/plugins/contracts/host-hooks.contract.test.ts`)
 is 1,637 lines of executable spec. Every plugin that touches a host-hook
@@ -2413,7 +2423,7 @@ host fixtures to exercise every contract above.
 
 ---
 
-# Closing
+## Closing
 
 If you've made it this far, you have the full picture: 14 host-hook
 contracts, 5 composition recipes, the cleanup matrix, and a testing
