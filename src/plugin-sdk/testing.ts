@@ -43,6 +43,7 @@ export {
 export { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
+export { maybeLoadShellEnvForGenerationProviders } from "../test-utils/generation-live-test-helpers.js";
 export { __testing } from "../acp/control-plane/manager.js";
 export { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 export { runAcpRuntimeAdapterContract } from "../acp/runtime/adapter-contract.testkit.js";
@@ -51,6 +52,7 @@ export { buildCommandTestParams } from "../auto-reply/reply/commands-spawn.test-
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
+export { createTestRegistry } from "../test-utils/channel-plugins.js";
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
 export { sanitizeTerminalText } from "../terminal/safe-text.js";

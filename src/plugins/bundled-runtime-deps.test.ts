@@ -999,6 +999,79 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
   });
 
+  it("reports missing root-dist mirror deps for selected bundled plugins", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { chokidar: "^5.0.0" },
+      }),
+    );
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+      enabledByDefault: true,
+    });
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "refresh-CZ2n5WoB.js"),
+      `import chokidar from "chokidar";\n`,
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["chokidar@^5.0.0"]);
+    expect(result.deps[0]?.pluginIds).toEqual(["memory-core"]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["chokidar@^5.0.0"]);
+  });
+
+  it("does not report root-dist mirror deps for inactive bundled plugin owners", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { chokidar: "^5.0.0" },
+      }),
+    );
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "slack",
+      deps: {},
+      channels: ["slack"],
+    });
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "refresh-CZ2n5WoB.js"),
+      `import chokidar from "chokidar";\n`,
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      selectedPluginIds: ["slack"],
+      config: {
+        channels: { slack: { botToken: "xoxb-token" } },
+      },
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps).toEqual([]);
+    expect(result.missing).toEqual([]);
+  });
+
   it("reports missing mirrored core runtime deps for startup plugins without own deps", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

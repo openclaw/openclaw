@@ -82,6 +82,7 @@ The full scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-ma
 
 - threading — `matrix-thread-*`, `matrix-subagent-thread-spawn`
 - top-level / DM / room — `matrix-top-level-reply-shape`, `matrix-room-*`, `matrix-dm-*`
+- streaming and tool progress — `matrix-room-partial-streaming-preview`, `matrix-room-quiet-streaming-preview`, `matrix-room-tool-progress-*`, `matrix-room-block-streaming`
 - media — `matrix-media-type-coverage`, `matrix-room-image-understanding-attachment`, `matrix-attachment-only-ignored`, `matrix-unsupported-media-safe`
 - routing — `matrix-room-autojoin-invite`, `matrix-secondary-room-*`
 - reactions — `matrix-reaction-*`

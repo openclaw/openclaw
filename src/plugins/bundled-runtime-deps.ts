@@ -68,8 +68,9 @@ const BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
 const BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
+const BUNDLED_EXTENSION_DIST_DIR = "extensions";
 const BUNDLED_RUNTIME_MIRROR_PLUGIN_REGION_RE = /(?:^|\n)\/\/#region extensions\/[^/\s]+(?:\/|$)/u;
-const MIRRORED_PACKAGE_RUNTIME_DEP_NAMES = ["tslog"] as const;
+const MIRRORED_CORE_RUNTIME_DEP_NAMES = ["tslog"] as const;
 const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
@@ -464,9 +465,13 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
   };
 }
 
-function collectMirroredPackageRuntimeDeps(packageRoot: string | null): {
+function collectMirroredPackageRuntimeDeps(
+  packageRoot: string | null,
+  ownerPluginIds?: ReadonlySet<string>,
+): {
   name: string;
   version: string;
+  pluginIds: string[];
 }[] {
   if (!packageRoot) {
     return [];
@@ -476,9 +481,188 @@ function collectMirroredPackageRuntimeDeps(packageRoot: string | null): {
     return [];
   }
   const runtimeDeps = collectRuntimeDeps(packageJson);
-  return MIRRORED_PACKAGE_RUNTIME_DEP_NAMES.flatMap((name) => {
+  const coreRuntimeDeps = MIRRORED_CORE_RUNTIME_DEP_NAMES.flatMap((name) => {
     const dep = parseInstallableRuntimeDep(name, runtimeDeps[name]);
-    return dep ? [dep] : [];
+    return dep ? [{ ...dep, pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID] }] : [];
+  });
+  return mergeRuntimeDepEntries([
+    ...coreRuntimeDeps,
+    ...collectRootDistMirroredRuntimeDeps({
+      packageRoot,
+      runtimeDeps,
+      ownerPluginIds,
+    }),
+  ]);
+}
+
+function packageNameFromSpecifier(specifier: string): string | null {
+  if (
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("node:") ||
+    specifier.startsWith("#")
+  ) {
+    return null;
+  }
+  const [first, second] = specifier.split("/");
+  if (!first) {
+    return null;
+  }
+  return first.startsWith("@") && second ? `${first}/${second}` : first;
+}
+
+function extractStaticRuntimeImportSpecifiers(source: string): string[] {
+  const specifiers = new Set<string>();
+  const patterns = [
+    /\bfrom\s*["']([^"']+)["']/g,
+    /\bimport\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        specifiers.add(match[1]);
+      }
+    }
+  }
+  return [...specifiers];
+}
+
+function walkRuntimeDistJavaScriptFiles(params: {
+  rootDir: string;
+  skipTopLevelDirs?: ReadonlySet<string>;
+}): string[] {
+  if (!fs.existsSync(params.rootDir)) {
+    return [];
+  }
+  const files: string[] = [];
+  const queue = [params.rootDir];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        const isSkippedTopLevelDir =
+          path.resolve(current) === path.resolve(params.rootDir) &&
+          params.skipTopLevelDirs?.has(entry.name);
+        if (entry.name !== "node_modules" && !isSkippedTopLevelDir) {
+          queue.push(fullPath);
+        }
+        continue;
+      }
+      if (
+        entry.isFile() &&
+        BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS.has(path.extname(entry.name))
+      ) {
+        files.push(fullPath);
+      }
+    }
+  }
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+function isPluginOwnedDistImporter(params: {
+  relativePath: string;
+  source: string;
+  pluginIds: readonly string[];
+}): boolean {
+  return params.pluginIds.some((pluginId) => {
+    const pluginPathPrefix = `${BUNDLED_EXTENSION_DIST_DIR}/${pluginId}/`;
+    return (
+      params.relativePath.startsWith(pluginPathPrefix) ||
+      params.source.includes(`//#region ${pluginPathPrefix}`)
+    );
+  });
+}
+
+function collectBundledRuntimeDependencyOwners(packageRoot: string): Map<
+  string,
+  {
+    name: string;
+    version: string;
+    pluginIds: string[];
+  }
+> {
+  const extensionsDir = path.join(packageRoot, "dist", "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return new Map();
+  }
+  const owners = new Map<string, { name: string; version: string; pluginIds: string[] }>();
+  for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const pluginId = entry.name;
+    const packageJson = readJsonObject(path.join(extensionsDir, pluginId, "package.json"));
+    if (!packageJson) {
+      continue;
+    }
+    for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
+      const dep = parseInstallableRuntimeDep(name, rawVersion);
+      if (!dep) {
+        continue;
+      }
+      const existing = owners.get(dep.name);
+      if (existing) {
+        existing.pluginIds = [...new Set([...existing.pluginIds, pluginId])].toSorted(
+          (left, right) => left.localeCompare(right),
+        );
+        continue;
+      }
+      owners.set(dep.name, { ...dep, pluginIds: [pluginId] });
+    }
+  }
+  return owners;
+}
+
+function collectRootDistMirroredRuntimeDeps(params: {
+  packageRoot: string;
+  runtimeDeps: Record<string, unknown>;
+  ownerPluginIds?: ReadonlySet<string>;
+}): { name: string; version: string; pluginIds: string[] }[] {
+  const dependencyOwners = collectBundledRuntimeDependencyOwners(params.packageRoot);
+  if (dependencyOwners.size === 0) {
+    return [];
+  }
+  const mirrored = new Map<string, { name: string; version: string; pluginIds: string[] }>();
+  const distDir = path.join(params.packageRoot, "dist");
+  for (const filePath of walkRuntimeDistJavaScriptFiles({
+    rootDir: distDir,
+    skipTopLevelDirs: new Set(["extensions"]),
+  })) {
+    const source = fs.readFileSync(filePath, "utf8");
+    const relativePath = path.relative(distDir, filePath).replaceAll(path.sep, "/");
+    for (const specifier of extractStaticRuntimeImportSpecifiers(source)) {
+      const dependencyName = packageNameFromSpecifier(specifier);
+      if (!dependencyName) {
+        continue;
+      }
+      const owner = dependencyOwners.get(dependencyName);
+      if (!owner) {
+        continue;
+      }
+      if (
+        params.ownerPluginIds &&
+        !owner.pluginIds.some((pluginId) => params.ownerPluginIds?.has(pluginId))
+      ) {
+        continue;
+      }
+      if (isPluginOwnedDistImporter({ relativePath, source, pluginIds: owner.pluginIds })) {
+        continue;
+      }
+      const dep = parseInstallableRuntimeDep(dependencyName, params.runtimeDeps[dependencyName]);
+      if (dep) {
+        mirrored.set(dep.name, { ...dep, pluginIds: owner.pluginIds });
+      }
+    }
+  }
+  return [...mirrored.values()].toSorted((left, right) => {
+    const nameOrder = left.name.localeCompare(right.name);
+    return nameOrder === 0 ? left.version.localeCompare(right.version) : nameOrder;
   });
 }
 
@@ -1376,11 +1560,7 @@ export function scanBundledPluginRuntimeDeps(params: {
   });
   const packageRuntimeDeps =
     pluginIds.length > 0
-      ? collectMirroredPackageRuntimeDeps(params.packageRoot).map((dep) => ({
-          name: dep.name,
-          version: dep.version,
-          pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID],
-        }))
+      ? collectMirroredPackageRuntimeDeps(params.packageRoot, new Set(pluginIds))
       : [];
   const allDeps = mergeRuntimeDepEntries([...deps, ...packageRuntimeDeps]);
   const packageInstallRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(
@@ -1987,7 +2167,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
   const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
   const packageRuntimeDeps =
     packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot)
-      ? collectMirroredPackageRuntimeDeps(packageRoot)
+      ? collectMirroredPackageRuntimeDeps(packageRoot, new Set([params.pluginId]))
       : [];
   const deps = mergeInstallableRuntimeDeps([...pluginDeps, ...packageRuntimeDeps]);
   if (deps.length === 0) {

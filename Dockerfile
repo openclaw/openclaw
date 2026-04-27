@@ -156,6 +156,10 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 WORKDIR /app
 
 # Install runtime system utilities missing from bookworm-slim.
+# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
+# so it must be installed explicitly here. Without it `/etc/ssl/certs/`
+# stays empty and every HTTPS outbound dies at TLS handshake with
+# `error setting certificate file`.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \

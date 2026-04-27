@@ -554,13 +554,23 @@ export async function handleFeishuMessage(params: {
     const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
     // DEBUG: log(`feishu[${account.accountId}]: groupPolicy=${groupPolicy}`);
 
+    // A group that is explicitly configured under `channels.feishu.groups.<chat_id>`
+    // is treated as admitted regardless of `groupAllowFrom`. The reporter case in
+    // #67687 only sets `groups.<chat_id>.requireMention=false` and leaves
+    // `groupAllowFrom` empty; with the schema-default `groupPolicy="allowlist"`,
+    // an empty allowlist would otherwise reject the group before any per-group
+    // `requireMention` override is evaluated.
+    const groupExplicitlyConfigured = groupConfig !== undefined;
+
     // Check if this GROUP is allowed (groupAllowFrom contains group IDs like oc_xxx, not user IDs)
-    const groupAllowed = isFeishuGroupAllowed({
-      groupPolicy,
-      allowFrom: groupAllowFrom,
-      senderId: ctx.chatId, // Check group ID, not sender ID
-      senderName: undefined,
-    });
+    const groupAllowed =
+      groupExplicitlyConfigured ||
+      isFeishuGroupAllowed({
+        groupPolicy,
+        allowFrom: groupAllowFrom,
+        senderId: ctx.chatId, // Check group ID, not sender ID
+        senderName: undefined,
+      });
 
     if (!groupAllowed) {
       log(

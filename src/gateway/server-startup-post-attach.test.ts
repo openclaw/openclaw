@@ -127,7 +127,7 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime, startGatewaySidecars } =
+const { startGatewayPostAttachRuntime, startGatewaySidecars, __testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
   await import("./server-startup-unavailable-methods.js");
@@ -223,6 +223,35 @@ describe("startGatewayPostAttachRuntime", () => {
     resumeSidecars();
     await runtimePromise;
     expect(returned).toBe(true);
+  });
+
+  it("continues channel startup when primary model prewarm hangs", async () => {
+    vi.useFakeTimers();
+    const log = { warn: vi.fn() };
+    const prewarm = vi.fn(async () => {
+      await new Promise(() => undefined);
+    });
+
+    try {
+      const promise = __testing.prewarmConfiguredPrimaryModelWithTimeout(
+        {
+          cfg: {} as never,
+          log,
+          timeoutMs: 25,
+        },
+        prewarm as never,
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await promise;
+
+      expect(prewarm).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        "startup model warmup timed out after 25ms; continuing channel startup",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {

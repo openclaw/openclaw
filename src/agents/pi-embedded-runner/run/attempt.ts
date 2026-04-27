@@ -78,6 +78,7 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -314,6 +315,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
+  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -480,7 +482,8 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  return stripRuntimeContextCustomMessages(normalized);
 }
 
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
@@ -2657,19 +2660,35 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
-              await queueRuntimeContextForNextTurn({
-                session: activeSession,
-                runtimeContext: promptSubmission.runtimeContext,
-              });
+              const runtimeContext = promptSubmission.runtimeContext?.trim();
+              const runtimeSystemPrompt = runtimeContext
+                ? composeSystemPromptWithHookContext({
+                    baseSystemPrompt: systemPromptText,
+                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                  })
+                : undefined;
+              if (runtimeSystemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              }
+              try {
+                await queueRuntimeContextForNextTurn({
+                  session: activeSession,
+                  runtimeContext,
+                });
 
-              // Only pass images option if there are actually images to pass
-              // This avoids potential issues with models that don't expect the images parameter
-              if (imageResult.images.length > 0) {
-                await abortable(
-                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-                );
-              } else {
-                await abortable(activeSession.prompt(promptSubmission.prompt));
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await abortable(
+                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(promptSubmission.prompt));
+                }
+              } finally {
+                if (runtimeSystemPrompt) {
+                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
+                }
               }
             }
           }

@@ -96,6 +96,42 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
     expect(input[0]).toHaveProperty("details");
   });
+
+  it("keeps runtime-context transcript entries out of the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible ask" }],
+        timestamp: 1,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "secret runtime context",
+        display: false,
+        timestamp: 2,
+      },
+      {
+        role: "custom",
+        customType: "other-extension-context",
+        content: "normal custom context",
+        display: false,
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output).toHaveLength(2);
+    expect(output).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ customType: "openclaw.runtime-context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
+    );
+  });
 });
 
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
