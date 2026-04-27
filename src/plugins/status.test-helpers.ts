@@ -143,6 +143,7 @@ export function createPluginLoadResult(
   } = overrides;
   return {
     plugins,
+    statusProviders: [],
     diagnostics: [],
     channels: [],
     channelSetups: [],

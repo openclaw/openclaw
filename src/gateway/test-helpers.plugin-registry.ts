@@ -7,6 +7,7 @@ import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.j
 function createStubPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
+    statusProviders: [],
     tools: [],
     hooks: [],
     typedHooks: [],

@@ -184,6 +184,7 @@ import type {
   TranscriptSourceProvider,
   MigrationProviderPlugin,
   OpenClawPluginService,
+  PluginStatusProvider,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginHookHandlerMap,
@@ -590,6 +591,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       runtimes,
       source: record.source,
       rootDir: record.rootDir,
+    });
+  };
+
+  const registerStatusProvider = (record: PluginRecord, provider: PluginStatusProvider) => {
+    registry.statusProviders.push({
+      pluginId: record.id,
+      provider,
     });
   };
 
@@ -2733,6 +2741,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {
+              registerStatusProvider: (provider) => registerStatusProvider(record, provider),
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),

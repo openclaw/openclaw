@@ -2518,6 +2518,16 @@ export type PluginSetupAutoEnableProbe = (
   ctx: PluginSetupAutoEnableContext,
 ) => string | string[] | null | undefined;
 
+/**
+ * Contributes arbitrary status strings to future host status surfaces.
+ */
+export type PluginStatusProvider = {
+  /** A unique identifier for this provider. */
+  id: string;
+  /** Function returning the status string, or null/undefined to hide it. */
+  getStatus: () => string | null | undefined;
+};
+
 export type OpenClawPluginSessionStateApi = {
   /** Register plugin-owned session state projected into Gateway session rows. */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
@@ -2607,7 +2617,7 @@ export type OpenClawPluginApi = {
    *
    * This surface is broader than hooks. Prefer hooks for third-party
    * automation/integration unless you need native registry integration.
-   */
+  */
   runtime: PluginRuntime;
   logger: PluginLogger;
   /**
@@ -2621,6 +2631,8 @@ export type OpenClawPluginApi = {
   runContext: OpenClawPluginRunContextApi;
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
+  /** Register a plugin-owned status provider for future host status surfaces. */
+  registerStatusProvider: (provider: PluginStatusProvider) => void;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,

@@ -117,6 +117,7 @@ import type {
   PluginSessionTurnUnscheduleByTagResult,
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
+  PluginStatusProvider,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
@@ -138,6 +139,7 @@ export type {
   MigrationProviderPlugin,
   MigrationSummary,
   OpenClawPluginApi,
+  PluginStatusProvider,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
