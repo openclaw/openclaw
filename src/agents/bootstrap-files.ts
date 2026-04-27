@@ -26,8 +26,11 @@ export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
+
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
+
 const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
 
@@ -61,7 +64,6 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
     if (stat.isSymbolicLink()) {
       return false;
     }
-
     const fh = await fs.open(sessionFile, "r");
     try {
       const bytesToRead = Math.min(stat.size, CONTINUATION_SCAN_MAX_TAIL_BYTES);
@@ -79,13 +81,11 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
         }
         text = text.slice(firstNewline + 1);
       }
-
       const records = text
         .split(/\r?\n/u)
         .filter((line) => line.trim().length > 0)
         .slice(-CONTINUATION_SCAN_MAX_RECORDS);
       let compactedAfterLatestAssistant = false;
-
       for (let i = records.length - 1; i >= 0; i--) {
         const line = records[i];
         if (!line) {
@@ -116,7 +116,6 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
           return !compactedAfterLatestAssistant;
         }
       }
-
       return false;
     } finally {
       await fh.close();
@@ -226,16 +225,83 @@ function filterHeartbeatBootstrapFile(
   return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
+/**
+ * Standard bootstrap filenames that should trigger a warning if they exist in agentDir
+ * but are not being loaded from the workspace.
+ */
+const STANDARD_BOOTSTRAP_FILENAMES = [
+  "SOUL.md",
+  "AGENTS.md",
+  "TOOLS.md",
+  "USER.md",
+  "IDENTITY.md",
+  "HEARTBEAT.md",
+  "BOOTSTRAP.md",
+  "MEMORY.md",
+] as const;
+
+/**
+ * Check if standard bootstrap files exist in agentDir and emit warnings if they are
+ * present but won't be loaded into the system prompt.
+ */
+async function warnIfAgentDirHasBootstrapFiles(params: {
+  agentDir?: string;
+  workspaceDir: string;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  if (!params.agentDir || !params.warn) {
+    return;
+  }
+
+  try {
+    const agentDirResolved = path.resolve(params.agentDir);
+    const agentDirExists = await fs
+      .access(agentDirResolved)
+      .then(() => true)
+      .catch(() => false);
+
+    if (!agentDirExists) {
+      return;
+    }
+
+    // Check each standard bootstrap filename
+    for (const filename of STANDARD_BOOTSTRAP_FILENAMES) {
+      const filePath = path.join(agentDirResolved, filename);
+      try {
+        await fs.access(filePath);
+        // File exists in agentDir - emit warning
+        params.warn(
+          `Warning: ${filename} found in agentDir (${agentDirResolved}) but will not be loaded. ` +
+            `Bootstrap files are only read from workspace (${params.workspaceDir}). ` +
+            `Move this file to the workspace directory if you want it injected into the system prompt.`,
+        );
+      } catch {
+        // File doesn't exist in agentDir, skip
+      }
+    }
+  } catch {
+    // Silently ignore errors checking agentDir
+  }
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  agentDir?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
+  // Emit warning if bootstrap files exist in agentDir but won't be loaded
+  await warnIfAgentDirHasBootstrapFiles({
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    warn: params.warn,
+  });
+
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
@@ -249,7 +315,6 @@ export async function resolveBootstrapFilesForRun(params: {
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
-
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
     workspaceDir: params.workspaceDir,
@@ -271,6 +336,7 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  agentDir?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
