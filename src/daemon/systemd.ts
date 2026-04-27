@@ -354,6 +354,17 @@ function readSystemctlEffectiveUser(): string | null {
   }
 }
 
+function readSystemctlEffectiveUid(): number | null {
+  if (typeof process.geteuid !== "function") {
+    return null;
+  }
+  try {
+    return process.geteuid();
+  } catch {
+    return null;
+  }
+}
+
 function isNonRootUser(user: string | null): user is string {
   return Boolean(user && user !== "root");
 }
@@ -364,15 +375,20 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
 } {
   const sudoUser = env.SUDO_USER?.trim() || null;
   const envUser = readSystemctlEnvUser(env);
+  const effectiveUid = readSystemctlEffectiveUid();
   const effectiveUser = readSystemctlEffectiveUser();
-  const machineUser = isNonRootUser(envUser)
-    ? envUser
-    : isNonRootUser(sudoUser)
-      ? sudoUser
-      : effectiveUser || envUser || sudoUser || null;
+  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
+  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  const machineUser = isSudoToRoot
+    ? sudoUser
+    : isNonRootUser(envUser)
+      ? envUser
+      : isNonRootUser(sudoUser)
+        ? sudoUser
+        : effectiveUser || envUser || sudoUser || null;
   return {
     machineUser,
-    preferMachineScope: isNonRootUser(sudoUser) && !isNonRootUser(envUser),
+    preferMachineScope: isSudoToRoot,
   };
 }
 
