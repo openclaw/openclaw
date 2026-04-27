@@ -97,11 +97,15 @@ export const handleDockCommand: CommandHandler = async (params, _allowTextComman
     };
   }
 
-  if (params.sessionEntry) {
-    params.sessionEntry.lastChannel = targetChannelRaw;
-    params.sessionEntry.lastTo = targetPeerId;
-    await persistSessionEntry(params);
+  if (!params.sessionEntry) {
+    return {
+      shouldContinue: false,
+      reply: { text: "Cannot dock: no active session entry found." },
+    };
   }
+  params.sessionEntry.lastChannel = targetChannelRaw;
+  params.sessionEntry.lastTo = targetPeerId;
+  await persistSessionEntry(params);
 
   return {
     shouldContinue: false,
