@@ -1609,6 +1609,7 @@ export function createExecTool(
         return executeNodeHostCommand({
           command: params.command,
           workdir,
+          workdirExplicit: explicitWorkdir !== undefined,
           env,
           requestedEnv: params.env,
           requestedNode: params.node?.trim(),
