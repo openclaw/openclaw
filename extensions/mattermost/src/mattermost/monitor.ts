@@ -10,6 +10,7 @@ import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
+  fetchMattermostPost,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
@@ -420,6 +421,72 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
   const suffix = mediaList.length === 1 ? label : `${label}s`;
   const tag = allImages ? "<media:image>" : "<media:document>";
   return `${tag} (${mediaList.length} ${suffix})`;
+}
+
+export type MattermostHydratedThreadContext = {
+  replyToBody?: string;
+  replyToSender?: string;
+  threadStarterBody?: string;
+};
+
+function buildMattermostPostContextBody(post: MattermostPost): string | undefined {
+  const body = normalizeOptionalString(post.message) ?? "";
+  const fileCount = (post.file_ids ?? []).filter((fileId) =>
+    normalizeOptionalString(fileId),
+  ).length;
+  const filePlaceholder = fileCount
+    ? `[Mattermost ${fileCount === 1 ? "file" : `${fileCount} files`}]`
+    : "";
+  return normalizeOptionalString([body, filePlaceholder].filter(Boolean).join("\n"));
+}
+
+function formatMattermostContextSender(user: MattermostUser | null, fallbackUserId: string) {
+  return (
+    normalizeOptionalString(user?.username) ??
+    normalizeOptionalString(user?.nickname) ??
+    normalizeOptionalString([user?.first_name, user?.last_name].filter(Boolean).join(" ")) ??
+    fallbackUserId
+  );
+}
+
+export async function hydrateMattermostThreadContext(params: {
+  client: MattermostClient;
+  currentPostId?: string | null;
+  threadRootId?: string | null;
+  resolveUserInfo?: (userId: string) => Promise<MattermostUser | null>;
+  log?: (message: string) => void;
+}): Promise<MattermostHydratedThreadContext> {
+  const rootPostId = normalizeOptionalString(params.threadRootId);
+  if (!rootPostId || rootPostId === normalizeOptionalString(params.currentPostId)) {
+    return {};
+  }
+
+  try {
+    const rootPost = await fetchMattermostPost(params.client, rootPostId);
+    const body = buildMattermostPostContextBody(rootPost);
+    if (!body) {
+      return {};
+    }
+
+    const rootSenderId = normalizeOptionalString(rootPost.user_id);
+    const rootSender = rootSenderId
+      ? formatMattermostContextSender(
+          params.resolveUserInfo ? await params.resolveUserInfo(rootSenderId) : null,
+          rootSenderId,
+        )
+      : undefined;
+
+    return {
+      replyToBody: body,
+      replyToSender: rootSender,
+      threadStarterBody: body,
+    };
+  } catch (error) {
+    params.log?.(
+      `mattermost: failed to hydrate thread context root=${rootPostId}: ${String(error)}`,
+    );
+    return {};
+  }
 }
 
 function buildMattermostWsUrl(baseUrl: string): string {
@@ -1539,6 +1606,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 timestamp: entry.timestamp,
               }))
             : undefined;
+        const hydratedThreadContext = await hydrateMattermostThreadContext({
+          client,
+          currentPostId: post.id,
+          threadRootId,
+          resolveUserInfo,
+          log: logVerboseMessage,
+        });
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: combinedBody,
           BodyForAgent: bodyText,
@@ -1572,6 +1646,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
           ReplyToId: effectiveReplyToId,
           MessageThreadId: effectiveReplyToId,
+          ReplyToBody: hydratedThreadContext.replyToBody,
+          ReplyToSender: hydratedThreadContext.replyToSender,
+          ThreadStarterBody: hydratedThreadContext.threadStarterBody,
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
           CommandAuthorized: commandAuthorized,

@@ -9,6 +9,7 @@ import {
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
   evaluateMattermostMentionGate,
+  hydrateMattermostThreadContext,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
@@ -74,6 +75,63 @@ function createDraftStreamMock(postId: string | undefined = "preview-post-1") {
 beforeEach(() => {
   vi.clearAllMocks();
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
+});
+
+describe("hydrateMattermostThreadContext", () => {
+  it("hydrates reply and thread starter bodies from the root post", async () => {
+    const client = createMattermostClientMock();
+    vi.mocked(client.request).mockResolvedValueOnce({
+      id: "root-1",
+      user_id: "user-1",
+      message: "root context",
+      file_ids: ["file-1"],
+    });
+
+    const context = await hydrateMattermostThreadContext({
+      client,
+      currentPostId: "reply-1",
+      threadRootId: "root-1",
+      resolveUserInfo: vi.fn(async () => ({ id: "user-1", username: "alice" })),
+    });
+
+    expect(client.request).toHaveBeenCalledWith("/posts/root-1");
+    expect(context).toEqual({
+      replyToBody: "root context\n[Mattermost file]",
+      replyToSender: "alice",
+      threadStarterBody: "root context\n[Mattermost file]",
+    });
+  });
+
+  it("skips hydration when there is no separate thread root", async () => {
+    const client = createMattermostClientMock();
+
+    await expect(
+      hydrateMattermostThreadContext({
+        client,
+        currentPostId: "root-1",
+        threadRootId: "root-1",
+      }),
+    ).resolves.toEqual({});
+
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("fails open when the root post cannot be fetched", async () => {
+    const client = createMattermostClientMock();
+    const log = vi.fn();
+    vi.mocked(client.request).mockRejectedValueOnce(new Error("not found"));
+
+    await expect(
+      hydrateMattermostThreadContext({
+        client,
+        currentPostId: "reply-1",
+        threadRootId: "root-1",
+        log,
+      }),
+    ).resolves.toEqual({});
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("failed to hydrate thread context"));
+  });
 });
 
 function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
