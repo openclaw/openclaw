@@ -176,13 +176,23 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
     try {
       await connectOk(started.ws);
 
-      const rotate = await rpcReq<{ token?: string }>(started.ws, "device.token.rotate", {
-        deviceId: device.deviceId,
-        role: "operator",
-        scopes: ["operator.pairing"],
-      });
+      const rotate = await rpcReq<{ rotatedAtMs?: number; token?: string }>(
+        started.ws,
+        "device.token.rotate",
+        {
+          deviceId: device.deviceId,
+          role: "operator",
+          scopes: ["operator.pairing"],
+        },
+      );
       expect(rotate.ok).toBe(true);
-      expect(rotate.payload?.token).toBeTruthy();
+      // Successful rotation reports the rotation timestamp; the freshly generated
+      // bearer token is intentionally NOT echoed back over the RPC channel (#66773).
+      expect(rotate.payload?.rotatedAtMs).toBeTypeOf("number");
+      expect(rotate.payload?.token).toBeUndefined();
+      // Verify the new token actually persisted server-side via the pairing store.
+      const pairedAfterRotate = await getPairedDevice(device.deviceId);
+      expect(pairedAfterRotate?.tokens?.operator?.token).toBeTruthy();
 
       const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
         deviceId: device.deviceId,

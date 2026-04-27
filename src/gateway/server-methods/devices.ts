@@ -362,12 +362,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
+    // SECURITY: Do NOT include the rotated bearer token in the RPC response payload.
+    // The freshly generated credential is persisted server-side; callers that need it
+    // should retrieve it through the documented bootstrap/provisioning path. Returning
+    // it here exposes the token to RPC trace logs, browser devtools, and proxies.
     respond(
       true,
       {
         deviceId,
         role: entry.role,
-        token: entry.token,
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
       },

@@ -294,12 +294,14 @@ describe("deviceHandlers", () => {
       {
         deviceId: " device-1 ",
         role: "operator",
-        token: "new-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },
       undefined,
     );
+    // SECURITY: rotate response MUST NOT leak the freshly rotated bearer token (#66773)
+    const rotatePayload = (opts.respond as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(rotatePayload).not.toHaveProperty("token");
   });
 
   it("treats normalized device ids as self-owned for token rotation", async () => {
@@ -328,12 +330,14 @@ describe("deviceHandlers", () => {
       {
         deviceId: " device-1 ",
         role: "operator",
-        token: "new-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },
       undefined,
     );
+    // SECURITY: rotate response MUST NOT leak the freshly rotated bearer token (#66773)
+    const rotatePayload = (opts.respond as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(rotatePayload).not.toHaveProperty("token");
   });
 
   it("rejects rotating a token for a role that was never approved", async () => {
