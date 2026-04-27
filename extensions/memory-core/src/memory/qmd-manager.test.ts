@@ -1037,7 +1037,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("refuses to rebind a stderr-only path-pattern conflict without collection metadata", async () => {
+  it("surfaces a manual repair hint for stderr-only path-pattern conflicts", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1102,6 +1102,14 @@ describe("QmdMemoryManager", () => {
     expect(removeCalls).toEqual([]);
     expect(addCalls).toEqual(["workspace-main"]);
     expect(logWarnMock).not.toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "qmd reported existing collection workspace-legacy, but list output did not include verifiable path/pattern metadata",
+      ),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection remove workspace-legacy"),
+    );
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("qmd collection add skipped for workspace-main"),
     );
