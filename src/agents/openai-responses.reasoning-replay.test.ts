@@ -46,7 +46,7 @@ const ZERO_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 } as const;
 
-function buildReasoningPart(id = "rs_test") {
+function buildReasoningPart(id = "rs_test", extra?: Record<string, unknown>) {
   return {
     type: "thinking" as const,
     thinking: "internal",
@@ -54,6 +54,7 @@ function buildReasoningPart(id = "rs_test") {
       type: "reasoning",
       id,
       summary: [],
+      ...extra,
     }),
   };
 }
@@ -172,6 +173,56 @@ describe("openai-responses reasoning replay", () => {
     ) as Record<string, unknown> | undefined;
     expect(functionCall?.call_id).toBe("call_123");
     expect(functionCall?.id).toBe("fc_123");
+  });
+
+  it("preserves encrypted reasoning content when replaying thinking signatures", async () => {
+    const assistantToolOnly = buildAssistantMessage({
+      stopReason: "toolUse",
+      content: [
+        buildReasoningPart("rs_test", {
+          encrypted_content: "opaque-encrypted-content",
+          summary: "brief summary",
+        }),
+        {
+          type: "toolCall",
+          id: "call_123|fc_123",
+          name: "noop",
+          arguments: {},
+        },
+      ],
+    });
+
+    const toolResult: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_123|fc_123",
+      toolName: "noop",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: Date.now(),
+    };
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Call noop.", timestamp: Date.now() },
+        assistantToolOnly,
+        toolResult,
+        { role: "user", content: "Now reply with ok.", timestamp: Date.now() },
+      ],
+      tools: [
+        {
+          name: "noop",
+          description: "no-op",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        },
+      ],
+    });
+
+    const reasoning = input.find(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "reasoning",
+    ) as Record<string, unknown> | undefined;
+    expect(reasoning?.encrypted_content).toBe("opaque-encrypted-content");
+    expect(reasoning?.summary).toBe("brief summary");
   });
 
   it("still replays reasoning when paired with an assistant message", async () => {

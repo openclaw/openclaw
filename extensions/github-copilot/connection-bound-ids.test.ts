@@ -5,18 +5,15 @@ import {
 } from "./connection-bound-ids.js";
 
 describe("github-copilot connection-bound response IDs", () => {
-  it("rewrites opaque message response item IDs deterministically", () => {
+  it("drops opaque message response item IDs instead of synthesizing mismatched IDs", () => {
     const originalId = Buffer.from(`message-${"x".repeat(24)}`).toString("base64");
-    const first = [{ id: originalId, type: "message" }];
-    const second = [{ id: originalId, type: "message" }];
+    const input = [{ id: originalId, type: "message" }];
 
-    expect(rewriteCopilotConnectionBoundResponseIds(first)).toBe(true);
-    expect(rewriteCopilotConnectionBoundResponseIds(second)).toBe(true);
-    expect(first[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
-    expect(first[0]?.id).toBe(second[0]?.id);
+    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(true);
+    expect(input[0]).not.toHaveProperty("id");
   });
 
-  it("uses response item type prefixes and preserves local IDs", () => {
+  it("drops opaque response item IDs and preserves local IDs", () => {
     const functionCallId = Buffer.from(`function-call-${"y".repeat(20)}`).toString("base64");
     const messageId = Buffer.from(`message-${"z".repeat(24)}`).toString("base64");
     const input = [
@@ -31,11 +28,11 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(input[0]?.id).toBe("rs_existing");
     expect(input[1]?.id).toBe("msg_existing");
     expect(input[2]?.id).toBe("fc_existing");
-    expect(input[3]?.id).toMatch(/^fc_[a-f0-9]{16}$/);
-    expect(input[4]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(input[3]).not.toHaveProperty("id");
+    expect(input[4]).not.toHaveProperty("id");
   });
 
-  it("preserves reasoning IDs regardless of encrypted_content", () => {
+  it("drops opaque reasoning IDs while preserving encrypted_content", () => {
     const withEncrypted = Buffer.from(`reasoning-${"e".repeat(24)}`).toString("base64");
     const withNull = Buffer.from(`reasoning-${"n".repeat(24)}`).toString("base64");
     const withoutField = Buffer.from(`reasoning-${"a".repeat(24)}`).toString("base64");
@@ -45,10 +42,11 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: withoutField, type: "reasoning" },
     ];
 
-    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(false);
-    expect(input[0]?.id).toBe(withEncrypted);
-    expect(input[1]?.id).toBe(withNull);
-    expect(input[2]?.id).toBe(withoutField);
+    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(true);
+    expect(input[0]).not.toHaveProperty("id");
+    expect(input[0]?.encrypted_content).toBe("opaque-encrypted-payload");
+    expect(input[1]).not.toHaveProperty("id");
+    expect(input[2]).not.toHaveProperty("id");
   });
 
   it("patches response payload input arrays only", () => {
@@ -56,7 +54,7 @@ describe("github-copilot connection-bound response IDs", () => {
     const payload = { input: [{ id: messageId, type: "message" }] };
 
     expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
-    expect(payload.input[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payload.input[0]).not.toHaveProperty("id");
     expect(rewriteCopilotResponsePayloadConnectionBoundIds(undefined)).toBe(false);
     expect(rewriteCopilotResponsePayloadConnectionBoundIds({ input: "text" })).toBe(false);
   });

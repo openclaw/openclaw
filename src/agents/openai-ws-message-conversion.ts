@@ -216,8 +216,7 @@ function parseThinkingSignature(value: unknown): ReplayableReasoningItem | null 
     return null;
   }
   try {
-    const signature = toReasoningSignature(JSON.parse(value));
-    return signature ? parseReasoningItem(signature) : null;
+    return parseReasoningItem(JSON.parse(value));
   } catch {
     return null;
   }
