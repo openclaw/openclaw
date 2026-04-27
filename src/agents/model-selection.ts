@@ -243,8 +243,8 @@ export function resolveSubagentConfiguredModelSelection(params: {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   return (
     normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model)
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
+    normalizeModelSelection(agentConfig?.model)
   );
 }
 

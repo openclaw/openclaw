@@ -15,7 +15,7 @@ const pruneLegacyStoreKeysMock = vi.fn();
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
-describe("spawnSubagentDirect runtime model persistence", () => {
+describe("spawnSubagentDirect model persistence", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
@@ -45,7 +45,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     );
   });
 
-  it("persists runtime model fields on the child session before starting the run", async () => {
+  it("persists selected model override fields on the child session before starting the run", async () => {
     const operations: string[] = [];
     callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
       operations.push(`gateway:${opts.method ?? "unknown"}`);
@@ -89,6 +89,12 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       sessionKey: /^agent:main:subagent:/,
       provider: "openai-codex",
       model: "gpt-5.4",
+    });
+    const persistedEntry = Object.values(persistedStore ?? {})[0];
+    expect(persistedEntry).toMatchObject({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);

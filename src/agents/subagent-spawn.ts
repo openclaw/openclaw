@@ -239,8 +239,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.model === "string" && patch.model.trim()) {
     const { provider, model } = splitModelRef(patch.model.trim());
     if (model) {
+      entry.modelOverride = model;
+      entry.modelOverrideSource = "auto";
       entry.model = model;
       if (provider) {
+        entry.providerOverride = provider;
         entry.modelProvider = provider;
       }
     }
