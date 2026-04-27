@@ -15,6 +15,7 @@ import {
   nextcloudTalkPairingTextAdapter,
   nextcloudTalkSecurityAdapter,
 } from "./channel.adapters.js";
+import { nextcloudTalkMessageActions } from "./channel.adapters.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
@@ -95,6 +96,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           }),
       },
       approvalCapability: nextcloudTalkApprovalAuth,
+      actions: nextcloudTalkMessageActions,
       doctor: nextcloudTalkDoctor,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
