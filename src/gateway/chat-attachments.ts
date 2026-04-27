@@ -271,7 +271,12 @@ export async function parseMessageWithAttachments(
         labelMime ||
         "application/octet-stream";
 
-      if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+      if (
+        sniffedMime &&
+        providedMime &&
+        !isGenericContainerMime(providedMime) &&
+        sniffedMime !== providedMime
+      ) {
         const usedSource =
           finalMime === sniffedMime
             ? "sniffed"
@@ -309,7 +314,11 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      if (shouldForceImageOffload && isImage && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
+      if (
+        shouldForceImageOffload &&
+        isImage &&
+        textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT
+      ) {
         log?.warn(
           `attachment ${label}: dropping image because text-only offload limit ` +
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
@@ -318,7 +327,8 @@ export async function parseMessageWithAttachments(
         continue;
       }
 
-      const shouldOffload = shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
+      const shouldOffload =
+        shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
 
       if (!shouldOffload) {
         images.push({ type: "image", data: b64, mimeType: finalMime });

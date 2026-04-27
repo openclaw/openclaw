@@ -2022,10 +2022,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
-      expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-      expect(mockState.lastDispatchCtx?.Body).toMatch(
-        /^summarize this\n\[media attached: media:\/\/inbound\//,
-      );
+      expect(mockState.lastDispatchImageOrder).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.Body).toBe("summarize this");
       expect(mockState.savedMediaCalls).toEqual([
         expect.objectContaining({
           contentType: "application/pdf",
@@ -2033,7 +2031,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           size: expect.any(Number),
         }),
       ]);
-      expect(message?.content).toMatch(/^summarize this\n\[media attached: media:\/\/inbound\//);
+      expect(message?.content).toBe("summarize this");
       expect(message?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
       expect(message?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
       expect(message?.MediaType).toBe("application/pdf");

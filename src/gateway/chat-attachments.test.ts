@@ -8,7 +8,9 @@ const saveMediaBufferMock = vi.hoisted(() =>
     contentType: mime,
   })),
 );
-const deleteMediaBufferMock = vi.hoisted(() => vi.fn(async () => undefined));
+const deleteMediaBufferMock = vi.hoisted(() =>
+  vi.fn(async (_id: string, _subdir?: string) => undefined),
+);
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
