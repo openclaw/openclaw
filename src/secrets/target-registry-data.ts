@@ -70,7 +70,10 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
 function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
-  for (const record of listBundledPluginMetadata()) {
+  for (const record of listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
     const secretInputs = record.manifest.configContracts?.secretInputs?.paths ?? [];
     for (const secretInput of secretInputs) {
       const entry = createPluginOpenClawConfigSecretTargetEntry(
