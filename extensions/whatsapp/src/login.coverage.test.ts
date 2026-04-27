@@ -19,7 +19,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   );
   return {
     ...actual,
-    loadConfig: () =>
+    getRuntimeConfig: () =>
       ({
         channels: {
           whatsapp: {

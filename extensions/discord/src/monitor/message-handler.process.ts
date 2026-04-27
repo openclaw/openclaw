@@ -384,6 +384,7 @@ export async function processDiscordMessage(
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
+  let modelParentSessionKey: string | undefined;
   if (threadChannel) {
     const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
     if (includeThreadStarter) {
@@ -423,6 +424,7 @@ export async function processDiscordMessage(
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
       });
+      modelParentSessionKey = parentSessionKey;
     }
     if (!threadParentInheritanceEnabled) {
       parentSessionKey = undefined;
@@ -522,6 +524,8 @@ export async function processDiscordMessage(
     ReplyToBody: filteredReplyContext?.body,
     ReplyToSender: filteredReplyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+    ModelParentSessionKey:
+      autoThreadContext?.ModelParentSessionKey ?? modelParentSessionKey ?? undefined,
     MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,

@@ -11,7 +11,7 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   }),
 }));

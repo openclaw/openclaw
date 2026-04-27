@@ -86,6 +86,30 @@ through PI, `openclaw doctor` warns and leaves the route unchanged.
 | Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
 | Embeddings                | memory embedding provider                                  | Yes                                                    |
 
+## Memory embeddings
+
+OpenClaw can use OpenAI, or an OpenAI-compatible embedding endpoint, for
+`memory_search` indexing and query embeddings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+      },
+    },
+  },
+}
+```
+
+For OpenAI-compatible endpoints that require asymmetric embedding labels, set
+`queryInputType` and `documentInputType` under `memorySearch`. OpenClaw forwards
+those as provider-specific `input_type` request fields: query embeddings use
+`queryInputType`; indexed memory chunks and batch indexing use
+`documentInputType`. See the [Memory configuration reference](/reference/memory-config#provider-specific-config) for the full example.
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.

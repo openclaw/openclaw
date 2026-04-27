@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -136,8 +137,8 @@ async function resolveDirectNodePushConfig() {
     : { ok: false as const, error: auth.error };
 }
 
-function resolveRelayNodePushConfig() {
-  const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+function resolveRelayNodePushConfig(cfg: OpenClawConfig) {
+  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway);
   return relay.ok
     ? { ok: true as const, relayConfig: relay.value }
     : { ok: false as const, error: relay.error };
@@ -245,6 +246,7 @@ function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
   client: { connect?: ConnectParams | null } | null;
+  cfg: OpenClawConfig;
 }): PendingNodeAction[] {
   const pending = listPendingNodeActions(params.nodeId);
   if (pending.length === 0) {
@@ -252,7 +254,7 @@ function resolveAllowedPendingNodeActions(params: {
   }
   const connect = params.client?.connect;
   const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
-  const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
+  const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
   });
@@ -302,7 +304,7 @@ function toPendingParamsJSON(params: unknown): string | undefined {
 
 export async function maybeWakeNodeWithApns(
   nodeId: string,
-  opts?: { force?: boolean; wakeReason?: string },
+  opts?: { force?: boolean; wakeReason?: string; cfg?: OpenClawConfig },
 ): Promise<NodeWakeAttempt> {
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
   nodeWakeById.set(nodeId, state);
@@ -332,7 +334,7 @@ export async function maybeWakeNodeWithApns(
 
       let wakeResult;
       if (registration.transport === "relay") {
-        const relay = resolveRelayNodePushConfig();
+        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
         if (!relay.ok) {
           return withDuration({
             available: false,
@@ -410,7 +412,10 @@ export async function maybeWakeNodeWithApns(
   }
 }
 
-export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
+export async function maybeSendNodeWakeNudge(
+  nodeId: string,
+  opts?: { cfg?: OpenClawConfig },
+): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -431,7 +436,7 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
   try {
     let result;
     if (registration.transport === "relay") {
-      const relay = resolveRelayNodePushConfig();
+      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
       if (!relay.ok) {
         return withDuration({
           sent: false,
@@ -781,7 +786,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "node.pending.pull": async ({ params, respond, client }) => {
+  "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({
         respond,
@@ -797,7 +802,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = resolveAllowedPendingNodeActions({ nodeId: trimmedNodeId, client });
+    const pending = resolveAllowedPendingNodeActions({
+      nodeId: trimmedNodeId,
+      client,
+      cfg: context.getRuntimeConfig(),
+    });
     respond(
       true,
       {
@@ -895,6 +904,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
+      const cfg = context.getRuntimeConfig();
       let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
         const wakeReqId = req.id;
@@ -903,7 +913,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
         );
 
-        const wake = await maybeWakeNodeWithApns(nodeId);
+        const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
         context.logGateway.info(
           `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
             `available=${wake.available} throttled=${wake.throttled} ` +
@@ -926,7 +936,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         nodeSession = context.nodeRegistry.get(nodeId);
         if (!nodeSession && wake.available) {
-          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true });
+          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true, cfg });
           context.logGateway.info(
             `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
               `available=${retryWake.available} throttled=${retryWake.throttled} ` +
@@ -951,7 +961,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         if (!nodeSession) {
           const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-          const nudge = await maybeSendNodeWakeNudge(nodeId);
+          const nudge = await maybeSendNodeWakeNudge(nodeId, { cfg });
           context.logGateway.info(
             `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
               `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
@@ -976,7 +986,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const cfg = loadConfig();
       const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
       const allowed = isNodeCommandAllowed({
         command,
@@ -1033,7 +1042,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             paramsJSON,
             idempotencyKey: p.idempotencyKey,
           });
-          const wake = await maybeWakeNodeWithApns(nodeId);
+          const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
           context.logGateway.info(
             `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
               `queuedId=${queued.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,

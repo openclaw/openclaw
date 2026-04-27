@@ -47,6 +47,9 @@ export const pluginSdkDocMetadata = {
   "channel-config-schema": {
     category: "channel",
   },
+  "channel-config-schema-legacy": {
+    category: "channel",
+  },
   "channel-contract": {
     category: "channel",
   },

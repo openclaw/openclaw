@@ -27,6 +27,7 @@ const configIoMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));

@@ -401,7 +401,7 @@ Without `--account <id>`, Matrix CLI commands use the implicit default account. 
 
     Startup also runs a conservative crypto bootstrap pass that reuses the current secret storage and cross-signing identity. If bootstrap state is broken, OpenClaw attempts a guarded repair even without `channels.matrix.password`; if the homeserver requires password UIA, startup logs a warning and stays non-fatal. Already-owner-signed devices are preserved.
 
-    See [Matrix migration](/install/migrating-matrix) for the full upgrade flow.
+    See [Matrix migration](/channels/matrix-migration) for the full upgrade flow.
 
   </Accordion>
 

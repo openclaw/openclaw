@@ -265,12 +265,50 @@ export function resolveControlUiClientVersion(params: {
     const page = new URL(pageUrl);
     const gateway = new URL(params.gatewayUrl, page);
     const allowedProtocols = new Set(["ws:", "wss:", "http:", "https:"]);
-    if (!allowedProtocols.has(gateway.protocol) || gateway.host !== page.host) {
+    if (!allowedProtocols.has(gateway.protocol) || !isSameControlUiVersionEndpoint(page, gateway)) {
       return undefined;
     }
     return serverVersion;
   } catch {
     return undefined;
+  }
+}
+
+function isSameControlUiVersionEndpoint(page: URL, gateway: URL): boolean {
+  if (gateway.host === page.host) {
+    return true;
+  }
+  return (
+    isLoopbackHostname(page.hostname) &&
+    isLoopbackHostname(gateway.hostname) &&
+    resolveUrlEffectivePort(page) === resolveUrlEffectivePort(gateway)
+  );
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    normalized === "127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function resolveUrlEffectivePort(url: URL): string {
+  if (url.port) {
+    return url.port;
+  }
+  switch (url.protocol) {
+    case "http:":
+    case "ws:":
+      return "80";
+    case "https:":
+    case "wss:":
+      return "443";
+    default:
+      return "";
   }
 }
 
@@ -393,6 +431,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       applySnapshot(host, hello);
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+        { applyIdentity: false },
       );
       // Process any pending abort from before the disconnect.
       if (host.pendingAbort) {

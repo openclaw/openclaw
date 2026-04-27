@@ -72,6 +72,7 @@ Default: `allowlist`
 - `true` — require @mention (default)
 - `false` — respond without @mention
 - Per-group override: `channels.feishu.groups.<chat_id>.requireMention`
+- Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
 ---
 

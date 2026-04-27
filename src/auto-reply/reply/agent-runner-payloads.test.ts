@@ -351,6 +351,7 @@ describe("buildReplyPayloads media filter integration", () => {
   it("extracts markdown image replies into final payload media urls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
+      extractMarkdownImages: true,
       payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
     });
 
@@ -365,6 +366,7 @@ describe("buildReplyPayloads media filter integration", () => {
   it("preserves inline caption text when lifting markdown image replies into media", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
+      extractMarkdownImages: true,
       payloads: [{ text: 'Look ![chart](https://example.com/chart.png "Quarterly chart") now' }],
     });
 
@@ -380,6 +382,7 @@ describe("buildReplyPayloads media filter integration", () => {
     const text = "Look ![chart](file:///etc/passwd) now";
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
+      extractMarkdownImages: true,
       payloads: [{ text }],
     });
 

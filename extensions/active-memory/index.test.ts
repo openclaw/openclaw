@@ -90,7 +90,13 @@ describe("active-memory plugin", () => {
         resolveStateDir: () => stateDir,
       },
       config: {
+        current: () => configFile,
         loadConfig: () => configFile,
+        replaceConfigFile: vi.fn(
+          async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
+            configFile = nextConfig;
+          },
+        ),
         writeConfigFile: vi.fn(async (nextConfig: Record<string, unknown>) => {
           configFile = nextConfig;
         }),
@@ -275,7 +281,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(offResult.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
     expect(configFile).toMatchObject({
       plugins: {
         entries: {

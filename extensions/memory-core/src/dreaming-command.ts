@@ -90,7 +90,7 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
         .split(/\s+/)
         .filter(Boolean)
         .map((token) => normalizeLowercaseStringOrEmpty(token));
-      const currentConfig = api.runtime.config.loadConfig();
+      const currentConfig = api.runtime.config.current() as OpenClawConfig;
 
       if (
         !firstToken ||
@@ -111,7 +111,10 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
         }
         const enabled = firstToken === "on";
         const nextConfig = updateDreamingEnabledInConfig(currentConfig, enabled);
-        await api.runtime.config.writeConfigFile(nextConfig);
+        await api.runtime.config.replaceConfigFile({
+          nextConfig,
+          afterWrite: { mode: "auto" },
+        });
         return {
           text: [
             `Dreaming ${enabled ? "enabled" : "disabled"}.`,
