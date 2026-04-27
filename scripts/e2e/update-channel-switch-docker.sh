@@ -43,7 +43,13 @@ mkdir -p "$git_root"
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 # The package-derived fixture can carry patchedDependencies whose targets are
 # absent from the trimmed tarball install; that should not block update preflight.
-printf "\nallowUnusedPatches=true\n" >>"$git_root/.npmrc"
+node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+const packageJsonPath = "/tmp/openclaw-git/package.json";
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+packageJson.pnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+NODE
 (
   cd "$git_root"
   npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
