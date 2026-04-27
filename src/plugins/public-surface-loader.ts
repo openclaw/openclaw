@@ -115,7 +115,12 @@ function shouldFallbackSourceArtifactRequireToJiti(error: unknown): boolean {
     return false;
   }
   const code = (error as NodeJS.ErrnoException).code;
-  return code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+    return false;
+  }
+  return /(?:Cannot find module|Cannot find package|imported from).+\.js(?:['"]|\b)/.test(
+    error.message,
+  );
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
