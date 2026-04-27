@@ -159,7 +159,7 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
           ),
           streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
             description:
-              'ACP-only stream target. Use "parent" to stream the ACP turn back to the requester instead of tracking it as a background sessions_spawn run.',
+              'ACP-only stream target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use "parent" to stream the ACP turn back to the requester instead of tracking it as a background sessions_spawn run.',
           }),
         }
       : {}),

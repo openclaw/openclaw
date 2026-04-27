@@ -73,7 +73,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
-        resumeSessionId?: unknown;
+        resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
     };
@@ -93,7 +93,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
-        resumeSessionId?: unknown;
+        resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
     };
@@ -103,7 +103,12 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     expect(schema.properties?.resumeSessionId).toBeDefined();
     expect(schema.properties?.streamTo).toBeDefined();
+    expect(schema.properties?.resumeSessionId?.description).toContain("ACP-only resume target");
+    expect(schema.properties?.resumeSessionId?.description).toContain(
+      'ignored for runtime="subagent"',
+    );
     expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
+    expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
