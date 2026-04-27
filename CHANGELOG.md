@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/plugin SDK: expose stable `agentId` on `ChannelOutboundContext` so channel plugins that model each agent as a distinct remote identity can attribute outbound sends without smuggling the id through display fields. Threaded from the existing upstream session/mirror context with the same precedence used for media-access scoping (`session > mirror`); `identity` (name/avatar/emoji/theme) remains the presentation-layer surface and is unchanged. Fixes #70905.
 - Codex: add Computer Use setup for Codex-mode agents, including `/codex computer-use status/install`, marketplace discovery, optional auto-install, and fail-closed MCP server checks before Codex-mode turns start. Fixes #72094. (#71842) Thanks @pash-openai.
 - Matrix/streaming: stream tool-progress updates into live Matrix preview edits by default when preview streaming is active, with `streaming.preview.toolProgress: false` to keep answer previews while hiding interim tool lines. Thanks @gumadeiras.
 - Plugins/models: wire manifest `modelCatalog.aliases` and `modelCatalog.suppressions` into model-catalog planning and built-in model suppression, with OpenAI stale Spark suppression now declared in the plugin manifest before runtime fallback. Thanks @shakkernerd.

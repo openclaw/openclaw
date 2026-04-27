@@ -133,6 +133,8 @@ type ChannelHandlerParams = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** See ChannelOutboundContext.agentId — stable agent attribution. (#70905) */
+  agentId?: string;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
@@ -329,6 +331,7 @@ function createChannelOutboundContextBase(
     cfg: params.cfg,
     to: params.to,
     accountId: params.accountId,
+    agentId: params.agentId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
@@ -894,6 +897,11 @@ async function deliverOutboundPayloadsCore(
     to,
     deps,
     accountId,
+    // Mirror existing precedence used for media-access scoping (line above
+    // in resolveAgentScopedOutboundMediaAccess): session > mirror. Surfaces
+    // the same id to channel adapters so non-inbound paths (heartbeat, cron,
+    // sessions_send, autonomous turns) can attribute outbound sends. (#70905)
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,

@@ -1367,6 +1367,92 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("propagates session.agentId into ChannelOutboundContext for adapter sendText (#70905)", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "m1" });
+    const customAdapter: ChannelOutboundAdapter = {
+      ...matrixOutboundForTest,
+      sendText,
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "matrix", outbound: customAdapter }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: vi.fn() },
+      session: { key: "agent:scoped:main", agentId: "scoped-agent" },
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ agentId: "scoped-agent" }));
+  });
+
+  it("falls back to mirror.agentId when session.agentId is absent (#70905)", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "m1" });
+    const customAdapter: ChannelOutboundAdapter = {
+      ...matrixOutboundForTest,
+      sendText,
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "matrix", outbound: customAdapter }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: vi.fn() },
+      mirror: { agentId: "mirror-agent", sessionKey: "agent:mirror:main" },
+    });
+
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ agentId: "mirror-agent" }));
+  });
+
+  it("omits agentId from ChannelOutboundContext when neither session nor mirror provides one (#70905)", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "m1" });
+    const customAdapter: ChannelOutboundAdapter = {
+      ...matrixOutboundForTest,
+      sendText,
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "matrix", outbound: customAdapter }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: vi.fn() },
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    const ctx = sendText.mock.calls[0]?.[0] as { agentId?: unknown };
+    expect(ctx.agentId).toBeUndefined();
+  });
+
   it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
     const { onError } = await runBestEffortPartialFailureDelivery();
 

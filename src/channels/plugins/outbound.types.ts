@@ -31,6 +31,17 @@ export type ChannelOutboundContext = {
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   accountId?: string | null;
+  /**
+   * Stable routing/attribution identifier for the originating agent. Distinct
+   * from display `identity` (name/avatar/emoji/theme), which is presentation-
+   * layer metadata. Channel plugins that model each agent as a separate remote
+   * identity (one row/handle per agent rather than a shared bot with per-
+   * message costumes) need this id to attribute outbound sends without
+   * smuggling the value through display fields. Available on inbound-driven
+   * replies via the originating route AND on heartbeat/cron/sessions_send/
+   * autonomous paths via the upstream session/mirror context. (#70905)
+   */
+  agentId?: string;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
