@@ -385,7 +385,7 @@ function hasTrackedActiveSessionRun(params: {
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
-  for (const active of params.context.chatAbortControllers.values()) {
+  for (const active of (params.context.chatAbortControllers ?? new Map()).values()) {
     if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
       return true;
     }
