@@ -545,12 +545,14 @@ describe("tryDispatchAcpReply", () => {
             list: [{ id: "codex-acp", agentDir }],
           },
           channels: {
-            discord: {
+            imessage: {
               attachmentRoots: [tempDir],
             },
           },
         }),
         ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
           MediaPath: imagePath,
           MediaType: "image/png",
         },
