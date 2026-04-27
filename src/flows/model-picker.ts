@@ -604,6 +604,27 @@ export async function promptDefaultModel(
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
+  let literalPrefixProvidersCache: Set<string> | undefined;
+  const resolveCachedLiteralPrefixProviders = async () => {
+    if (!literalPrefixProvidersCache) {
+      literalPrefixProvidersCache = await resolveLiteralPrefixProviderIds({
+        cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return literalPrefixProvidersCache;
+  };
+  const resolveConfiguredDisplayLabel = async () => {
+    const providerId = normalizeProviderId(resolved.provider);
+    if (!providerId) {
+      return configuredRaw || resolvedKey;
+    }
+    const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
+    return literalPrefixProviders.has(providerId)
+      ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
+      : configuredRaw || resolvedKey;
+  };
 
   if (
     loadCatalog &&
@@ -612,11 +633,12 @@ export async function promptDefaultModel(
     allowKeep &&
     normalizeProviderId(resolved.provider) === preferredProvider
   ) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [
       {
         value: KEEP_VALUE,
         label: configuredRaw
-          ? `Keep current (${configuredRaw})`
+          ? `Keep current (${configuredLabel})`
           : `Keep current (default: ${resolvedKey})`,
         hint:
           configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
@@ -653,12 +675,13 @@ export async function promptDefaultModel(
   }
 
   if (!loadCatalog) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [];
     if (allowKeep) {
       options.push({
         value: KEEP_VALUE,
         label: configuredRaw
-          ? `Keep current (${configuredRaw})`
+          ? `Keep current (${configuredLabel})`
           : `Keep current (default: ${resolvedKey})`,
         hint:
           configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
@@ -764,11 +787,7 @@ export async function promptDefaultModel(
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
-  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({
-    cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
   // for providers that set preserveLiteralProviderPrefix, so the user sees the

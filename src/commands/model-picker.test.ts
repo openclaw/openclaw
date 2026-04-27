@@ -341,6 +341,50 @@ describe("promptDefaultModel", () => {
     );
   });
 
+  it("shows literal double-prefix keep label before browsing provider catalogs", async () => {
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "nvidia",
+        preserveLiteralProviderPrefix: true,
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result).toEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(select.mock.calls[0]?.[0]).toMatchObject({
+      searchable: false,
+      initialValue: "__keep__",
+    });
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({
+        value: "__keep__",
+        label: "Keep current (nvidia/nvidia/nemotron-3-super-120b-a12b)",
+      }),
+      expect.objectContaining({ value: "__manual__" }),
+      expect.objectContaining({ value: "__browse__" }),
+    ]);
+  });
+
   it("keeps current preferred-provider models cold until browsing is requested", async () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
