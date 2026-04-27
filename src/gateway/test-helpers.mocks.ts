@@ -213,6 +213,7 @@ vi.mock("../config/io.js", async () => {
     ...actual.createConfigIO(),
     getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   }));
@@ -221,6 +222,7 @@ vi.mock("../config/io.js", async () => {
     createConfigIO,
     getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   };

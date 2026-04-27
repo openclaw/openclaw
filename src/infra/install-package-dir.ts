@@ -120,8 +120,8 @@ async function assertInstallBaseStable(params: {
   installBaseDir: string;
   expectedRealPath: string;
 }): Promise<void> {
-  const baseLstat = await fs.lstat(params.installBaseDir);
-  if (!baseLstat.isDirectory() || baseLstat.isSymbolicLink()) {
+  const baseStat = await fs.stat(params.installBaseDir);
+  if (!baseStat.isDirectory()) {
     throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
   }
   const currentRealPath = await fs.realpath(params.installBaseDir);

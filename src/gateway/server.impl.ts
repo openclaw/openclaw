@@ -36,6 +36,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -938,6 +939,8 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
         unavailableGatewayMethods,
+        getCronService: () =>
+          runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
         onPluginServices: (pluginServices) => {
           runtimeState.pluginServices = pluginServices;
         },

@@ -1031,10 +1031,12 @@ module:
 }
 ```
 
-Use it when setup, doctor, or configured-state flows need a cheap yes/no auth
-probe before the full channel plugin loads. The target export should be a small
-function that reads persisted state only; do not route it through the full
-channel runtime barrel.
+Use it when setup, doctor, status, or read-only presence flows need a cheap
+yes/no auth probe before the full channel plugin loads. Persisted auth state is
+not configured channel state: do not use this metadata to auto-enable plugins,
+repair runtime dependencies, or decide whether a channel runtime should load.
+The target export should be a small function that reads persisted state only; do
+not route it through the full channel runtime barrel.
 
 `openclaw.channel.configuredState` follows the same shape for cheap env-only
 configured checks:
