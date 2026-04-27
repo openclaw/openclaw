@@ -126,6 +126,7 @@ describe("production lint suppressions", () => {
       "src/tasks/task-flow-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
       "src/tasks/task-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
       "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
+      "src/test-utils/plugin-runtime-env.ts|typescript/no-unnecessary-type-parameters|2",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
       "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
