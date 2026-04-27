@@ -168,6 +168,18 @@ function setupPluginInstallDirs() {
   return { tmpDir, pluginDir, extensionsDir };
 }
 
+function writeMinimalPackagePlugin(pluginDir: string, name: string): void {
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name,
+      version: "1.0.0",
+      openclaw: { extensions: ["index.js"] },
+    }),
+  );
+  fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+}
+
 function setupInstallPluginFromDirFixture(params?: {
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -1398,6 +1410,116 @@ describe("installPluginFromArchive", () => {
       if (!result.ok) {
         expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
         expect(result.error).toContain("symlink target outside install root");
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows package installs when node_modules/openclaw points at the host package root",
+    async () => {
+      const { pluginDir, extensionsDir, tmpDir } = setupPluginInstallDirs();
+      const hostRoot = path.join(tmpDir, "host-openclaw");
+      fs.mkdirSync(hostRoot, { recursive: true });
+      fs.writeFileSync(path.join(hostRoot, "package.json"), '{"name":"openclaw"}\n');
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(hostRoot);
+      writeMinimalPackagePlugin(pluginDir, "openclaw-peer-plugin");
+
+      const nodeModulesDir = path.join(pluginDir, "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync(hostRoot, path.join(nodeModulesDir, "openclaw"), "junction");
+
+      const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+      expect(result.ok).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows package installs when node_modules/.bin/openclaw points inside the host package root",
+    async () => {
+      const { pluginDir, extensionsDir, tmpDir } = setupPluginInstallDirs();
+      const hostRoot = path.join(tmpDir, "host-openclaw");
+      fs.mkdirSync(hostRoot, { recursive: true });
+      fs.writeFileSync(path.join(hostRoot, "package.json"), '{"name":"openclaw"}\n');
+      const hostBin = path.join(hostRoot, "openclaw.mjs");
+      fs.writeFileSync(hostBin, "#!/usr/bin/env node\n");
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(hostRoot);
+      writeMinimalPackagePlugin(pluginDir, "openclaw-bin-peer-plugin");
+
+      const binDir = path.join(pluginDir, "node_modules", ".bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.symlinkSync(hostBin, path.join(binDir, "openclaw"), "file");
+
+      const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+      expect(result.ok).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails package installs when node_modules/openclaw points outside the host package root",
+    async () => {
+      const { pluginDir, extensionsDir, tmpDir } = setupPluginInstallDirs();
+      const hostRoot = path.join(tmpDir, "host-openclaw");
+      const spoofedRoot = path.join(tmpDir, "spoofed-openclaw");
+      fs.mkdirSync(hostRoot, { recursive: true });
+      fs.mkdirSync(spoofedRoot, { recursive: true });
+      fs.writeFileSync(path.join(hostRoot, "package.json"), '{"name":"openclaw"}\n');
+      fs.writeFileSync(path.join(spoofedRoot, "package.json"), '{"name":"openclaw"}\n');
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(hostRoot);
+      writeMinimalPackagePlugin(pluginDir, "spoofed-openclaw-peer-plugin");
+
+      const nodeModulesDir = path.join(pluginDir, "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync(spoofedRoot, path.join(nodeModulesDir, "openclaw"), "junction");
+
+      const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+        expect(result.error).toContain("node_modules/openclaw");
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails package installs for nested or non-exact openclaw node_modules symlinks",
+    async () => {
+      const cases = [
+        {
+          pluginName: "nested-openclaw-peer-plugin",
+          relativePath: path.join("node_modules", "vendor", "node_modules", "openclaw"),
+        },
+        {
+          pluginName: "uppercase-openclaw-peer-plugin",
+          relativePath: path.join("node_modules", "OpenClaw"),
+        },
+        {
+          pluginName: "trailing-space-openclaw-peer-plugin",
+          relativePath: path.join("node_modules", "openclaw "),
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const { pluginDir, extensionsDir, tmpDir } = setupPluginInstallDirs();
+        const hostRoot = path.join(tmpDir, "host-openclaw");
+        fs.mkdirSync(hostRoot, { recursive: true });
+        fs.writeFileSync(path.join(hostRoot, "package.json"), '{"name":"openclaw"}\n');
+        vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(hostRoot);
+        writeMinimalPackagePlugin(pluginDir, testCase.pluginName);
+
+        const symlinkPath = path.join(pluginDir, testCase.relativePath);
+        fs.mkdirSync(path.dirname(symlinkPath), { recursive: true });
+        fs.symlinkSync(hostRoot, symlinkPath, "junction");
+
+        const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+          expect(result.error).toContain(testCase.relativePath);
+        }
       }
     },
   );
