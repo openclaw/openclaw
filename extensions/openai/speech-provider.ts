@@ -34,6 +34,7 @@ type OpenAITtsProviderConfig = {
   baseUrl: string;
   model: string;
   voice: string;
+  timeoutMs?: number;
   speed?: number;
   instructions?: string;
   responseFormat?: OpenAiSpeechResponseFormat;
@@ -112,6 +113,7 @@ function normalizeOpenAIProviderConfig(
     ),
     model: trimToUndefined(raw?.model) ?? "gpt-4o-mini-tts",
     voice: trimToUndefined(raw?.voice) ?? "coral",
+    timeoutMs: asFiniteNumber(raw?.timeoutMs),
     speed: asFiniteNumber(raw?.speed),
     instructions: trimToUndefined(raw?.instructions),
     responseFormat: normalizeOpenAISpeechResponseFormat(raw?.responseFormat),
@@ -125,6 +127,7 @@ function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProvid
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voice: trimToUndefined(config.voice) ?? normalized.voice,
+    timeoutMs: asFiniteNumber(config.timeoutMs) ?? normalized.timeoutMs,
     speed: asFiniteNumber(config.speed) ?? normalized.speed,
     instructions: trimToUndefined(config.instructions) ?? normalized.instructions,
     responseFormat:

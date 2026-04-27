@@ -854,6 +854,29 @@ function sanitizeTtsErrorForLog(err: unknown): string {
   return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
+function resolveProviderAttemptTimeoutMs(params: {
+  explicitTimeoutMs?: number;
+  providerConfig: SpeechProviderConfig;
+  defaultTimeoutMs: number;
+}): number {
+  const explicitTimeout =
+    typeof params.explicitTimeoutMs === "number" && Number.isFinite(params.explicitTimeoutMs)
+      ? Math.floor(params.explicitTimeoutMs)
+      : undefined;
+  if (typeof explicitTimeout === "number" && explicitTimeout > 0) {
+    return explicitTimeout;
+  }
+  const providerTimeout =
+    typeof params.providerConfig.timeoutMs === "number" &&
+    Number.isFinite(params.providerConfig.timeoutMs)
+      ? Math.floor(params.providerConfig.timeoutMs)
+      : undefined;
+  if (typeof providerTimeout === "number" && providerTimeout > 0) {
+    return providerTimeout;
+  }
+  return params.defaultTimeoutMs;
+}
+
 function buildTtsFailureResult(
   errors: string[],
   attemptedProviders?: string[],
@@ -1117,7 +1140,10 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, persona, providers } = setup;
-  const timeoutMs = params.timeoutMs ?? config.timeoutMs;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? Math.floor(params.timeoutMs)
+      : undefined;
   const target = resolveTtsSynthesisTarget(params.channel);
 
   const errors: string[] = [];
@@ -1153,6 +1179,11 @@ export async function synthesizeSpeech(params: {
         logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const attemptTimeoutMs = resolveProviderAttemptTimeoutMs({
+        explicitTimeoutMs: timeoutMs,
+        providerConfig: resolvedProvider.providerConfig,
+        defaultTimeoutMs: config.timeoutMs,
+      });
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
@@ -1162,7 +1193,7 @@ export async function synthesizeSpeech(params: {
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target,
-        timeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       const synthesis = await resolvedProvider.provider.synthesize({
         text: prepared.text,
@@ -1170,7 +1201,7 @@ export async function synthesizeSpeech(params: {
         providerConfig: prepared.providerConfig,
         target,
         providerOverrides: prepared.providerOverrides,
-        timeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({
