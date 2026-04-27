@@ -31,6 +31,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("./pi-tools.before-tool-call.js", () => ({
   BeforeToolCallBlockedError: hookMocks.BeforeToolCallBlockedError,
+  buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+    content: [{ type: "text", text: reason }],
+    details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+  }),
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
   isBeforeToolCallBlockedError: (error: unknown) =>
     error instanceof hookMocks.BeforeToolCallBlockedError,

@@ -98,6 +98,10 @@ async function loadFreshAfterToolCallModulesForTest() {
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
     BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
+    buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+      content: [{ type: "text", text: reason }],
+      details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+    }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
     isBeforeToolCallBlockedError: (error: unknown) =>
       error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,

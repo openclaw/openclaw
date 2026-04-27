@@ -130,4 +130,56 @@ describe("handlePluginCommand", () => {
       reply: { text: "from plugin" },
     });
   });
+
+  it("enforces requiredScopes through the command handler path", async () => {
+    const actualCommands = await vi.importActual<typeof import("../../plugins/commands.js")>(
+      "../../plugins/commands.js",
+    );
+    const handler = vi.fn().mockResolvedValue({
+      text: "approved",
+      continueAgent: true,
+    });
+    const command = {
+      pluginId: "approval-plugin",
+      pluginName: "Approval Plugin",
+      pluginRoot: "/tmp/approval-plugin",
+      name: "approve-deploy",
+      description: "Approve deployment",
+      requiredScopes: ["operator.approvals"],
+      handler,
+    };
+    matchPluginCommandMock.mockReturnValue({
+      command,
+      args: "",
+    });
+    executePluginCommandMock.mockImplementation(actualCommands.executePluginCommand);
+
+    const denied = await handlePluginCommand(
+      buildPluginParams("/approve-deploy", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(denied).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ This command requires gateway scope: operator.approvals." },
+    });
+    expect(handler).not.toHaveBeenCalled();
+
+    const allowedParams = buildPluginParams("/approve-deploy", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    allowedParams.ctx.GatewayClientScopes = ["operator.approvals"];
+
+    const allowed = await handlePluginCommand(allowedParams, true);
+
+    expect(allowed).toEqual({
+      shouldContinue: true,
+      reply: { text: "approved" },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 });

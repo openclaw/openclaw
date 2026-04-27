@@ -11,7 +11,7 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
-  BeforeToolCallBlockedError,
+  buildBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
   runBeforeToolCallHook,
@@ -236,7 +236,13 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolCallId,
             });
             if (hookOutcome.blocked) {
-              throw new BeforeToolCallBlockedError(hookOutcome.reason);
+              if (hookOutcome.kind === "veto") {
+                return buildBlockedToolResult({
+                  reason: hookOutcome.reason,
+                  deniedReason: hookOutcome.deniedReason,
+                });
+              }
+              throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
           }
@@ -259,9 +265,8 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           }
           if (isBeforeToolCallBlockedError(err)) {
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
-            return buildToolExecutionErrorResult({
-              toolName: normalizedName,
-              message: err.reason,
+            return buildBlockedToolResult({
+              reason: err.reason,
             });
           }
           const described = describeToolExecutionError(err);
@@ -340,7 +345,13 @@ export function toClientToolDefinitions(
           ctx: hookContext,
         });
         if (outcome.blocked) {
-          throw new BeforeToolCallBlockedError(outcome.reason);
+          if (outcome.kind === "veto") {
+            return buildBlockedToolResult({
+              reason: outcome.reason,
+              deniedReason: outcome.deniedReason,
+            });
+          }
+          throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
         const paramsRecord = coerceParamsRecord(adjustedParams);

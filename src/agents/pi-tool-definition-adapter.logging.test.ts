@@ -99,8 +99,9 @@ describe("pi tool definition adapter logging", () => {
     expect(result).toEqual(
       expect.objectContaining({
         details: expect.objectContaining({
-          status: "error",
-          error: "blocked by policy",
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
         }),
       }),
     );

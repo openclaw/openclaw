@@ -39,7 +39,17 @@ export type HookContext = {
   loopDetection?: ToolLoopDetectionConfig;
 };
 
-type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
+type HookBlockedKind = "veto" | "failure";
+type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookOutcome =
+  | {
+      blocked: true;
+      kind?: HookBlockedKind;
+      deniedReason?: HookBlockedReason;
+      reason: string;
+      params?: unknown;
+    }
+  | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 
 const log = createSubsystemLogger("agents/tools");
@@ -173,7 +183,10 @@ async function requestPluginToolApproval(params: {
       safeOnResolution(PluginApprovalResolutions.CANCELLED);
       return {
         blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
         reason: approval.description || "Plugin approval request failed",
+        params: params.baseParams,
       };
     }
     const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
@@ -187,7 +200,10 @@ async function requestPluginToolApproval(params: {
         safeOnResolution(PluginApprovalResolutions.CANCELLED);
         return {
           blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
           reason: "Plugin approval unavailable (no approval route)",
+          params: params.baseParams,
         };
       }
     } else {
@@ -243,7 +259,13 @@ async function requestPluginToolApproval(params: {
       };
     }
     if (decision === PluginApprovalResolutions.DENY) {
-      return { blocked: true, reason: "Denied by user" };
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
+        reason: "Denied by user",
+        params: params.baseParams,
+      };
     }
     const timeoutBehavior = approval.timeoutBehavior ?? "deny";
     if (timeoutBehavior === "allow") {
@@ -252,22 +274,48 @@ async function requestPluginToolApproval(params: {
         params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
       };
     }
-    return { blocked: true, reason: "Approval timed out" };
+    return {
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Approval timed out",
+      params: params.baseParams,
+    };
   } catch (err) {
     safeOnResolution(PluginApprovalResolutions.CANCELLED);
     if (isAbortSignalCancellation(err, params.signal)) {
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
         blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
         reason: "Approval cancelled (run aborted)",
+        params: params.baseParams,
       };
     }
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
       reason: "Plugin approval required (gateway unavailable)",
+      params: params.baseParams,
     };
   }
+}
+
+export function buildBlockedToolResult(params: {
+  reason: string;
+  deniedReason?: HookBlockedReason;
+}) {
+  return {
+    content: [{ type: "text" as const, text: params.reason }],
+    details: {
+      status: "blocked",
+      deniedReason: params.deniedReason ?? "plugin-before-tool-call",
+      reason: params.reason,
+    },
+  };
 }
 
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
@@ -388,7 +436,10 @@ export async function runBeforeToolCallHook(args: {
         });
         return {
           blocked: true,
+          kind: "failure",
+          deniedReason: "tool-loop",
           reason: loopResult.message,
+          params,
         };
       }
       const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
@@ -443,7 +494,10 @@ export async function runBeforeToolCallHook(args: {
     if (trustedPolicyResult?.block) {
       return {
         blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
         reason: trustedPolicyResult.blockReason || "Tool call blocked by trusted plugin policy",
+        params,
       };
     }
     if (trustedPolicyResult?.requireApproval) {
@@ -475,7 +529,10 @@ export async function runBeforeToolCallHook(args: {
     if (hookResult?.block) {
       return {
         blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
         reason: hookResult.blockReason || "Tool call blocked by plugin hook",
+        params: policyAdjustedParams,
       };
     }
 
@@ -504,7 +561,10 @@ export async function runBeforeToolCallHook(args: {
     log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(cause)}`);
     return {
       blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-before-tool-call",
       reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,
+      params,
     };
   }
 }
@@ -529,7 +589,40 @@ export function wrapToolWithBeforeToolCallHook(
         signal,
       });
       if (outcome.blocked) {
-        throw new BeforeToolCallBlockedError(outcome.reason);
+        if (outcome.kind !== "veto") {
+          throw new Error(outcome.reason);
+        }
+        const normalizedToolName = normalizeToolName(toolName || "tool");
+        const trace = ctx?.trace
+          ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
+          : undefined;
+        const eventBase = {
+          ...(ctx?.runId && { runId: ctx.runId }),
+          ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
+          ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+          ...(trace && { trace }),
+          toolName: normalizedToolName,
+          ...(toolCallId && { toolCallId }),
+          paramsSummary: summarizeToolParams(outcome.params ?? params),
+        };
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.blocked",
+          ...eventBase,
+          reason: outcome.reason,
+          deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+        });
+        const blockedResult = buildBlockedToolResult({
+          reason: outcome.reason,
+          deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+        });
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: outcome.params ?? params,
+          toolCallId,
+          result: blockedResult,
+        });
+        return blockedResult;
       }
       if (toolCallId) {
         const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
