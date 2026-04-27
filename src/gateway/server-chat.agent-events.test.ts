@@ -340,7 +340,7 @@ describe("agent event handler", () => {
     },
   );
 
-  it("suppresses partial NO_REPLY lead fragment in final when lifecycle ends at underscore fragment", () => {
+  it("suppresses buffered NO_REPLY lead fragment in final when lifecycle ends at underscore fragment", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_150,
     });
@@ -366,7 +366,7 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("keeps final uppercase 'NO' replies when no control-token provenance arrives", () => {
+  it("keeps final uppercase 'NO' replies when no NO_REPLY lead-fragment provenance arrives", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_175,
     });
