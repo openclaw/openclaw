@@ -34,6 +34,15 @@ const MAX_PERSIST_FILE_BYTES = 4 * 1024 * 1024;
  * (which would let them poison the cache).
  */
 const PERSIST_FILE_MODE = 0o600;
+
+/**
+ * Directory mode for the persist file's parent directory: owner-only.
+ * Matches PERSIST_FILE_MODE so an attacker on a multi-tenant host can't
+ * traverse into the directory to enumerate other persist files or
+ * pre-create symlinks to be picked up by atomic-rename. Mirrors the
+ * mode the SDK helper uses (gpt-5.5 deep-review P2-D).
+ */
+const PERSIST_DIR_MODE = 0o700;
 const PERSIST_DEBOUNCE_MS = 5_000;
 const PERSIST_FILENAME = "slack-thread-participation.json";
 
@@ -110,18 +119,40 @@ function hydrateFromDisk(): void {
     // most-recent timestamp before inserting. The 4 MB file cap above
     // permits up to ~250K entries through, which would otherwise blow
     // past the 5K in-memory cap on first load (Aisle medium #1 / opus
-    // P2 review). Sorting DESC by ts and slicing keeps hydration bounded
-    // by MAX_ENTRIES regardless of file size up to MAX_PERSIST_FILE_BYTES.
+    // P2 / gpt-5.5 P2-A review). Sorting DESC by ts and slicing keeps
+    // hydration bounded by MAX_ENTRIES regardless of file size up to
+    // MAX_PERSIST_FILE_BYTES.
+    //
+    // Timestamp guard: require ts > 0 && ts <= now in addition to the
+    // TTL window. This rejects future timestamps from a crafted persist
+    // file or a backwards system-clock jump (gpt-5.5 P2-C / P3-C).
+    // Without this guard, a ts of e.g. Number.MAX_SAFE_INTEGER would
+    // satisfy now - ts < TTL_MS (the difference underflows or stays
+    // negative) and the entry would never expire.
     const candidates: Array<[string, number]> = [];
     for (const [key, ts] of Object.entries(data)) {
-      if (typeof ts === "number" && Number.isFinite(ts) && now - ts < TTL_MS) {
+      if (
+        typeof ts === "number" &&
+        Number.isFinite(ts) &&
+        ts > 0 &&
+        ts <= now &&
+        now - ts < TTL_MS
+      ) {
         candidates.push([key, ts]);
       }
     }
     if (candidates.length > MAX_ENTRIES) {
+      // Sort DESC by ts so we slice to keep the most-recent MAX_ENTRIES.
       candidates.sort((a, b) => b[1] - a[1]);
       candidates.length = MAX_ENTRIES;
     }
+    // Sort ASC by ts so Map insertion order matches recency (oldest
+    // first). recordSlackThreadParticipation()'s eviction loop relies
+    // on `keys().next()` returning the OLDEST entry; without this sort
+    // a slice from the DESC branch above would invert the order and the
+    // first eviction after hydration would drop the NEWEST entry
+    // instead of the oldest (gpt-5.5 P3-B).
+    candidates.sort((a, b) => a[1] - b[1]);
     for (const [key, ts] of candidates) {
       // Use check() to insert into the dedupe cache (it returns false for new entries)
       threadParticipation.check(key, ts);
@@ -132,6 +163,60 @@ function hydrateFromDisk(): void {
   }
 }
 
+/**
+ * Synchronously prune expired entries, cap to MAX_ENTRIES, and atomically
+ * write to disk. Shared between the debounced timer in schedulePersist()
+ * and the test-only flush helper _flushPersist() so any future hardening
+ * (write atomicity, file modes, etc.) lives in exactly one place
+ * (gpt-5.5 P2-B: previously these two paths drifted independently).
+ */
+function persistToDisk(): void {
+  // Prune expired entries before writing.
+  const now = Date.now();
+  for (const [key, ts] of persistState.entries) {
+    if (now - ts >= TTL_MS) {
+      persistState.entries.delete(key);
+    }
+  }
+  // Cap persisted size to MAX_ENTRIES by most-recent timestamp so the
+  // on-disk file can't grow beyond the in-memory dedupe cap.
+  let entries = Array.from(persistState.entries.entries());
+  if (entries.length > MAX_ENTRIES) {
+    entries.sort((a, b) => b[1] - a[1]);
+    entries = entries.slice(0, MAX_ENTRIES);
+    // Re-sort ASC by ts so the on-disk JSON iteration order is
+    // oldest-first. This matters because hydration's fast path (file
+    // ≤ MAX_ENTRIES, no sort) preserves iteration order into the Map,
+    // and the in-memory eviction loop assumes Map insertion order =
+    // ts-ASC. Inverting that order would cause post-restart evictions
+    // to drop the newest entries instead of the oldest (gpt-5.5 P3-B).
+    entries.sort((a, b) => a[1] - b[1]);
+  }
+  const data = Object.fromEntries(entries);
+  const filePath = getPersistPath();
+  // mkdirSync is fine to call repeatedly; mode is applied only when the
+  // directory is created. 0o700 mirrors the SDK helper and matches the
+  // 0o600 file mode (gpt-5.5 P2-D).
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSIST_DIR_MODE });
+  // Write atomically via temp file + rename so a mid-write crash
+  // can't leave a truncated/corrupt JSON on disk.
+  //
+  // Security: tmpPath uses randomUUID() (not pid) and flag "wx"
+  // (O_CREAT | O_EXCL) to close the symlink-follow window described
+  // in CWE-59. A predictable name like ${pid}.tmp combined with the
+  // default "w" flag would let an attacker pre-create a symlink at
+  // the tmp path pointing to e.g. /etc/passwd, and our truncating
+  // write would follow it. "wx" refuses to overwrite existing
+  // entries (file or symlink), and randomUUID() removes
+  // predictability. Aisle medium #2 / opus P1 / gpt-5.5 P1-B.
+  const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data), {
+    mode: PERSIST_FILE_MODE,
+    flag: "wx",
+  });
+  fs.renameSync(tmpPath, filePath);
+}
+
 /** Debounced write of the shadow map to disk. */
 function schedulePersist(): void {
   if (persistState.persistTimer) {
@@ -140,40 +225,7 @@ function schedulePersist(): void {
   persistState.persistTimer = setTimeout(() => {
     persistState.persistTimer = null;
     try {
-      // Prune expired entries before writing.
-      const now = Date.now();
-      for (const [key, ts] of persistState.entries) {
-        if (now - ts >= TTL_MS) {
-          persistState.entries.delete(key);
-        }
-      }
-      // Cap persisted size to MAX_ENTRIES by most-recent timestamp so the
-      // on-disk file can't grow beyond the in-memory dedupe cap.
-      let entries = Array.from(persistState.entries.entries());
-      if (entries.length > MAX_ENTRIES) {
-        entries.sort((a, b) => b[1] - a[1]);
-        entries = entries.slice(0, MAX_ENTRIES);
-      }
-      const data = Object.fromEntries(entries);
-      const filePath = getPersistPath();
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      // Write atomically via temp file + rename so a mid-write crash
-      // can't leave a truncated/corrupt JSON on disk.
-      //
-      // Security: tmpPath uses randomUUID() (not pid) and flag "wx"
-      // (O_CREAT | O_EXCL) to close the symlink-follow window described
-      // in CWE-59. A predictable name like ${pid}.tmp combined with the
-      // default "w" flag would let an attacker pre-create a symlink at
-      // the tmp path pointing to e.g. /etc/passwd, and our truncating
-      // write would follow it. "wx" refuses to overwrite existing
-      // entries (file or symlink), and randomUUID() removes
-      // predictability. Aisle medium #2 / opus P1.
-      const tmpPath = `${filePath}.${randomUUID()}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(data), {
-        mode: PERSIST_FILE_MODE,
-        flag: "wx",
-      });
-      fs.renameSync(tmpPath, filePath);
+      persistToDisk();
     } catch {
       // Best-effort persistence — don't crash on write failures.
     }
@@ -277,29 +329,10 @@ export function _flushPersist(): void {
     clearTimeout(persistState.persistTimer);
     persistState.persistTimer = null;
   }
-  // Write immediately.
+  // Reuse the shared persistToDisk() implementation so test-time and
+  // production-time writes can never drift (gpt-5.5 P2-B).
   try {
-    const now = Date.now();
-    for (const [key, ts] of persistState.entries) {
-      if (now - ts >= TTL_MS) {
-        persistState.entries.delete(key);
-      }
-    }
-    let entries = Array.from(persistState.entries.entries());
-    if (entries.length > MAX_ENTRIES) {
-      entries.sort((a, b) => b[1] - a[1]);
-      entries = entries.slice(0, MAX_ENTRIES);
-    }
-    const data = Object.fromEntries(entries);
-    const filePath = getPersistPath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    // Same CWE-59 hardening as schedulePersist: randomUUID() + "wx".
-    const tmpPath = `${filePath}.${randomUUID()}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data), {
-      mode: PERSIST_FILE_MODE,
-      flag: "wx",
-    });
-    fs.renameSync(tmpPath, filePath);
+    persistToDisk();
   } catch {
     // Best-effort.
   }

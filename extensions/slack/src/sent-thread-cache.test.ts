@@ -286,6 +286,71 @@ describe("slack sent-thread-cache persistence", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
   });
 
+  it("rejects future timestamps from a crafted persist file (gpt-5.5 P2-C)", () => {
+    setup();
+    const now = Date.now();
+    const data: Record<string, number> = {
+      "A1:C123:past": now - 1000,
+      "A1:C123:future-near": now + 60_000, // 1 min in the future
+      "A1:C123:future-far": Number.MAX_SAFE_INTEGER, // far future
+      "A1:C123:zero": 0,
+      "A1:C123:negative": -1,
+    };
+    fs.writeFileSync(tempFile, JSON.stringify(data));
+    _resetForTests(tempFile);
+    expect(hasSlackThreadParticipation("A1", "C123", "past")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "future-near")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "future-far")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "zero")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "negative")).toBe(false);
+  });
+
+  it("creates the persist directory with mode 0o700 (gpt-5.5 P2-D)", () => {
+    // Use a NEW subdirectory under tempDir that doesn't yet exist; that
+    // way the mkdirSync mode applies (mode is only honoured on creation).
+    const nestedFile = path.join(tempDir, "nested", "slack-thread-participation.json");
+    _resetForTests(nestedFile);
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    _flushPersist();
+    const stat = fs.statSync(path.dirname(nestedFile));
+    expect(stat.isDirectory()).toBe(true);
+    // Mask off type bits and check perms. Owner: rwx; group/other: none.
+    // (Test isolated from umask peculiarities by checking the lower 9 bits.)
+    expect(stat.mode & 0o777).toBe(0o700);
+  });
+
+  it("preserves oldest-first iteration order after over-capacity slice (gpt-5.5 P3-B)", () => {
+    setup();
+    // Write a file with > MAX_ENTRIES so hydration triggers the
+    // DESC sort + slice path, then verify in-memory eviction picks
+    // the OLDEST entry first (Map insertion order = ts-ASC after the
+    // re-sort fix).
+    const data: Record<string, number> = {};
+    const baseTs = Date.now();
+    const total = 5050;
+    for (let i = 0; i < total; i++) {
+      const key = `A1:C123:order-${i.toString().padStart(5, "0")}`;
+      data[key] = baseTs - (total - i);
+    }
+    fs.writeFileSync(tempFile, JSON.stringify(data));
+    _resetForTests(tempFile);
+    // Trigger hydration via any read — we expect the newest 5000
+    // (order-00050 … order-05049) to land in the in-memory map.
+    expect(hasSlackThreadParticipation("A1", "C123", "order-00050")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "order-05049")).toBe(true);
+    // Now record a single brand-new entry. The map is at MAX_ENTRIES so
+    // this triggers the eviction loop, which calls keys().next() to
+    // pick the OLDEST. With the P3-B fix, that's order-00050 (the oldest
+    // hydrated entry). Without the fix, it would be order-05049 (newest)
+    // because DESC iteration order would have inverted insertion order.
+    recordSlackThreadParticipation("A1", "C123", "brand-new");
+    expect(hasSlackThreadParticipation("A1", "C123", "brand-new")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "order-00050")).toBe(false);
+    // The newest hydrated entry must still be present — it is younger
+    // than brand-new entries' eviction target by construction.
+    expect(hasSlackThreadParticipation("A1", "C123", "order-05049")).toBe(true);
+  });
+
   it("caps hydration at MAX_ENTRIES even when the file holds many more (Aisle medium #1)", () => {
     setup();
     // The file-size cap is 4 MB ≈ ~250K entries with realistic key sizes.
