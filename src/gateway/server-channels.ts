@@ -685,7 +685,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const byId = new Map<ChannelId, ChannelPlugin>();
     for (const plugin of listChannelPlugins()) {
       byId.set(plugin.id, plugin);
