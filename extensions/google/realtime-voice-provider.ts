@@ -461,19 +461,25 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       );
       return;
     }
-    this.pendingFunctionNames.delete(callId);
-    this.session.sendToolResponse({
-      functionResponses: [
-        {
-          id: callId,
-          name,
-          response:
-            result && typeof result === "object"
-              ? (result as Record<string, unknown>)
-              : { output: result },
-        },
-      ],
-    });
+    try {
+      this.session.sendToolResponse({
+        functionResponses: [
+          {
+            id: callId,
+            name,
+            response:
+              result && typeof result === "object" && !Array.isArray(result)
+                ? (result as Record<string, unknown>)
+                : { output: result },
+          },
+        ],
+      });
+      this.pendingFunctionNames.delete(callId);
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Failed to send Google Live function response"),
+      );
+    }
   }
 
   acknowledgeMark(): void {}
