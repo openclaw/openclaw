@@ -216,6 +216,14 @@ export const mainLanes = [
     weight: 6,
   }),
   lane(
+    "bundled-plugin-install-uninstall",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall",
+    {
+      resources: ["npm"],
+      weight: 4,
+    },
+  ),
+  lane(
     "plugins-offline",
     "OPENCLAW_PLUGINS_E2E_CLAWHUB=0 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
     {
@@ -387,6 +395,14 @@ const releasePathChunks = {
       resources: ["npm", "service"],
       weight: 6,
     }),
+    lane(
+      "bundled-plugin-install-uninstall",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall",
+      {
+        resources: ["npm"],
+        weight: 4,
+      },
+    ),
     npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
     ...bundledScenarioLanes,
     serviceLane(
