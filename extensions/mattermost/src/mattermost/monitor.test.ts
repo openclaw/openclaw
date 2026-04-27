@@ -214,6 +214,25 @@ describe("resolveMattermostReplyRootId", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("keeps direct-message replies top-level when only the payload reply target exists", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        replyToId: "dm-post-123",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps group replies on the existing Mattermost thread root", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "group",
+        threadRootId: "group-root-456",
+        replyToId: "group-child-789",
+      }),
+    ).toBe("group-root-456");
+  });
 });
 
 describe("canFinalizeMattermostPreviewInPlace", () => {
