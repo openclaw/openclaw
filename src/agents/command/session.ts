@@ -86,9 +86,11 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   ];
   if (legacyStorePath === opts.storePath) {
     for (const legacyKey of legacyKeys) {
-      if (opts.sessionStore[legacyKey]) {
+      const legacyEntry = opts.sessionStore[legacyKey];
+      if (legacyEntry) {
+        opts.sessionStore[opts.sessionKey] = { ...legacyEntry };
         return {
-          sessionKey: legacyKey,
+          sessionKey: opts.sessionKey,
           sessionStore: opts.sessionStore,
           storePath: opts.storePath,
         };
@@ -98,8 +100,14 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   }
   const legacyStore = loadSessionStore(legacyStorePath);
   for (const legacyKey of legacyKeys) {
-    if (legacyStore[legacyKey]) {
-      return { sessionKey: legacyKey, sessionStore: legacyStore, storePath: legacyStorePath };
+    const legacyEntry = legacyStore[legacyKey];
+    if (legacyEntry) {
+      opts.sessionStore[opts.sessionKey] = { ...legacyEntry };
+      return {
+        sessionKey: opts.sessionKey,
+        sessionStore: opts.sessionStore,
+        storePath: opts.storePath,
+      };
     }
   }
   return undefined;
