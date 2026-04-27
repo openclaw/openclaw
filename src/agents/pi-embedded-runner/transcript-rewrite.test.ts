@@ -518,7 +518,9 @@ describe("rewriteTranscriptEntriesInSessionManager — #66443 dedupe invariant",
       ],
     });
 
-    const contents = getBranchMessages(sessionManager).map((m) => m.content);
+    const contents = getBranchMessages(sessionManager).map(
+      (m) => (m as { content?: unknown }).content,
+    );
     expect(contents).toEqual(["a", "b", "c"]);
   });
 });
