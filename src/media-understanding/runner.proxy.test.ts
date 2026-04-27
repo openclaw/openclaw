@@ -386,7 +386,7 @@ describe("runCapability proxy fetch passthrough", () => {
       },
     );
 
-    expect(seenApiKey).toBe("local-whisper-token");
+    expect(seenApiKey).toBe("openclaw-request-auth");
     expect(seenRequest?.auth).toEqual({
       mode: "authorization-bearer",
       token: "local-whisper-token",

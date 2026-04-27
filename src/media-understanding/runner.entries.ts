@@ -69,6 +69,7 @@ function resolveLiteralProviderApiKey(params: {
   const value = providerConfig?.apiKey;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
+const REQUEST_AUTH_API_KEY_PLACEHOLDER = "openclaw-request-auth";
 
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
@@ -472,7 +473,7 @@ async function resolveProviderExecutionApiKeys(params: {
     if (requestAuthKey && message.includes("No API key")) {
       return collectProviderApiKeysForExecution({
         provider: params.providerId,
-        primaryApiKey: requestAuthKey,
+        primaryApiKey: REQUEST_AUTH_API_KEY_PLACEHOLDER,
       });
     }
     throw error;

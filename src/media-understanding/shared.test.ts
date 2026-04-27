@@ -232,6 +232,35 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
+  it("removes provider-default auth headers when request auth overrides credentials", () => {
+    const resolved = resolveProviderHttpRequestConfig({
+      baseUrl: "https://api.elevenlabs.io",
+      defaultBaseUrl: "https://api.elevenlabs.io",
+      defaultHeaders: {
+        authorization: "Bearer provider-token",
+        "x-api-key": "provider-token",
+        "x-goog-api-key": "provider-token",
+        "xi-api-key": "provider-token",
+        "content-type": "application/json",
+      },
+      request: {
+        auth: {
+          mode: "authorization-bearer",
+          token: "proxy-token",
+        },
+      },
+      provider: "elevenlabs",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.headers.get("authorization")).toBe("Bearer proxy-token");
+    expect(resolved.headers.get("x-api-key")).toBeNull();
+    expect(resolved.headers.get("x-goog-api-key")).toBeNull();
+    expect(resolved.headers.get("xi-api-key")).toBeNull();
+    expect(resolved.headers.get("content-type")).toBe("application/json");
+  });
+
   it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.deepgram.com/v1",
