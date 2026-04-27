@@ -27,6 +27,9 @@ package_tgz=\"\${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_
 npm install -g --prefix /tmp/npm-prefix \"\$package_tgz\" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 entry=\"/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.mjs\"
 [ -f \"\$entry\" ] || entry=/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.js
+package_version=\$(node -p \"require('/tmp/npm-prefix/lib/node_modules/openclaw/package.json').version\")
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT=\$(PACKAGE_VERSION=\"\$package_version\" node -e 'const version = process.env.PACKAGE_VERSION || \"\"; const match = new RegExp(\"^(\\\\d{4})\\\\.(\\\\d{1,2})\\\\.(\\\\d{1,2})(?:[-+].*)?\").exec(version); if (!match) { console.log(\"0\"); process.exit(0); } const value = [Number(match[1]), Number(match[2]), Number(match[3])]; const max = [2026, 4, 25]; for (let i = 0; i < value.length; i += 1) { if (value[i] < max[i]) { console.log(\"1\"); process.exit(0); } if (value[i] > max[i]) { console.log(\"0\"); process.exit(0); } } console.log(\"1\");')
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
 export PATH=\"/tmp/npm-prefix/bin:\$PATH\"
 
@@ -37,11 +40,32 @@ cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'
   \"version\": \"0.9.0\"
 }
 JSON
-cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" = \"1\" ]; then
+  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+{
+  \"plugins\": {
+    \"installs\": {
+      \"lossless-claw\": {
+        \"source\": \"npm\",
+        \"spec\": \"@example/lossless-claw@0.9.0\",
+        \"installPath\": \"~/.openclaw/extensions/lossless-claw\",
+        \"resolvedName\": \"@example/lossless-claw\",
+        \"resolvedVersion\": \"0.9.0\",
+        \"resolvedSpec\": \"@example/lossless-claw@0.9.0\",
+        \"integrity\": \"sha512-same\",
+        \"shasum\": \"same\"
+      }
+    }
+  }
+}
+JSON
+else
+  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
 {
   \"plugins\": {}
 }
 JSON
+fi
 mkdir -p \"\$HOME/.openclaw/plugins\"
 cat > \"\$HOME/.openclaw/plugins/installs.json\" <<'JSON'
 {
@@ -128,31 +152,88 @@ if [ \"\$registry_ready\" -ne 1 ]; then
   exit 1
 fi
 
-before_hash=\$(node --input-type=module -e '
-  import crypto from \"node:crypto\";
+before_config_hash=\"\"
+if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" != \"1\" ]; then
+  before_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+fi
+
+node --input-type=module > /tmp/plugin-update-before.json <<'NODE'
   import fs from \"node:fs\";
   import os from \"node:os\";
   import path from \"node:path\";
-  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
-  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
-')
+
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, \"utf8\"));
+    } catch {
+      return {};
+    }
+  };
+  const home = os.homedir();
+  const config = readJson(path.join(home, \".openclaw\", \"openclaw.json\"));
+  const index = readJson(path.join(home, \".openclaw\", \"plugins\", \"installs.json\"));
+  const records = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const record = records[\"lossless-claw\"] ?? records[\"@example/lossless-claw\"];
+  if (!record) {
+    throw new Error(\"missing seeded plugin install record\");
+  }
+  const snapshot = {
+    source: record.source,
+    spec: record.spec,
+    resolvedName: record.resolvedName,
+    resolvedVersion: record.resolvedVersion,
+    resolvedSpec: record.resolvedSpec,
+    integrity: record.integrity,
+    shasum: record.shasum
+  };
+  process.stdout.write(JSON.stringify(snapshot, null, 2));
+NODE
 
 node \"\$entry\" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
 
-after_hash=\$(node --input-type=module -e '
-  import crypto from \"node:crypto\";
+if [ -n \"\$before_config_hash\" ]; then
+  after_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+  if [ \"\$before_config_hash\" != \"\$after_config_hash\" ]; then
+    echo \"Config changed unexpectedly for modern package \$package_version\"
+    cat /tmp/plugin-update-output.log
+    exit 1
+  fi
+fi
+
+node --input-type=module <<'NODE'
   import fs from \"node:fs\";
   import os from \"node:os\";
   import path from \"node:path\";
-  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
-  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
-')
 
-if [ \"\$before_hash\" != \"\$after_hash\" ]; then
-  echo \"Config changed unexpectedly\"
-  cat /tmp/plugin-update-output.log
-  exit 1
-fi
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, \"utf8\"));
+    } catch {
+      return {};
+    }
+  };
+  const home = os.homedir();
+  const before = readJson(\"/tmp/plugin-update-before.json\");
+  const config = readJson(path.join(home, \".openclaw\", \"openclaw.json\"));
+  const index = readJson(path.join(home, \".openclaw\", \"plugins\", \"installs.json\"));
+  const records = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const record = records[\"lossless-claw\"] ?? records[\"@example/lossless-claw\"];
+  if (!record) {
+    throw new Error(\"missing plugin install record after update\");
+  }
+  const after = {
+    source: record.source,
+    spec: record.spec,
+    resolvedName: record.resolvedName,
+    resolvedVersion: record.resolvedVersion,
+    resolvedSpec: record.resolvedSpec,
+    integrity: record.integrity,
+    shasum: record.shasum
+  };
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new Error(\"plugin install record changed unexpectedly: \" + JSON.stringify({ before, after }));
+  }
+NODE
 if grep -q 'Downloading @example/lossless-claw' /tmp/plugin-update-output.log; then
   echo \"Unexpected npm download/reinstall path\"
   cat /tmp/plugin-update-output.log

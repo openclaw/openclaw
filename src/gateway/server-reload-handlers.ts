@@ -1,6 +1,6 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
+import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";

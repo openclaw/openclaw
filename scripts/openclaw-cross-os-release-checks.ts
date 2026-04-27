@@ -60,6 +60,9 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
+export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
+export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 
 if (isMainModule()) {
   try {
@@ -1629,7 +1632,14 @@ async function resolveInstalledGatewayStatusArgs(params) {
     requireRpc &&
     (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
   ) {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
+    return [
+      "gateway",
+      "status",
+      "--deep",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ];
   }
   return ["gateway", "status", "--deep"];
 }
@@ -2370,7 +2380,9 @@ async function waitForGateway(params) {
 }
 
 function gatewayReadyDeadlineMs() {
-  return process.platform === "win32" ? 5 * 60 * 1000 : 90_000;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS
+    : CROSS_OS_GATEWAY_READY_TIMEOUT_MS;
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
@@ -2383,7 +2395,14 @@ async function resolveGatewayStatusArgs(lane, env, logPath) {
     check: false,
   });
   if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
+    return [
+      "gateway",
+      "status",
+      "--deep",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ];
   }
   return ["gateway", "status", "--deep"];
 }

@@ -34,12 +34,14 @@ export function parseLaneSelection(raw) {
   if (!raw) {
     return [];
   }
+  const laneAliases = new Map([["bundled-channel-deps", "bundled-channel-deps-compat"]]);
   return [
     ...new Set(
       String(raw)
         .split(/[,\s]+/u)
         .map((token) => token.trim())
-        .filter(Boolean),
+        .filter(Boolean)
+        .map((token) => laneAliases.get(token) ?? token),
     ),
   ];
 }

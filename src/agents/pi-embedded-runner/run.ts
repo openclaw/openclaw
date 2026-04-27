@@ -84,6 +84,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
@@ -112,12 +113,14 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
+  resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveSilentToolResultReplyPayload,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -149,6 +152,36 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function normalizeEmbeddedRunAttemptResult(
+  attempt: EmbeddedRunAttemptForRunner,
+): EmbeddedRunAttemptForRunner {
+  const raw = attempt as EmbeddedRunAttemptForRunner & {
+    assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
+    toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
+    messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
+    messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
+    messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
+    messagingToolSentTargets?: EmbeddedRunAttemptForRunner["messagingToolSentTargets"] | null;
+    itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+  };
+  return {
+    ...attempt,
+    assistantTexts: raw.assistantTexts ?? [],
+    toolMetas: raw.toolMetas ?? [],
+    messagesSnapshot: raw.messagesSnapshot ?? [],
+    messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
+    messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
+    messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+    itemLifecycle: raw.itemLifecycle ?? {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    replayMetadata: resolveAttemptReplayMetadata(raw),
+  };
+}
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
   return {
@@ -853,7 +886,7 @@ export async function runEmbeddedPiAgent(
             },
           });
 
-          const attempt = await runEmbeddedAttemptWithBackend({
+          const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
             sandboxSessionKey: params.sandboxSessionKey,
@@ -958,6 +991,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
+          const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
             aborted,
@@ -1853,6 +1887,10 @@ export async function runEmbeddedPiAgent(
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),
           });
+          const failureSignal = resolveEmbeddedRunFailureSignal({
+            trigger: params.trigger,
+            lastToolError: attempt.lastToolError,
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1893,6 +1931,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -1904,7 +1943,19 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          const payloadCount = payloadsWithToolMedia?.length ?? 0;
+          const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
+            isCronTrigger: params.trigger === "cron",
+            payloadCount: payloadsWithToolMedia?.length ?? 0,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          const payloadsForTerminalPath = payloadsWithToolMedia?.length
+            ? payloadsWithToolMedia
+            : silentToolResultReplyPayload
+              ? [silentToolResultReplyPayload]
+              : payloadsWithToolMedia;
+          const payloadCount = payloadsForTerminalPath?.length ?? 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
@@ -2070,6 +2121,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2119,6 +2171,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2184,7 +2237,7 @@ export async function runEmbeddedPiAgent(
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
-              payloadCount: payloads.length,
+              payloadCount,
               aborted,
               timedOut,
               attempt,
@@ -2197,7 +2250,7 @@ export async function runEmbeddedPiAgent(
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `stopReason=${incompleteStopReason} payloads=0 — surfacing error to user`,
+                `stopReason=${incompleteStopReason} payloads=${payloadCount} — surfacing error to user`,
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
@@ -2227,6 +2280,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2256,7 +2310,7 @@ export async function runEmbeddedPiAgent(
           }
           const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = resolveRunLivenessState({
-            payloadCount: payloads.length,
+            payloadCount,
             aborted,
             timedOut,
             attempt,
@@ -2269,7 +2323,7 @@ export async function runEmbeddedPiAgent(
               : (sessionLastAssistant?.stopReason as string | undefined);
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsWithToolMedia;
+            : payloadsForTerminalPath;
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
@@ -2334,6 +2388,7 @@ export async function runEmbeddedPiAgent(
                 ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
               },
               toolSummary: attemptToolSummary,
+              ...(failureSignal ? { failureSignal } : {}),
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),

@@ -26,6 +26,20 @@ type CronDenialSignal = {
   field: string;
 };
 
+type CronFailureSignal = {
+  kind?: string;
+  source?: string;
+  toolName?: string;
+  code?: string;
+  message?: string;
+  fatalForCron?: boolean;
+};
+
+type NormalizedCronFailureSignal = CronFailureSignal & {
+  message: string;
+  fatalForCron: true;
+};
+
 const CRON_DENIAL_EXACT_TOKENS = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 const CRON_DENIAL_CASE_INSENSITIVE_TOKENS = [
   "approval cannot safely bind",
@@ -73,6 +87,45 @@ function resolveCronDenialSignal(
 
 function formatCronDenialSignal(signal: CronDenialSignal): string {
   return `cron classifier: denial token "${signal.token}" detected in ${signal.field}`;
+}
+
+function normalizeCronFailureSignal(
+  signal: CronFailureSignal | undefined,
+): NormalizedCronFailureSignal | undefined {
+  const message = normalizeOptionalString(signal?.message);
+  if (signal?.fatalForCron !== true || !message) {
+    return undefined;
+  }
+  return { ...signal, message, fatalForCron: true };
+}
+
+function formatCronFailureSignal(signal: NormalizedCronFailureSignal): string {
+  const kind = normalizeOptionalString(signal.kind) ?? "run";
+  const code = normalizeOptionalString(signal.code);
+  const source = normalizeOptionalString(signal.toolName) ?? normalizeOptionalString(signal.source);
+  return `cron classifier: ${kind} failure${source ? ` from ${source}` : ""}${
+    code ? ` (${code})` : ""
+  }: ${signal.message}`;
+}
+
+function formatCronRunLevelError(error: unknown): string | undefined {
+  const direct = normalizeOptionalString(error);
+  if (direct) {
+    return `cron isolated run failed: ${direct}`;
+  }
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const record = error as { message?: unknown; kind?: unknown };
+  const message = normalizeOptionalString(record.message);
+  if (message) {
+    return `cron isolated run failed: ${message}`;
+  }
+  const kind = normalizeOptionalString(record.kind);
+  if (kind) {
+    return `cron isolated run failed: ${kind}`;
+  }
+  return "cron isolated run failed";
 }
 
 export function pickSummaryFromOutput(text: string | undefined) {
@@ -191,7 +244,8 @@ export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxCha
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
-  finalAssistantVisibleText?: string;
+  failureSignal?: CronFailureSignal | undefined;
+  finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
   const firstText = params.payloads[0]?.text ?? "";
@@ -254,19 +308,44 @@ export function resolveCronPayloadOutcome(params: {
       text: payload?.text,
     })),
   ]);
-  const hasFatalErrorPayload = hasFatalStructuredErrorPayload || denialSignal !== undefined;
+  const failureSignal = normalizeCronFailureSignal(params.failureSignal);
+  const runLevelError = formatCronRunLevelError(params.runLevelError);
+  const hasFatalErrorPayload =
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    denialSignal !== undefined ||
+    runLevelError !== undefined;
+  const structuredErrorText = hasFatalStructuredErrorPayload
+    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
+  const shouldUseRunLevelErrorPayload =
+    runLevelError !== undefined &&
+    structuredErrorText === undefined &&
+    failureSignal === undefined &&
+    denialSignal === undefined;
+  const fatalDeliveryText =
+    structuredErrorText ??
+    failureSignal?.message ??
+    (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
+  const fatalDeliveryPayload = fatalDeliveryText
+    ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
+    : undefined;
   return {
-    summary,
-    outputText,
-    synthesizedText,
-    deliveryPayload,
-    deliveryPayloads: resolvedDeliveryPayloads,
-    deliveryPayloadHasStructuredContent,
+    summary: fatalDeliveryText ? (pickSummaryFromOutput(fatalDeliveryText) ?? summary) : summary,
+    outputText: fatalDeliveryText ?? outputText,
+    synthesizedText: fatalDeliveryText ?? synthesizedText,
+    deliveryPayload: fatalDeliveryPayload ?? deliveryPayload,
+    deliveryPayloads: fatalDeliveryPayload ? [fatalDeliveryPayload] : resolvedDeliveryPayloads,
+    deliveryPayloadHasStructuredContent: fatalDeliveryPayload
+      ? false
+      : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
-    embeddedRunError: hasFatalStructuredErrorPayload
-      ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
-      : denialSignal
-        ? formatCronDenialSignal(denialSignal)
-        : undefined,
+    embeddedRunError: structuredErrorText
+      ? structuredErrorText
+      : failureSignal
+        ? formatCronFailureSignal(failureSignal)
+        : denialSignal
+          ? formatCronDenialSignal(denialSignal)
+          : runLevelError,
   };
 }

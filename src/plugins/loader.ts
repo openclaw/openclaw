@@ -35,9 +35,11 @@ import {
   clearBundledRuntimeDependencyNodePaths,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  materializeBundledRuntimeMirrorDistFile,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   withBundledRuntimeDepsFilesystemLock,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
@@ -147,6 +149,7 @@ export type PluginLoadOptions = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  coreGatewayMethodNames?: readonly string[];
   runtimeOptions?: CreatePluginRuntimeOptions;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
@@ -719,6 +722,9 @@ function mirrorBundledPluginRuntimeRoot(params: {
         // Best-effort only: the access check below will surface non-writable dirs.
       }
       fs.accessSync(mirrorParent, fs.constants.W_OK);
+      if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
+        return mirrorRoot;
+      }
       const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
       const stagedRoot = path.join(tempDir, "plugin");
       try {
@@ -742,14 +748,56 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   const sourceDistRootName = path.basename(sourceDistRoot);
   const mirrorDistRoot = path.join(params.installRoot, sourceDistRootName);
   const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
+  ensureBundledRuntimeMirrorDirectory(mirrorDistRoot);
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
-  for (const entry of fs.readdirSync(sourceDistRoot, { withFileTypes: true })) {
+  mirrorBundledRuntimeDistRootEntries({
+    sourceDistRoot,
+    mirrorDistRoot,
+  });
+  if (sourceDistRootName === "dist-runtime") {
+    mirrorCanonicalBundledRuntimeDistRoot({
+      installRoot: params.installRoot,
+      pluginRoot: params.pluginRoot,
+      sourceRuntimeDistRoot: sourceDistRoot,
+    });
+  }
+  ensureOpenClawPluginSdkAlias(mirrorDistRoot);
+  return mirrorExtensionsRoot;
+}
+
+function ensureBundledRuntimeMirrorDirectory(targetRoot: string): void {
+  try {
+    const stat = fs.lstatSync(targetRoot);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      return;
+    }
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
+}
+
+function mirrorBundledRuntimeDistRootEntries(params: {
+  sourceDistRoot: string;
+  mirrorDistRoot: string;
+}): void {
+  for (const entry of fs.readdirSync(params.sourceDistRoot, { withFileTypes: true })) {
     if (entry.name === "extensions") {
       continue;
     }
-    const sourcePath = path.join(sourceDistRoot, entry.name);
-    const targetPath = path.join(mirrorDistRoot, entry.name);
+    const sourcePath = path.join(params.sourceDistRoot, entry.name);
+    const targetPath = path.join(params.mirrorDistRoot, entry.name);
+    if (path.resolve(sourcePath) === path.resolve(targetPath)) {
+      continue;
+    }
+    if (entry.isFile() && shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)) {
+      materializeBundledRuntimeMirrorDistFile(sourcePath, targetPath);
+      continue;
+    }
     if (fs.existsSync(targetPath)) {
       continue;
     }
@@ -766,26 +814,44 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       }
     }
   }
-  if (sourceDistRootName === "dist-runtime") {
-    const sourceCanonicalDistRoot = path.join(path.dirname(sourceDistRoot), "dist");
-    const targetCanonicalDistRoot = path.join(params.installRoot, "dist");
-    if (fs.existsSync(sourceCanonicalDistRoot)) {
-      const targetMatchesSource =
-        fs.existsSync(targetCanonicalDistRoot) &&
-        safeRealpathOrResolve(targetCanonicalDistRoot) ===
-          safeRealpathOrResolve(sourceCanonicalDistRoot);
-      if (!targetMatchesSource) {
-        fs.rmSync(targetCanonicalDistRoot, { recursive: true, force: true });
-        try {
-          fs.symlinkSync(sourceCanonicalDistRoot, targetCanonicalDistRoot, "junction");
-        } catch {
-          copyBundledPluginRuntimeRoot(sourceCanonicalDistRoot, targetCanonicalDistRoot);
-        }
-      }
-    }
+}
+
+function mirrorCanonicalBundledRuntimeDistRoot(params: {
+  installRoot: string;
+  pluginRoot: string;
+  sourceRuntimeDistRoot: string;
+}): void {
+  const sourceCanonicalDistRoot = path.join(path.dirname(params.sourceRuntimeDistRoot), "dist");
+  if (!fs.existsSync(sourceCanonicalDistRoot)) {
+    return;
   }
-  ensureOpenClawPluginSdkAlias(mirrorDistRoot);
-  return mirrorExtensionsRoot;
+  const targetCanonicalDistRoot = path.join(params.installRoot, "dist");
+  ensureBundledRuntimeMirrorDirectory(targetCanonicalDistRoot);
+  fs.mkdirSync(path.join(targetCanonicalDistRoot, "extensions"), { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeDistPackageJson(targetCanonicalDistRoot);
+  mirrorBundledRuntimeDistRootEntries({
+    sourceDistRoot: sourceCanonicalDistRoot,
+    mirrorDistRoot: targetCanonicalDistRoot,
+  });
+  ensureOpenClawPluginSdkAlias(targetCanonicalDistRoot);
+
+  const pluginId = path.basename(params.pluginRoot);
+  const sourceCanonicalPluginRoot = path.join(sourceCanonicalDistRoot, "extensions", pluginId);
+  if (!fs.existsSync(sourceCanonicalPluginRoot)) {
+    return;
+  }
+  const targetCanonicalPluginRoot = path.join(targetCanonicalDistRoot, "extensions", pluginId);
+  const tempDir = fs.mkdtempSync(
+    path.join(path.dirname(targetCanonicalPluginRoot), `.plugin-${pluginId}-`),
+  );
+  const stagedRoot = path.join(tempDir, "plugin");
+  try {
+    copyBundledPluginRuntimeRoot(sourceCanonicalPluginRoot, stagedRoot);
+    fs.rmSync(targetCanonicalPluginRoot, { recursive: true, force: true });
+    fs.renameSync(stagedRoot, targetCanonicalPluginRoot);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
@@ -797,6 +863,9 @@ function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
 }
 
 function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
+  if (path.resolve(sourceRoot) === path.resolve(targetRoot)) {
+    return;
+  }
   fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
   for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
     if (entry.name === "node_modules") {
@@ -1200,7 +1269,12 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const shouldInstallBundledRuntimeDeps = options.installBundledRuntimeDeps !== false;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
-  const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
+  const coreGatewayMethodNames = Array.from(
+    new Set([
+      ...(options.coreGatewayMethodNames ?? []),
+      ...Object.keys(options.coreGatewayHandlers ?? {}),
+    ]),
+  ).toSorted();
   const installRecords = {
     ...loadInstalledPluginIndexInstallRecordsSync({ env }),
     ...cfg.plugins?.installs,
@@ -2286,6 +2360,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       logger,
       runtime,
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+      ...(options.coreGatewayMethodNames !== undefined && {
+        coreGatewayMethodNames: options.coreGatewayMethodNames,
+      }),
       activateGlobalSideEffects: shouldActivate,
     });
 
@@ -3189,6 +3266,9 @@ export async function loadOpenClawPluginCliRegistry(
     logger,
     runtime: {} as PluginRuntime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+    ...(options.coreGatewayMethodNames !== undefined && {
+      coreGatewayMethodNames: options.coreGatewayMethodNames,
+    }),
     activateGlobalSideEffects: false,
   });
 

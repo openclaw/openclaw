@@ -76,6 +76,84 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toContain("Model context overflow");
+    expect(result.outputText).toBe("Model context overflow");
+    expect(result.deliveryPayloads).toEqual([{ text: "Model context overflow", isError: true }]);
+  });
+
+  it("treats standalone run-level errors as fatal and synthesizes delivery", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [],
+      runLevelError: { kind: "provider_error", message: "model provider unreachable" },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("cron isolated run failed: model provider unreachable");
+    expect(result.summary).toBe("cron isolated run failed: model provider unreachable");
+    expect(result.outputText).toBe("cron isolated run failed: model provider unreachable");
+    expect(result.synthesizedText).toBe("cron isolated run failed: model provider unreachable");
+    expect(result.deliveryPayload).toEqual({
+      text: "cron isolated run failed: model provider unreachable",
+      isError: true,
+    });
+    expect(result.deliveryPayloads).toEqual([
+      { text: "cron isolated run failed: model provider unreachable", isError: true },
+    ]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("uses string run-level errors when no error payload exists", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: " " }],
+      runLevelError: "rate limit exceeded",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("cron isolated run failed: rate limit exceeded");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "cron isolated run failed: rate limit exceeded", isError: true },
+    ]);
+  });
+
+  it("falls back to run-level error kind without exposing arbitrary objects", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Partial assistant text before failure" }],
+      runLevelError: { kind: "retry_limit", detail: { provider: "example" } },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("cron isolated run failed: retry_limit");
+    expect(result.outputText).toBe("cron isolated run failed: retry_limit");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "cron isolated run failed: retry_limit", isError: true },
+    ]);
+  });
+
+  it("uses a generic run-level error for unrecognized objects", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [],
+      runLevelError: { detail: { provider: "example" } },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("cron isolated run failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "cron isolated run failed", isError: true }]);
+  });
+
+  it("does not let later success clear a run-level error", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Temporary provider failure", isError: true },
+        { text: "Partial success-looking text" },
+      ],
+      runLevelError: "retry limit exceeded",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("Temporary provider failure");
+    expect(result.outputText).toBe("Temporary provider failure");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Temporary provider failure", isError: true },
+    ]);
   });
 
   it("truncates long summaries", () => {
@@ -188,6 +266,51 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.embeddedRunError).toBe(
       'cron classifier: denial token "could not run" detected in summary',
     );
+  });
+
+  it("prefers typed failure signals over denial-token fallback", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "On it, retrying now." }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      "cron classifier: execution_denied failure from exec (SYSTEM_RUN_DENIED): SYSTEM_RUN_DENIED: approval required",
+    );
+    expect(result.summary).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.outputText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.synthesizedText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.deliveryPayload).toEqual({
+      text: "SYSTEM_RUN_DENIED: approval required",
+      isError: true,
+    });
+    expect(result.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("ignores non-fatal failure signal metadata", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "ordinary success" }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: false,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
   });
 
   it("keeps structured error payload reasons ahead of denial-token reasons", () => {

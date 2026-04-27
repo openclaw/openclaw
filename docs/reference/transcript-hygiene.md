@@ -7,11 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-This document describes **provider-specific fixes** applied to transcripts before a run
-(building model context). Most of these are **in-memory** adjustments used to satisfy
-strict provider requirements. A separate session-file repair pass may also rewrite
-stored JSONL before the session is loaded, either by dropping malformed JSONL lines or
-by repairing persisted turns that are syntactically valid but known to be rejected by a
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, either by dropping malformed JSONL lines or by repairing persisted turns that are syntactically valid but known to be rejected by a
 provider during replay. When a repair occurs, the original file is backed up alongside
 the session file.
 

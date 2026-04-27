@@ -5,9 +5,9 @@ read_when:
 title: "macOS dev setup"
 ---
 
-# macOS Developer Setup
+# macOS developer setup
 
-This guide covers the necessary steps to build and run the OpenClaw macOS application from source.
+Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 

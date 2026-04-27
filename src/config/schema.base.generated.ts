@@ -1554,6 +1554,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
                 },
+                contextWindow: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Context Window",
+                  description:
+                    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Context Tokens",
+                  description:
+                    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+                },
+                maxTokens: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Max Tokens",
+                  description:
+                    "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+                },
+                timeoutSeconds: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Request Timeout",
+                  description:
+                    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+                },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
                   title: "Model Provider Inject num_ctx (OpenAI Compat)",
@@ -20868,6 +20898,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 minimum: 0,
                 maximum: 9007199254740991,
               },
+              includeSkipped: {
+                type: "boolean",
+              },
               mode: {
                 type: "string",
                 enum: ["announce", "webhook"],
@@ -26476,6 +26509,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Model Provider API Adapter",
       help: "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
       tags: ["models"],
+    },
+    "models.providers.*.contextWindow": {
+      label: "Model Provider Context Window",
+      help: "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+      tags: ["models"],
+    },
+    "models.providers.*.contextTokens": {
+      label: "Model Provider Context Tokens",
+      help: "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+      tags: ["security", "auth", "models"],
+    },
+    "models.providers.*.maxTokens": {
+      label: "Model Provider Max Tokens",
+      help: "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+      tags: ["security", "auth", "performance", "models"],
+    },
+    "models.providers.*.timeoutSeconds": {
+      label: "Model Provider Request Timeout",
+      help: "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+      tags: ["performance", "models"],
     },
     "models.providers.*.injectNumCtxForOpenAICompat": {
       label: "Model Provider Inject num_ctx (OpenAI Compat)",

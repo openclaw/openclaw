@@ -23,6 +23,7 @@ type GuardedFetchCall = {
   url: string;
   init?: RequestInit;
   policy?: unknown;
+  timeoutMs?: number;
   auditContext?: string;
 };
 
@@ -206,7 +207,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe(false);
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -259,7 +260,26 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("low");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
+      },
+    );
+  });
+
+  it("passes resolved provider request timeouts to native Ollama chat fetches", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { requestTimeoutMs: 450_000 },
+        });
+
+        await collectStreamEvents(stream);
+
+        expect(getGuardedFetchCall(fetchMock).timeoutMs).toBe(450_000);
       },
     );
   });
@@ -312,7 +332,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("high");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -613,6 +633,34 @@ describe("buildAssistantMessage", () => {
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
+  });
+
+  it("estimates usage when Ollama omits eval counters", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant" as const, content: "Estimated output" },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo, { input: 11, output: 4 });
+    expect(result.usage.input).toBe(11);
+    expect(result.usage.output).toBe(4);
+    expect(result.usage.totalTokens).toBe(15);
+  });
+
+  it("preserves explicit zero usage counters from Ollama", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant" as const, content: "" },
+      done: true,
+      prompt_eval_count: 0,
+      eval_count: 0,
+    };
+    const result = buildAssistantMessage(response, modelInfo, { input: 11, output: 4 });
+    expect(result.usage.input).toBe(0);
+    expect(result.usage.output).toBe(0);
+    expect(result.usage.totalTokens).toBe(0);
   });
 
   it("builds response with tool calls", () => {
@@ -1032,6 +1080,65 @@ describe("createOllamaStreamFn streaming events", () => {
     );
   });
 
+  it("estimates usage when the final Ollama chunk omits counters", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Estimated answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.usage.input).toBeGreaterThan(0);
+          expect(doneEvent.message.usage.output).toBeGreaterThan(0);
+          expect(doneEvent.message.usage.totalTokens).toBeGreaterThan(0);
+        }
+      },
+    );
+  });
+
+  it("counts image payloads in prompt usage estimates when Ollama omits counters", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"vision answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "llava",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [
+                {
+                  role: "user",
+                  content: [{ type: "image", data: "a".repeat(400) }],
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.usage.input).toBeGreaterThan(50);
+        }
+      },
+    );
+  });
+
   it("emits text streaming events before done for mixed text + tool responses", async () => {
     await withMockNdjsonFetch(
       [
@@ -1189,9 +1296,12 @@ describe("createOllamaStreamFn", () => {
         }
 
         const requestBody = JSON.parse(requestInit.body) as {
-          options: { num_ctx?: number; num_predict?: number };
+          options?: { num_ctx?: number; num_predict?: number };
         };
-        expect(requestBody.options.num_ctx).toBe(131072);
+        if (!requestBody.options) {
+          throw new Error("Expected Ollama request options");
+        }
+        expect(requestBody.options?.num_ctx).toBeUndefined();
         expect(requestBody.options.num_predict).toBe(123);
       },
     );

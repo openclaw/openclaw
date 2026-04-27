@@ -862,6 +862,92 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
+  it("falls back to machine user scope when install activation hits a no-medium user bus failure", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      const installEnv = { ...env, USER: "debian" };
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env: installEnv,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  it("surfaces install activation user-bus failures as systemd unavailable errors", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      vi.spyOn(os, "userInfo").mockImplementation(() => {
+        throw new Error("no user info");
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "node", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+          },
+        }),
+      ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus: No medium found");
+
+      expect(execFileMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it("disables the OPENCLAW_SYSTEMD_UNIT override during uninstall", async () => {
     await withNodeSystemdFixture(async ({ env, unitPath }) => {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });

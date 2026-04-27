@@ -28,6 +28,26 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_id:
+        description: Prior run id containing package_artifact_name; blank uses this run or packs the selected ref
+        required: false
+        default: ""
+        type: string
+      docker_e2e_bare_image:
+        description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
+        required: false
+        default: ""
+        type: string
+      docker_e2e_functional_image:
+        description: Existing functional Docker E2E image to reuse; blank derives from package SHA/ref
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -66,6 +86,26 @@ on:
         type: boolean
       docker_lanes:
         description: Comma/space separated Docker scheduler lane names to run against the prepared image
+        required: false
+        default: ""
+        type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_id:
+        description: Prior run id containing package_artifact_name; blank uses this run or packs the selected ref
+        required: false
+        default: ""
+        type: string
+      docker_e2e_bare_image:
+        description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
+        required: false
+        default: ""
+        type: string
+      docker_e2e_functional_image:
+        description: Existing functional Docker E2E image to reuse; blank derives from package SHA/ref
         required: false
         default: ""
         type: string
@@ -191,10 +231,9 @@ jobs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
-      - name: Checkout selected ref
+      - name: Checkout workflow repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - name: Validate selected ref
@@ -204,11 +243,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selected_sha="$(git rev-parse HEAD)"
           trusted_reason=""
 
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git fetch --tags origin '+refs/tags/*:refs/tags/*'
+
+          # Resolve here instead of in actions/checkout so short SHAs work too.
+          if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
+            echo "Ref '${INPUT_REF}' could not be resolved to a commit." >&2
+            exit 1
+          fi
 
           if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
@@ -442,6 +486,8 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -477,6 +523,7 @@ jobs:
           mode: chunk
           chunk: ${{ matrix.chunk_id }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run Docker E2E chunk
         shell: bash
@@ -568,6 +615,8 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -603,6 +652,7 @@ jobs:
           mode: targeted
           lanes: ${{ inputs.docker_lanes }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run targeted Docker E2E lanes
         shell: bash
@@ -645,6 +695,7 @@ jobs:
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
+    name: Docker E2E (openwebui)
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 75
     env:
@@ -652,6 +703,9 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
@@ -683,8 +737,50 @@ jobs:
             exit 1
           }
 
-      - name: Run Open WebUI Docker E2E
-        run: pnpm test:docker:openwebui
+      - name: Plan and hydrate Open WebUI Docker E2E chunk
+        id: plan
+        uses: ./.github/actions/docker-e2e-plan
+        with:
+          mode: chunk
+          chunk: openwebui
+          include-openwebui: "true"
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+
+      - name: Run Open WebUI Docker E2E chunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_CHUNK=openwebui
+          export OPENCLAW_DOCKER_ALL_BUILD=0
+          export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
+          export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI=1
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-openwebui"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-openwebui-timings.json"
+          export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+
+          pnpm test:docker:all
+
+      - name: Summarize Open WebUI Docker E2E chunk
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=".artifacts/docker-tests/release-openwebui/summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Open WebUI Docker E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-e2e-openwebui
+          path: .artifacts/docker-tests/
+          if-no-files-found: ignore
 
   prepare_docker_e2e_image:
     needs: validate_selected_ref
@@ -692,6 +788,7 @@ jobs:
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 90
     permissions:
+      actions: read
       contents: read
       packages: write
     outputs:
@@ -713,23 +810,6 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      - name: Resolve shared Docker E2E image tags
-        id: image
-        shell: bash
-        env:
-          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-        run: |
-          set -euo pipefail
-          repository="${GITHUB_REPOSITORY,,}"
-          bare_image="ghcr.io/${repository}-docker-e2e-bare:${SELECTED_SHA}"
-          functional_image="ghcr.io/${repository}-docker-e2e-functional:${SELECTED_SHA}"
-          image="$functional_image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
-          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
-          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Plan Docker E2E images
         id: plan
         uses: ./.github/actions/docker-e2e-plan
@@ -741,15 +821,31 @@ jobs:
           hydrate-artifacts: "false"
 
       - name: Setup Node environment
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
+      - name: Download current-run OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.package_artifact_name }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Download previous-run OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          path: .artifacts/docker-e2e-package
+          run-id: ${{ inputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Pack OpenClaw package for Docker E2E
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -758,13 +854,61 @@ jobs:
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz
 
-      - name: Upload OpenClaw Docker E2E package
+      - name: Validate OpenClaw Docker E2E package
+        id: package
         if: steps.plan.outputs.needs_package == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-e2e-package
+          target=".artifacts/docker-e2e-package/openclaw-current.tgz"
+          if [[ ! -f "$target" ]]; then
+            mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
+            if [[ "${#tgzs[@]}" -ne 1 ]]; then
+              echo "Expected exactly one package tarball in .artifacts/docker-e2e-package; found ${#tgzs[@]}." >&2
+              printf '%s\n' "${tgzs[@]}" >&2
+              exit 1
+            fi
+            cp "${tgzs[0]}" "$target"
+          fi
+          node scripts/check-openclaw-package-tarball.mjs "$target"
+          digest="$(sha256sum "$target" | awk '{print $1}')"
+          tag="pkg-${digest:0:32}"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "Docker E2E package: \`$target\`"
+            echo "Docker E2E package SHA-256: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && (inputs.package_artifact_name == '' || inputs.package_artifact_run_id != '')
         uses: actions/upload-artifact@v7
         with:
-          name: docker-e2e-package
+          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
           if-no-files-found: error
+
+      - name: Resolve shared Docker E2E image tags
+        id: image
+        shell: bash
+        env:
+          PACKAGE_TAG: ${{ steps.package.outputs.tag }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
+          PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"
+          bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"
+          functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"
+          image="$functional_image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
+          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
+          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'
@@ -778,6 +922,9 @@ jobs:
         id: image_exists
         if: steps.plan.outputs.needs_e2e_image == '1'
         shell: bash
+        env:
+          PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
+          PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
         run: |
           set -euo pipefail
           bare_exists=0
@@ -788,6 +935,9 @@ jobs:
             if docker manifest inspect "${{ steps.image.outputs.bare_image }}" >/dev/null 2>&1; then
               bare_exists=1
               echo "Shared Docker E2E bare image already exists: ${{ steps.image.outputs.bare_image }}"
+            elif [[ -n "$PROVIDED_BARE_IMAGE" ]]; then
+              echo "Provided bare Docker E2E image does not exist: $PROVIDED_BARE_IMAGE" >&2
+              exit 1
             else
               needs_build=1
             fi
@@ -797,6 +947,9 @@ jobs:
             if docker manifest inspect "${{ steps.image.outputs.functional_image }}" >/dev/null 2>&1; then
               functional_exists=1
               echo "Shared Docker E2E functional image already exists: ${{ steps.image.outputs.functional_image }}"
+            elif [[ -n "$PROVIDED_FUNCTIONAL_IMAGE" ]]; then
+              echo "Provided functional Docker E2E image does not exist: $PROVIDED_FUNCTIONAL_IMAGE" >&2
+              exit 1
             else
               needs_build=1
             fi
@@ -812,14 +965,12 @@ jobs:
 
       - name: Build and push bare Docker E2E image
         if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
           target: bare
           platforms: linux/amd64
-          cache-from: type=gha,scope=docker-e2e-bare
-          cache-to: type=gha,mode=max,scope=docker-e2e-bare
           tags: ${{ steps.image.outputs.bare_image }}
           sbom: true
           provenance: mode=max
@@ -827,7 +978,7 @@ jobs:
 
       - name: Build and push functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
@@ -835,10 +986,6 @@ jobs:
           build-contexts: |
             openclaw_package=.artifacts/docker-e2e-package
           platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=docker-e2e-bare
-            type=gha,scope=docker-e2e-functional
-          cache-to: type=gha,mode=max,scope=docker-e2e-functional
           tags: ${{ steps.image.outputs.functional_image }}
           sbom: true
           provenance: mode=max

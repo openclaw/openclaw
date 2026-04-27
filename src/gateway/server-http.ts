@@ -56,13 +56,13 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeGatewayHttpRequestOrReply,
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
-} from "./http-utils.js";
+} from "./http-auth-utils.js";
+import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { resolveRequestClientIp } from "./net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
@@ -70,15 +70,24 @@ import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-r
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
-  type PluginHttpRequestHandler,
   type PluginRoutePathContext,
-} from "./server/plugins-http.js";
+} from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { VOICECLAW_REALTIME_PATH } from "./voiceclaw-realtime/paths.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type PluginHttpRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -891,6 +900,7 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
+  loadConfig?: () => OpenClawConfig;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -912,6 +922,7 @@ export function createGatewayHttpServer(opts: {
     getReadiness,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
+  const loadGatewayConfig = opts.loadConfig ?? loadConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -938,7 +949,21 @@ export function createGatewayHttpServer(opts: {
     }
 
     try {
-      const configSnapshot = loadConfig();
+      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
+        await handleGatewayProbeRequest(
+          req,
+          res,
+          requestPath,
+          getResolvedAuth(),
+          [],
+          false,
+          getReadiness,
+        );
+        return;
+      }
+
+      const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -949,9 +974,9 @@ export function createGatewayHttpServer(opts: {
       if (scopedCanvas.rewrittenUrl) {
         req.url = scopedCanvas.rewrittenUrl;
       }
-      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const scopedRequestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       const pluginPathContext = handlePluginRequest
-        ? resolvePluginRoutePathContext(requestPath)
+        ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
       const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
@@ -961,7 +986,7 @@ export function createGatewayHttpServer(opts: {
             handleGatewayProbeRequest(
               req,
               res,
-              requestPath,
+              scopedRequestPath,
               resolvedAuth,
               trustedProxies,
               allowRealIpFallback,
@@ -973,7 +998,7 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
-      if (openAiCompatEnabled && isOpenAiModelsPath(requestPath)) {
+      if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
           run: async () =>
@@ -985,7 +1010,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openAiCompatEnabled && isEmbeddingsPath(requestPath)) {
+      if (openAiCompatEnabled && isEmbeddingsPath(scopedRequestPath)) {
         requestStages.push({
           name: "embeddings",
           run: async () =>
@@ -997,7 +1022,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isToolsInvokePath(requestPath)) {
+      if (isToolsInvokePath(scopedRequestPath)) {
         requestStages.push({
           name: "tools-invoke",
           run: async () =>
@@ -1009,7 +1034,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isSessionKillPath(requestPath)) {
+      if (isSessionKillPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-kill",
           run: async () =>
@@ -1021,7 +1046,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isSessionHistoryPath(requestPath)) {
+      if (isSessionHistoryPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-history",
           run: async () =>
@@ -1034,7 +1059,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openResponsesEnabled && isOpenResponsesPath(requestPath)) {
+      if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {
         requestStages.push({
           name: "openresponses",
           run: async () =>
@@ -1047,7 +1072,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openAiChatCompletionsEnabled && isOpenAiChatCompletionsPath(requestPath)) {
+      if (openAiChatCompletionsEnabled && isOpenAiChatCompletionsPath(scopedRequestPath)) {
         requestStages.push({
           name: "openai",
           run: async () =>
@@ -1064,7 +1089,7 @@ export function createGatewayHttpServer(opts: {
         requestStages.push({
           name: "canvas-auth",
           run: async () => {
-            if (!isCanvasPath(requestPath)) {
+            if (!isCanvasPath(scopedRequestPath)) {
               return false;
             }
             const ok = await authorizeCanvasRequest({
@@ -1086,7 +1111,7 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "a2ui",
-          run: () => (isA2uiPath(requestPath) ? handleA2uiHttpRequest(req, res) : false),
+          run: () => (isA2uiPath(scopedRequestPath) ? handleA2uiHttpRequest(req, res) : false),
         });
         requestStages.push({
           name: "canvas-http",
@@ -1100,7 +1125,7 @@ export function createGatewayHttpServer(opts: {
         ...buildPluginRequestStages({
           req,
           res,
-          requestPath,
+          requestPath: scopedRequestPath,
           getGatewayAuthBypassPaths: () => getCachedPluginGatewayAuthBypassPaths(configSnapshot),
           pluginPathContext,
           handlePluginRequest,

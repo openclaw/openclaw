@@ -109,7 +109,7 @@ start_gateway() {
 
   # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
   for _ in $(seq 1 1200); do
-    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
+    if grep -Eq "listening on ws://|\\[gateway\\] http server listening|\\[gateway\\] ready( \\(|$)" "$log_file"; then
       return 0
     fi
     if ! kill -0 "$gateway_pid" 2>/dev/null; then

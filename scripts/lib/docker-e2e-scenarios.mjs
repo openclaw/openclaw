@@ -215,6 +215,19 @@ export const mainLanes = [
     resources: ["npm", "service"],
     weight: 6,
   }),
+  lane(
+    "plugins-offline",
+    "OPENCLAW_PLUGINS_E2E_CLAWHUB=0 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
+    {
+      resources: ["npm", "service"],
+      weight: 6,
+    },
+  ),
+  npmLane(
+    "bundled-channel-deps-compat",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps:fast",
+    { resources: ["service"], weight: 3 },
+  ),
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,
@@ -375,11 +388,7 @@ const releasePathChunks = {
       weight: 6,
     }),
     npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
-    npmLane(
-      "bundled-channel-deps",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps",
-      { resources: ["service"], weight: 3 },
-    ),
+    ...bundledScenarioLanes,
     serviceLane(
       "cron-mcp-cleanup",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
@@ -394,7 +403,15 @@ const releasePathChunks = {
       { timeoutMs: 8 * 60 * 1000 },
     ),
   ],
+  openwebui: [],
 };
+
+function openWebUILane() {
+  return serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    timeoutMs: OPENWEBUI_TIMEOUT_MS,
+    weight: 5,
+  });
+}
 
 export function releasePathChunkLanes(chunk, options = {}) {
   const base = releasePathChunks[chunk];
@@ -403,22 +420,21 @@ export function releasePathChunkLanes(chunk, options = {}) {
       `OPENCLAW_DOCKER_ALL_CHUNK must be one of: ${Object.keys(releasePathChunks).join(", ")}. Got: ${JSON.stringify(chunk)}`,
     );
   }
+  if (chunk === "openwebui") {
+    return options.includeOpenWebUI ? [openWebUILane()] : [];
+  }
   if (chunk !== "plugins-integrations" || !options.includeOpenWebUI) {
     return base;
   }
-  return [
-    ...base,
-    serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
-      timeoutMs: OPENWEBUI_TIMEOUT_MS,
-      weight: 5,
-    }),
-  ];
+  return [...base, openWebUILane()];
 }
 
 export function allReleasePathLanes(options = {}) {
-  return Object.keys(releasePathChunks).flatMap((chunk) =>
-    releasePathChunkLanes(chunk, {
-      includeOpenWebUI: chunk === "plugins-integrations" && options.includeOpenWebUI,
-    }),
-  );
+  return Object.keys(releasePathChunks)
+    .filter((chunk) => chunk !== "openwebui")
+    .flatMap((chunk) =>
+      releasePathChunkLanes(chunk, {
+        includeOpenWebUI: options.includeOpenWebUI,
+      }),
+    );
 }
