@@ -408,6 +408,7 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
+    createIfMissing: false,
     updateLastRoute:
       !isGroup || updateLastRouteThreadId != null
         ? {

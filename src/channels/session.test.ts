@@ -132,4 +132,21 @@ describe("recordInboundSession", () => {
       senderRecipient: "9999",
     });
   });
+
+  it("skips updateLastRoute when createIfMissing is false", async () => {
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      createIfMissing: false,
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
+      },
+      onRecordError: vi.fn(),
+    });
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
 });
