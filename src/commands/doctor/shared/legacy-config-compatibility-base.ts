@@ -9,6 +9,7 @@ import {
   normalizeLegacyTalkConfig,
   seedMissingDefaultAccountsFromSingleAccountBase,
 } from "./legacy-config-core-normalizers.js";
+import { normalizeLegacyProviderApi } from "./legacy-config-provider-api-migrate.js";
 import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
 import { migrateLegacyWebSearchConfig } from "./legacy-web-search-migrate.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
@@ -40,5 +41,6 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
+  next = normalizeLegacyProviderApi(next, changes);
   return normalizeLegacyMistralModelMaxTokens(next, changes);
 }
