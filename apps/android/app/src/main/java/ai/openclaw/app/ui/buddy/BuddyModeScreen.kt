@@ -22,6 +22,7 @@ import ai.openclaw.app.MainViewModel
 @Composable
 fun BuddyModeScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val snapshot by viewModel.buddySnapshot.collectAsState()
+  val cameraConfirmation by viewModel.buddyCameraConfirmation.collectAsState()
   val activity = LocalContext.current.findActivity()
 
   DisposableEffect(activity) {
@@ -49,6 +50,9 @@ fun BuddyModeScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     )
     BuddyOverlay(
       snapshot = snapshot,
+      showConfirmationActions = cameraConfirmation != null,
+      onConfirm = { viewModel.respondBuddyCameraConfirmation(true) },
+      onCancel = { viewModel.respondBuddyCameraConfirmation(false) },
       modifier =
         Modifier
           .align(Alignment.BottomCenter)

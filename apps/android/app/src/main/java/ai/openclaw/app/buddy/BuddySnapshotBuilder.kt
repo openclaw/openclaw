@@ -11,13 +11,14 @@ object BuddySnapshotBuilder {
     cameraHudText: String?,
     cameraEnabled: Boolean,
     recordAudioGranted: Boolean,
+    cameraConfirmationRequired: Boolean = false,
   ): BuddySnapshot {
     val permissionRequired = !cameraEnabled || !recordAudioGranted
     val visionScanning = !cameraHudText.isNullOrBlank()
     val state =
       BuddyState.resolve(
         permissionRequired = permissionRequired,
-        confirmationRequired = pendingToolCallCount > 0,
+        confirmationRequired = cameraConfirmationRequired || pendingToolCallCount > 0,
         recording = micListening || micSending,
         visionScanning = visionScanning,
         speaking = talkSpeaking,
@@ -35,8 +36,17 @@ object BuddySnapshotBuilder {
       BuddyState.NeedsConfirmation ->
         BuddySnapshot(
           state = state,
-          agent = BuddyAgent(mood = BuddyMood.Attentive, message = "要我继续吗？"),
-          prompt = BuddyPrompt(id = "pending-tool-call", kind = "continue", text = "要我继续吗？"),
+          agent =
+            BuddyAgent(
+              mood = BuddyMood.Attentive,
+              message = if (cameraConfirmationRequired) "要我打开摄像头吗？" else "要我继续吗？",
+            ),
+          prompt =
+            if (cameraConfirmationRequired) {
+              BuddyPrompt(id = "camera-confirmation", kind = "camera", text = "要我打开摄像头吗？")
+            } else {
+              BuddyPrompt(id = "pending-tool-call", kind = "continue", text = "要我继续吗？")
+            },
         )
       BuddyState.Recording ->
         BuddySnapshot(

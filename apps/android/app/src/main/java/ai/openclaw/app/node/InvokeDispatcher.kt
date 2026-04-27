@@ -81,6 +81,7 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
+  private val confirmCameraInvoke: suspend (String, String?) -> Boolean = { _, _ -> true },
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
@@ -166,8 +167,14 @@ class InvokeDispatcher(
 
       // Camera commands
       OpenClawCameraCommand.List.rawValue -> cameraHandler.handleList(paramsJson)
-      OpenClawCameraCommand.Snap.rawValue -> cameraHandler.handleSnap(paramsJson)
-      OpenClawCameraCommand.Clip.rawValue -> cameraHandler.handleClip(paramsJson)
+      OpenClawCameraCommand.Snap.rawValue ->
+        withCameraConfirmation(command, paramsJson) {
+          cameraHandler.handleSnap(paramsJson)
+        }
+      OpenClawCameraCommand.Clip.rawValue ->
+        withCameraConfirmation(command, paramsJson) {
+          cameraHandler.handleClip(paramsJson)
+        }
 
       // Location command
       OpenClawLocationCommand.Get.rawValue -> locationHandler.handleLocationGet(paramsJson)
@@ -214,6 +221,20 @@ class InvokeDispatcher(
       "debug.logs" -> debugHandler.handleLogs()
       else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
     }
+  }
+
+  private suspend fun withCameraConfirmation(
+    command: String,
+    paramsJson: String?,
+    block: suspend () -> GatewaySession.InvokeResult,
+  ): GatewaySession.InvokeResult {
+    if (!confirmCameraInvoke(command, paramsJson)) {
+      return GatewaySession.InvokeResult.error(
+        code = "CAMERA_CONFIRMATION_REQUIRED",
+        message = "CAMERA_CONFIRMATION_REQUIRED: user confirmation is required before camera capture",
+      )
+    }
+    return block()
   }
 
   private suspend fun withReadyA2ui(

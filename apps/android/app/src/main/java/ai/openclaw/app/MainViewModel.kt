@@ -97,6 +97,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
   val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
+  val buddyCameraConfirmation: StateFlow<NodeRuntime.BuddyCameraConfirmation?> =
+    runtimeState(initial = null) { it.buddyCameraConfirmation }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -173,7 +175,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       chatPendingToolCalls,
       cameraHud,
       cameraEnabled,
-    ) { activity, toolCalls, hud, cameraEnabled ->
+      buddyCameraConfirmation,
+    ) { activity, toolCalls, hud, cameraEnabled, cameraConfirmation ->
       BuddySnapshotBuilder.build(
         connected = activity.connected,
         micListening = activity.micListening,
@@ -184,6 +187,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         cameraHudText = hud?.message,
         cameraEnabled = cameraEnabled,
         recordAudioGranted = true,
+        cameraConfirmationRequired = cameraConfirmation != null,
       )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, BuddySnapshot.listening())
 
@@ -343,6 +347,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   private fun requestBuddyCameraSnap() {
     ensureRuntime().requestBuddyCameraSnap()
+  }
+
+  fun respondBuddyCameraConfirmation(approved: Boolean) {
+    ensureRuntime().respondBuddyCameraConfirmation(approved)
   }
 
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {

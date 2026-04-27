@@ -45,6 +45,27 @@ class BuddySnapshotBuilderTest {
   }
 
   @Test
+  fun cameraConfirmationMapsToCameraPrompt() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        cameraConfirmationRequired = true,
+      )
+
+    assertEquals(BuddyState.NeedsConfirmation, snapshot.state)
+    assertEquals("camera", snapshot.prompt?.kind)
+    assertEquals("要我打开摄像头吗？", snapshot.prompt?.text)
+  }
+
+  @Test
   fun cameraHudMapsToVisionScanning() {
     val snapshot =
       BuddySnapshotBuilder.build(

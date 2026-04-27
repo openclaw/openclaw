@@ -21,9 +21,11 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +36,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -52,6 +57,12 @@ class NodeRuntime(
     val token: String?,
     val bootstrapToken: String?,
     val password: String?,
+  )
+
+  data class BuddyCameraConfirmation(
+    val id: String,
+    val command: String,
+    val message: String,
   )
 
   private val appContext = context.applicationContext
@@ -190,6 +201,7 @@ class NodeRuntime(
     onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
+    confirmCameraInvoke = ::awaitBuddyCameraConfirmation,
   )
 
   data class GatewayTrustPrompt(
@@ -218,6 +230,12 @@ class NodeRuntime(
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
+  private val cameraConfirmationSeq = AtomicLong(0)
+  private val cameraConfirmationMutex = Mutex()
+  private var cameraConfirmationDeferred: CompletableDeferred<Boolean>? = null
+
+  private val _buddyCameraConfirmation = MutableStateFlow<BuddyCameraConfirmation?>(null)
+  val buddyCameraConfirmation: StateFlow<BuddyCameraConfirmation?> = _buddyCameraConfirmation.asStateFlow()
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
 
@@ -777,9 +795,58 @@ class NodeRuntime(
     }
   }
 
+  suspend fun awaitBuddyCameraConfirmation(command: String, paramsJson: String?): Boolean {
+    val deferred = CompletableDeferred<Boolean>()
+    val accepted =
+      cameraConfirmationMutex.withLock {
+        if (cameraConfirmationDeferred?.isActive == true) {
+          false
+        } else {
+          cameraConfirmationDeferred = deferred
+          _buddyCameraConfirmation.value =
+            BuddyCameraConfirmation(
+              id = "camera-${cameraConfirmationSeq.incrementAndGet()}",
+              command = command,
+              message = cameraConfirmationMessage(command, paramsJson),
+            )
+          true
+        }
+      }
+    if (!accepted) return false
+
+    val approved =
+      try {
+        withTimeoutOrNull(30_000) { deferred.await() } == true
+      } finally {
+        cameraConfirmationMutex.withLock {
+          if (cameraConfirmationDeferred === deferred) {
+            cameraConfirmationDeferred = null
+            _buddyCameraConfirmation.value = null
+          }
+        }
+      }
+    return approved
+  }
+
+  fun respondBuddyCameraConfirmation(approved: Boolean) {
+    scope.launch {
+      cameraConfirmationMutex.withLock {
+        cameraConfirmationDeferred?.complete(approved)
+        cameraConfirmationDeferred = null
+        _buddyCameraConfirmation.value = null
+      }
+    }
+  }
+
   fun setMicEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
+
+  private fun cameraConfirmationMessage(command: String, _paramsJson: String?): String =
+    when (command) {
+      OpenClawCameraCommand.Clip.rawValue -> "要我录一小段视频吗？"
+      else -> "要我打开摄像头吗？"
+    }
 
   fun setTalkModeEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)

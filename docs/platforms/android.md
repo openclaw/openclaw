@@ -222,7 +222,7 @@ Buddy mode translates node and agent state into expressions and short user-facin
 Camera behavior:
 
 - User voice or touch can trigger a foreground `camera.snap` flow.
-- Agent-initiated camera requests are represented as Buddy confirmation prompts; command-policy enforcement belongs with the Gateway/node invoke layer.
+- Agent-initiated `camera.snap` and `camera.clip` requests wait for Buddy confirmation before capture.
 - Camera preview is not kept open while idle.
 
 Voice behavior:
