@@ -80,6 +80,7 @@ describe("bundled plugin postinstall", () => {
       shell: false,
       stdio: "pipe",
       windowsVerbatimArguments: undefined,
+      windowsHide: true,
     });
   }
 

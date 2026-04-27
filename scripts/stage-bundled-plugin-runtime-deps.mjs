@@ -885,6 +885,7 @@ function runNpmInstall(params) {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: params.timeoutMs ?? 5 * 60 * 1000,
     windowsVerbatimArguments: params.npmRunner.windowsVerbatimArguments,
+    windowsHide: true,
   });
   if (result.status === 0) {
     return;

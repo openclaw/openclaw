@@ -819,6 +819,7 @@ export function runBundledPluginPostinstall(params = {}) {
       stdio: "pipe",
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+      windowsHide: true,
     });
     if (result.status !== 0) {
       const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();

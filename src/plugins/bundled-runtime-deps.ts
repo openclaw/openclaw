@@ -1294,6 +1294,7 @@ export function installBundledRuntimeDeps(params: {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
     });
     if (result.status !== 0 || result.error) {
       const output = [result.error?.message, result.stderr, result.stdout]
