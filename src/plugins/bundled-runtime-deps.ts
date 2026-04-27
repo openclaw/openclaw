@@ -1173,7 +1173,8 @@ export function scanBundledPluginRuntimeDeps(params: {
   const packageRuntimeDeps =
     deps.length > 0
       ? collectMirroredPackageRuntimeDeps(params.packageRoot).map((dep) => ({
-          ...dep,
+          name: dep.name,
+          version: dep.version,
           pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID],
         }))
       : [];
