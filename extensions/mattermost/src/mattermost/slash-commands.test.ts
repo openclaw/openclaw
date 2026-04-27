@@ -3,7 +3,6 @@ import type { MattermostClient } from "./client.js";
 import {
   DEFAULT_COMMAND_SPECS,
   MATTERMOST_SLASH_POST_METHOD,
-  appendSlashCallbackSecret,
   parseSlashCommandPayload,
   registerSlashCommands,
   resolveCallbackUrl,
@@ -108,12 +107,6 @@ describe("slash-commands", () => {
       gatewayHost: "0.0.0.0",
     });
     expect(callbackUrl).toBe("http://localhost:18789/api/channels/mattermost/command");
-  });
-
-  it("appends callback URL secrets while preserving existing query params", () => {
-    expect(
-      appendSlashCallbackSecret("https://gateway.example.com/slash?account=default", "s3cr3t"),
-    ).toBe("https://gateway.example.com/slash?account=default&openclaw_slash=s3cr3t");
   });
 
   it("reuses existing command when trigger already points to callback URL", async () => {

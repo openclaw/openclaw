@@ -40,7 +40,6 @@ import {
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
-  MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
   MATTERMOST_SLASH_POST_METHOD,
   getMattermostCommand,
   listMattermostCommands,
@@ -72,11 +71,14 @@ const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
 const COMMAND_LOOKUP_CACHE_SUCCESS_MS = 5_000;
 const COMMAND_LOOKUP_CACHE_FAILURE_MS = 5_000;
+const UNKNOWN_TOKEN_VALIDATION_WINDOW_MS = 60_000;
+const UNKNOWN_TOKEN_VALIDATION_MAX = 5;
 const commandLookupInflight = new Map<string, Promise<MattermostCommandResponse | null>>();
 const commandLookupCache = new Map<
   string,
   { command: MattermostCommandResponse | null; expiresAt: number }
 >();
+const unknownTokenValidationAttempts = new Map<string, { count: number; resetAt: number }>();
 
 /**
  * Read the full request body as a string.
@@ -138,32 +140,6 @@ function sanitizeMattermostLogValue(value: string): string {
   return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
 }
 
-function matchesRegisteredCallbackSecret(params: {
-  requestUrl?: string;
-  registeredUrl: string;
-}): boolean {
-  let expected: string | null = null;
-  try {
-    expected = new URL(params.registeredUrl).searchParams.get(
-      MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
-    );
-  } catch {
-    return false;
-  }
-  if (!expected) {
-    return false;
-  }
-
-  try {
-    const actual = new URL(params.requestUrl ?? "", params.registeredUrl).searchParams.get(
-      MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
-    );
-    return !!actual && safeEqualSecret(actual, expected);
-  } catch {
-    return false;
-  }
-}
-
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), COMMAND_LOOKUP_TIMEOUT_MS);
@@ -185,6 +161,28 @@ function commandLookupKey(
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
   commandLookupInflight.clear();
   commandLookupCache.clear();
+  unknownTokenValidationAttempts.clear();
+}
+
+function consumeUnknownTokenValidationBudget(params: {
+  remoteAddress: string;
+  registered: MattermostRegisteredCommand;
+}): boolean {
+  const key = `${params.remoteAddress}:${params.registered.teamId}:${params.registered.trigger}`;
+  const now = Date.now();
+  const existing = unknownTokenValidationAttempts.get(key);
+  if (!existing || existing.resetAt <= now) {
+    unknownTokenValidationAttempts.set(key, {
+      count: 1,
+      resetAt: now + UNKNOWN_TOKEN_VALIDATION_WINDOW_MS,
+    });
+    return true;
+  }
+  if (existing.count >= UNKNOWN_TOKEN_VALIDATION_MAX) {
+    return false;
+  }
+  existing.count += 1;
+  return true;
 }
 
 async function fetchCurrentMattermostCommandUncached(params: {
@@ -211,21 +209,7 @@ async function fetchCurrentMattermostCommandUncached(params: {
     const currentCommands = await withCommandLookupTimeout((signal) =>
       listMattermostCommands(params.client, params.registered.teamId, { signal }),
     );
-    const currentById = currentCommands.find((cmd) => cmd.id === params.registered.id);
-    if (currentById && !isDeletedMattermostCommand(currentById)) {
-      return currentById;
-    }
-    return (
-      currentCommands.find(
-        (cmd) =>
-          !isDeletedMattermostCommand(cmd) &&
-          cmd.team_id === params.registered.teamId &&
-          cmd.trigger === params.registered.trigger &&
-          cmd.url === params.registered.url,
-      ) ??
-      currentById ??
-      commandLookupResult
-    );
+    return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
   } catch (err) {
     const primaryDetail = commandLookupError
       ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
@@ -291,6 +275,7 @@ export async function validateMattermostSlashCommandToken(params: {
     return false;
   }
   if (
+    current.id !== params.registeredCommand.id ||
     current.team_id !== params.registeredCommand.teamId ||
     current.trigger !== params.registeredCommand.trigger ||
     current.method !== MATTERMOST_SLASH_POST_METHOD ||
@@ -488,9 +473,10 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
     if (
-      !matchesRegisteredCallbackSecret({
-        requestUrl: req.url,
-        registeredUrl: registeredCommand.url,
+      !startupTokenMatches &&
+      !consumeUnknownTokenValidationBudget({
+        remoteAddress: req.socket?.remoteAddress ?? "unknown",
+        registered: registeredCommand,
       })
     ) {
       sendJsonResponse(res, 401, {

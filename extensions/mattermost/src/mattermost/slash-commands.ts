@@ -18,7 +18,6 @@ import type { MattermostClient } from "./client.js";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export const MATTERMOST_SLASH_POST_METHOD = "P";
-export const MATTERMOST_SLASH_CALLBACK_SECRET_PARAM = "openclaw_slash";
 
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
@@ -605,18 +604,4 @@ export function resolveCallbackUrl(params: {
   }
 
   return `http://${host}:${params.gatewayPort}${path}`;
-}
-
-export function appendSlashCallbackSecret(callbackUrl: string, secret: string): string {
-  const normalizedSecret = secret.trim();
-  if (!normalizedSecret) {
-    return callbackUrl;
-  }
-  try {
-    const url = new URL(callbackUrl);
-    url.searchParams.set(MATTERMOST_SLASH_CALLBACK_SECRET_PARAM, normalizedSecret);
-    return url.toString();
-  } catch {
-    return callbackUrl;
-  }
 }

@@ -467,7 +467,7 @@ describe("slash-http", () => {
     ).resolves.toBe(false);
   });
 
-  it("accepts a regenerated command when the current trigger and URL match", async () => {
+  it("rejects a regenerated command when the current command id changed", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const oldDeletedCommand = {
       id: "cmd-1",
@@ -508,7 +508,7 @@ describe("slash-http", () => {
           text: "",
         },
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
