@@ -40,6 +40,18 @@ describe("tool allowlist guard", () => {
     expect(error?.message).toContain("the selected model does not support tools");
   });
 
+  it("skips the empty-allowlist guard for modelRun call shapes", () => {
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "tools.allow", entries: ["*", "lobster", "llm-task"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        disableTools: true,
+        modelRun: true,
+      }),
+    ).toBeNull();
+  });
+
   it("allows text-only runs without explicit allowlists", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({

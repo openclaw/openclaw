@@ -19,7 +19,14 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   callableToolNames: string[];
   toolsEnabled: boolean;
   disableTools?: boolean;
+  modelRun?: boolean;
 }): Error | null {
+  // `infer model run` and other modelRun call shapes intentionally zero tools, so
+  // a global `tools.alsoAllow` injected into the explicit allowlist must not fail
+  // the run before the model is even reached.
+  if (params.modelRun === true) {
+    return null;
+  }
   const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
   if (params.sources.length === 0 || callableToolNames.length > 0) {
     return null;

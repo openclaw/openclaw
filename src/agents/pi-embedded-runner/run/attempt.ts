@@ -948,6 +948,7 @@ export async function runEmbeddedAttempt(
       callableToolNames: effectiveTools.map((tool) => tool.name),
       toolsEnabled,
       disableTools: params.disableTools,
+      modelRun: params.modelRun,
     });
     logAgentRuntimeToolDiagnostics({
       runtimePlan: params.runtimePlan,
