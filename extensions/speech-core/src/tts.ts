@@ -91,7 +91,9 @@ export type TtsAttemptReasonCode =
    * routing decision when a capability tier doesn't apply, not a provider failure). */
   | "empty_speech_text"
   /** Provider was skipped because its routed text was below the auto-TTS minimum. */
-  | "speech_text_too_short";
+  | "speech_text_too_short"
+  /** Provider was skipped because its routed text exceeded the hard TTS limit. */
+  | "speech_text_too_long";
 
 export type TtsProviderAttempt = {
   provider: string;
@@ -1285,6 +1287,22 @@ export async function synthesizeSpeech(params: {
         logVerbose(`TTS: provider ${provider} skipped (resolved speech text too short)`);
         continue;
       }
+      if (trimmedProviderText.length > config.maxTextLength) {
+        const skipMessage = `${provider}: speech text exceeds maximum length after per-provider routing`;
+        errors.push(skipMessage);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "speech_text_too_long",
+          persona: persona?.id,
+          ...(resolvedProvider.personaBinding
+            ? { personaBinding: resolvedProvider.personaBinding }
+            : {}),
+          error: skipMessage,
+        });
+        logVerbose(`TTS: provider ${provider} skipped (resolved speech text too long)`);
+        continue;
+      }
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: trimmedProviderText,
@@ -1681,7 +1699,21 @@ export async function maybeApplyTtsToPayload(params: {
       ...providerOrder.filter((provider) => provider !== effectiveProvider),
     ];
     for (const provider of providers) {
-      const candidate = resolveRoutedSpeechText(provider, expressiveText, plainText).trim();
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        persona: activePersona,
+      });
+      if (resolvedProvider.kind === "skip") {
+        continue;
+      }
+      const candidate = resolveRoutedSpeechText(
+        provider,
+        expressiveText,
+        plainText,
+        resolvedProvider.providerConfig,
+      ).trim();
       if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
         return { provider, text: candidate };
       }
