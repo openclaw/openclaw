@@ -403,6 +403,7 @@ export function createFollowupRunner(params: {
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
+                emotionMode: run.emotionMode,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[
