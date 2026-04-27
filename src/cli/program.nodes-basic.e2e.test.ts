@@ -180,6 +180,65 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("Pairing Scoped");
   });
 
+  it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "request\u001b[2K-1",
+              nodeId: "pending-node",
+              displayName: "Pending\u001b[1A\nNode",
+              remoteIp: "10.0.0.4\rrewritten",
+              ts: now - 1_000,
+            },
+          ],
+          paired: [
+            {
+              nodeId: "paired-node",
+              displayName: "Paired\u001b[2K\nNode",
+              remoteIp: "10.0.0.5\rrewritten",
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("older gateway");
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    const output = getRuntimeOutput();
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("[2K");
+    expect(output).toContain("Pending\\nNode");
+    expect(output).toContain("Paired\\nNode");
+    expect(output).toContain("10.0.0.5\\rrewritten");
+
+    runtime.log.mockClear();
+    await runProgram(["nodes", "list", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      pending: [
+        expect.objectContaining({
+          requestId: "request\u001b[2K-1",
+          displayName: "Pending\u001b[1A\nNode",
+        }),
+      ],
+      paired: [
+        expect.objectContaining({
+          nodeId: "paired-node",
+          displayName: "Paired\u001b[2K\nNode",
+          remoteIp: "10.0.0.5\rrewritten",
+        }),
+      ],
+    });
+  });
+
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {

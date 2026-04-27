@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -88,6 +89,11 @@ function formatClientLabel(node: { clientId?: string; clientMode?: string }): st
     return `${clientId}/${clientMode}`;
   }
   return clientId || clientMode || null;
+}
+
+function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string }): string {
+  const label = node.displayName?.trim() ? node.displayName.trim() : node.nodeId;
+  return sanitizeTerminalText(label);
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {
@@ -239,7 +245,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           const rows = filtered.map((n) => {
-            const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
@@ -251,9 +256,11 @@ export function registerNodesStatusCommands(nodes: Command) {
               perms ? `perms: ${perms}` : null,
               versions,
               pathEnv ? `path: ${pathEnv}` : null,
-            ].filter(Boolean) as string[];
+            ]
+              .filter(Boolean)
+              .map((part) => sanitizeTerminalText(String(part)));
             const caps = Array.isArray(n.caps)
-              ? n.caps.map(String).filter(Boolean).toSorted().join(", ")
+              ? sanitizeTerminalText(n.caps.map(String).filter(Boolean).toSorted().join(", "))
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
@@ -263,9 +270,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                 : "";
 
             return {
-              Node: name,
-              ID: n.nodeId,
-              IP: n.remoteIp ?? "",
+              Node: formatNodeTerminalLabel(n),
+              ID: sanitizeTerminalText(n.nodeId),
+              IP: sanitizeTerminalText(n.remoteIp ?? ""),
               Detail: detailParts.join(" · "),
               Status: `${paired} · ${connected}${since}`,
               Caps: caps,
@@ -338,17 +345,17 @@ export function registerNodesStatusCommands(nodes: Command) {
           }`;
           const tableWidth = getTerminalTableWidth();
           const rows = [
-            { Field: "ID", Value: nodeId },
-            displayName ? { Field: "Name", Value: displayName } : null,
-            client ? { Field: "Client", Value: client } : null,
-            ip ? { Field: "IP", Value: ip } : null,
-            family ? { Field: "Device", Value: family } : null,
-            model ? { Field: "Model", Value: model } : null,
-            perms ? { Field: "Perms", Value: perms } : null,
-            versions ? { Field: "Version", Value: versions } : null,
-            pathEnv ? { Field: "PATH", Value: pathEnv } : null,
+            { Field: "ID", Value: sanitizeTerminalText(nodeId) },
+            displayName ? { Field: "Name", Value: sanitizeTerminalText(displayName) } : null,
+            client ? { Field: "Client", Value: sanitizeTerminalText(client) } : null,
+            ip ? { Field: "IP", Value: sanitizeTerminalText(ip) } : null,
+            family ? { Field: "Device", Value: sanitizeTerminalText(family) } : null,
+            model ? { Field: "Model", Value: sanitizeTerminalText(model) } : null,
+            perms ? { Field: "Perms", Value: sanitizeTerminalText(perms) } : null,
+            versions ? { Field: "Version", Value: sanitizeTerminalText(versions) } : null,
+            pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
             { Field: "Status", Value: status },
-            { Field: "Caps", Value: caps ? caps.join(", ") : "?" },
+            { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;
 
           defaultRuntime.log(heading("Node"));
@@ -395,8 +402,8 @@ export function registerNodesStatusCommands(nodes: Command) {
           const effectiveNodes = hasFilters
             ? parseNodeList(await callGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
-          const pairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
-          const filteredPaired = pairedRows.filter((node) => {
+          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
+          const filteredPaired = effectivePairedRows.filter((node) => {
             if (connectedOnly) {
               if (!node.connected) {
                 return false;
@@ -453,9 +460,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                     ? n.connectedAtMs
                     : undefined;
               return {
-                Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
-                Id: n.nodeId,
-                IP: n.remoteIp ?? "",
+                Node: formatNodeTerminalLabel(n),
+                Id: sanitizeTerminalText(n.nodeId),
+                IP: sanitizeTerminalText(n.remoteIp ?? ""),
                 LastConnect:
                   typeof lastConnectedAtMs === "number"
                     ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
