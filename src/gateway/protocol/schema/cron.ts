@@ -186,6 +186,13 @@ const CronDeliverySharedProperties = {
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
+  // Forward-compatible alias for routing announcements to chat threads
+  // (e.g. Telegram forum topic ids). The TypeScript types in
+  // `src/cron/types.ts` already declare `threadId?: string | number`, but
+  // the runtime API schema rejected it because `additionalProperties:false`
+  // is set on every CronDelivery* variant. Mirrors the existing
+  // `ConfigDeliveryContextSchema` shape in `config.ts`. (#73017)
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
 };
 
 const CronDeliveryNoopSchema = Type.Object(

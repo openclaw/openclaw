@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/protocol: allow `delivery.threadId` (string or number) on every CronDelivery variant so Telegram forum-topic ids and other thread-routed announcements pass schema validation. The runtime types in `src/cron/types.ts` already declared `threadId?: string | number`, but the API schema rejected it because `additionalProperties: false` was set on every variant. Mirrors the existing `ConfigDeliveryContextSchema` shape. Fixes #73017.
 - Channels/sessions: prevent guarded inbound session recording from creating route-only phantom sessions while still allowing last-route updates for sessions that already exist. Carries forward #73009. Thanks @jzakirov.
 - Plugins/runtime deps: stage bundled plugin dependencies imported by mirrored root dist chunks, so packaged memory and status commands do not miss `chokidar` or similar root-chunk dependencies after update. Fixes #72882 and #72970; carries forward #72992. Thanks @shrimpy8, @colin-chang, and @Schnup03.
 - Agents/runtime context: deliver hidden runtime context through prompt-local system context while keeping the transcript-only custom entry out of provider user turns, and strip stale copied runtime-context prefaces from user-facing replies. Fixes #72386; carries forward #72969. Thanks @jhsmith409.
