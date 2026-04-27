@@ -125,4 +125,30 @@ describe("detectTelegramBotTargeting", () => {
     expect(result.mentionedBot).toBe("mybot");
     expect(result.repliedToBot).toBe("otherbot");
   });
+
+  it("leaves mentionedBot undefined for media-only messages with no text/caption", () => {
+    // Sticker / voice / non-captioned media: bots can only be mentioned via
+    // text, so we never scan and therefore can't claim emptiness with null.
+    const result = detectTelegramBotTargeting(msg({}), { currentBotUsername: "mybot" });
+    expect(result.mentionedBot).toBeUndefined();
+  });
+
+  it("returns repliedToBot=null when reply target has no from (channel post / anonymous admin)", () => {
+    // reply_to_message exists but reply.from is undefined — happens for
+    // replies to channel posts and to anonymous group admins. We know there's
+    // a reply target and it isn't a known bot, which is null (distinct from
+    // undefined = "no reply target at all").
+    const result = detectTelegramBotTargeting(
+      msg({
+        text: "ack",
+        reply_to_message: {
+          message_id: 11,
+          date: 1,
+          chat: { id: 1, type: "supergroup", title: "x" },
+        } as ReplyTo,
+      }),
+      {},
+    );
+    expect(result.repliedToBot).toBeNull();
+  });
 });

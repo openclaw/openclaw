@@ -395,8 +395,8 @@ export function detectTelegramBotTargeting(
 
   if (knownBots.size > 0) {
     const { text, entities } = getTelegramTextParts(msg);
-    let found: string | null = null;
     if (text) {
+      let found: string | null = null;
       for (const ent of entities) {
         if (ent.type !== "mention") {
           continue;
@@ -417,8 +417,11 @@ export function detectTelegramBotTargeting(
           }
         }
       }
+      // Only assert "no bot mentioned" (null) when a scan actually ran. For
+      // media-only messages with no text/caption we leave mentionedBot
+      // undefined: we never scanned, so we can't claim emptiness.
+      result.mentionedBot = found;
     }
-    result.mentionedBot = found;
   }
 
   const reply = msg.reply_to_message;
@@ -426,7 +429,12 @@ export function detectTelegramBotTargeting(
     const replyFrom = reply.from;
     if (replyFrom?.is_bot && replyFrom.username) {
       result.repliedToBot = replyFrom.username.toLowerCase();
-    } else if (replyFrom != null) {
+    } else {
+      // A reply target exists but the sender is either a human (replyFrom set,
+      // not a bot) or absent entirely (channel post / anonymous group admin —
+      // reply.from is undefined). Both cases mean "we know there's a reply
+      // and it isn't a known bot," which is null, distinct from undefined
+      // ("no reply target at all").
       result.repliedToBot = null;
     }
   }
