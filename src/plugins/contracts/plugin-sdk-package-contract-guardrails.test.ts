@@ -1,23 +1,29 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
-import { pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../test-helpers/fs-fixtures.js";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import {
+  pluginSdkEntrypoints,
+  publicPluginOwnedSdkEntrypoints,
+  reservedBundledPluginSdkEntrypoints,
+  supportedBundledFacadeSdkEntrypoints,
+} from "../../plugin-sdk/entrypoints.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
+const SDK_SUBPATH_DOC_FILE = "docs/plugins/sdk-subpaths.md";
 const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
-const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
-const tempDirs: string[] = [];
+const BUNDLED_PLUGIN_FACADE_LOADER_PATTERN =
+  /\bload(?:Activated)?BundledPluginPublicSurfaceModuleSync\b/;
+const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
+  /\b(?:Private helper surface|Narrow plugin-sdk surface for the bundled|Narrow .*runtime exports used by the bundled)\b/i;
+const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
+const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
+  /\b(?:bluebubbles|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -53,6 +59,93 @@ function collectPluginSdkSubpathReferences() {
   return references;
 }
 
+function collectDocumentedSdkSubpaths(): Set<string> {
+  const source = readFileSync(resolve(REPO_ROOT, SDK_SUBPATH_DOC_FILE), "utf8");
+  return new Set(
+    [...source.matchAll(/`plugin-sdk\/([a-z0-9][a-z0-9-]*)`/g)]
+      .map((match) => match[1])
+      .filter((subpath): subpath is string => Boolean(subpath)),
+  );
+}
+
+function collectBundledPluginIds(): string[] {
+  return readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .toSorted((a, b) => b.length - a.length || a.localeCompare(b));
+}
+
+function collectPluginOwnedSdkEntrypoints(): string[] {
+  const pluginIds = collectBundledPluginIds();
+  return pluginSdkEntrypoints
+    .filter((entrypoint) =>
+      pluginIds.some(
+        (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
+      ),
+    )
+    .toSorted();
+}
+
+function resolvePluginOwnerFromEntrypoint(entrypoint: string): string | undefined {
+  return collectBundledPluginIds().find(
+    (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
+  );
+}
+
+function collectClassificationOverlaps(classifications: Record<string, readonly string[]>) {
+  const seen = new Map<string, string[]>();
+  for (const [classification, entrypoints] of Object.entries(classifications)) {
+    for (const entrypoint of entrypoints) {
+      const current = seen.get(entrypoint) ?? [];
+      current.push(classification);
+      seen.set(entrypoint, current);
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, matches]) => matches.length > 1)
+    .map(([entrypoint, matches]) => `${entrypoint}: ${matches.toSorted().join(", ")}`)
+    .toSorted();
+}
+
+function collectBundledFacadeSdkEntrypoints(): string[] {
+  const entrypoints: string[] = [];
+  for (const entrypoint of pluginSdkEntrypoints) {
+    const filePath = resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`);
+    const source = readFileSync(filePath, "utf8");
+    if (BUNDLED_PLUGIN_FACADE_LOADER_PATTERN.test(source)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints.toSorted();
+}
+
+function collectPrivateBundledSdkSurfaceEntrypoints(): string[] {
+  const entrypoints: string[] = [];
+  for (const entrypoint of pluginSdkEntrypoints) {
+    const filePath = resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`);
+    const source = readFileSync(filePath, "utf8");
+    if (PRIVATE_BUNDLED_SDK_SURFACE_PATTERN.test(source)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints.toSorted();
+}
+
+function collectGenericCoreOwnerNameLeaks(): Array<{ file: string; match: string }> {
+  const leaks: Array<{ file: string; match: string }> = [];
+  for (const file of GENERIC_CORE_HELPER_FILES) {
+    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    for (const match of source.matchAll(GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN)) {
+      const ownerName = match[0];
+      if (!ownerName) {
+        continue;
+      }
+      leaks.push({ file, match: ownerName });
+    }
+  }
+  return leaks;
+}
+
 function readRootPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -66,42 +159,10 @@ function readRootPackageJson(): {
 function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
 } {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
-  };
-}
-
-function readAmazonBedrockPackageJson(): {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
-} {
-  return JSON.parse(
-    readFileSync(resolve(REPO_ROOT, "extensions/amazon-bedrock/package.json"), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
   };
 }
 
@@ -113,128 +174,6 @@ function collectRuntimeDependencySpecs(packageJson: {
     ...Object.entries(packageJson.dependencies ?? {}),
     ...Object.entries(packageJson.optionalDependencies ?? {}),
   ]);
-}
-
-function createRootPackageRequire() {
-  return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
-}
-
-function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(
-    value.split(/[\\/]/).at(-1)?.toLowerCase() ?? "",
-  );
-}
-
-function escapeForCmdExe(arg: string): string {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(command: string, args: string[]): string {
-  return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(" ");
-}
-
-type NpmCommandInvocation = {
-  command: string;
-  args: string[];
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
-};
-
-function resolveNpmCommandInvocation(npmArgs: string[]): NpmCommandInvocation {
-  const npmExecPath = process.env.npm_execpath;
-  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: process.execPath, args: [npmExecPath, ...npmArgs] };
-  }
-
-  if (process.platform !== "win32") {
-    return { command: "npm", args: npmArgs };
-  }
-
-  const nodeDir = dirname(process.execPath);
-  const npmCliCandidates = [
-    resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
-    resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
-  ];
-  const npmCliPath = npmCliCandidates.find((candidate) => existsSync(candidate));
-  if (npmCliPath) {
-    return { command: process.execPath, args: [npmCliPath, ...npmArgs] };
-  }
-
-  const npmExePath = resolve(nodeDir, "npm.exe");
-  if (existsSync(npmExePath)) {
-    return { command: npmExePath, args: npmArgs };
-  }
-
-  const npmCmdPath = resolve(nodeDir, "npm.cmd");
-  if (existsSync(npmCmdPath)) {
-    return {
-      command: process.env.ComSpec ?? "cmd.exe",
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmCmdPath, npmArgs)],
-      windowsVerbatimArguments: true,
-    };
-  }
-
-  return {
-    command: process.env.ComSpec ?? "cmd.exe",
-    args: ["/d", "/s", "/c", buildCmdExeCommandLine("npm.cmd", npmArgs)],
-    windowsVerbatimArguments: true,
-  };
-}
-
-function packOpenClawToTempDir(packDir: string): string {
-  const invocation = resolveNpmCommandInvocation([
-    "pack",
-    "--ignore-scripts",
-    "--json",
-    "--pack-destination",
-    packDir,
-  ]);
-  const result = spawnSync(invocation.command, invocation.args, {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...invocation.env,
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-    },
-    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error((result.stderr || result.stdout || "npm pack failed").trim());
-  }
-  const raw = result.stdout;
-  const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
-  const filename = parsed[0]?.filename?.trim();
-  if (!filename) {
-    throw new Error(`npm pack did not return a filename: ${raw}`);
-  }
-  return join(packDir, filename);
-}
-
-async function readPackedRootPackageJson(archivePath: string): Promise<{
-  dependencies?: Record<string, string>;
-}> {
-  const extractDir = makeTrackedTempDir("openclaw-packed-root-package-json", tempDirs);
-  await tar.x({
-    file: archivePath,
-    cwd: extractDir,
-    filter: (entryPath) => entryPath === "package/package.json",
-    strict: true,
-  });
-  return JSON.parse(readFileSync(join(extractDir, "package", "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
 }
 
 function collectExtensionFiles(dir: string): string[] {
@@ -265,6 +204,7 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
     if (
       /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
       /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
       /\.test\.[cm]?tsx?$/.test(repoRelativePath)
     ) {
       continue;
@@ -290,13 +230,126 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
   return leaks;
 }
 
+function collectCrossOwnerReservedSdkImports(): Array<{
+  file: string;
+  specifier: string;
+  owner?: string;
+}> {
+  const leaks: Array<{ file: string; specifier: string; owner?: string }> = [];
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPattern =
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g;
+
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    if (
+      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
+      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
+    ) {
+      continue;
+    }
+    const pluginId = repoRelativePath.split("/")[1];
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(importPattern)) {
+      const subpath = match[1];
+      if (!subpath || !reserved.has(subpath)) {
+        continue;
+      }
+      const owner = resolvePluginOwnerFromEntrypoint(subpath);
+      if (owner === pluginId) {
+        continue;
+      }
+      leaks.push({
+        file: repoRelativePath,
+        specifier: `openclaw/plugin-sdk/${subpath}`,
+        owner,
+      });
+    }
+  }
+  return leaks;
+}
+
 describe("plugin-sdk package contract guardrails", () => {
-  afterEach(() => {
-    cleanupTrackedTempDirs(tempDirs);
+  it("keeps plugin-sdk entrypoint metadata unique", () => {
+    const counts = new Map<string, number>();
+    for (const entrypoint of pluginSdkEntrypoints) {
+      counts.set(entrypoint, (counts.get(entrypoint) ?? 0) + 1);
+    }
+    const duplicates = [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([entrypoint]) => entrypoint)
+      .toSorted();
+
+    expect(duplicates).toEqual([]);
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
+  });
+
+  it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+    const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
+    const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
+      (entrypoint) => !reserved.has(entrypoint) && !supported.has(entrypoint),
+    );
+    const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
+      (entrypoint) => !reserved.has(entrypoint),
+    );
+
+    expect({
+      unknownReserved,
+      unknownSupported,
+      unclassifiedBundledFacades,
+      unreservedPrivateSurfaces,
+    }).toEqual({
+      unknownReserved: [],
+      unknownSupported: [],
+      unclassifiedBundledFacades: [],
+      unreservedPrivateSurfaces: [],
+    });
+  });
+
+  it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+    const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
+    const publicOwned = new Set<string>(publicPluginOwnedSdkEntrypoints);
+    const documented = collectDocumentedSdkSubpaths();
+    const pluginOwnedEntrypoints = collectPluginOwnedSdkEntrypoints();
+    const classified = new Set([...reserved, ...supported, ...publicOwned]);
+
+    const unknownPublicOwned = [...publicOwned].filter(
+      (entrypoint) => !entrypoints.has(entrypoint),
+    );
+    const classificationOverlaps = collectClassificationOverlaps({
+      reserved: reservedBundledPluginSdkEntrypoints,
+      supported: supportedBundledFacadeSdkEntrypoints,
+      publicOwned: publicPluginOwnedSdkEntrypoints,
+    });
+    const unclassifiedPluginOwned = pluginOwnedEntrypoints.filter(
+      (entrypoint) => !classified.has(entrypoint),
+    );
+    const undocumentedPluginOwned = pluginOwnedEntrypoints.filter(
+      (entrypoint) => !documented.has(entrypoint),
+    );
+
+    expect({
+      unknownPublicOwned,
+      classificationOverlaps,
+      unclassifiedPluginOwned,
+      undocumentedPluginOwned,
+    }).toEqual({
+      unknownPublicOwned: [],
+      classificationOverlaps: [],
+      unclassifiedPluginOwned: [],
+      undocumentedPluginOwned: [],
+    });
   });
 
   it("keeps curated public plugin-sdk references on exported built subpaths", () => {
@@ -323,68 +376,32 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("mirrors matrix runtime deps needed by the bundled host graph", () => {
+  it("keeps Matrix runtime deps local to the Matrix plugin", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
-    const allowlist = matrixPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
-    expect(Array.isArray(allowlist)).toBe(true);
-    const matrixRootMirrorAllowlist = allowlist as string[];
-    expect(matrixRootMirrorAllowlist).toEqual(
-      expect.arrayContaining(["@matrix-org/matrix-sdk-crypto-wasm"]),
-    );
-
-    for (const dep of matrixRootMirrorAllowlist) {
-      expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
+    for (const dep of [
+      "@matrix-org/matrix-sdk-crypto-wasm",
+      "@matrix-org/matrix-sdk-crypto-nodejs",
+      "fake-indexeddb",
+      "matrix-js-sdk",
+    ]) {
+      expect(matrixRuntimeDeps.get(dep)).toBeDefined();
+      expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
-  });
-
-  it("mirrors Bedrock runtime deps needed by the bundled host graph", () => {
-    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-    const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-    const allowlist = bedrockPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
-
-    expect(Array.isArray(allowlist)).toBe(true);
-    const bedrockRootMirrorAllowlist = allowlist as string[];
-    expect(bedrockRootMirrorAllowlist).toEqual(expect.arrayContaining(["@aws-sdk/client-bedrock"]));
-
-    for (const dep of bedrockRootMirrorAllowlist) {
-      expect(rootRuntimeDeps.get(dep)).toBe(bedrockRuntimeDeps.get(dep));
-    }
-  });
-
-  it("resolves matrix crypto WASM from the root runtime surface", () => {
-    const rootRequire = createRootPackageRequire();
-    // Normalize filesystem separators so the package assertion stays portable.
-    const resolvedPath = rootRequire
-      .resolve("@matrix-org/matrix-sdk-crypto-wasm")
-      .replaceAll("\\", "/");
-
-    expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
-  });
-
-  it("keeps matrix crypto WASM in the packed artifact manifest", async () => {
-    const tempRoot = makeTrackedTempDir("openclaw-matrix-wasm-pack", tempDirs);
-    const packDir = join(tempRoot, "pack");
-    mkdirSync(packDir, { recursive: true });
-
-    const archivePath = packOpenClawToTempDir(packDir);
-    const packedPackageJson = await readPackedRootPackageJson(archivePath);
-    const matrixPackageJson = readMatrixPackageJson();
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-
-    expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
-      matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
-    );
-    expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
-      bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
-    );
-    expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
+    expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
     expect(collectExtensionCoreImportLeaks()).toEqual([]);
+  });
+
+  it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
+    expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+  });
+
+  it("keeps generic core poll helpers free of plugin owner names", () => {
+    expect(collectGenericCoreOwnerNameLeaks()).toEqual([]);
   });
 });

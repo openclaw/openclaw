@@ -1,7 +1,24 @@
 import type { Agent } from "node:https";
+import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import {
+  readPluginPackageVersion,
+  resolveAmbientNodeProxyAgent,
+} from "openclaw/plugin-sdk/extension-shared";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const pluginVersion = readPluginPackageVersion({ require });
+
+export { pluginVersion };
+
+const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
+export { FEISHU_USER_AGENT };
+
+/** User-Agent header value for all Feishu API requests. */
+export function getFeishuUserAgent(): string {
+  return FEISHU_USER_AGENT;
+}
 
 type FeishuClientSdk = Pick<
   typeof Lark,
@@ -26,6 +43,35 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
+// Override the SDK's default User-Agent interceptor.
+// The Lark SDK registers an axios request interceptor that sets
+// 'oapi-node-sdk/1.0.0'. Axios request interceptors execute in LIFO order
+// (last-registered runs first), so simply appending ours doesn't work — the
+// SDK's interceptor would run last and overwrite our UA. We must clear
+// handlers[] first, then register our own as the sole interceptor.
+//
+// Risk is low: the SDK only registers one interceptor (UA) at init time, and
+// we clear it at module load before any other code can register handlers.
+// If a future SDK version adds more interceptors, the upgrade will need
+// compatibility verification regardless.
+{
+  const inst = Lark.defaultHttpInstance as {
+    interceptors?: {
+      request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
+    };
+  };
+  if (inst.interceptors?.request) {
+    inst.interceptors.request.handlers = [];
+    inst.interceptors.request.use((req: unknown) => {
+      const r = req as { headers?: Record<string, string> };
+      if (r.headers) {
+        r.headers["User-Agent"] = getFeishuUserAgent();
+      }
+      return req;
+    });
+  }
+}
+
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
@@ -36,7 +82,7 @@ type FeishuHttpInstanceLike = Pick<
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
 
-async function getWsProxyAgent(): Promise<Agent | undefined> {
+async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
 
@@ -61,8 +107,8 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
 
 /**
  * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout to prevent indefinite hangs
- * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ * but injects a default request timeout and User-Agent header to prevent
+ * indefinite hangs and set a standardized User-Agent per OAPI best practices.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;

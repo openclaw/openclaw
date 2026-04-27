@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
+import { createRequire } from "node:module";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -7,7 +8,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
   formatTaskBlockedFollowupMessage,
@@ -24,6 +25,7 @@ import {
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
+import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -66,13 +68,21 @@ type TaskRegistryDeliveryRuntime = Pick<
 const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.deliveryRuntimeOverride",
 );
-type TaskRegistryGlobalWithDeliveryOverride = typeof globalThis & {
+const TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY = Symbol.for(
+  "openclaw.taskRegistry.controlRuntimeOverride",
+);
+const require = createRequire(import.meta.url);
+const TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES = [
+  "./task-registry-control.runtime.js",
+  "./task-registry-control.runtime.ts",
+] as const;
+type TaskRegistryGlobalWithRuntimeOverrides = typeof globalThis & {
   [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
+  [TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY]?: TaskRegistryControlRuntime | null;
 };
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
-let controlRuntimePromise: Promise<typeof import("./task-registry-control.runtime.js")> | null =
-  null;
+let controlRuntimePromise: Promise<TaskRegistryControlRuntime> | null = null;
 
 type TaskDeliveryOwner = {
   sessionKey?: string;
@@ -168,6 +178,52 @@ function assertParentFlowLinkAllowed(params: {
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return { ...record };
+}
+
+function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
+  // Detached runtimes can report lifecycle times captured before the registry
+  // inserted or restored the row; keep createdAt as the visible lifecycle floor.
+  let createdAt = task.createdAt;
+  for (const candidate of [task.startedAt, task.lastEventAt, task.endedAt]) {
+    if (typeof candidate === "number" && candidate < createdAt) {
+      createdAt = candidate;
+    }
+  }
+
+  const startedAt =
+    typeof task.startedAt === "number" ? Math.max(task.startedAt, createdAt) : task.startedAt;
+  const lastEventAt =
+    typeof task.lastEventAt === "number"
+      ? Math.max(task.lastEventAt, startedAt ?? createdAt)
+      : task.lastEventAt;
+  const endedAt =
+    typeof task.endedAt === "number"
+      ? Math.max(task.endedAt, startedAt ?? createdAt)
+      : task.endedAt;
+
+  if (
+    createdAt === task.createdAt &&
+    startedAt === task.startedAt &&
+    lastEventAt === task.lastEventAt &&
+    endedAt === task.endedAt
+  ) {
+    return task;
+  }
+
+  const normalized: TaskRecord = {
+    ...task,
+    createdAt,
+  };
+  if (typeof startedAt === "number") {
+    normalized.startedAt = startedAt;
+  }
+  if (typeof lastEventAt === "number") {
+    normalized.lastEventAt = lastEventAt;
+  }
+  if (typeof endedAt === "number") {
+    normalized.endedAt = endedAt;
+  }
+  return normalized;
 }
 
 function cloneTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
@@ -343,6 +399,22 @@ function normalizeTaskTerminalOutcome(
   return value === "succeeded" || value === "blocked" ? value : undefined;
 }
 
+function shouldApplyRunScopedStatusUpdate(params: {
+  currentStatus: TaskStatus;
+  nextStatus: TaskStatus;
+}): boolean {
+  if (params.currentStatus === params.nextStatus) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.currentStatus)) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.nextStatus)) {
+    return false;
+  }
+  return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
+}
+
 function resolveTaskTerminalOutcome(params: {
   status: TaskStatus;
   terminalOutcome?: TaskTerminalOutcome | null;
@@ -368,7 +440,7 @@ function appendTaskEvent(event: {
 }
 
 function loadTaskRegistryDeliveryRuntime() {
-  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ];
   if (deliveryRuntimeOverride) {
@@ -379,9 +451,24 @@ function loadTaskRegistryDeliveryRuntime() {
 }
 
 function loadTaskRegistryControlRuntime() {
+  const controlRuntimeOverride = (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ];
+  if (controlRuntimeOverride) {
+    return Promise.resolve(controlRuntimeOverride);
+  }
   // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
   // control graph off the default import path until a cancellation flow actually needs it.
-  controlRuntimePromise ??= import("./task-registry-control.runtime.js");
+  controlRuntimePromise ??= Promise.resolve().then(() => {
+    for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
+      try {
+        return require(candidate) as TaskRegistryControlRuntime;
+      } catch {
+        // Try runtime/source candidates in order.
+      }
+    }
+    throw new Error("Failed to load task registry control runtime.");
+  });
   return controlRuntimePromise;
 }
 
@@ -836,7 +923,7 @@ function restoreTaskRegistryOnce() {
       return;
     }
     for (const [taskId, task] of restored.tasks.entries()) {
-      tasks.set(taskId, task);
+      tasks.set(taskId, normalizeTaskTimestamps(task));
     }
     for (const [taskId, state] of restored.deliveryStates.entries()) {
       taskDeliveryStates.set(taskId, state);
@@ -864,7 +951,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   if (!current) {
     return null;
   }
-  const next = { ...current, ...patch };
+  const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
     next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
@@ -1305,6 +1392,9 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
+      if (isTerminalTaskStatus(current.status)) {
+        continue;
+      }
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -1425,7 +1515,7 @@ export function createTaskRecord(params: {
     scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
-  const record: TaskRecord = {
+  const record: TaskRecord = normalizeTaskTimestamps({
     taskId,
     runtime: params.runtime,
     taskKind: normalizeOptionalString(params.taskKind),
@@ -1453,7 +1543,7 @@ export function createTaskRecord(params: {
       status,
       terminalOutcome: params.terminalOutcome,
     }),
-  };
+  });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter =
       (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
@@ -1510,6 +1600,15 @@ function updateTaskStateByRunId(params: {
   for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+    if (
+      params.status &&
+      !shouldApplyRunScopedStatusUpdate({
+        currentStatus: current.status,
+        nextStatus,
+      })
+    ) {
+      continue;
+    }
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
     if (params.status) {
       patch.status = normalizeTaskStatus(params.status);
@@ -1573,15 +1672,20 @@ function updateTaskDeliveryByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {
+    deliveryStatus: params.deliveryStatus,
+  };
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
   return updateTasksByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
-    patch: {
-      deliveryStatus: params.deliveryStatus,
-    },
+    patch,
   });
 }
 
@@ -1637,6 +1741,22 @@ export function markTaskTerminalByRunId(params: {
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
 }) {
+  return finalizeTaskRunByRunId(params);
+}
+
+export function finalizeTaskRunByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
   return updateTaskStateByRunId({
     runId: params.runId,
     runtime: params.runtime,
@@ -1657,6 +1777,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return updateTaskDeliveryByRunId(params);
 }
@@ -1719,43 +1840,45 @@ export async function cancelTaskById(params: {
     };
   }
   const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "Task has no cancellable child session.",
-      task: cloneTaskRecord(task),
-    };
-  }
   try {
-    if (task.runtime === "acp") {
-      const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
-      await getAcpSessionManager().cancelSession({
-        cfg: params.cfg,
-        sessionKey: childSessionKey,
-        reason: "task-cancel",
-      });
-    } else if (task.runtime === "subagent") {
-      const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
-      const result = await killSubagentRunAdmin({
-        cfg: params.cfg,
-        sessionKey: childSessionKey,
-      });
-      if (!result.found || !result.killed) {
+    if (task.runtime !== "cli") {
+      if (!childSessionKey) {
         return {
           found: true,
           cancelled: false,
-          reason: result.found ? "Subagent was not running." : "Subagent task not found.",
+          reason: "Task has no cancellable child session.",
           task: cloneTaskRecord(task),
         };
       }
-    } else {
-      return {
-        found: true,
-        cancelled: false,
-        reason: "Task runtime does not support cancellation yet.",
-        task: cloneTaskRecord(task),
-      };
+      if (task.runtime === "acp") {
+        const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
+        await getAcpSessionManager().cancelSession({
+          cfg: params.cfg,
+          sessionKey: childSessionKey,
+          reason: "task-cancel",
+        });
+      } else if (task.runtime === "subagent") {
+        const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
+        const result = await killSubagentRunAdmin({
+          cfg: params.cfg,
+          sessionKey: childSessionKey,
+        });
+        if (!result.found || !result.killed) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: result.found ? "Subagent was not running." : "Subagent task not found.",
+            task: cloneTaskRecord(task),
+          };
+        }
+      } else {
+        return {
+          found: true,
+          cancelled: false,
+          reason: "Task runtime does not support cancellation yet.",
+          task: cloneTaskRecord(task),
+        };
+      }
     }
     const updated = updateTask(task.taskId, {
       status: "cancelled",
@@ -1784,7 +1907,7 @@ export async function cancelTaskById(params: {
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]
-    .map((task, insertionIndex) => ({ ...cloneTaskRecord(task), insertionIndex }))
+    .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
 }
@@ -1821,7 +1944,7 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
   return [...ids]
     .map((taskId, insertionIndex) => {
       const task = tasks.get(taskId);
-      return task ? { ...cloneTaskRecord(task), insertionIndex } : null;
+      return task ? Object.assign({}, cloneTaskRecord(task), { insertionIndex }) : null;
     })
     .filter(
       (
@@ -1959,15 +2082,29 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 export function resetTaskRegistryDeliveryRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = null;
   deliveryRuntimePromise = null;
 }
 
 export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = runtime;
   deliveryRuntimePromise = null;
+}
+
+export function resetTaskRegistryControlRuntimeForTests() {
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ] = null;
+  controlRuntimePromise = null;
+}
+
+export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
+  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
+    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
+  ] = runtime;
+  controlRuntimePromise = null;
 }

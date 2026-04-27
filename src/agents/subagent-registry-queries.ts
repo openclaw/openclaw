@@ -1,5 +1,6 @@
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
@@ -86,6 +87,43 @@ function findLatestRunForChildSession(
   return latest;
 }
 
+export function isSubagentSessionRunActiveFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): boolean {
+  const latest = findLatestRunForChildSession(runs, childSessionKey);
+  return Boolean(latest && isLiveUnendedSubagentRun(latest));
+}
+
+export function getSubagentRunByChildSessionKeyFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latestActive: SubagentRunRecord | null = null;
+  let latestEnded: SubagentRunRecord | null = null;
+  for (const entry of runs.values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (isLiveUnendedSubagentRun(entry)) {
+      if (!latestActive || entry.createdAt > latestActive.createdAt) {
+        latestActive = entry;
+      }
+      continue;
+    }
+    if (!latestEnded || entry.createdAt > latestEnded.createdAt) {
+      latestEnded = entry;
+    }
+  }
+
+  return latestActive ?? latestEnded;
+}
+
 export function resolveRequesterForChildSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
@@ -149,7 +187,7 @@ export function countActiveRunsForSessionFromRuns(
 
   let count = 0;
   for (const entry of latestByChildSessionKey.values()) {
-    if (typeof entry.endedAt !== "number") {
+    if (isLiveUnendedSubagentRun(entry)) {
       count += 1;
       continue;
     }
@@ -215,7 +253,7 @@ export function countActiveDescendantRunsFromRuns(
   let count = 0;
   if (
     !forEachDescendantRun(runs, rootSessionKey, (_runId, entry) => {
-      if (typeof entry.endedAt !== "number") {
+      if (isLiveUnendedSubagentRun(entry)) {
         count += 1;
       }
     })
@@ -234,9 +272,10 @@ function countPendingDescendantRunsInternal(
   let count = 0;
   if (
     !forEachDescendantRun(runs, rootSessionKey, (runId, entry) => {
-      const runEnded = typeof entry.endedAt === "number";
+      const runEnded = hasSubagentRunEnded(entry);
       const cleanupCompleted = typeof entry.cleanupCompletedAt === "number";
-      if ((!runEnded || !cleanupCompleted) && runId !== excludedRunId) {
+      const runPending = runEnded ? !cleanupCompleted : isLiveUnendedSubagentRun(entry);
+      if (runPending && runId !== excludedRunId) {
         count += 1;
       }
     })

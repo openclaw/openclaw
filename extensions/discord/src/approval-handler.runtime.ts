@@ -19,13 +19,13 @@ import type {
   PluginApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   ExecApprovalActionDescriptor,
   ExecApprovalDecision,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { logDebug, logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { shouldHandleDiscordApprovalRequest } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -358,10 +358,11 @@ async function updateMessage(params: {
   container: DiscordUiContainer;
 }): Promise<void> {
   try {
-    const { rest, request: discordRequest } = createDiscordClient(
-      { token: params.token, accountId: params.accountId },
-      params.cfg,
-    );
+    const { rest, request: discordRequest } = createDiscordClient({
+      cfg: params.cfg,
+      token: params.token,
+      accountId: params.accountId,
+    });
     const payload = buildExecApprovalPayload(params.container);
     await discordRequest(
       () =>
@@ -389,10 +390,11 @@ async function finalizeMessage(params: {
     return;
   }
   try {
-    const { rest, request: discordRequest } = createDiscordClient(
-      { token: params.token, accountId: params.accountId },
-      params.cfg,
-    );
+    const { rest, request: discordRequest } = createDiscordClient({
+      cfg: params.cfg,
+      token: params.token,
+      accountId: params.accountId,
+    });
     await discordRequest(
       () => rest.delete(Routes.channelMessage(params.channelId, params.messageId)) as Promise<void>,
       "delete-approval",
@@ -517,10 +519,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
           },
         };
       }
-      const { rest, request: discordRequest } = createDiscordClient(
-        { token: resolved.context.token, accountId: resolved.accountId },
+      const { rest, request: discordRequest } = createDiscordClient({
         cfg,
-      );
+        token: resolved.context.token,
+        accountId: resolved.accountId,
+      });
       const userId = plannedTarget.target.to;
       const dmChannel = (await discordRequest(
         () =>
@@ -553,10 +556,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return null;
       }
-      const { rest, request: discordRequest } = createDiscordClient(
-        { token: resolved.context.token, accountId: resolved.accountId },
+      const { rest, request: discordRequest } = createDiscordClient({
         cfg,
-      );
+        token: resolved.context.token,
+        accountId: resolved.accountId,
+      });
       const message = (await discordRequest(
         () =>
           rest.post(Routes.channelMessages(preparedTarget.discordChannelId), {

@@ -1,5 +1,5 @@
 import { normalizeChatChannelId } from "../../../channels/ids.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
@@ -118,6 +118,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
+    if (channelConfig.enabled === false) {
+      continue;
+    }
     await recoverAllowFromForAccount({
       channelName,
       account: channelConfig,
@@ -130,6 +133,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     }
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
       if (!accountConfig || typeof accountConfig !== "object") {
+        continue;
+      }
+      if ((accountConfig as { enabled?: unknown }).enabled === false) {
         continue;
       }
       await recoverAllowFromForAccount({

@@ -1,14 +1,12 @@
 ---
-title: "Plugin Testing"
-sidebarTitle: "Testing"
 summary: "Testing utilities and patterns for OpenClaw plugins"
+title: "Plugin testing"
+sidebarTitle: "Testing"
 read_when:
   - You are writing tests for a plugin
   - You need test utilities from the plugin SDK
   - You want to understand contract tests for bundled plugins
 ---
-
-# Plugin Testing
 
 Reference for test utilities, patterns, and lint enforcement for OpenClaw
 plugins.
@@ -83,6 +81,27 @@ describe("my-channel target resolution", () => {
 
 ## Testing patterns
 
+### Testing registration contracts
+
+Unit tests that pass a hand-written `api` mock to `register(api)` do not exercise
+OpenClaw's loader acceptance gates. Add at least one loader-backed smoke test
+for each registration surface your plugin depends on, especially hooks and
+exclusive capabilities such as memory.
+
+The real loader fails plugin registration when required metadata is missing or a
+plugin calls a capability API it does not own. For example,
+`api.registerHook(...)` requires a hook name, and
+`api.registerMemoryCapability(...)` requires the plugin manifest or exported
+entry to declare `kind: "memory"`.
+
+### Testing runtime config access
+
+Prefer the shared plugin runtime mock from the repo test helpers when testing
+bundled plugins. Its deprecated `runtime.config.loadConfig()` and
+`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
+usage of compatibility APIs. Override those mocks only when the test is
+explicitly covering legacy compatibility behavior.
+
 ### Unit testing a channel plugin
 
 ```typescript
@@ -155,7 +174,10 @@ For code that uses `createPluginRuntimeStore`, mock the runtime in tests:
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const store = createPluginRuntimeStore<PluginRuntime>("test runtime not set");
+const store = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "test-plugin",
+  errorMessage: "test runtime not set",
+});
 
 // In test setup
 const mockRuntime = {
@@ -164,8 +186,9 @@ const mockRuntime = {
     // ... other mocks
   },
   config: {
-    loadConfig: vi.fn(),
-    writeConfigFile: vi.fn(),
+    current: vi.fn(() => ({}) as const),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
   },
   // ... other namespaces
 } as unknown as PluginRuntime;

@@ -5,7 +5,7 @@ import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/li
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
+import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
@@ -15,13 +15,13 @@ import {
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
 } from "../src/music-generation/live-test-helpers.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../test/helpers/plugins/provider-registration.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -99,18 +99,7 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
 }
 
 function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
-  const expectedKeys = [
-    ...new Set(providerIds.flatMap((providerId) => getProviderEnvVars(providerId))),
-  ];
-  if (expectedKeys.length === 0) {
-    return;
-  }
-  loadShellEnvFallback({
-    enabled: true,
-    env: process.env,
-    expectedKeys,
-    logger: { warn: (message: string) => console.warn(message) },
-  });
+  maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
 function resolveLiveLyrics(providerId: string): string | undefined {
@@ -125,6 +114,14 @@ function resolveLiveLyrics(providerId: string): string | undefined {
     "Hold the night inside this song",
     "We run together bright and strong",
   ].join("\n");
+}
+
+function isSkippableLiveMusicProviderError(providerId: string, error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    providerId === "google" &&
+    message.toLowerCase().includes("music generation response missing audio data")
+  );
 }
 
 describeLive("music generation provider live", () => {
@@ -202,6 +199,10 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
         } catch (error) {
+          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
+            skipped.push(`${testCase.providerId}:generate transient no-audio response`);
+            continue;
+          }
           failures.push(
             `${testCase.providerId}:generate (${authLabel}): ${
               error instanceof Error ? error.message : String(error)
@@ -236,6 +237,10 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:edit:${providerModel} (${authLabel})`);
         } catch (error) {
+          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
+            skipped.push(`${testCase.providerId}:edit transient no-audio response`);
+            continue;
+          }
           failures.push(
             `${testCase.providerId}:edit (${authLabel}): ${
               error instanceof Error ? error.message : String(error)

@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isUsageCountedSessionTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  isCompactionCheckpointTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+} from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { hashText } from "./internal.js";
-
-const log = createSubsystemLogger("memory");
+import { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+import { hashText } from "./hash.js";
 
 export type SessionFileEntry = {
   path: string;
@@ -17,7 +20,38 @@ export type SessionFileEntry = {
   content: string;
   /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
   lineMap: number[];
+  /** True when this transcript belongs to an internal dreaming narrative run. */
+  generatedByDreamingNarrative?: boolean;
 };
+
+function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const candidate = record as {
+    type?: unknown;
+    customType?: unknown;
+    data?: unknown;
+  };
+  if (
+    candidate.type !== "custom" ||
+    candidate.customType !== "openclaw:bootstrap-context:full" ||
+    !candidate.data ||
+    typeof candidate.data !== "object" ||
+    Array.isArray(candidate.data)
+  ) {
+    return false;
+  }
+  const runId = (candidate.data as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.startsWith("dreaming-narrative-");
+}
+
+function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
+  const fileName = path.basename(absPath);
+  return (
+    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
+  );
+}
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
@@ -37,6 +71,11 @@ export function sessionPathForFile(absPath: string): string {
   return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
 }
 
+async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
+  const { createSubsystemLogger } = await import("../../../../src/logging/subsystem.js");
+  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
+}
+
 function normalizeSessionText(value: string): string {
   return value
     .replace(/\s*\n+\s*/g, " ")
@@ -44,10 +83,9 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
-export function extractSessionText(content: unknown): string | null {
+function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
-    const normalized = normalizeSessionText(content);
-    return normalized ? normalized : null;
+    return content;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -58,27 +96,59 @@ export function extractSessionText(content: unknown): string | null {
       continue;
     }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const normalized = normalizeSessionText(record.text);
-    if (normalized) {
-      parts.push(normalized);
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
     }
   }
-  if (parts.length === 0) {
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * Strip OpenClaw-injected inbound metadata envelopes from a raw text block
+ * on user-role messages before normalization. See the authoritative
+ * implementation in `src/memory-host-sdk/host/session-files.ts` for the
+ * full rationale; duplicated here to keep this parallel copy bug-free.
+ */
+function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
+  if (role !== "user") {
+    return text;
+  }
+  return stripInboundMetadata(text);
+}
+
+export function extractSessionText(
+  content: unknown,
+  role: "user" | "assistant" = "assistant",
+): string | null {
+  const rawText = collectRawSessionText(content);
+  if (rawText === null) {
     return null;
   }
-  return parts.join(" ");
+  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const normalized = normalizeSessionText(stripped);
+  return normalized ? normalized : null;
 }
 
 export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
+    if (shouldSkipTranscriptFileForDreaming(absPath)) {
+      return {
+        path: sessionPathForFile(absPath),
+        absPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        hash: hashText("\n\n"),
+        content: "",
+        lineMap: [],
+        generatedByDreamingNarrative: false,
+      };
+    }
     const raw = await fs.readFile(absPath, "utf-8");
     const lines = raw.split("\n");
     const collected: string[] = [];
     const lineMap: number[] = [];
+    let generatedByDreamingNarrative = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -90,6 +160,9 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       } catch {
         continue;
       }
+      if (!generatedByDreamingNarrative && isDreamingNarrativeBootstrapRecord(record)) {
+        generatedByDreamingNarrative = true;
+      }
       if (
         !record ||
         typeof record !== "object" ||
@@ -98,7 +171,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
@@ -106,7 +179,10 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content);
+      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
+        continue;
+      }
+      const text = extractSessionText(message.content, message.role);
       if (!text) {
         continue;
       }
@@ -124,9 +200,10 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       hash: hashText(content + "\n" + lineMap.join(",")),
       content,
       lineMap,
+      ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     };
   } catch (err) {
-    log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
+    void logSessionFileReadFailure(absPath, err);
     return null;
   }
 }

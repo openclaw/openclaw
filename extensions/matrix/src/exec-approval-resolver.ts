@@ -1,6 +1,6 @@
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 
 export { isApprovalNotFoundError };
@@ -21,5 +21,3 @@ export async function resolveMatrixApproval(params: {
     clientDisplayName: `Matrix approval (${params.senderId?.trim() || "unknown"})`,
   });
 }
-
-export const resolveMatrixExecApproval = resolveMatrixApproval;

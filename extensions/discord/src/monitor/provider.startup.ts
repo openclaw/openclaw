@@ -8,8 +8,8 @@ import {
 } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -18,7 +18,10 @@ import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
+import {
+  createDiscordGatewayPlugin,
+  waitForDiscordGatewayPluginRegistration,
+} from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
@@ -40,6 +43,7 @@ type CreateClientFn = (
   handlers: ConstructorParameters<typeof Client>[1],
   plugins: ConstructorParameters<typeof Client>[2],
 ) => Client;
+type CarbonEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
 type ListenerCompatClient = Client & {
   plugins?: Array<{ id: string; plugin: Plugin }>;
@@ -106,7 +110,7 @@ export function createDiscordStatusReadyListener(params: {
   })();
 }
 
-export function createDiscordMonitorClient(params: {
+export async function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
@@ -116,7 +120,10 @@ export function createDiscordMonitorClient(params: {
   modals: Modal[];
   voiceEnabled: boolean;
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
-    eventQueue?: { listenerTimeout?: number };
+    eventQueue?: Pick<
+      CarbonEventQueueOptions,
+      "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
+    >;
   };
   runtime: RuntimeEnv;
   createClient: CreateClientFn;
@@ -145,8 +152,9 @@ export function createDiscordMonitorClient(params: {
   // Discord normalization/enqueue work).
   const eventQueueOpts = {
     listenerTimeout: 120_000,
+    slowListenerThreshold: 30_000,
     ...params.discordConfig.eventQueue,
-  };
+  } satisfies CarbonEventQueueOptions;
   const readyListener = createDiscordStatusReadyListener({
     discordConfig: params.discordConfig,
     getAutoPresenceController: () => autoPresenceController,
@@ -178,6 +186,7 @@ export function createDiscordMonitorClient(params: {
     });
   }
   const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
+  await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,
     isDisallowedIntentsError: params.isDisallowedIntentsError,

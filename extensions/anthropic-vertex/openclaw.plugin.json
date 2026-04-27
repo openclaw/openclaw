@@ -2,6 +2,9 @@
   "id": "anthropic-vertex",
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["anthropic-vertex"],
+  "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

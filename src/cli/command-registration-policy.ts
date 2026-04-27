@@ -2,7 +2,8 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
 export function shouldRegisterPrimaryCommandOnly(argv: string[]): boolean {
-  return !resolveCliArgvInvocation(argv).hasHelpOrVersion;
+  const invocation = resolveCliArgvInvocation(argv);
+  return invocation.primary !== null || !invocation.hasHelpOrVersion;
 }
 
 export function shouldSkipPluginCommandRegistration(params: {
@@ -13,8 +14,12 @@ export function shouldSkipPluginCommandRegistration(params: {
   if (params.hasBuiltinPrimary) {
     return true;
   }
+  const invocation = resolveCliArgvInvocation(params.argv);
+  if (params.primary === "help") {
+    return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
+  }
   if (!params.primary) {
-    return resolveCliArgvInvocation(params.argv).hasHelpOrVersion;
+    return invocation.hasHelpOrVersion;
   }
   return false;
 }

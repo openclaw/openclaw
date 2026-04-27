@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
-import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+  isSameSsrFPolicy,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "./ssrf.js";
 
 const privateIpCases = [
   "198.18.0.1",
@@ -106,6 +111,20 @@ describe("ssrf ip classification", () => {
   });
 });
 
+describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
+  it("builds an allowed-hostname policy from HTTP base URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
+      allowedHostnames: ["api.example.com"],
+    });
+  });
+
+  it("ignores empty, invalid, and non-HTTP URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("not-a-url")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("ftp://api.example.com")).toBeUndefined();
+  });
+});
+
 describe("isBlockedHostnameOrIp", () => {
   it.each([
     "localhost.localdomain",
@@ -147,5 +166,33 @@ describe("isBlockedHostnameOrIp", () => {
 
   it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
     expect(isBlockedHostnameOrIp(value)).toBe(false);
+  });
+});
+
+describe("isSameSsrFPolicy", () => {
+  it("compares policy fields semantically", () => {
+    expect(
+      isSameSsrFPolicy(
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["b.example.com", "A.example.com"],
+          hostnameAllowlist: ["*.example.com", "api.example.com"],
+        },
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
+          hostnameAllowlist: ["api.example.com", "*.example.com"],
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      isSameSsrFPolicy(
+        { dangerouslyAllowPrivateNetwork: true },
+        { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
+      ),
+    ).toBe(false);
   });
 });

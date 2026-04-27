@@ -23,6 +23,25 @@ func (runner fakePromptRunner) Stderr() string {
 	return runner.stderr
 }
 
+type fakePiPromptClient struct {
+	prompt func(context.Context, string) (string, error)
+	stderr string
+	closed bool
+}
+
+func (client *fakePiPromptClient) Prompt(ctx context.Context, message string) (string, error) {
+	return client.prompt(ctx, message)
+}
+
+func (client *fakePiPromptClient) Stderr() string {
+	return client.stderr
+}
+
+func (client *fakePiPromptClient) Close() error {
+	client.closed = true
+	return nil
+}
+
 func TestRunPromptAddsTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -79,6 +98,36 @@ func TestIsRetryableTranslateErrorRejectsAuthenticationFailures(t *testing.T) {
 	}
 }
 
+func TestIsRetryableTranslateErrorRetriesPiTermination(t *testing.T) {
+	t.Parallel()
+
+	if !isRetryableTranslateError(errors.New("pi error: terminated; stopReason=error; assistant=partial output")) {
+		t.Fatal("terminated pi session should retry")
+	}
+}
+
+func TestIsRetryableTranslateErrorRetriesTerminatedStopReason(t *testing.T) {
+	t.Parallel()
+
+	if !isRetryableTranslateError(errors.New("pi error: stopReason=terminated; assistant=partial output")) {
+		t.Fatal("terminated stopReason should retry")
+	}
+}
+
+func TestIsRetryableTranslateErrorRetriesCanceledStopReasons(t *testing.T) {
+	t.Parallel()
+
+	for _, message := range []string{
+		"pi error: stopReason=cancelled; assistant=partial output",
+		"pi error: stopReason=canceled; assistant=partial output",
+		"pi error: stopReason=aborted; assistant=partial output",
+	} {
+		if !isRetryableTranslateError(errors.New(message)) {
+			t.Fatalf("expected retryable stop reason for %q", message)
+		}
+	}
+}
+
 func TestRunPromptIncludesStderr(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +181,19 @@ func TestResolveDocsPiCommandUsesOverrideEnv(t *testing.T) {
 	}
 }
 
+func TestDocsPiModelRefUsesProviderPrefixWhenProviderFlagIsOmitted(t *testing.T) {
+	t.Setenv(envDocsI18nProvider, "openai")
+	t.Setenv(envDocsI18nModel, "gpt-5.5")
+	t.Setenv(envDocsPiOmitProvider, "1")
+
+	if got := docsPiProviderArg(); got != "" {
+		t.Fatalf("expected empty provider arg when omit-provider is enabled, got %q", got)
+	}
+	if got := docsPiModelRef(); got != "openai/gpt-5.5" {
+		t.Fatalf("expected provider-qualified model ref, got %q", got)
+	}
+}
+
 func TestShouldMaterializePiRuntimeForPiMonoWrapper(t *testing.T) {
 	t.Parallel()
 
@@ -156,5 +218,143 @@ func TestShouldMaterializePiRuntimeForPiMonoWrapper(t *testing.T) {
 
 	if !shouldMaterializePiRuntime(link) {
 		t.Fatal("expected pi-mono wrapper to materialize runtime")
+	}
+}
+
+func TestPiTranslatorRestartsClientAfterPiTermination(t *testing.T) {
+	t.Parallel()
+
+	clients := []*fakePiPromptClient{}
+	factoryCalls := 0
+	factory := func(context.Context) (docsPiPromptClient, error) {
+		factoryCalls++
+		index := factoryCalls
+		client := &fakePiPromptClient{
+			prompt: func(context.Context, string) (string, error) {
+				if index == 1 {
+					return "", errors.New("pi error: terminated; stopReason=error; assistant=partial output")
+				}
+				return "translated", nil
+			},
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatalf("factory failed: %v", err)
+	}
+	translator := &PiTranslator{client: client, clientFactory: factory}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("expected factory to run twice, got %d", factoryCalls)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	if !clients[0].closed {
+		t.Fatal("expected first client to close before retry")
+	}
+	if clients[1].closed {
+		t.Fatal("expected replacement client to remain open")
+	}
+}
+
+func TestPiTranslatorRestartsClientAfterTerminatedStopReason(t *testing.T) {
+	t.Parallel()
+
+	clients := []*fakePiPromptClient{}
+	factoryCalls := 0
+	factory := func(context.Context) (docsPiPromptClient, error) {
+		factoryCalls++
+		index := factoryCalls
+		client := &fakePiPromptClient{
+			prompt: func(context.Context, string) (string, error) {
+				if index == 1 {
+					return "", errors.New("pi error: stopReason=terminated; assistant=partial output")
+				}
+				return "translated", nil
+			},
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatalf("factory failed: %v", err)
+	}
+	translator := &PiTranslator{client: client, clientFactory: factory}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("expected factory to run twice, got %d", factoryCalls)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	if !clients[0].closed {
+		t.Fatal("expected first client to close before retry")
+	}
+	if clients[1].closed {
+		t.Fatal("expected replacement client to remain open")
+	}
+}
+
+func TestPiTranslatorRestartsClientAfterCanceledStopReason(t *testing.T) {
+	t.Parallel()
+
+	clients := []*fakePiPromptClient{}
+	factoryCalls := 0
+	factory := func(context.Context) (docsPiPromptClient, error) {
+		factoryCalls++
+		index := factoryCalls
+		client := &fakePiPromptClient{
+			prompt: func(context.Context, string) (string, error) {
+				if index == 1 {
+					return "", errors.New("pi error: stopReason=aborted; assistant=partial output")
+				}
+				return "translated", nil
+			},
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatalf("factory failed: %v", err)
+	}
+	translator := &PiTranslator{client: client, clientFactory: factory}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("expected factory to run twice, got %d", factoryCalls)
+	}
+	if !clients[0].closed {
+		t.Fatal("expected first client to close before retry")
+	}
+	if clients[1].closed {
+		t.Fatal("expected replacement client to remain open")
 	}
 }

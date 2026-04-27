@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { saveSessionStore } from "openclaw/plugin-sdk/config-runtime";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../../../../test/helpers/plugins/temp-dir.js";
 import {
@@ -34,7 +34,7 @@ describe("isBotMentionedFromTargets", () => {
 
   function expectMentioned(
     msg: WebInboundMsg,
-    cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number> },
+    cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
     const targets = resolveMentionTargets(msg);
@@ -86,6 +86,21 @@ describe("isBotMentionedFromTargets", () => {
       selfJid: "999@s.whatsapp.net",
     });
     expectMentioned(msgTextMention, cfg, true);
+  });
+
+  it("honors explicit self-chat overrides without recomputing from allowFrom", () => {
+    const cfg = {
+      mentionRegexes: [/\bopenclaw\b/i],
+      allowFrom: ["+15551230000"],
+      isSelfChat: true,
+    };
+    const msg = makeMsg({
+      body: "@owner ping",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+    });
+    expectMentioned(msg, cfg, false);
   });
 
   it("matches fallback number mentions when regexes do not match", () => {

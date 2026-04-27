@@ -15,6 +15,7 @@ export function createCompatibilityNotice(
     return {
       pluginId: params.pluginId,
       code: params.code,
+      compatCode: "legacy-before-agent-start",
       severity: "warn",
       message: LEGACY_BEFORE_AGENT_START_MESSAGE,
     };
@@ -23,6 +24,7 @@ export function createCompatibilityNotice(
   return {
     pluginId: params.pluginId,
     code: params.code,
+    compatCode: "hook-only-plugin-shape",
     severity: "info",
     message: HOOK_ONLY_MESSAGE,
   };
@@ -59,10 +61,14 @@ export function createPluginRecord(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
+    contextEngineIds: [],
     memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
+    gatewayDiscoveryServiceIds: [],
     commands: [],
     httpRoutes: 0,
     hookCount: 0,
@@ -126,7 +132,12 @@ export function createPluginLoadResult(
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
+    textTransforms: [],
+    agentHarnesses: [],
     tools: [],
     hooks: [],
     typedHooks: [],
@@ -137,6 +148,7 @@ export function createPluginLoadResult(
     commands: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
     realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };

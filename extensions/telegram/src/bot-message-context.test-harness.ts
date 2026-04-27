@@ -1,4 +1,5 @@
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
+import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -6,16 +7,33 @@ export const baseTelegramMessageContextConfig = {
   messages: { groupChat: { mentionPatterns: [] } },
 } as never;
 
+type TelegramTestSessionRuntime = NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
+const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
+  TelegramTestSessionRuntime["finalizeInboundContext"]
+>;
+
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
   allMedia?: TelegramMediaRef[];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  runtime?: BuildTelegramMessageContextParams["runtime"];
+  sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
+
+const telegramMessageContextSessionRuntimeForTest = {
+  finalizeInboundContext: finalizeInboundContextForTest,
+  readSessionUpdatedAt: () => undefined,
+  recordInboundSession: async () => undefined,
+  resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
+    route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
+  resolvePinnedMainDmOwnerFromAllowlist: () => null,
+  resolveStorePath: () => "/tmp/openclaw/session-store.json",
+} satisfies NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
 
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
@@ -24,6 +42,13 @@ export async function buildTelegramMessageContextForTest(
 > {
   const { vi } = await loadVitestModule();
   const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
+  const sessionRuntime =
+    params.sessionRuntime === null
+      ? undefined
+      : {
+          ...telegramMessageContextSessionRuntimeForTest,
+          ...params.sessionRuntime,
+        };
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -46,6 +71,11 @@ export async function buildTelegramMessageContextForTest(
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
     loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
+    runtime: {
+      recordChannelActivity: () => undefined,
+      ...params.runtime,
+    },
+    sessionRuntime,
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),

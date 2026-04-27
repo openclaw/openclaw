@@ -64,6 +64,7 @@ export type PublishablePluginPackageCandidate<
   packageJson: TPackageJson;
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
 function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
   path: string,
 ): TPackageJson {
@@ -80,7 +81,7 @@ export function collectExtensionPackageJsonCandidates<
 
   const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
   for (const dir of dirs) {
-    const packageDir = join("extensions", dir.name);
+    const packageDir = `extensions/${dir.name}`;
     const absolutePackageDir = join(extensionsDir, dir.name);
     const packageJsonPath = join(absolutePackageDir, "package.json");
     try {
@@ -461,10 +462,11 @@ export function collectPluginReleasePlan(params?: {
             })
           : allPublishable;
 
-  const all = selectedPublishable.map((plugin) => ({
-    ...plugin,
-    alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
-  }));
+  const all = selectedPublishable.map((plugin) =>
+    Object.assign({}, plugin, {
+      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+    }),
+  );
 
   return {
     all,

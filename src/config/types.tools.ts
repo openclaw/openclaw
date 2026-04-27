@@ -169,6 +169,8 @@ export type ToolLoopDetectionConfig = {
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
   warningThreshold?: number;
+  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
+  unknownToolThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
@@ -380,6 +382,12 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Optional provider-specific embedding input_type for query and document requests. */
+  inputType?: string;
+  /** Optional provider-specific embedding input_type for query-time memory search. */
+  queryInputType?: string;
+  /** Optional provider-specific embedding input_type for document/index embeddings. */
+  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
@@ -391,6 +399,12 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /**
+     * Context window size for the local embedding context (default: 4096).
+     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
+     * trained maximum — not recommended for 8B+ models.
+     */
+    contextSize?: number | "auto";
   };
   /** Index storage configuration. */
   store?: {
@@ -425,6 +439,11 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    /**
+     * Timeout in seconds for inline embedding batches during memory indexing.
+     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
+     */
+    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;
@@ -550,6 +569,11 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy configuration for web_fetch. */
+      ssrfPolicy?: {
+        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
+        allowRfc2544BenchmarkRange?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;
@@ -635,9 +659,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
+  /** Experimental tool flags. Default off unless explicitly enabled, except strict-agentic GPT-5 OpenAI/Codex runs may auto-enable `planTool`. */
   experimental?: {
-    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
+    /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
     planTool?: boolean;
   };
 };

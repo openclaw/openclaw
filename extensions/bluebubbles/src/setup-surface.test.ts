@@ -1,5 +1,5 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -448,6 +448,19 @@ describe("BlueBubblesConfigSchema", () => {
       parsed.data as { accounts?: { work?: { enrichGroupParticipantsFromContacts?: boolean } } }
     ).accounts?.work;
     expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
+  });
+
+  it("accepts explicit enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      enrichGroupParticipantsFromContacts: true,
+      accounts: {
+        work: {
+          enrichGroupParticipantsFromContacts: false,
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
   });
 });
 

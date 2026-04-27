@@ -1,15 +1,136 @@
 import { describe, expect, it, vi } from "vitest";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
+  consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
+  recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import {
+  createOpenAiResponsesPartial,
+  createOpenAiResponsesTextBlock,
+  createOpenAiResponsesTextEvent as createTextUpdateEvent,
+} from "./pi-embedded-subscribe.openai-responses.test-helpers.js";
+
+function createMessageUpdateContext(
+  params: {
+    onAgentEvent?: ReturnType<typeof vi.fn>;
+    onPartialReply?: ReturnType<typeof vi.fn>;
+    flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
+    resetAssistantMessageState?: ReturnType<typeof vi.fn>;
+    debug?: ReturnType<typeof vi.fn>;
+    shouldEmitPartialReplies?: boolean;
+    consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
+    state?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    params: {
+      runId: "run-1",
+      session: { id: "session-1" },
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+      ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
+    },
+    state: {
+      deterministicApprovalPromptPending: false,
+      deterministicApprovalPromptSent: false,
+      reasoningStreamOpen: false,
+      streamReasoning: false,
+      deltaBuffer: "",
+      blockBuffer: "",
+      partialBlockState: {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      },
+      lastStreamedAssistant: undefined,
+      lastStreamedAssistantCleaned: undefined,
+      emittedAssistantUpdate: false,
+      shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
+      blockReplyBreak: "text_end",
+      assistantMessageIndex: 0,
+      lastAssistantStreamItemId: undefined,
+      assistantTexts: [],
+      pendingAssistantReplyDirectives: undefined,
+      ...params.state,
+    },
+    log: { debug: params.debug ?? vi.fn() },
+    noteLastAssistant: vi.fn(),
+    stripBlockTags: (text: string) => text,
+    consumePartialReplyDirectives: params.consumePartialReplyDirectives ?? vi.fn(() => null),
+    emitReasoningStream: vi.fn(),
+    flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
+    recordAssistantUsage: vi.fn(),
+    commitAssistantUsage: vi.fn(),
+  } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function createMessageEndContext(
+  params: {
+    onAgentEvent?: ReturnType<typeof vi.fn>;
+    onBlockReply?: ReturnType<typeof vi.fn>;
+    emitBlockReply?: ReturnType<typeof vi.fn>;
+    finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
+    consumeReplyDirectives?: ReturnType<typeof vi.fn>;
+    warn?: ReturnType<typeof vi.fn>;
+    builtinToolNames?: ReadonlySet<string>;
+    state?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    params: {
+      runId: "run-1",
+      session: { id: "session-1" },
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+      ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
+    },
+    state: {
+      assistantTexts: [],
+      assistantTextBaseline: 0,
+      emittedAssistantUpdate: false,
+      deterministicApprovalPromptPending: false,
+      deterministicApprovalPromptSent: false,
+      messagingToolSentTexts: [],
+      messagingToolSentTextsNormalized: [],
+      includeReasoning: false,
+      streamReasoning: false,
+      blockReplyBreak: "message_end",
+      deltaBuffer: "Need send.",
+      blockBuffer: "Need send.",
+      blockState: {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      },
+      lastStreamedAssistant: undefined,
+      lastStreamedAssistantCleaned: undefined,
+      lastReasoningSent: undefined,
+      reasoningStreamOpen: false,
+      ...params.state,
+    },
+    noteLastAssistant: vi.fn(),
+    recordAssistantUsage: vi.fn(),
+    commitAssistantUsage: vi.fn(),
+    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    builtinToolNames: params.builtinToolNames,
+    stripBlockTags: (text: string) => text,
+    finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
+    emitBlockReply: params.emitBlockReply ?? vi.fn(),
+    consumeReplyDirectives: params.consumeReplyDirectives ?? vi.fn(() => ({ text: "Need send." })),
+    emitReasoningStream: vi.fn(),
+    flushBlockReplyBuffer: vi.fn(),
+    blockChunker: null,
+  } as unknown as EmbeddedPiSubscribeContext;
+}
 
 describe("resolveSilentReplyFallbackText", () => {
   it("replaces NO_REPLY with latest messaging tool text when available", () => {
@@ -75,12 +196,162 @@ describe("buildAssistantStreamData", () => {
         delta: "he",
         replace: true,
         mediaUrl: "https://example.com/a.png",
+        phase: "final_answer",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
       replace: true,
       mediaUrls: ["https://example.com/a.png"],
+      phase: "final_answer",
+    });
+  });
+});
+
+describe("pending assistant reply directives", () => {
+  it("merges directive metadata into the next non-reasoning block reply", () => {
+    const state = { pendingAssistantReplyDirectives: undefined };
+
+    recordPendingAssistantReplyDirectives(state, {
+      text: "",
+      mediaUrls: ["/tmp/reply.ogg"],
+      replyToCurrent: true,
+      replyToTag: true,
+      audioAsVoice: true,
+      isSilent: false,
+    });
+
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(state, {
+        text: "Done.",
+      }),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["/tmp/reply.ogg"],
+      audioAsVoice: true,
+      replyToId: undefined,
+      replyToTag: true,
+      replyToCurrent: true,
+    });
+    expect(state.pendingAssistantReplyDirectives).toBeUndefined();
+  });
+
+  it("does not consume pending directive metadata on reasoning replies", () => {
+    const state = {
+      pendingAssistantReplyDirectives: {
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    };
+
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(state, {
+        text: "Thinking...",
+        isReasoning: true,
+      }),
+    ).toEqual({
+      text: "Thinking...",
+      isReasoning: true,
+    });
+    expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+  });
+});
+
+describe("handleMessageUpdate", () => {
+  it("treats phased textSignature item changes as assistant-message boundaries", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+    context.state.lastAssistantStreamItemId = "item-1";
+    context.state.assistantMessageIndex = 7;
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Second block",
+        partial: {
+          role: "assistant",
+          phase: "final_answer",
+          content: [
+            createOpenAiResponsesTextBlock({
+              text: "First block",
+              id: "item-1",
+              phase: "final_answer",
+            }),
+            createOpenAiResponsesTextBlock({
+              text: "Second block",
+              id: "item-2",
+              phase: "final_answer",
+            }),
+          ],
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
+    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+  });
+
+  it("preserves phase-aware media, voice, and reply directives for block delivery", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const ctx = createMessageUpdateContext({
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+      state: {
+        blockReplyBreak: "message_end",
+      },
+    });
+    const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: replyText,
+        id: "item-final",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      }),
+    );
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: replyText,
+        id: "item-final",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      }),
+    );
+
+    expect(ctx.state.blockBuffer).toBe("Done.");
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
+        text: "Done.",
+      }),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["/tmp/reply.ogg"],
+      audioAsVoice: true,
+      replyToId: undefined,
+      replyToTag: true,
+      replyToCurrent: true,
     });
   });
 });
@@ -90,6 +361,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -104,10 +376,53 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual([]);
   });
 
+  it("does not append queued image tool media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["./selected.png"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["./selected.png"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
+  it("does not append queued voice media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["/tmp/assistant-provided.opus"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/assistant-provided.opus"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
   it("preserves reasoning replies without consuming queued media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -125,10 +440,26 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("consumePendingToolMediaReply", () => {
+  it("reads a media-only reply without consuming queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({
@@ -145,48 +476,20 @@ describe("handleMessageUpdate", () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const flushBlockReplyBuffer = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-        onPartialReply,
-      },
-      state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        streamReasoning: false,
-        deltaBuffer: "",
-        blockBuffer: "",
-        partialBlockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistantCleaned: undefined,
-        emittedAssistantUpdate: false,
-        shouldEmitPartialReplies: true,
-        blockReplyBreak: "text_end",
-        assistantMessageIndex: 0,
-      },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      consumePartialReplyDirectives: vi.fn(() => null),
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
       flushBlockReplyBuffer,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", phase: "commentary", content: [] },
-      assistantMessageEvent: { type: "text_delta", delta: "Need send." },
-    } as never);
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", phase: "commentary", content: [] },
-      assistantMessageEvent: { type: "text_end", content: "Need send." },
-    } as never);
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({ type: "text_delta", text: "Need send.", messagePhase: "commentary" }),
+    );
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({ type: "text_end", text: "Need send.", messagePhase: "commentary" }),
+    );
 
     await Promise.resolve();
 
@@ -199,53 +502,33 @@ describe("handleMessageUpdate", () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const flushBlockReplyBuffer = vi.fn();
-    const commentaryBlock = {
-      type: "text",
+    const commentaryBlock = createOpenAiResponsesTextBlock({
       text: "Need send.",
-      textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
-    };
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-        onPartialReply,
-      },
-      state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        streamReasoning: false,
-        deltaBuffer: "",
-        blockBuffer: "",
-        partialBlockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistantCleaned: undefined,
-        emittedAssistantUpdate: false,
-        shouldEmitPartialReplies: true,
-        blockReplyBreak: "text_end",
-        assistantMessageIndex: 0,
-      },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      consumePartialReplyDirectives: vi.fn(() => null),
+      id: "msg_sig",
+      phase: "commentary",
+    });
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
       flushBlockReplyBuffer,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", content: [commentaryBlock] },
-      assistantMessageEvent: { type: "text_delta", delta: "Need send." },
-    } as never);
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", content: [commentaryBlock] },
-      assistantMessageEvent: { type: "text_end", content: "Need send." },
-    } as never);
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Need send.",
+        content: [commentaryBlock],
+      }),
+    );
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "Need send.",
+        content: [commentaryBlock],
+      }),
+    );
 
     await Promise.resolve();
 
@@ -258,93 +541,42 @@ describe("handleMessageUpdate", () => {
 
   it("suppresses commentary partials even when they contain visible text", () => {
     const onAgentEvent = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-      },
-      state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        streamReasoning: false,
-        deltaBuffer: "",
-        blockBuffer: "",
-        partialBlockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistant: undefined,
-        lastStreamedAssistantCleaned: undefined,
-        emittedAssistantUpdate: false,
-        shouldEmitPartialReplies: false,
-        blockReplyBreak: "text_end",
-      },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      consumePartialReplyDirectives: vi.fn(() => null),
-      emitReasoningStream: vi.fn(),
-      flushBlockReplyBuffer: vi.fn(),
-    } as unknown as EmbeddedPiSubscribeContext;
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      shouldEmitPartialReplies: false,
+    });
 
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
         type: "text_delta",
-        delta: "Working...",
-        partial: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Working...",
-              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-            },
-          ],
-          phase: "commentary",
-          stopReason: "stop",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5.2",
-          usage: {},
-          timestamp: 0,
-        },
-      },
-    } as never);
+        text: "Working...",
+        partial: createOpenAiResponsesPartial({
+          text: "Working...",
+          id: "item_commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        }),
+      }),
+    );
 
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(ctx.state.deltaBuffer).toBe("");
     expect(ctx.state.blockBuffer).toBe("");
 
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
         type: "text_delta",
-        delta: "Done.",
-        partial: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Done.",
-              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-            },
-          ],
-          phase: "final_answer",
-          stopReason: "stop",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5.2",
-          usage: {},
-          timestamp: 0,
-        },
-      },
-    } as never);
+        text: "Done.",
+        partial: createOpenAiResponsesPartial({
+          text: "Done.",
+          id: "item_final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      }),
+    );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
@@ -358,42 +590,15 @@ describe("handleMessageUpdate", () => {
 
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-      },
-      state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        streamReasoning: false,
-        deltaBuffer: "",
-        blockBuffer: "",
-        partialBlockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistantCleaned: undefined,
-        emittedAssistantUpdate: false,
-        shouldEmitPartialReplies: false,
-        blockReplyBreak: "text_end",
-      },
-      log: { debug },
-      noteLastAssistant: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      consumePartialReplyDirectives: vi.fn(() => null),
+    const ctx = createMessageUpdateContext({
+      debug,
+      shouldEmitPartialReplies: false,
       flushBlockReplyBuffer: vi.fn(() => {
         throw new Error("boom");
       }),
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
-    handleMessageUpdate(ctx, {
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: { type: "text_end" },
-    } as never);
+    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
 
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
@@ -402,48 +607,66 @@ describe("handleMessageUpdate", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("warns when assistant text only pretends to call a registered tool", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        provider: "ollama",
+        model: "qwen-local",
+        content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    expect(warn).toHaveBeenCalledWith(
+      "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "ollama",
+        model: "qwen-local",
+        pattern: "json_tool_call",
+        toolName: "read",
+        registeredTool: true,
+      }),
+    );
+  });
+
+  it("does not warn when the assistant emitted a structured tool call", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    } as never);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("suppresses commentary-phase replies from user-visible output", () => {
     const onAgentEvent = vi.fn();
     const emitBlockReply = vi.fn();
     const finalizeAssistantTexts = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-        onBlockReply: vi.fn(),
-      },
-      state: {
-        assistantTexts: [],
-        assistantTextBaseline: 0,
-        emittedAssistantUpdate: false,
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        includeReasoning: false,
-        streamReasoning: false,
-        blockReplyBreak: "message_end",
-        deltaBuffer: "Need send.",
-        blockBuffer: "Need send.",
-        blockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistant: undefined,
-        lastStreamedAssistantCleaned: undefined,
-      },
-      noteLastAssistant: vi.fn(),
-      recordAssistantUsage: vi.fn(),
-      log: { debug: vi.fn(), warn: vi.fn() },
-      stripBlockTags: (text: string) => text,
+    const ctx = createMessageEndContext({
+      onAgentEvent,
       finalizeAssistantTexts,
       emitBlockReply,
-      consumeReplyDirectives: vi.fn(() => ({ text: "Need send." })),
-      emitReasoningStream: vi.fn(),
-      flushBlockReplyBuffer: vi.fn(),
-      blockChunker: null,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
     void handleMessageEnd(ctx, {
       type: "message_end",
@@ -464,55 +687,22 @@ describe("handleMessageEnd", () => {
     const onAgentEvent = vi.fn();
     const emitBlockReply = vi.fn();
     const finalizeAssistantTexts = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-        onBlockReply: vi.fn(),
-      },
-      state: {
-        assistantTexts: [],
-        assistantTextBaseline: 0,
-        emittedAssistantUpdate: false,
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        reasoningStreamOpen: false,
-        includeReasoning: false,
-        streamReasoning: false,
-        blockReplyBreak: "message_end",
-        deltaBuffer: "Need send.",
-        blockBuffer: "Need send.",
-        blockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        lastStreamedAssistant: undefined,
-        lastStreamedAssistantCleaned: undefined,
-      },
-      noteLastAssistant: vi.fn(),
-      recordAssistantUsage: vi.fn(),
-      log: { debug: vi.fn(), warn: vi.fn() },
-      stripBlockTags: (text: string) => text,
+    const ctx = createMessageEndContext({
+      onAgentEvent,
       finalizeAssistantTexts,
       emitBlockReply,
-      consumeReplyDirectives: vi.fn(() => ({ text: "Need send." })),
-      emitReasoningStream: vi.fn(),
-      flushBlockReplyBuffer: vi.fn(),
-      blockChunker: null,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
     void handleMessageEnd(ctx, {
       type: "message_end",
       message: {
         role: "assistant",
         content: [
-          {
-            type: "text",
+          createOpenAiResponsesTextBlock({
             text: "Need send.",
-            textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
-          },
+            id: "msg_sig",
+            phase: "commentary",
+          }),
         ],
         usage: { input: 1, output: 1, total: 2 },
       },
@@ -530,47 +720,20 @@ describe("handleMessageEnd", () => {
     // input. The non-empty call shouldn't happen for text_end channels (that's
     // the safety send we're guarding against).
     const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onBlockReply,
-      },
+    const ctx = createMessageEndContext({
+      onBlockReply,
+      emitBlockReply,
+      consumeReplyDirectives,
       state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        messagingToolSentTexts: [],
-        messagingToolSentTextsNormalized: [],
-        includeReasoning: false,
-        streamReasoning: false,
         emittedAssistantUpdate: true,
         lastStreamedAssistantCleaned: "Hello world",
-        assistantTexts: [],
-        assistantTextBaseline: 0,
         blockReplyBreak: "text_end",
         // Simulate text_end already delivered this text through emitBlockChunk
         lastBlockReplyText: "Hello world",
-        lastReasoningSent: undefined,
-        reasoningStreamOpen: false,
         deltaBuffer: "",
         blockBuffer: "",
-        blockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
       },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      recordAssistantUsage: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      finalizeAssistantTexts: vi.fn(),
-      emitBlockReply,
-      consumeReplyDirectives,
-      emitReasoningStream: vi.fn(),
-      flushBlockReplyBuffer: vi.fn(),
-      blockChunker: null,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
     void handleMessageEnd(ctx, {
       type: "message_end",
@@ -592,47 +755,20 @@ describe("handleMessageEnd", () => {
     const emitBlockReply = vi.fn();
     // Same pattern: directive accumulator returns null for empty final flush
     const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onBlockReply,
-      },
+    const ctx = createMessageEndContext({
+      onBlockReply,
+      emitBlockReply,
+      consumeReplyDirectives,
       state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        messagingToolSentTexts: [],
-        messagingToolSentTextsNormalized: [],
-        includeReasoning: false,
-        streamReasoning: false,
         emittedAssistantUpdate: true,
         lastStreamedAssistantCleaned: "Hello world",
-        assistantTexts: [],
-        assistantTextBaseline: 0,
         blockReplyBreak: "text_end",
         // text_end delivered via emitBlockChunk which uses different stripping
         lastBlockReplyText: "Hello world.",
-        lastReasoningSent: undefined,
-        reasoningStreamOpen: false,
         deltaBuffer: "",
         blockBuffer: "",
-        blockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
       },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      recordAssistantUsage: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      finalizeAssistantTexts: vi.fn(),
-      emitBlockReply,
-      consumeReplyDirectives,
-      emitReasoningStream: vi.fn(),
-      flushBlockReplyBuffer: vi.fn(),
-      blockChunker: null,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
     void handleMessageEnd(ctx, {
       type: "message_end",
@@ -652,58 +788,32 @@ describe("handleMessageEnd", () => {
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
     const onAgentEvent = vi.fn();
-    const ctx = {
-      params: {
-        runId: "run-1",
-        session: { id: "session-1" },
-        onAgentEvent,
-      },
+    const ctx = createMessageEndContext({
+      onAgentEvent,
       state: {
-        deterministicApprovalPromptPending: false,
-        deterministicApprovalPromptSent: false,
-        messagingToolSentTexts: [],
-        messagingToolSentTextsNormalized: [],
-        includeReasoning: false,
-        streamReasoning: false,
         emittedAssistantUpdate: true,
         lastStreamedAssistantCleaned: "Working...",
-        assistantTexts: [],
-        assistantTextBaseline: 0,
         blockReplyBreak: "text_end",
-        lastReasoningSent: undefined,
-        reasoningStreamOpen: false,
         deltaBuffer: "",
         blockBuffer: "",
-        blockState: {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
       },
-      log: { debug: vi.fn() },
-      noteLastAssistant: vi.fn(),
-      recordAssistantUsage: vi.fn(),
-      stripBlockTags: (text: string) => text,
-      finalizeAssistantTexts: vi.fn(),
-      emitReasoningStream: vi.fn(),
-      blockChunker: null,
-    } as unknown as EmbeddedPiSubscribeContext;
+    });
 
     void handleMessageEnd(ctx, {
       type: "message_end",
       message: {
         role: "assistant",
         content: [
-          {
-            type: "text",
+          createOpenAiResponsesTextBlock({
             text: "Working...",
-            textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-          },
-          {
-            type: "text",
+            id: "item_commentary",
+            phase: "commentary",
+          }),
+          createOpenAiResponsesTextBlock({
             text: "Done.",
-            textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-          },
+            id: "item_final",
+            phase: "final_answer",
+          }),
         ],
         stopReason: "stop",
         api: "openai-responses",

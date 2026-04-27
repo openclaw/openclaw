@@ -1,4 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryVersion,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
@@ -10,6 +18,7 @@ let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGat
 
 vi.mock("./config.js", () => {
   return {
+    getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   };
@@ -17,6 +26,11 @@ vi.mock("./config.js", () => {
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mockLoadPluginManifestRegistry(...args),
 }));
 
 function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
@@ -144,6 +158,10 @@ beforeAll(async () => {
     await import("./runtime-schema.js"));
 });
 
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,5 +228,28 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
+  });
+
+  it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {
+    // Each MCP connection triggers a config.schema / config.get gateway request which calls
+    // loadGatewayRuntimeConfigSchema. The original bug caused a fresh full plugin registry to
+    // be activated on every call, re-running registerFull for all channel plugins including
+    // Feishu. Verify that repeated calls keep using manifest metadata without replacing the
+    // already-active runtime registry or mutating its activation version.
+    const activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry, "startup-registry");
+    const versionBefore = getActivePluginRegistryVersion();
+
+    loadGatewayRuntimeConfigSchema();
+    loadGatewayRuntimeConfigSchema();
+    loadGatewayRuntimeConfigSchema();
+
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    for (const call of mockLoadPluginManifestRegistry.mock.calls) {
+      expect(call[0]).toMatchObject({ cache: false });
+    }
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getActivePluginRegistryKey()).toBe("startup-registry");
+    expect(getActivePluginRegistryVersion()).toBe(versionBefore);
   });
 });

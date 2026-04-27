@@ -1,7 +1,7 @@
 import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
@@ -98,6 +98,34 @@ describe("agent components", () => {
       reply,
     };
   };
+
+  async function expectSuccessfulDmButtonInteraction(params: {
+    dmPolicy: "pairing" | "open";
+    expectPairingStoreRead: boolean;
+  }) {
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: params.dmPolicy,
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { componentId: "hello" } as ComponentData);
+
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "[Discord component: hello clicked by Alice#1234 (123456789)]",
+      expect.objectContaining({
+        sessionKey: defaultDmSessionKey,
+      }),
+    );
+    if (params.expectPairingStoreRead) {
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
+    } else {
+      expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    }
+  }
 
   beforeEach(() => {
     resetDiscordComponentRuntimeMocks();
@@ -220,47 +248,19 @@ describe("agent components", () => {
 
   it("authorizes DM interactions from pairing-store entries in pairing mode", async () => {
     readAllowFromStoreMock.mockResolvedValue(["123456789"]);
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
+    await expectSuccessfulDmButtonInteraction({
       dmPolicy: "pairing",
+      expectPairingStoreRead: true,
     });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
-        sessionKey: defaultDmSessionKey,
-      }),
-    );
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
   it("allows DM component interactions in open mode without reading pairing store", async () => {
     readAllowFromStoreMock.mockResolvedValue(["123456789"]);
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
+    await expectSuccessfulDmButtonInteraction({
       dmPolicy: "open",
+      expectPairingStoreRead: false,
     });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
-        sessionKey: defaultDmSessionKey,
-      }),
-    );
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("uses user conversation ids for direct-message component originating targets", () => {

@@ -1,3 +1,4 @@
+import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -41,7 +42,12 @@ type EventHandlerContext = {
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
   clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
+  streamingWatchdogMs?: number;
+  localMode?: boolean;
 };
+
+const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -59,12 +65,59 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    localMode,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
+
+  const streamingWatchdogMs =
+    typeof context.streamingWatchdogMs === "number" &&
+    Number.isFinite(context.streamingWatchdogMs) &&
+    context.streamingWatchdogMs >= 0
+      ? Math.floor(context.streamingWatchdogMs)
+      : DEFAULT_STREAMING_WATCHDOG_MS;
+  let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamingWatchdogRunId: string | null = null;
+
+  const clearStreamingWatchdog = () => {
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+      streamingWatchdogTimer = null;
+    }
+    streamingWatchdogRunId = null;
+  };
+
+  const armStreamingWatchdog = (runId: string) => {
+    if (streamingWatchdogMs <= 0) {
+      return;
+    }
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+    }
+    streamingWatchdogRunId = runId;
+    streamingWatchdogTimer = setTimeout(() => {
+      streamingWatchdogTimer = null;
+      if (streamingWatchdogRunId !== runId || state.activeChatRunId !== runId) {
+        return;
+      }
+      streamingWatchdogRunId = null;
+      state.activeChatRunId = null;
+      setActivityStatus("idle");
+      chatLog.addSystem(
+        `streaming watchdog: no stream updates for ${Math.round(
+          streamingWatchdogMs / 1000,
+        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
+      );
+      tui.requestRender();
+    }, streamingWatchdogMs);
+    const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
+    if (typeof maybeUnref === "function") {
+      maybeUnref.call(streamingWatchdogTimer);
+    }
+  };
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -102,6 +155,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
+    clearStreamingWatchdog();
   };
 
   const flushPendingHistoryRefreshIfIdle = () => {
@@ -110,6 +164,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     pendingHistoryRefresh = false;
     void loadHistory?.();
+  };
+
+  const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
+    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
+    const provider = state.sessionInfo.modelProvider?.trim();
+    return provider
+      ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
+      : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
   };
 
   const noteSessionRun = (runId: string) => {
@@ -140,6 +204,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
   };
@@ -155,6 +222,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
   };
@@ -241,12 +311,18 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     if (evt.state === "delta") {
+      // Arm watchdog and mark streaming on every delta, even when the visible
+      // text hasn't changed yet (e.g. first commentary-only or tool-call delta).
+      // Without this, the watchdog never fires and the status bar stays stale.
+      setActivityStatus("streaming");
+      if (state.activeChatRunId === evt.runId) {
+        armStreamingWatchdog(evt.runId);
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (!displayText) {
         return;
       }
       chatLog.updateAssistant(displayText, evt.runId);
-      setActivityStatus("streaming");
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
@@ -313,7 +389,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      const errorMessage = evt.errorMessage ?? "unknown";
+      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${errorMessage}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -412,5 +489,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent };
+  const dispose = () => {
+    clearStreamingWatchdog();
+  };
+
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
 }

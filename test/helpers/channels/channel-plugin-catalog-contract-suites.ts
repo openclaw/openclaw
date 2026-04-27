@@ -203,6 +203,149 @@ export function describeChannelPluginCatalogEntriesContract() {
           };
         },
       },
+      {
+        name: "accepts rich external manifest entries with pinned npm metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-rich-"));
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  name: "@wecom/wecom-openclaw-plugin",
+                  description:
+                    "OpenClaw WeCom (企业微信) channel plugin — community maintained, published on npm.",
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "wecom",
+                      label: "WeCom",
+                      selectionLabel: "WeCom (企业微信)",
+                      detailLabel: "WeCom",
+                      docsPath: "/channels/wecom",
+                      docsLabel: "wecom",
+                      blurb: "企业微信 (WeCom) bot & conversation channel.",
+                      aliases: ["qywx", "wework"],
+                      order: 45,
+                    },
+                    install: {
+                      npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                      defaultChoice: "npm",
+                      minHostVersion: ">=2026.4.10",
+                      expectedIntegrity: "sha512-wecom",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "wecom",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "wecom",
+              meta: {
+                label: "WeCom",
+                selectionLabel: "WeCom (企业微信)",
+                detailLabel: "WeCom",
+                docsPath: "/channels/wecom",
+                docsLabel: "wecom",
+                blurb: "企业微信 (WeCom) bot & conversation channel.",
+              },
+              install: {
+                npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                defaultChoice: "npm",
+                minHostVersion: ">=2026.4.10",
+                expectedIntegrity: "sha512-wecom",
+              },
+              installSource: {
+                defaultChoice: "npm",
+                npm: {
+                  spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+                  packageName: "@wecom/wecom-openclaw-plugin",
+                  selector: "1.2.3",
+                  selectorKind: "exact-version",
+                  exactVersion: true,
+                  expectedIntegrity: "sha512-wecom",
+                  pinState: "exact-with-integrity",
+                },
+                warnings: [],
+              },
+            },
+          };
+        },
+      },
+      {
+        name: "accepts rich external manifest entries for yuanbao with pinned npm metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-yuanbao-"));
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  name: "openclaw-plugin-yuanbao",
+                  description:
+                    "OpenClaw Yuanbao (元宝) channel plugin — community maintained, published on npm.",
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "openclaw-plugin-yuanbao",
+                      label: "Yuanbao",
+                      selectionLabel: "Yuanbao (Tencent Yuanbao)",
+                      detailLabel: "Yuanbao",
+                      docsPath: "/channels/yuanbao",
+                      docsLabel: "yuanbao",
+                      blurb: "Tencent Yuanbao AI assistant conversation channel.",
+                      aliases: ["yb", "tencent-yuanbao"],
+                      order: 78,
+                    },
+                    install: {
+                      npmSpec: "openclaw-plugin-yuanbao@1.0.0",
+                      defaultChoice: "npm",
+                      minHostVersion: ">=2026.4.10",
+                      expectedIntegrity: "sha512-yuanbao",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "openclaw-plugin-yuanbao",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "openclaw-plugin-yuanbao",
+              meta: {
+                label: "Yuanbao",
+                selectionLabel: "Yuanbao (Tencent Yuanbao)",
+                detailLabel: "Yuanbao",
+                docsPath: "/channels/yuanbao",
+                docsLabel: "yuanbao",
+                blurb: "Tencent Yuanbao AI assistant conversation channel.",
+              },
+              install: {
+                npmSpec: "openclaw-plugin-yuanbao@1.0.0",
+                defaultChoice: "npm",
+                minHostVersion: ">=2026.4.10",
+                expectedIntegrity: "sha512-yuanbao",
+              },
+            },
+          };
+        },
+      },
     ] as const)("$name", ({ setup }) => {
       const setupResult = setup();
       const { channelId, expected } = setupResult;

@@ -1,12 +1,15 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildNativeAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { NATIVE_ANTHROPIC_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  hasAnthropicVertexAvailableAuth,
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
   resolveImplicitAnthropicVertexProvider,
 } from "./api.js";
 
 const PROVIDER_ID = "anthropic-vertex";
+const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -36,7 +39,22 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      buildReplayPolicy: ({ modelId }) => buildNativeAnthropicReplayPolicyForModel(modelId),
+      ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+      resolveSyntheticAuth: () => {
+        if (!hasAnthropicVertexAvailableAuth()) {
+          return undefined;
+        }
+        return {
+          apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
+          source: "gcp-vertex-credentials (ADC)",
+          mode: "api-key",
+        };
+      },
+      augmentModelCatalog: ({ config }) =>
+        readConfiguredProviderCatalogEntries({
+          config,
+          providerId: PROVIDER_ID,
+        }),
     });
   },
 });

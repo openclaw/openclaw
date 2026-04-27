@@ -1,12 +1,12 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
@@ -515,7 +515,10 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
         };
       }
-      await writeConfigFile(validated.config);
+      await replaceConfigFile({
+        nextConfig: validated.config,
+        afterWrite: { mode: "auto" },
+      });
     }
 
     if (!configChanged && !shouldTouchStore) {

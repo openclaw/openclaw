@@ -8,7 +8,11 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -25,6 +29,51 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 ] as const;
 
 type AnthropicServiceTier = "auto" | "standard_only";
+
+function isAnthropicThinkingEnabled(payloadObj: Record<string, unknown>): boolean {
+  const thinking = payloadObj.thinking;
+  if (!thinking || typeof thinking !== "object") {
+    return false;
+  }
+  return (thinking as { type?: unknown }).type !== "disabled";
+}
+
+function assistantMessageHasToolUse(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      ((block as { type?: unknown }).type === "tool_use" ||
+        (block as { type?: unknown }).type === "toolCall"),
+  );
+}
+
+function stripTrailingAssistantPrefillWhenThinking(payloadObj: Record<string, unknown>): number {
+  if (!isAnthropicThinkingEnabled(payloadObj) || !Array.isArray(payloadObj.messages)) {
+    return 0;
+  }
+  let stripped = 0;
+  while (payloadObj.messages.length > 0) {
+    const last = payloadObj.messages[payloadObj.messages.length - 1];
+    if (!last || typeof last !== "object") {
+      break;
+    }
+    const message = last as Record<string, unknown>;
+    if (message.role !== "assistant" || assistantMessageHasToolUse(message)) {
+      break;
+    }
+    payloadObj.messages.pop();
+    stripped += 1;
+  }
+  return stripped;
+}
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
@@ -62,23 +111,6 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
   return enabled ? "auto" : "standard_only";
-}
-
-function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
-    return false;
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
-    return true;
-  }
-  return undefined;
 }
 
 function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
@@ -152,27 +184,7 @@ export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const serviceTier = resolveAnthropicFastServiceTier(enabled);
-  return (model, context, options) => {
-    if (isAnthropicOAuthApiKey(options?.apiKey)) {
-      return underlying(model, context, options);
-    }
-
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      serviceTier,
-    });
-    if (!payloadPolicy.allowsServiceTier) {
-      return underlying(model, context, options);
-    }
-
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
-    );
-  };
+  return createAnthropicServiceTierWrapper(baseStreamFn, resolveAnthropicFastServiceTier(enabled));
 }
 
 export function createAnthropicServiceTierWrapper(
@@ -199,6 +211,21 @@ export function createAnthropicServiceTierWrapper(
       applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
     );
   };
+}
+
+export function createAnthropicThinkingPrefillWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const stripped = stripTrailingAssistantPrefillWhenThinking(payloadObj);
+      if (stripped > 0) {
+        log.warn(
+          `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+        );
+      }
+    });
 }
 
 export function resolveAnthropicFastMode(
@@ -238,7 +265,8 @@ export function wrapAnthropicProviderStream(
     fastMode !== undefined
       ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
       : undefined,
+    (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );
 }
 
-export const __testing = { log };
+export const __testing = { log, stripTrailingAssistantPrefillWhenThinking };

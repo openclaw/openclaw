@@ -1,22 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { clearBundledProviderPolicySurfaceCache } from "../plugins/provider-public-artifacts.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
-const { normalizeProviderSpecificConfigMock } = vi.hoisted(() => ({
-  normalizeProviderSpecificConfigMock: vi.fn((providerKey: string, provider: unknown) => {
-    if (providerKey !== "anthropic" || !provider || typeof provider !== "object") {
-      return provider;
-    }
-    return { ...(provider as Record<string, unknown>), api: "anthropic-messages" };
-  }),
-}));
-
-vi.mock("../agents/models-config.providers.policy.js", () => ({
-  normalizeProviderSpecificConfig: normalizeProviderSpecificConfigMock,
-}));
-
 describe("applyModelDefaults", () => {
+  beforeEach(() => {
+    clearBundledProviderPolicySurfaceCache();
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    clearBundledProviderPolicySurfaceCache();
+  });
+
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
       models: {
@@ -76,7 +78,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-opus-4-7": {},
             "openai/gpt-5.4": {},
           },
         },
@@ -84,7 +86,7 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -93,7 +95,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
           },
         },
       },
@@ -101,7 +103,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {

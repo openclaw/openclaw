@@ -6,8 +6,8 @@ import {
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
   isPluginCommandRegistryLocked,
+  listProviderPluginCommandSpecs,
   pluginCommands,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
@@ -21,7 +21,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-var reservedCommands: Set<string> | undefined;
+let reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
   ok: boolean;
@@ -102,6 +102,17 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
+  if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
+    return "Agent prompt guidance must be an array of strings";
+  }
+  for (const [index, guidance] of (command.agentPromptGuidance ?? []).entries()) {
+    if (typeof guidance !== "string") {
+      return `Agent prompt guidance ${index + 1} must be a string`;
+    }
+    if (!guidance.trim()) {
+      return `Agent prompt guidance ${index + 1} cannot be empty`;
+    }
+  }
   const nameError = validateCommandName(command.name.trim());
   if (nameError) {
     return nameError;
@@ -167,6 +178,9 @@ export function registerPluginCommand(
     ...command,
     name,
     description,
+    ...(command.agentPromptGuidance
+      ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
+      : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
   const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
@@ -196,5 +210,5 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs };
+export { clearPluginCommands, clearPluginCommandsForPlugin, listProviderPluginCommandSpecs };
 export type { RegisteredPluginCommand };

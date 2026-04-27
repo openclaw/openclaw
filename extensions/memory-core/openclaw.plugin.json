@@ -1,11 +1,26 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "contracts": {
+    "memoryEmbeddingProviders": ["local"]
+  },
+  "commandAliases": [
+    {
+      "name": "dreaming",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ],
   "uiHints": {
     "dreaming.frequency": {
       "label": "Dreaming Frequency",
       "placeholder": "0 3 * * *",
       "help": "Optional cron cadence for the full dreaming sweep (light, REM, then deep)."
+    },
+    "dreaming.model": {
+      "label": "Dreaming Model",
+      "placeholder": "anthropic/claude-sonnet-4-6",
+      "help": "Optional provider/model override for Dream Diary narrative subagent runs. Requires plugins.entries.memory-core.subagent.allowModelOverride."
     }
   },
   "configSchema": {
@@ -20,6 +35,9 @@
             "type": "boolean"
           },
           "frequency": {
+            "type": "string"
+          },
+          "model": {
             "type": "string"
           },
           "timezone": {
@@ -38,6 +56,21 @@
               },
               "separateReports": {
                 "type": "boolean"
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "defaults": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                }
               }
             }
           },
@@ -64,6 +97,15 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               },
@@ -98,6 +140,15 @@
                   "maxAgeDays": {
                     "type": "integer",
                     "minimum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               },
@@ -120,6 +171,15 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }

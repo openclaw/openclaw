@@ -27,112 +27,32 @@ vi.mock("./outbound-session.js", () => ({
   resolveOutboundSessionRoute: vi.fn(async () => null),
 }));
 
-vi.mock("./message-action-threading.js", () => ({
-  resolveAndApplyOutboundThreadId: vi.fn(
-    (
-      actionParams: Record<string, unknown>,
-      context: {
-        cfg: OpenClawConfig;
-        to: string;
-        accountId?: string | null;
-        toolContext?: Record<string, unknown>;
-        resolveAutoThreadId?: (params: {
-          cfg: OpenClawConfig;
-          accountId?: string | null;
-          to: string;
-          toolContext?: Record<string, unknown>;
-          replyToId?: string;
-        }) => string | undefined;
-      },
-    ) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolved =
-        explicit ??
-        context.resolveAutoThreadId?.({
-          cfg: context.cfg,
-          accountId: context.accountId,
-          to: context.to,
-          toolContext: context.toolContext,
-          replyToId,
-        });
-      if (resolved && !actionParams.threadId) {
-        actionParams.threadId = resolved;
-      }
-      return resolved ?? undefined;
-    },
-  ),
-  prepareOutboundMirrorRoute: vi.fn(
-    async ({
-      actionParams,
-      cfg,
-      to,
-      accountId,
-      toolContext,
-      agentId,
-      resolveAutoThreadId,
-    }: {
-      actionParams: Record<string, unknown>;
-      cfg: OpenClawConfig;
-      to: string;
-      accountId?: string | null;
-      toolContext?: Record<string, unknown>;
-      agentId?: string;
-      resolveAutoThreadId?: (params: {
-        cfg: OpenClawConfig;
-        accountId?: string | null;
-        to: string;
-        toolContext?: Record<string, unknown>;
-        replyToId?: string;
-      }) => string | undefined;
-    }) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolvedThreadId =
-        explicit ??
-        resolveAutoThreadId?.({
-          cfg,
-          accountId,
-          to,
-          toolContext,
-          replyToId,
-        });
-      if (resolvedThreadId && !actionParams.threadId) {
-        actionParams.threadId = resolvedThreadId;
-      }
-      if (agentId) {
-        actionParams.__agentId = agentId;
-      }
-      return {
-        resolvedThreadId,
-        outboundRoute: null,
-      };
-    },
-  ),
-}));
-const telegramConfig = {
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
+const pollerConfig = {
   channels: {
-    telegram: {
-      botToken: "telegram-test",
+    poller: {
+      botToken: "poller-test",
     },
   },
 } as OpenClawConfig;
 
-const telegramPollTestPlugin: ChannelPlugin = {
-  id: "telegram",
+const pollerTestPlugin: ChannelPlugin = {
+  id: "poller",
   meta: {
-    id: "telegram",
-    label: "Telegram",
-    selectionLabel: "Telegram",
-    docsPath: "/channels/telegram",
-    blurb: "Telegram poll test plugin.",
+    id: "poller",
+    label: "Poller",
+    selectionLabel: "Poller",
+    docsPath: "/channels/poller",
+    blurb: "Poller test plugin.",
   },
   capabilities: { chatTypes: ["direct", "group"] },
   config: {
     listAccountIds: () => ["default"],
-    resolveAccount: () => ({ botToken: "telegram-test" }),
+    resolveAccount: () => ({ botToken: "poller-test" }),
     isConfigured: () => true,
   },
   outbound: {
@@ -199,9 +119,9 @@ describe("runMessageAction poll handling", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
+          pluginId: "poller",
           source: "test",
-          plugin: telegramPollTestPlugin,
+          plugin: pollerTestPlugin,
         },
       ]),
     );
@@ -226,10 +146,10 @@ describe("runMessageAction poll handling", () => {
   it("requires at least two poll options", async () => {
     await expect(
       runPollAction({
-        cfg: telegramConfig,
+        cfg: pollerConfig,
         actionParams: {
-          channel: "telegram",
-          target: "telegram:123",
+          channel: "poller",
+          target: "poller:123",
           pollQuestion: "Lunch?",
           pollOption: ["Pizza"],
         },
@@ -240,16 +160,16 @@ describe("runMessageAction poll handling", () => {
 
   it("passes shared poll fields and auto threadId to executePollAction", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
         pollDurationHours: 2,
       },
       toolContext: {
-        currentChannelId: "telegram:123",
+        currentChannelId: "poller:123",
         currentThreadTs: "42",
       },
     });
@@ -261,10 +181,10 @@ describe("runMessageAction poll handling", () => {
 
   it("expands maxSelections when pollMulti is enabled", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
         pollMulti: true,
@@ -276,10 +196,10 @@ describe("runMessageAction poll handling", () => {
 
   it("defaults maxSelections to one choice when pollMulti is omitted", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
       },

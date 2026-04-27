@@ -133,6 +133,7 @@ describe("config schema", () => {
         }
       | undefined;
     expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -287,6 +288,42 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
+  });
+
+  it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          ssrfPolicy: {
+            allowRfc2544BenchmarkRange: true,
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
+  it("rejects allowPrivateNetwork on media-understanding request config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        media: {
+          image: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4.1-mini",
+                request: {
+                  allowPrivateNetwork: true,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("rejects unknown keys inside web fetch firecrawl config", () => {

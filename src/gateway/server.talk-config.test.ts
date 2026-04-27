@@ -1,27 +1,28 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
+import { withSpeechProviders } from "./talk.test-helpers.js";
 import {
   connectOk,
+  createGatewaySuiteHarness,
   installGatewayTestHooks,
   readConnectChallengeNonce,
   rpcReq,
 } from "./test-helpers.js";
-import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-type GatewaySocket = Parameters<Parameters<typeof withServer>[0]>[0];
+type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 type SecretRef = { source?: string; provider?: string; id?: string };
 type TalkConfigPayload = {
   config?: {
@@ -34,6 +35,7 @@ type TalkConfigPayload = {
         provider?: string;
         config?: { voiceId?: string; apiKey?: string | SecretRef };
       };
+      speechLocale?: string;
       silenceTimeoutMs?: number;
     };
     session?: { mainKey?: string };
@@ -41,18 +43,28 @@ type TalkConfigPayload = {
   };
 };
 type TalkConfig = NonNullable<NonNullable<TalkConfigPayload["config"]>["talk"]>;
-const TALK_CONFIG_DEVICE_PATH = path.join(
-  os.tmpdir(),
-  `openclaw-talk-config-device-${process.pid}.json`,
-);
-const TALK_CONFIG_DEVICE = loadOrCreateDeviceIdentity(TALK_CONFIG_DEVICE_PATH);
 const GENERIC_TALK_PROVIDER_ID = "acme";
 const GENERIC_TALK_API_ENV = "ACME_SPEECH_API_KEY";
+let harness: GatewayHarness;
+let talkConfigDeviceSeq = 0;
+
+beforeAll(async () => {
+  harness = await createGatewaySuiteHarness({
+    serverOptions: { auth: { mode: "token", token: "secret" } },
+  });
+});
+
+afterAll(async () => {
+  await harness.close();
+});
 
 async function createFreshOperatorDevice(scopes: string[], nonce: string) {
+  const identity = loadOrCreateDeviceIdentity(
+    path.join(os.tmpdir(), `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}`),
+  );
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
-    deviceId: TALK_CONFIG_DEVICE.deviceId,
+    deviceId: identity.deviceId,
     clientId: "test",
     clientMode: "test",
     role: "operator",
@@ -63,9 +75,9 @@ async function createFreshOperatorDevice(scopes: string[], nonce: string) {
   });
 
   return {
-    id: TALK_CONFIG_DEVICE.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(TALK_CONFIG_DEVICE.publicKeyPem),
-    signature: signDevicePayload(TALK_CONFIG_DEVICE.privateKeyPem, payload),
+    id: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    signature: signDevicePayload(identity.privateKeyPem, payload),
     signedAt: signedAtMs,
     nonce,
   };
@@ -113,19 +125,16 @@ async function fetchTalkConfig(
   return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {});
 }
 
-async function withSpeechProviders<T>(
-  speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
-  run: () => Promise<T>,
+async function withTalkConfigConnection<T>(
+  scopes: string[],
+  run: (ws: GatewaySocket) => Promise<T>,
 ): Promise<T> {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  setActivePluginRegistry({
-    ...createEmptyPluginRegistry(),
-    speechProviders,
-  });
+  const ws = await harness.openWs();
   try {
-    return await run();
+    await connectOperator(ws, scopes);
+    return await run(ws);
   } finally {
-    setActivePluginRegistry(previousRegistry);
+    ws.close();
   }
 }
 
@@ -137,6 +146,7 @@ function expectTalkConfig(
     apiKey?: string | SecretRef;
     providerApiKey?: string | SecretRef;
     resolvedApiKey?: string | SecretRef;
+    speechLocale?: string;
     silenceTimeoutMs?: number;
   },
 ) {
@@ -155,6 +165,9 @@ function expectTalkConfig(
   if ("resolvedApiKey" in expected) {
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.resolvedApiKey);
   }
+  if ("speechLocale" in expected) {
+    expect(talk?.speechLocale).toBe(expected.speechLocale);
+  }
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
   }
@@ -172,6 +185,7 @@ describe("gateway talk.config", () => {
             apiKey: "secret-key-abc", // pragma: allowlist secret
           },
         },
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       },
       session: {
@@ -182,14 +196,14 @@ describe("gateway talk.config", () => {
       },
     });
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read"]);
+    await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
         provider: GENERIC_TALK_PROVIDER_ID,
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main-test");
@@ -200,8 +214,7 @@ describe("gateway talk.config", () => {
   it("rejects invalid talk.config params", async () => {
     await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read"]);
+    await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws, { includeSecrets: "yes" });
       expect(res.ok).toBe(false);
       expect(res.error?.message).toContain("invalid talk.config params");
@@ -211,8 +224,7 @@ describe("gateway talk.config", () => {
   it("requires operator.talk.secrets for includeSecrets", async () => {
     await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read"]);
+    await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(false);
       expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
@@ -225,8 +237,7 @@ describe("gateway talk.config", () => {
   ] as const)("returns secrets for %s scope", async (_label, scopes) => {
     await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, [...scopes]);
+    await withTalkConfigConnection([...scopes], async (ws) => {
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
@@ -246,21 +257,23 @@ describe("gateway talk.config", () => {
     });
 
     await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
-      await withServer(async (ws) => {
-        await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-        const res = await fetchTalkConfig(ws, { includeSecrets: true });
-        expect(res.ok, JSON.stringify(res.error)).toBe(true);
-        expect(validateTalkConfigResult(res.payload)).toBe(true);
-        const secretRef = {
-          source: "env",
-          provider: "default",
-          id: GENERIC_TALK_API_ENV,
-        } satisfies SecretRef;
-        expectTalkConfig(res.payload?.config?.talk, {
-          provider: GENERIC_TALK_PROVIDER_ID,
-          apiKey: secretRef,
-        });
-      });
+      await withTalkConfigConnection(
+        ["operator.read", "operator.write", "operator.talk.secrets"],
+        async (ws) => {
+          const res = await fetchTalkConfig(ws, { includeSecrets: true });
+          expect(res.ok, JSON.stringify(res.error)).toBe(true);
+          expect(validateTalkConfigResult(res.payload)).toBe(true);
+          const secretRef = {
+            source: "env",
+            provider: "default",
+            id: GENERIC_TALK_API_ENV,
+          } satisfies SecretRef;
+          expectTalkConfig(res.payload?.config?.talk, {
+            provider: GENERIC_TALK_PROVIDER_ID,
+            apiKey: secretRef,
+          });
+        },
+      );
     });
   });
 
@@ -297,8 +310,7 @@ describe("gateway talk.config", () => {
           },
         ],
         async () => {
-          await withServer(async (ws) => {
-            await connectOperator(ws, ["operator.read"]);
+          await withTalkConfigConnection(["operator.read"], async (ws) => {
             const res = await fetchTalkConfig(ws);
             expect(res.ok, JSON.stringify(res.error)).toBe(true);
             expectTalkConfig(res.payload?.config?.talk, {
@@ -312,14 +324,94 @@ describe("gateway talk.config", () => {
     });
   });
 
+  it("does not throw when SecretRef apiKey flows through a strict provider resolver", async () => {
+    // Regression for #72496: ElevenLabs/OpenAI speech providers call the strict
+    // normalizeResolvedSecretInputString helper inside resolveTalkConfig. The
+    // discovery path used to hand them the raw source config (with the SecretRef
+    // wrapper still intact), causing talk.config to throw "unresolved SecretRef"
+    // and pushing iOS/macOS Talk overlays onto local AVSpeechSynthesizer.
+    const apiKeyPath = `talk.providers.${GENERIC_TALK_PROVIDER_ID}.apiKey`;
+    await writeTalkConfig({
+      apiKey: { source: "env", provider: "default", id: GENERIC_TALK_API_ENV },
+      voiceId: "voice-secretref",
+    });
+
+    await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
+      await withSpeechProviders(
+        [
+          {
+            pluginId: "acme-strict-talk-provider-test",
+            source: "test",
+            provider: {
+              id: GENERIC_TALK_PROVIDER_ID,
+              label: "Acme Strict Speech",
+              isConfigured: () => true,
+              resolveTalkConfig: ({ talkProviderConfig }) => {
+                const apiKey = normalizeResolvedSecretInputString({
+                  value: talkProviderConfig.apiKey,
+                  path: apiKeyPath,
+                });
+                return {
+                  ...talkProviderConfig,
+                  ...(apiKey === undefined ? {} : { apiKey }),
+                };
+              },
+              synthesize: async () => ({
+                audioBuffer: Buffer.from([1]),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              }),
+            },
+          },
+        ],
+        async () => {
+          const secretRef = {
+            source: "env",
+            provider: "default",
+            id: GENERIC_TALK_API_ENV,
+          } satisfies SecretRef;
+
+          await withTalkConfigConnection(["operator.read"], async (ws) => {
+            const res = await fetchTalkConfig(ws);
+            expect(res.ok, JSON.stringify(res.error)).toBe(true);
+            const talk = res.payload?.config?.talk;
+            expect(talk?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+            expect(talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.voiceId).toBe("voice-secretref");
+            // SecretRef apiKey is redacted in-place; the wrapper shape stays so
+            // the UI keeps the SecretRef context, but every field becomes the
+            // sentinel so no credential material leaks to read-scope callers.
+            const redactedApiKey = talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.apiKey;
+            expect(redactedApiKey).toBeTypeOf("object");
+            expect((redactedApiKey as SecretRef).id).toBe("__OPENCLAW_REDACTED__");
+            expect(talk?.resolved?.config?.apiKey).toEqual(redactedApiKey);
+          });
+
+          await withTalkConfigConnection(
+            ["operator.read", "operator.write", "operator.talk.secrets"],
+            async (ws) => {
+              const res = await fetchTalkConfig(ws, { includeSecrets: true });
+              expect(res.ok, JSON.stringify(res.error)).toBe(true);
+              expect(validateTalkConfigResult(res.payload)).toBe(true);
+              expectTalkConfig(res.payload?.config?.talk, {
+                provider: GENERIC_TALK_PROVIDER_ID,
+                voiceId: "voice-secretref",
+                apiKey: secretRef,
+              });
+            },
+          );
+        },
+      );
+    });
+  });
+
   it("returns canonical provider talk payloads", async () => {
     await writeTalkConfig({
       provider: GENERIC_TALK_PROVIDER_ID,
       voiceId: "voice-normalized",
     });
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read"]);
+    await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {

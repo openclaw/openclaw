@@ -1,27 +1,25 @@
 ---
-title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
 
-# Memory Overview
-
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
-workspace. The model only "remembers" what gets saved to disk -- there is no
+workspace. The model only "remembers" what gets saved to disk — there is no
 hidden state.
 
 ## How it works
 
 Your agent has three memory-related files:
 
-- **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
+- **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
+- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
-  summaries for human review.
+- **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
+  summaries for human review, including grounded historical backfill entries.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
@@ -34,9 +32,9 @@ prefer TypeScript." It will write it to the appropriate file.
 
 The agent has two tools for working with memory:
 
-- **`memory_search`** -- finds relevant notes using semantic search, even when
+- **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
-- **`memory_get`** -- reads a specific memory file or line range.
+- **`memory_get`** — reads a specific memory file or line range.
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 
@@ -63,7 +61,7 @@ See [Memory Wiki](/plugins/memory-wiki).
 ## Memory search
 
 When an embedding provider is configured, `memory_search` uses **hybrid
-search** -- combining vector similarity (semantic meaning) with keyword matching
+search** — combining vector similarity (semantic meaning) with keyword matching
 (exact terms like IDs and code symbols). This works out of the box once you have
 an API key for any supported provider.
 
@@ -106,7 +104,7 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
 runs a silent turn that reminds the agent to save important context to memory
-files. This is on by default -- you do not need to configure anything.
+files. This is on by default — you do not need to configure anything.
 
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
@@ -114,7 +112,7 @@ important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is an optional background consolidation pass for memory. It collects
 short-term signals, scores candidates, and promotes only qualified items into
@@ -131,7 +129,42 @@ It is designed to keep long-term memory high signal:
   for human review.
 
 For phase behavior, scoring signals, and Dream Diary details, see
-[Dreaming (experimental)](/concepts/dreaming).
+[Dreaming](/concepts/dreaming).
+
+## Grounded backfill and live promotion
+
+The dreaming system now has two closely related review lanes:
+
+- **Live dreaming** works from the short-term dreaming store under
+  `memory/.dreams/` and is what the normal deep phase uses when deciding what
+  can graduate into `MEMORY.md`.
+- **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
+  standalone day files and writes structured review output into `DREAMS.md`.
+
+Grounded backfill is useful when you want to replay older notes and inspect what
+the system thinks is durable without manually editing `MEMORY.md`.
+
+When you use:
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
+```
+
+the grounded durable candidates are not promoted directly. They are staged into
+the same short-term dreaming store the normal deep phase already uses. That
+means:
+
+- `DREAMS.md` stays the human review surface.
+- the short-term store stays the machine-facing ranking surface.
+- `MEMORY.md` is still only written by deep promotion.
+
+If you decide the replay was not useful, you can remove the staged artifacts
+without touching ordinary diary entries or normal recall state:
+
+```bash
+openclaw memory rem-backfill --rollback
+openclaw memory rem-backfill --rollback-short-term
+```
 
 ## CLI
 
@@ -143,13 +176,18 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
-- [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
-- [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
-- [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
-- [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
-- [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
-  tuning
-- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
-  from short-term recall to long-term memory
-- [Memory configuration reference](/reference/memory-config) -- all config knobs
-- [Compaction](/concepts/compaction) -- how compaction interacts with memory
+- [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
+- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
+- [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
+- [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
+- [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
+- [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory configuration reference](/reference/memory-config): all config knobs.
+- [Compaction](/concepts/compaction): how compaction interacts with memory.
+
+## Related
+
+- [Active memory](/concepts/active-memory)
+- [Memory search](/concepts/memory-search)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

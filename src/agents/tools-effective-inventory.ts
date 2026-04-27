@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -6,64 +7,22 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
-import { resolveModel } from "./pi-embedded-runner/model.js";
+import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
+import { normalizeToolName } from "./tool-policy.js";
+import type {
+  EffectiveToolInventoryNotice,
+  EffectiveToolInventoryEntry,
+  EffectiveToolInventoryGroup,
+  EffectiveToolInventoryResult,
+  EffectiveToolSource,
+  ResolveEffectiveToolInventoryParams,
+} from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-export type EffectiveToolSource = "core" | "plugin" | "channel";
-
-export type EffectiveToolInventoryEntry = {
-  id: string;
-  label: string;
-  description: string;
-  rawDescription: string;
-  source: EffectiveToolSource;
-  pluginId?: string;
-  channelId?: string;
-};
-
-export type EffectiveToolInventoryGroup = {
-  id: EffectiveToolSource;
-  label: string;
-  source: EffectiveToolSource;
-  tools: EffectiveToolInventoryEntry[];
-};
-
-export type EffectiveToolInventoryResult = {
-  agentId: string;
-  profile: string;
-  groups: EffectiveToolInventoryGroup[];
-};
-
-export type ResolveEffectiveToolInventoryParams = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  workspaceDir?: string;
-  agentDir?: string;
-  messageProvider?: string;
-  senderIsOwner?: boolean;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  accountId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  replyToMode?: "off" | "first" | "all" | "batched";
-  modelHasVision?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  disableMessageTool?: boolean;
-};
 
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
@@ -114,6 +73,82 @@ function groupLabel(source: EffectiveToolSource): string {
   }
 }
 
+function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
+  if (!Array.isArray(list)) {
+    return false;
+  }
+  const normalizedToolName = normalizeToolName(toolName);
+  return list.some((entry) => normalizeToolName(entry) === normalizedToolName);
+}
+
+function policyDeniesTool(policy: { deny?: string[] } | undefined, toolName: string): boolean {
+  return (
+    listIncludesTool(policy?.deny, toolName) ||
+    listIncludesTool(policy?.deny, "group:ui") ||
+    listIncludesTool(policy?.deny, "group:openclaw")
+  );
+}
+
+function hasExplicitBrowserIntent(cfg: OpenClawConfig): boolean {
+  return cfg.browser?.enabled !== false && Boolean(cfg.browser || cfg.plugins?.entries?.browser);
+}
+
+function buildToolInventoryNotices(params: {
+  cfg: OpenClawConfig;
+  profile: string;
+  entries: EffectiveToolInventoryEntry[];
+  effectivePolicy: ReturnType<typeof resolveEffectiveToolPolicy>;
+}): EffectiveToolInventoryNotice[] | undefined {
+  const hasBrowserTool = params.entries.some((entry) => normalizeToolName(entry.id) === "browser");
+  if (hasBrowserTool || !hasExplicitBrowserIntent(params.cfg)) {
+    return undefined;
+  }
+
+  const browserDenied = [
+    params.effectivePolicy.globalPolicy,
+    params.effectivePolicy.globalProviderPolicy,
+    params.effectivePolicy.agentPolicy,
+    params.effectivePolicy.agentProviderPolicy,
+  ].some((policy) => policyDeniesTool(policy, "browser"));
+  if (browserDenied) {
+    return [
+      {
+        id: "browser-denied-by-policy",
+        severity: "info",
+        message:
+          "Browser is configured, but this session does not expose the browser tool because tool policy denies it. Remove the browser deny entry to use browser automation.",
+      },
+    ];
+  }
+
+  if (params.profile !== "full") {
+    return [
+      {
+        id: "browser-filtered-by-profile",
+        severity: "info",
+        message:
+          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.list[].tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
+      },
+    ];
+  }
+
+  if (
+    Array.isArray(params.cfg.plugins?.allow) &&
+    !listIncludesTool(params.cfg.plugins.allow, "browser")
+  ) {
+    return [
+      {
+        id: "browser-plugin-not-allowed",
+        severity: "warning",
+        message:
+          'Browser is configured, but plugins.allow does not include browser. Add "browser" to plugins.allow or remove the restrictive plugin allowlist.',
+      },
+    ];
+  }
+
+  return undefined;
+}
+
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -130,20 +165,30 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
 
 function resolveEffectiveModelCompat(params: {
   cfg: OpenClawConfig;
-  agentDir: string;
   modelProvider?: string;
   modelId?: string;
 }) {
-  const provider = params.modelProvider?.trim();
-  const modelId = params.modelId?.trim();
+  const provider = normalizeProviderId(params.modelProvider ?? "");
+  const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
     return undefined;
   }
-  try {
-    return resolveModel(provider, modelId, params.agentDir, params.cfg).model?.compat;
-  } catch {
+  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
+  const models = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
+  if (models.length === 0) {
     return undefined;
   }
+  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
+  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
+  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
+    `${provider}/${normalizedModelId}`,
+  );
+  const match = models.find((model) => {
+    const id = normalizeStaticProviderModelId(provider, model.id);
+    const key = normalizeLowercaseStringOrEmpty(id);
+    return key === normalizedModelKey || key === providerPrefixedModelKey;
+  });
+  return extractModelCompat(match);
 }
 
 export function resolveEffectiveToolInventory(
@@ -156,7 +201,6 @@ export function resolveEffectiveToolInventory(
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
   const modelCompat = resolveEffectiveModelCompat({
     cfg: params.cfg,
-    agentDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
@@ -202,16 +246,19 @@ export function resolveEffectiveToolInventory(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
-        return {
-          id: tool.name,
-          label: resolveEffectiveToolLabel(tool),
-          description: summarizeToolDescription(tool),
-          rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
-          ...source,
-        } satisfies EffectiveToolInventoryEntry;
+        return Object.assign(
+          {
+            id: tool.name,
+            label: resolveEffectiveToolLabel(tool),
+            description: summarizeToolDescription(tool),
+            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+          },
+          source,
+        ) satisfies EffectiveToolInventoryEntry;
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
+  const notices = buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy });
   const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
   for (const entry of entries) {
     const tools = groupsBySource.get(entry.source) ?? [];
@@ -234,5 +281,5 @@ export function resolveEffectiveToolInventory(
     })
     .filter((group): group is EffectiveToolInventoryGroup => group !== null);
 
-  return { agentId, profile, groups };
+  return { agentId, profile, groups, ...(notices ? { notices } : {}) };
 }
