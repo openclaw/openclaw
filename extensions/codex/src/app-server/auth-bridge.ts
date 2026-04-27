@@ -12,6 +12,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/typescript/v2/ChatgptAuthTokensRefreshResponse.js";
 import type { GetAccountResponse } from "./protocol-generated/typescript/v2/GetAccountResponse.js";
 import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
@@ -51,9 +52,10 @@ export async function applyCodexAppServerAuthProfile(params: {
     if (params.startOptions?.transport !== "stdio") {
       return;
     }
+    const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
     const fallbackLoginParams = await resolveCodexAppServerEnvApiKeyLoginParams({
       client: params.client,
-      env: process.env,
+      env,
     });
     if (fallbackLoginParams) {
       await params.client.request("account/login/start", fallbackLoginParams);

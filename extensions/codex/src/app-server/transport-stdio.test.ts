@@ -92,8 +92,8 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
 
 describe("resolveCodexAppServerSpawnEnv", () => {
   it("applies configured env overrides before clearing denied env vars", () => {
-    expect(
-      resolveCodexAppServerSpawnEnv(
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
         {
           env: {
             OPENAI_API_KEY: "configured-openai-key",
@@ -107,8 +107,43 @@ describe("resolveCodexAppServerSpawnEnv", () => {
           KEEP: "parent",
         },
       ),
-    ).toEqual({
+    }).toEqual({
       KEEP: "override",
     });
+  });
+
+  it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
+    const overrides = Object.create(null) as Record<string, string | undefined>;
+    Object.defineProperty(overrides, "__proto__", {
+      value: "polluted",
+      enumerable: true,
+    });
+    Object.defineProperty(overrides, "constructor", {
+      value: "polluted",
+      enumerable: true,
+    });
+    Object.defineProperty(overrides, "prototype", {
+      value: "polluted",
+      enumerable: true,
+    });
+    overrides.SAFE = "1";
+
+    const env = resolveCodexAppServerSpawnEnv(
+      {
+        env: overrides as Record<string, string>,
+      },
+      {
+        BASE: "1",
+      },
+    );
+
+    expect(Object.getPrototypeOf(env)).toBeNull();
+    expect({ ...env }).toEqual({
+      BASE: "1",
+      SAFE: "1",
+    });
+    expect(Object.hasOwn(env, "__proto__")).toBe(false);
+    expect(Object.hasOwn(env, "constructor")).toBe(false);
+    expect(Object.hasOwn(env, "prototype")).toBe(false);
   });
 });
