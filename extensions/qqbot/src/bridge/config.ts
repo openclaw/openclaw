@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getPlatformAdapter } from "../engine/adapter/index.js";
+import { getPlatformAdapter, hasPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
   applyAccountConfig,
@@ -50,23 +50,36 @@ export function resolveQQBotAccount(
       ? "channels.qqbot.clientSecret"
       : `channels.qqbot.accounts.${base.accountId}.clientSecret`;
 
-  const adapter = getPlatformAdapter();
-  if (adapter.hasConfiguredSecret(accountConfig.clientSecret)) {
-    clientSecret = opts?.allowUnresolvedSecretRef
-      ? (adapter.normalizeSecretInputString(accountConfig.clientSecret) ?? "")
-      : (adapter.resolveSecretInputString({
-          value: accountConfig.clientSecret,
-          path: clientSecretPath,
-        }) ?? "");
-    secretSource = "config";
-  } else if (accountConfig.clientSecretFile) {
+  // Skip the PlatformAdapter call when no adapter is registered. CLI surfaces
+  // (e.g. `openclaw status`) walk every bundled channel through `resolveAccount`
+  // even when qqbot is not configured; the adapter is only registered during
+  // Gateway bootstrap, so an unconditional call crashes status commands with
+  // `PlatformAdapter not registered`. The clientSecretFile / env fallbacks
+  // below still work without the adapter. Issue #72465.
+  if (hasPlatformAdapter()) {
+    const adapter = getPlatformAdapter();
+    if (adapter.hasConfiguredSecret(accountConfig.clientSecret)) {
+      clientSecret = opts?.allowUnresolvedSecretRef
+        ? (adapter.normalizeSecretInputString(accountConfig.clientSecret) ?? "")
+        : (adapter.resolveSecretInputString({
+            value: accountConfig.clientSecret,
+            path: clientSecretPath,
+          }) ?? "");
+      secretSource = "config";
+    }
+  }
+  if (secretSource === "none" && accountConfig.clientSecretFile) {
     try {
       clientSecret = fs.readFileSync(accountConfig.clientSecretFile, "utf8").trim();
       secretSource = "file";
     } catch {
       secretSource = "none";
     }
-  } else if (process.env.QQBOT_CLIENT_SECRET && base.accountId === DEFAULT_ACCOUNT_ID) {
+  } else if (
+    secretSource === "none" &&
+    process.env.QQBOT_CLIENT_SECRET &&
+    base.accountId === DEFAULT_ACCOUNT_ID
+  ) {
     clientSecret = process.env.QQBOT_CLIENT_SECRET;
     secretSource = "env";
   }

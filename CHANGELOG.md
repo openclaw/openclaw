@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/QQBot: skip the PlatformAdapter lookup in `resolveQQBotAccount` when no adapter is registered so `openclaw status` and other CLI surfaces no longer crash with `PlatformAdapter not registered. Call registerPlatformAdapter() during bootstrap.` when the bundled qqbot extension is walked through `resolveAccount` without the Gateway bootstrap path having run. Fixes #72465.
 - macOS Gateway: write launchd services with a state-dir `WorkingDirectory`, use a durable state-dir temp path instead of freezing macOS session `TMPDIR`, create that temp directory before bootstrap, and label abort-shaped launchd exits as `SIGABRT/abort` in status output. Fixes #53679 and #70223; refs #71848. Thanks @dlturock, @stammi922, and @palladius.
 - Exec approvals: accept runtime-owned `source: "allow-always"` and `commandText` allowlist metadata in gateway and node approval-set payloads so Control UI round-trips no longer fail with `unexpected property 'source'`. Fixes #60000; carries forward #60064. Thanks @sd1471123, @sharkqwy, and @luoyanglang.
 - Exec/node: skip approval-plan preparation for full-trust `host=node` runs so interpreter and script commands no longer fail with `SYSTEM_RUN_DENIED: approval cannot safely bind` when effective policy is `security=full` and `ask=off`. Fixes #48457 and duplicate #69251. Thanks @ajtran303, @jaserNo1, @Blakeshannon, @lesliefag, and @AvIsBeastMC.
