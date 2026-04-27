@@ -40,6 +40,68 @@ describe("secrets-keyring createKeyringSecretProvider", () => {
     expect(receivedArgs).toContain("openclaw");
   });
 
+  it("on macOS uses native Keychain semantics: -s for service config, -a for ref id", async () => {
+    vi.resetModules();
+    vi.doMock("node:os", async (importOriginal) => {
+      const real = await importOriginal<typeof import("node:os")>();
+      return { ...real, platform: () => "darwin", homedir: () => "/Users/test" };
+    });
+    let receivedArgs: string[] = [];
+    vi.doMock("node:child_process", () => ({
+      execFile: (
+        _cmd: string,
+        args: string[],
+        cb: (err: null, out: { stdout: string; stderr: string }) => void,
+      ) => {
+        receivedArgs = args;
+        cb(null, { stdout: "v\n", stderr: "" });
+      },
+    }));
+
+    const { createKeyringSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await provider.resolve({
+      refs: [{ source: "keyring", provider: "local", id: "openai-api-key" }],
+      providerName: "local",
+      providerConfig: { source: "keyring", service: "openclaw" },
+      env: process.env,
+    });
+    // Native macOS Keychain attribute mapping:
+    //   `security add-generic-password -s <service> -a <account> -w <value>`
+    // OpenClaw `service` config -> -s, OpenClaw ref id -> -a.
+    const sIdx = receivedArgs.indexOf("-s");
+    const aIdx = receivedArgs.indexOf("-a");
+    expect(receivedArgs[sIdx + 1]).toBe("openclaw");
+    expect(receivedArgs[aIdx + 1]).toBe("openai-api-key");
+  });
+
+  it("preserves trailing newlines in the stored secret value (only strips one CLI-added newline)", async () => {
+    vi.resetModules();
+    vi.doMock("node:os", async (importOriginal) => {
+      const real = await importOriginal<typeof import("node:os")>();
+      return { ...real, platform: () => "darwin", homedir: () => "/Users/test" };
+    });
+    // PEM-style: stored value ends with "\n", security adds another "\n" → "...END KEY-----\n\n".
+    // We must return "...END KEY-----\n", not "...END KEY-----".
+    vi.doMock("node:child_process", () => ({
+      execFile: (
+        _cmd: string,
+        _args: string[],
+        cb: (err: null, out: { stdout: string; stderr: string }) => void,
+      ) => cb(null, { stdout: "-----BEGIN KEY-----\nbody\n-----END KEY-----\n\n", stderr: "" }),
+    }));
+
+    const { createKeyringSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    const out = await provider.resolve({
+      refs: [{ source: "keyring", provider: "local", id: "pem-key" }],
+      providerName: "local",
+      providerConfig: { source: "keyring" },
+      env: process.env,
+    });
+    expect(out.get("pem-key")).toBe("-----BEGIN KEY-----\nbody\n-----END KEY-----\n");
+  });
+
   it("uses a custom service name on macOS", async () => {
     vi.resetModules();
     vi.doMock("node:os", async (importOriginal) => {

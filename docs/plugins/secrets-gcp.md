@@ -43,6 +43,12 @@ source. Plugins that are not enabled have no startup or import cost.
    }
    ```
 
+<Note>
+The interactive `openclaw secrets configure` flow does not currently list
+plugin-owned sources in its source picker. Edit `openclaw.json` directly to
+add a `gcp` provider entry; resolution at runtime works the same either way.
+</Note>
+
 3. Reference the secret anywhere SecretRef is accepted:
 
    ```json5

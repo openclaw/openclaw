@@ -41,23 +41,37 @@ function assertSafeKeychainPath(value: string): void {
   }
 }
 
+// Strip exactly one trailing newline that the platform CLI adds, preserving
+// any newlines the user intentionally stored as part of the secret value (PEM
+// keys, multi-line config blobs, etc.). `.trimEnd()` would over-strip.
+function stripCliTrailingNewline(value: string): string {
+  if (value.endsWith("\r\n")) return value.slice(0, -2);
+  if (value.endsWith("\n")) return value.slice(0, -1);
+  return value;
+}
+
 async function resolveDarwinSecret(params: {
   refId: string;
   providerName: string;
   service: string;
   keychainPath: string;
 }): Promise<string> {
+  // Use macOS Keychain native semantics: -s is the service-name attribute,
+  // -a is the account attribute. The OpenClaw `service` config maps to the
+  // Keychain service slot; the SecretRef `id` maps to the account slot.
+  // This matches how a user would natively store a secret with
+  // `security add-generic-password -s <service> -a <id> -w <value>`.
   try {
     const { stdout } = await execFileAsync("security", [
       "find-generic-password",
-      "-a",
-      params.service,
       "-s",
+      params.service,
+      "-a",
       params.refId,
       "-w",
       params.keychainPath,
     ]);
-    return stdout.trimEnd();
+    return stripCliTrailingNewline(stdout);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -67,17 +81,21 @@ async function resolveDarwinSecret(params: {
   }
 }
 
-function classifyLinuxError(err: unknown): { kind: "tool_missing" | "not_found" } {
+function isMissingExecutableError(err: unknown): boolean {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return true;
+    }
+  }
+  // Fallback message-substring check for promisified wrappers and exotic
+  // shells that don't surface the original errno on the rejection.
   const msg = err instanceof Error ? err.message : String(err);
-  if (
+  return (
     msg.includes("ENOENT") ||
-    msg.includes("not found") ||
     msg.toLowerCase().includes("command not found") ||
     msg.toLowerCase().includes("no such file")
-  ) {
-    return { kind: "tool_missing" };
-  }
-  return { kind: "not_found" };
+  );
 }
 
 async function resolveLinuxSecret(params: {
@@ -85,6 +103,10 @@ async function resolveLinuxSecret(params: {
   providerName: string;
   service: string;
 }): Promise<string> {
+  // libsecret has no "account" attribute; we use its native `service` and
+  // `key` attributes directly. The OpenClaw `service` config maps to libsecret
+  // `service`; the SecretRef `id` maps to libsecret `key`. This matches how a
+  // user would store with `secret-tool store ... service <service> key <id>`.
   try {
     const { stdout } = await execFileAsync("secret-tool", [
       "lookup",
@@ -93,7 +115,7 @@ async function resolveLinuxSecret(params: {
       "key",
       params.refId,
     ]);
-    const value = stdout.trimEnd();
+    const value = stripCliTrailingNewline(stdout);
     if (!value) {
       throw new Error(
         `Keyring secret "${params.refId}" not found in libsecret (provider: ${params.providerName}, service: ${params.service}). Use \`secret-tool store\` to add it.`,
@@ -104,7 +126,7 @@ async function resolveLinuxSecret(params: {
     if (err instanceof Error && err.message.startsWith("Keyring secret ")) {
       throw err;
     }
-    if (classifyLinuxError(err).kind === "tool_missing") {
+    if (isMissingExecutableError(err)) {
       throw new Error(
         `Keyring provider requires the libsecret \`secret-tool\` CLI on Linux but it was not found on PATH. Install libsecret-tools (Debian/Ubuntu) or libsecret (Fedora/Arch) and try again.`,
         { cause: err },

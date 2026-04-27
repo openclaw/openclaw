@@ -50,6 +50,12 @@ unconfigured.
    }
    ```
 
+<Note>
+The interactive `openclaw secrets configure` flow does not currently list
+plugin-owned sources in its source picker. Edit `openclaw.json` directly to
+add a `keyring` provider entry; resolution at runtime works the same either way.
+</Note>
+
 3. Store a credential in the OS keyring (see platform sections below), then
    reference it anywhere SecretRef is accepted:
 
@@ -98,16 +104,19 @@ security list-keychains -d user -s \
   ~/Library/Keychains/login.keychain-db \
   ~/Library/Keychains/openclaw.keychain-db
 
-# Store a secret.
+# Store a secret. -s holds the configured `service`, -a holds the SecretRef `id`.
 security add-generic-password \
-  -a openclaw \
-  -s openai-api-key \
+  -s openclaw \
+  -a openai-api-key \
   -w "sk-..." \
   ~/Library/Keychains/openclaw.keychain-db
 ```
 
-The `-a` flag matches the configured `service` (default `"openclaw"`); the
-`-s` flag matches the SecretRef `id`.
+This matches macOS Keychain native semantics: `-s` is the service-name
+attribute and `-a` is the account attribute. The OpenClaw `service` config
+field maps to the Keychain service slot; the SecretRef `id` maps to the
+account slot. Anything you store with this `security add-generic-password`
+shape can be looked up by the plugin without further mapping.
 
 ### Use the login keychain
 

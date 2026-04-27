@@ -7,7 +7,6 @@ export type SecretProviderResolveContext = {
   /** Already validated by SecretProviderPlugin.validateConfig (if defined). */
   providerConfig: unknown;
   env: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
 };
 
 export type SecretProviderPlugin = {
