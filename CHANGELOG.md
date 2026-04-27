@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Memory-core: re-resolve the active runtime config whenever `memory_search` or `memory_get` executes, so provider changes made by `config.patch` stop leaving stale embedding backends behind in existing tool instances. Fixes #61098. Thanks @BradGroux and @Linux2010.
+- WebChat: keep bare `/new` and `/reset` startup instructions out of visible chat history while preserving `/reset <note>` as user-visible transcript text. Fixes #72369. Thanks @collynes and @haishmg.
 - Channels/setup: treat bundled channel plugins as already bundled during `channels add` and onboarding, enabling them without writing redundant `plugins.load.paths` entries or path install records. Fixes #72740. Thanks @iCodePoet.
 - WhatsApp: honor gateway `HTTPS_PROXY` / `HTTP_PROXY` env vars for QR-login WebSocket connections, while respecting `NO_PROXY`, so proxied networks no longer fall back to direct `mmg.whatsapp.net` connections that time out with 408. Fixes #72547; supersedes #72692. Thanks @mebusw and @SymbolStar.
 - Bonjour: default mDNS advertisements to the system hostname when it is DNS-safe, avoiding `openclaw.local` probing conflicts and Gateway restart loops on hosts such as `Lobster` or `ubuntu`. Fixes #72355 and #72689; supersedes #72694. Thanks @mscheuerlein-bot, @gcusms, @moyuwuhen601, @pavan987, @zml-0912, @hhq365, and @SymbolStar.
