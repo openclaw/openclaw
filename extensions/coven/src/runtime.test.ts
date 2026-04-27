@@ -347,11 +347,14 @@ describe("CovenAcpRuntime", () => {
       mode: "oneshot",
       cwd: workspaceDir,
     });
-    handle.runtimeSessionName = __testing.encodeRuntimeSessionName({
-      agent: "codex",
-      mode: "prompt",
-      cwd: "/tmp/attacker",
-    });
+    handle.runtimeSessionName = `coven:${Buffer.from(
+      JSON.stringify({
+        agent: "codex",
+        mode: "prompt",
+        cwd: "/tmp/attacker",
+      }),
+      "utf8",
+    ).toString("base64url")}`;
 
     await collect(
       runtime.runTurn({
@@ -611,7 +614,6 @@ describe("CovenAcpRuntime", () => {
       agent: "A".repeat(5_000),
       mode: "prompt".repeat(1_000),
       sessionMode: "persistent".repeat(1_000),
-      cwd: "/workspace/".repeat(1_000),
     });
 
     expect(Buffer.byteLength(encoded, "utf8")).toBeLessThanOrEqual("coven:".length + 2_048);

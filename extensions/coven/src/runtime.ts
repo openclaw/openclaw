@@ -51,7 +51,6 @@ type CovenRuntimeSessionState = {
   agent: string;
   mode: string;
   sessionMode?: string;
-  cwd?: string;
 };
 
 type CovenAcpRuntimeParams = {
@@ -109,7 +108,6 @@ function decodeRuntimeSessionName(value: string): CovenRuntimeSessionState | nul
       agent,
       mode: typeof parsed.mode === "string" ? parsed.mode : "prompt",
       ...(typeof parsed.sessionMode === "string" ? { sessionMode: parsed.sessionMode } : {}),
-      ...(typeof parsed.cwd === "string" && parsed.cwd.trim() ? { cwd: parsed.cwd.trim() } : {}),
     };
   } catch {
     return null;
