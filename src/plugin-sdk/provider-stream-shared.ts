@@ -154,6 +154,68 @@ export function createPayloadPatchStreamWrapper(
   };
 }
 
+function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
+  const thinking = payload.thinking;
+  if (!thinking || typeof thinking !== "object") {
+    return false;
+  }
+  return (thinking as { type?: unknown }).type !== "disabled";
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      ((block as { type?: unknown }).type === "tool_use" ||
+        (block as { type?: unknown }).type === "toolCall"),
+  );
+}
+
+export function stripTrailingAnthropicAssistantPrefillWhenThinking(
+  payload: Record<string, unknown>,
+): number {
+  if (!isAnthropicThinkingEnabled(payload) || !Array.isArray(payload.messages)) {
+    return 0;
+  }
+
+  let stripped = 0;
+  while (payload.messages.length > 0) {
+    const finalMessage = payload.messages[payload.messages.length - 1];
+    if (!finalMessage || typeof finalMessage !== "object") {
+      break;
+    }
+
+    const message = finalMessage as Record<string, unknown>;
+    if (message.role !== "assistant" || assistantMessageHasAnthropicToolUse(message)) {
+      break;
+    }
+
+    payload.messages.pop();
+    stripped += 1;
+  }
+  return stripped;
+}
+
+export function createAnthropicThinkingPrefillPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  onStripped?: (stripped: number) => void,
+): StreamFn {
+  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
+    const stripped = stripTrailingAnthropicAssistantPrefillWhenThinking(payload);
+    if (stripped > 0) {
+      onStripped?.(stripped);
+    }
+  });
+}
+
 export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 
 export function isOpenAICompatibleThinkingEnabled(params: {

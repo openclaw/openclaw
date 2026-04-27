@@ -8,6 +8,7 @@ import {
   decodeHtmlEntitiesInObject,
   hasCopilotVisionInput,
   isOpenAICompatibleThinkingEnabled,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 type FakeWrappedStream = {
@@ -263,5 +264,59 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
+  it("removes trailing assistant text turns when Anthropic thinking is enabled", () => {
+    const payload = {
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+        { role: "assistant", content: '"status"' },
+      ],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(2);
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+  });
+
+  it("preserves assistant tool-use turns across Anthropic and OpenAI-shaped payloads", () => {
+    const anthropicPayload = {
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+      ],
+    };
+    const openAiPayload = {
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
+      ],
+    };
+    const toolCallsPayload = {
+      thinking: { type: "adaptive" },
+      messages: [{ role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] }],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(anthropicPayload)).toBe(0);
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(openAiPayload)).toBe(0);
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(toolCallsPayload)).toBe(0);
+  });
+
+  it("keeps assistant prefill when Anthropic thinking is disabled", () => {
+    const payload = {
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
+    expect(payload.messages).toHaveLength(2);
   });
 });
