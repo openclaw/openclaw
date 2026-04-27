@@ -79,7 +79,7 @@ describe("generateSlugViaLLM", () => {
       if (typeof model === "string") {
         return model;
       }
-      return model?.primary;
+      return model?.primary ?? null;
     });
 
     await generateSlugViaLLM({

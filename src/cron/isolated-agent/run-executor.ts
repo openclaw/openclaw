@@ -13,7 +13,6 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { resolveSessionAuthProfileOverride } from "./run-auth-profile.runtime.js";
 import {
-  getCliSessionId,
   getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,

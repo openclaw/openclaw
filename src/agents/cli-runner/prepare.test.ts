@@ -93,6 +93,34 @@ function createSessionFile() {
   return { dir, sessionFile };
 }
 
+function makeMcpLoopbackServer() {
+  return {
+    port: 3210,
+    close: vi.fn(async () => undefined),
+  };
+}
+
+function makeMcpLoopbackServerConfig(port = 3210) {
+  return {
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: {
+          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
+          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-message-to": "${OPENCLAW_MCP_MESSAGE_TO}",
+          "x-openclaw-thread-id": "${OPENCLAW_MCP_THREAD_ID}",
+          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+        },
+      },
+    },
+  };
+}
+
 function appendTranscriptEntry(
   sessionFile: string,
   entry: {
@@ -129,8 +157,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
-      ensureMcpLoopbackServer: vi.fn(async () => undefined),
-      createMcpLoopbackServerConfig: vi.fn(() => ({ mcpServers: {} })),
+      ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+      createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
@@ -509,7 +537,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
   it("does not prepare bundled MCP tools when tools are disabled", async () => {
     const { dir, sessionFile } = createSessionFile();
-    const ensureMcpLoopbackServerMock = vi.fn(async () => undefined);
+    const ensureMcpLoopbackServerMock = vi.fn(async () => makeMcpLoopbackServer());
     try {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(() => ({
@@ -518,13 +546,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           nonOwnerToken: "agent-token",
         })),
         ensureMcpLoopbackServer: ensureMcpLoopbackServerMock,
-        createMcpLoopbackServerConfig: vi.fn(() => ({
-          mcpServers: {
-            openclaw: {
-              url: "http://127.0.0.1:3210/mcp",
-            },
-          },
-        })),
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
       });
 
       const context = await prepareCliRunContext({
@@ -569,14 +591,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           ownerToken: "owner-token",
           nonOwnerToken: "agent-token",
         })),
-        ensureMcpLoopbackServer: vi.fn(async () => undefined),
-        createMcpLoopbackServerConfig: vi.fn(() => ({
-          mcpServers: {
-            openclaw: {
-              url: "http://127.0.0.1:3210/mcp",
-            },
-          },
-        })),
+        ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
       });
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -587,10 +603,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
               command: "test-cli",
               args: ["--print"],
               systemPromptArg: "--system-prompt",
-              systemPromptWhen: "first",
-              sessionMode: "existing",
-              output: "text",
-              input: "arg",
+              systemPromptWhen: "first" as const,
+              sessionMode: "existing" as const,
+              output: "text" as const,
+              input: "arg" as const,
             },
             bundleMcp: true,
             bundleMcpMode: "claude-config-file",
