@@ -76,6 +76,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
               type: "hello-ok",
               protocol: 3,
               snapshot: {},
+              auth: { role: "operator", scopes: [] },
             },
           );
         },
