@@ -48,6 +48,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { stripDreamingManagedBlocks } from "openclaw/plugin-sdk/memory-host-markdown";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -86,6 +87,13 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+/** Match `memory/YYYY-MM-DD.md` (the daily journal file pattern). */
+const DAILY_MEMORY_PATH_RE = /(?:^|[/\\])memory[/\\]\d{4}-\d{2}-\d{2}\.md$/;
+
+function isDailyMemoryPath(relPath: string): boolean {
+  return DAILY_MEMORY_PATH_RE.test(relPath);
+}
 
 function isDefaultMemoryPath(relPath: string): boolean {
   const normalized = relPath.trim().replace(/^\.\//, "").replace(/\\/g, "/");
@@ -1275,6 +1283,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const contextLimits = this.contextLimits;
     if (params.from !== undefined || params.lines !== undefined) {
+      // For daily memory files, read the full file and strip dreaming blocks
+      // before slicing so that line numbers are consistent with a full read
+      // and cross-session staging data is never exposed.  Daily files are
+      // small (a few KB) so the overhead of a full read is negligible.
+      // See openclaw/openclaw#68367.
+      if (isDailyMemoryPath(relPath)) {
+        const full = await this.readFullText(absPath);
+        if (full.missing) {
+          return { text: "", path: relPath };
+        }
+        const stripped = stripDreamingManagedBlocks(full.text);
+        return buildMemoryReadResult({
+          content: stripped,
+          relPath,
+          from: params.from,
+          lines: params.lines,
+          defaultLines: contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+          maxChars: contextLimits?.memoryGetMaxChars,
+          suggestReadFallback: isDefaultMemoryPath(relPath),
+        });
+      }
+      // Non-daily files: use efficient streaming partial read.
       const requestedCount = Math.max(
         1,
         params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
@@ -1296,8 +1326,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (full.missing) {
       return { text: "", path: relPath };
     }
+    // Strip managed dreaming blocks from daily memory files so that
+    // light-sleep / REM staging data from other sessions is not leaked
+    // into memory_get results.  See openclaw/openclaw#68367.
+    const fullText = isDailyMemoryPath(relPath) ? stripDreamingManagedBlocks(full.text) : full.text;
     return buildMemoryReadResult({
-      content: full.text,
+      content: fullText,
       relPath,
       from: params.from,
       lines: params.lines,

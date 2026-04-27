@@ -32,3 +32,46 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
   }
   return `${trimmed}\n\n${managedBlock}\n`;
 }
+
+/**
+ * Managed dreaming block definitions used for stripping.
+ * Must stay in sync with the markers emitted by `writeDailyDreamingPhaseBlock`.
+ */
+const DREAMING_MANAGED_BLOCKS: ReadonlyArray<{
+  heading: string;
+  startMarker: string;
+  endMarker: string;
+}> = [
+  {
+    heading: "## Light Sleep",
+    startMarker: "<!-- openclaw:dreaming:light:start -->",
+    endMarker: "<!-- openclaw:dreaming:light:end -->",
+  },
+  {
+    heading: "## REM Sleep",
+    startMarker: "<!-- openclaw:dreaming:rem:start -->",
+    endMarker: "<!-- openclaw:dreaming:rem:end -->",
+  },
+];
+
+/**
+ * Strip all managed dreaming blocks (Light Sleep / REM Sleep) from a markdown
+ * document.  Removes the optional heading line (e.g. `## Light Sleep`), the
+ * start/end markers, and everything between them.
+ *
+ * This is safe to call on any content — when no dreaming blocks are present
+ * the input is returned unchanged.
+ */
+export function stripDreamingManagedBlocks(content: string): string {
+  let result = content;
+  for (const block of DREAMING_MANAGED_BLOCKS) {
+    const pattern = new RegExp(
+      `(?:${escapeRegex(block.heading)}\\n)?${escapeRegex(block.startMarker)}[\\s\\S]*?${escapeRegex(block.endMarker)}\\n?`,
+      "gm",
+    );
+    result = result.replace(pattern, "");
+  }
+  // Collapse runs of 3+ blank lines into 2.
+  result = result.replace(/\n{3,}/g, "\n\n");
+  return result;
+}

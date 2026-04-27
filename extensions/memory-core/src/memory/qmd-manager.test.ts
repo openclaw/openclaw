@@ -3873,6 +3873,59 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("strips dreaming managed blocks from partial reads of daily memory files", async () => {
+    const relPath = path.join("memory", "2026-04-18.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const lines = [
+      "# 2026-04-18 Daily Log",
+      "",
+      "## Morning notes",
+      "line-4",
+      "line-5",
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "dreaming-candidate-1",
+      "dreaming-candidate-2",
+      "<!-- openclaw:dreaming:light:end -->",
+      "",
+      "## Afternoon notes",
+      "line-13",
+      "line-14",
+    ];
+    await fs.writeFile(path.join(workspaceDir, relPath), lines.join("\n"), "utf-8");
+
+    const { manager } = await createManager();
+
+    // Partial read that would span the dreaming block in the raw file
+    const result = await manager.readFile({ relPath, from: 1, lines: 10 });
+    expect(result.text).not.toContain("dreaming-candidate");
+    expect(result.text).not.toContain("openclaw:dreaming");
+    expect(result.text).toContain("Morning notes");
+    expect(result.text).toContain("Afternoon notes");
+
+    await manager.close();
+  });
+
+  it("uses efficient streaming partial read for non-daily memory files", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const relPath = path.join("memory", "window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, relPath),
+      Array.from({ length: 20 }, (_, i) => `line-${i + 1}`).join("\n"),
+      "utf-8",
+    );
+
+    const { manager } = await createManager();
+    const result = await manager.readFile({ relPath, from: 5, lines: 3 });
+    expect(result.text).toContain("line-5");
+    // Non-daily files should use streaming partial read, not readFile
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    await manager.close();
+    readFileSpy.mockRestore();
+  });
+
   it("returns a bounded default excerpt for qmd memory reads without explicit lines", async () => {
     const relPath = path.join("memory", "default-window.md");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
