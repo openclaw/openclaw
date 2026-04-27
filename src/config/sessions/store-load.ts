@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
+  cloneSessionStoreRecord,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
@@ -166,5 +167,5 @@ export function loadSessionStore(
     });
   }
 
-  return opts.clone === false ? store : structuredClone(store);
+  return opts.clone === false ? store : cloneSessionStoreRecord(store);
 }
