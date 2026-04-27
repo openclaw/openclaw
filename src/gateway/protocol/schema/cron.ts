@@ -186,6 +186,8 @@ const CronDeliverySharedProperties = {
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
+  // Fixed: Added threadId to bridge drift between TypeScript types and runtime schema
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
 };
 
 const CronDeliveryNoopSchema = Type.Object(
