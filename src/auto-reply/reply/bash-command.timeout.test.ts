@@ -89,7 +89,7 @@ describe("handleBashChatCommand timeout handling", () => {
   });
 
   it("allows chat bash jobs to disable the exec timeout", async () => {
-    await handleBashChatCommand(buildParams("/bash timeout=0 tail -f app.log"));
+    await handleBashChatCommand(buildParams("/bash --timeout 0 tail -f app.log"));
 
     expect(executeMock).toHaveBeenCalledWith("chat-bash", {
       command: "tail -f app.log",
@@ -110,16 +110,23 @@ describe("handleBashChatCommand timeout handling", () => {
   });
 
   it("rejects timeout prefixes that omit the bash command", async () => {
-    const timeoutEquals = await handleBashChatCommand(buildParams("/bash timeout=0"));
     const timeoutFlag = await handleBashChatCommand(buildParams("/bash --timeout 90"));
     const malformedTimeout = await handleBashChatCommand(
       buildParams("/bash --timeout nope npm test"),
     );
 
-    expect(timeoutEquals.text).toContain("Usage");
     expect(timeoutFlag.text).toContain("Usage");
     expect(malformedTimeout.text).toContain("Usage");
     expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves shell env assignments that start with timeout", async () => {
+    await handleBashChatCommand(buildParams("/bash timeout=5 npm test"));
+
+    expect(executeMock).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ command: "timeout=5 npm test", timeout: undefined }),
+    );
   });
 
   it("shows timeout exit reasons when polling finished chat bash jobs", async () => {

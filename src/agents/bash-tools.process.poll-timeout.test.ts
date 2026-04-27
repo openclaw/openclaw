@@ -43,10 +43,12 @@ async function logSession(
   processTool: ReturnType<typeof createProcessTool>,
   callId: string,
   sessionId: string,
+  params?: { offset?: number; limit?: number },
 ) {
   return processTool.execute(callId, {
     action: "log",
     sessionId,
+    ...params,
   });
 }
 
@@ -206,4 +208,21 @@ test("process log includes timeout guidance for silent finished sessions", async
 
   expect(text).toContain(timeoutText);
   expect(text).not.toContain("(no output recorded)");
+});
+
+test("process log preserves raw slices for timed-out sessions with output", async () => {
+  const sessionId = "sess-timeout-log-slice";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stdout", "first\nsecond\nthird\n");
+  session.failureReason = "Command timed out after 30 seconds.";
+  markExited(session, null, "SIGKILL", "failed", "overall-timeout");
+
+  const log = await logSession(processTool, "toolcall-timeout-log-slice", sessionId, {
+    offset: 1,
+    limit: 1,
+  });
+  const text = log.content[0]?.type === "text" ? log.content[0].text : "";
+
+  expect(text).toBe("second");
 });

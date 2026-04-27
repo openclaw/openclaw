@@ -125,6 +125,22 @@ function mergeTimeoutPollOutput(params: {
   return `${params.drainedOutput}\n\n${timeoutOutput}`;
 }
 
+function mergeTimeoutEmptyLogOutput(params: {
+  slice: string;
+  totalChars: number;
+  failureReason?: string;
+  exitReason: unknown;
+}) {
+  if (params.totalChars > 0) {
+    return params.slice;
+  }
+  return mergeTimeoutPollOutput({
+    drainedOutput: params.slice,
+    failureReason: params.failureReason,
+    exitReason: params.exitReason,
+  });
+}
+
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
   try {
     const sessionState = getDiagnosticSessionState({ sessionId });
@@ -451,8 +467,9 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const logText = mergeTimeoutPollOutput({
-              drainedOutput: slice,
+            const logText = mergeTimeoutEmptyLogOutput({
+              slice,
+              totalChars,
               failureReason: scopedSession.failureReason,
               exitReason: scopedSession.exitReason,
             });
@@ -479,8 +496,9 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const logText = mergeTimeoutPollOutput({
-              drainedOutput: slice,
+            const logText = mergeTimeoutEmptyLogOutput({
+              slice,
+              totalChars,
               failureReason: scopedFinished.failureReason,
               exitReason: scopedFinished.exitReason,
             });

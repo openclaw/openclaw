@@ -111,11 +111,10 @@ function formatBashFinishedOutput(finished: {
 function parseBashTimeoutOption(rest: string): { command: string; timeoutSec?: number } {
   const trimmed = rest.trimStart();
   const match =
-    trimmed.match(/^timeout=(\d+(?:\.\d+)?)\s+([\s\S]+)$/) ??
     trimmed.match(/^--timeout=(\d+(?:\.\d+)?)\s+([\s\S]+)$/) ??
     trimmed.match(/^--timeout\s+(\d+(?:\.\d+)?)\s+([\s\S]+)$/);
   if (!match) {
-    if (/^(?:timeout=|--timeout(?:=|\s|$))/.test(trimmed)) {
+    if (/^--timeout(?:=|\s|$)/.test(trimmed)) {
       return { command: "" };
     }
     return { command: rest };
@@ -237,7 +236,7 @@ function buildUsageReply(): ReplyPayload {
     text: [
       "⚙️ Usage:",
       "- ! <command>",
-      "- ! timeout=<seconds> <command> (use timeout=0 for long-running jobs)",
+      "- ! --timeout <seconds> <command> (use --timeout 0 for long-running jobs)",
       "- !poll | ! poll",
       "- !stop | ! stop",
       "- /bash ... (alias; same subcommands as !)",
