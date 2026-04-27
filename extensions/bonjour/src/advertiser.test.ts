@@ -611,6 +611,38 @@ describe("gateway bonjour advertiser", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it("disables advertiser on EADDRINUSE instead of crashing", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("listen EADDRINUSE: address already in use :::5353"))
+      .mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    // Advance timers to let the floating disableAdvertiser() complete
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("mDNS conflict detected (possibly Avahi)"),
+    );
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+
+    // After disable, subsequent stop should be a no-op (shutdown already ran)
+    await started.stop();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes hostnames with domains for service names", async () => {
     // Allow advertiser to run in unit tests.
     delete process.env.VITEST;

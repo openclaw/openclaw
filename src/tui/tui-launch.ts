@@ -101,6 +101,7 @@ export async function launchTuiCli(
     const child = spawn(process.execPath, args, {
       stdio: "inherit",
       env,
+      windowsHide: true,
     });
     const { detach } = attachChildProcessBridge(child);
 

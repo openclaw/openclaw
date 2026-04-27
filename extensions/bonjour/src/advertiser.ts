@@ -139,6 +139,16 @@ function isAnnouncedState(state: string) {
   return state === BONJOUR_ANNOUNCED_STATE;
 }
 
+function isCancellationError(err: unknown): boolean {
+  const msg = formatBonjourError(err).toUpperCase();
+  return msg.includes("CANCELLED") || msg.includes("CANCELED");
+}
+
+function isEaddrInUse(err: unknown): boolean {
+  const msg = formatBonjourError(err).toLowerCase();
+  return msg.includes("eaddrinuse") || msg.includes("address already in use");
+}
+
 function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
   return args.some(
     (arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT),
@@ -324,14 +334,32 @@ export async function startGatewayBonjourAdvertiser(
               logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
             .catch((err) => {
-              logger.warn(
-                `bonjour: advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-              );
+              const msg = formatBonjourError(err);
+              if (isCancellationError(err)) {
+                logger.debug(
+                  `bonjour: advertise cancelled (${serviceSummary(label, svc)}): ${msg}`,
+                );
+              } else if (isEaddrInUse(err)) {
+                void disableAdvertiser(
+                  "mDNS conflict detected (possibly Avahi); Bonjour discovery may be limited.",
+                );
+              } else {
+                logger.warn(`bonjour: advertise failed (${serviceSummary(label, svc)}): ${msg}`);
+              }
             });
         } catch (err) {
-          logger.warn(
-            `bonjour: advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          const msg = formatBonjourError(err);
+          if (isCancellationError(err)) {
+            logger.debug(
+              `bonjour: advertise threw cancellation (${serviceSummary(label, svc)}): ${msg}`,
+            );
+          } else if (isEaddrInUse(err)) {
+            void disableAdvertiser(
+              "mDNS conflict detected (possibly Avahi); Bonjour discovery may be limited.",
+            );
+          } else {
+            logger.warn(`bonjour: advertise threw (${serviceSummary(label, svc)}): ${msg}`);
+          }
         }
       }
     }
@@ -366,6 +394,19 @@ export async function startGatewayBonjourAdvertiser(
       }
     };
 
+    const disableAdvertiser = async (reason: string) => {
+      if (stopped || disabled) {
+        return;
+      }
+      disabled = true;
+      logger.warn(reason);
+      const previous = cycle;
+      cycle = null;
+      stateTracker.clear();
+      await stopCycle(previous, { shutdownResponder: true });
+      restoreConsoleLog();
+    };
+
     const recreateAdvertiser = async (reason: string) => {
       if (stopped || disabled) {
         return;
@@ -376,15 +417,9 @@ export async function startGatewayBonjourAdvertiser(
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
         if (consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS) {
-          disabled = true;
-          logger.warn(
+          await disableAdvertiser(
             `bonjour: disabling advertiser after ${MAX_CONSECUTIVE_RESTARTS} failed restarts (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
           );
-          const previous = cycle;
-          cycle = null;
-          stateTracker.clear();
-          await stopCycle(previous, { shutdownResponder: true });
-          restoreConsoleLog();
           return;
         }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
@@ -459,14 +494,36 @@ export async function startGatewayBonjourAdvertiser(
         );
         try {
           void svc.advertise().catch((err) => {
-            logger.warn(
-              `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-            );
+            const msg = formatBonjourError(err);
+            if (isCancellationError(err)) {
+              logger.debug(
+                `bonjour: watchdog re-advertise cancelled (${serviceSummary(label, svc)}): ${msg}`,
+              );
+            } else if (isEaddrInUse(err)) {
+              void disableAdvertiser(
+                "mDNS conflict detected (possibly Avahi); Bonjour discovery may be limited.",
+              );
+            } else {
+              logger.warn(
+                `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${msg}`,
+              );
+            }
           });
         } catch (err) {
-          logger.warn(
-            `bonjour: watchdog re-advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          const msg = formatBonjourError(err);
+          if (isCancellationError(err)) {
+            logger.debug(
+              `bonjour: watchdog re-advertise threw cancellation (${serviceSummary(label, svc)}): ${msg}`,
+            );
+          } else if (isEaddrInUse(err)) {
+            void disableAdvertiser(
+              "mDNS conflict detected (possibly Avahi); Bonjour discovery may be limited.",
+            );
+          } else {
+            logger.warn(
+              `bonjour: watchdog re-advertise threw (${serviceSummary(label, svc)}): ${msg}`,
+            );
+          }
         }
       }
     }, WATCHDOG_INTERVAL_MS);
@@ -481,7 +538,16 @@ export async function startGatewayBonjourAdvertiser(
         } catch {
           // ignore
         }
-        await stopCycle(cycle, { shutdownResponder: true });
+        try {
+          await stopCycle(cycle, { shutdownResponder: true });
+        } catch (err) {
+          const msg = formatBonjourError(err);
+          if (isCancellationError(err)) {
+            logger.debug(`bonjour: stop cancellation: ${msg}`);
+          } else {
+            logger.warn(`bonjour: stop cleanup error: ${msg}`);
+          }
+        }
         restoreConsoleLog();
         cleanupProcessHandlers();
       },

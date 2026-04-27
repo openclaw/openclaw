@@ -1752,7 +1752,8 @@
       }
     },
     "patchedDependencies": {
-      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
+      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
+      "@homebridge/ciao@1.3.6": "patches/@homebridge__ciao@1.3.6.patch"
     }
   }
 }

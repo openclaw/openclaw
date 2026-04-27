@@ -31,6 +31,9 @@ overrides:
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
 patchedDependencies:
+  '@homebridge/ciao@1.3.6':
+    hash: c0836cb408866d6a6c76d61b04532f3d8d6428e02738e77bdb00b5b7e72ead61
+    path: patches/@homebridge__ciao@1.3.6.patch
   '@whiskeysockets/baileys@7.0.0-rc.9':
     hash: 23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201
     path: patches/@whiskeysockets__baileys@7.0.0-rc.9.patch
@@ -311,7 +314,7 @@ importers:
     dependencies:
       '@homebridge/ciao':
         specifier: ^1.3.6
-        version: 1.3.6
+        version: 1.3.6(patch_hash=c0836cb408866d6a6c76d61b04532f3d8d6428e02738e77bdb00b5b7e72ead61)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -8706,7 +8709,7 @@ snapshots:
 
   '@hapi/hoek@9.3.0': {}
 
-  '@homebridge/ciao@1.3.6':
+  '@homebridge/ciao@1.3.6(patch_hash=c0836cb408866d6a6c76d61b04532f3d8d6428e02738e77bdb00b5b7e72ead61)':
     dependencies:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
