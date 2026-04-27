@@ -108,6 +108,39 @@ function formatFlowListSummary(flows: TaskFlowRecord[]) {
   return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
+function summarizeWait(flow: TaskFlowRecord): string {
+  if (flow.waitJson == null) {
+    return "waiting";
+  }
+  if (
+    typeof flow.waitJson === "string" ||
+    typeof flow.waitJson === "number" ||
+    typeof flow.waitJson === "boolean"
+  ) {
+    return String(flow.waitJson);
+  }
+  if (Array.isArray(flow.waitJson)) {
+    return `array(${flow.waitJson.length})`;
+  }
+  return Object.keys(flow.waitJson).toSorted().join(", ") || "object";
+}
+
+function summarizeFlowState(flow: TaskFlowRecord): string | null {
+  if (flow.status === "blocked") {
+    if (flow.blockedSummary) {
+      return flow.blockedSummary;
+    }
+    if (flow.blockedTaskId) {
+      return `blocked by ${flow.blockedTaskId}`;
+    }
+    return "blocked";
+  }
+  if (flow.status === "waiting" && flow.waitJson != null) {
+    return summarizeWait(flow);
+  }
+  return null;
+}
+
 function formatResidueResolutionValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -176,6 +209,7 @@ export async function flowsShowCommand(
   }
   const tasks = listTasksForFlowId(flow.flowId);
   const taskSummary = getFlowTaskSummary(flow.flowId);
+  const stateSummary = summarizeFlowState(flow);
   const residueResolution = getFlowResidueResolution(flow);
 
   if (opts.json) {
@@ -201,7 +235,7 @@ export async function flowsShowCommand(
     `currentStep: ${safeFlowDisplayText(flow.currentStep)}`,
     `owner: ${safeFlowDisplayText(flow.ownerKey)}`,
     `notify: ${flow.notifyPolicy}`,
-    ...(flow.blockedSummary ? [`state: ${safeFlowDisplayText(flow.blockedSummary)}`] : []),
+    ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(residueResolution?.disposition
       ? [
           `residueDisposition: ${safeFlowDisplayText(
