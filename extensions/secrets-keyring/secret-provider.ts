@@ -45,8 +45,12 @@ function assertSafeKeychainPath(value: string): void {
 // any newlines the user intentionally stored as part of the secret value (PEM
 // keys, multi-line config blobs, etc.). `.trimEnd()` would over-strip.
 function stripCliTrailingNewline(value: string): string {
-  if (value.endsWith("\r\n")) return value.slice(0, -2);
-  if (value.endsWith("\n")) return value.slice(0, -1);
+  if (value.endsWith("\r\n")) {
+    return value.slice(0, -2);
+  }
+  if (value.endsWith("\n")) {
+    return value.slice(0, -1);
+  }
   return value;
 }
 

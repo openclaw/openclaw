@@ -94,6 +94,16 @@ export function loadBundledSecretProviderEntriesFromDir(params: {
     }
     return null;
   }
+  // Surface partial-success factory errors so plugin authors aren't left
+  // wondering why a sibling factory silently went missing. We only warn (rather
+  // than throw) because the valid providers from this plugin are still usable.
+  if (errors.length > 0) {
+    const cause = errors.length === 1 ? errors[0] : new AggregateError(errors);
+    const message = cause instanceof Error ? cause.message : String(cause);
+    console.warn(
+      `[plugin:${params.pluginId}] One or more secret provider factories failed to initialize and were skipped: ${message}`,
+    );
+  }
   return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 

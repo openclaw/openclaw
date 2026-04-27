@@ -15,7 +15,10 @@ import type { PluginSecretProviderEntry } from "./secret-provider-types.js";
 // the same source cannot double-load the artifact today. If a future refactor
 // makes `loadBundledSecretProviderEntriesFromDir` async, switch this Map to
 // cache promises (`Map<string, Promise<...>>`) to avoid a load race.
-const cache = new Map<string, PluginSecretProviderEntry>();
+// `null` is a sentinel for "we already looked and there is no provider for
+// this source" so repeated misses don't re-scan the bundled artifact every
+// call. Successful hits store the resolved entry.
+const cache = new Map<string, PluginSecretProviderEntry | null>();
 
 export function _resetSecretProviderResolverCache(): void {
   cache.clear();
@@ -31,13 +34,13 @@ export function _resetSecretProviderResolverCache(): void {
 export async function resolveBundledSecretProviderForSource(
   source: string,
 ): Promise<PluginSecretProviderEntry | undefined> {
-  const cached = cache.get(source);
-  if (cached) {
-    return cached;
+  if (cache.has(source)) {
+    return cache.get(source) ?? undefined;
   }
 
   const pluginId = resolveBundledPluginIdForSecretProviderSource(source);
   if (!pluginId) {
+    cache.set(source, null);
     return undefined;
   }
 
@@ -48,17 +51,20 @@ export async function resolveBundledSecretProviderForSource(
       pluginId,
     });
   } catch (err) {
+    // Don't cache load failures — they may be transient (missing dep, etc).
     throw new Error(
       `Plugin "${pluginId}" declares secret provider source "${source}" but its artifact failed to load.`,
       { cause: err },
     );
   }
   if (!entries) {
+    cache.set(source, null);
     return undefined;
   }
 
   const match = entries.find((entry) => entry.id === source);
   if (!match) {
+    cache.set(source, null);
     return undefined;
   }
   cache.set(source, match);

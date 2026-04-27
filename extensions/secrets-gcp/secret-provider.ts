@@ -26,19 +26,27 @@ type GcpModule = {
   default?: { SecretManagerServiceClient?: new () => GcpSecretManagerClient };
 };
 
-let gcpClient: GcpSecretManagerClient | null = null;
+// Cache the in-flight promise (not just the resolved client) so concurrent
+// first-callers share a single dynamic import + client construction instead of
+// each racing to create their own SecretManagerServiceClient.
+let gcpClientPromise: Promise<GcpSecretManagerClient> | null = null;
 
 async function getGcpClient(): Promise<GcpSecretManagerClient> {
-  if (gcpClient) {
-    return gcpClient;
+  gcpClientPromise ??= (async () => {
+    const mod = (await import(GCP_MODULE)) as GcpModule;
+    const Ctor = mod.SecretManagerServiceClient ?? mod.default?.SecretManagerServiceClient;
+    if (!Ctor) {
+      throw new Error(`${GCP_MODULE}: SecretManagerServiceClient export not found.`);
+    }
+    return new Ctor();
+  })();
+  try {
+    return await gcpClientPromise;
+  } catch (err) {
+    // Don't cache a failed init — let the next caller retry.
+    gcpClientPromise = null;
+    throw err;
   }
-  const mod = (await import(GCP_MODULE)) as GcpModule;
-  const Ctor = mod.SecretManagerServiceClient ?? mod.default?.SecretManagerServiceClient;
-  if (!Ctor) {
-    throw new Error(`${GCP_MODULE}: SecretManagerServiceClient export not found.`);
-  }
-  gcpClient = new Ctor();
-  return gcpClient;
 }
 
 type GcpSecretProviderConfig = {
