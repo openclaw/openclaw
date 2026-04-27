@@ -4,12 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
-import { resolveRealtimeSenderIsOwner, VoiceClawRealtimeSession } from "./session.js";
+import { VoiceClawGeminiLiveAdapter } from "./gemini-live.js";
+import {
+  createDefaultAdapterFactory,
+  defaultVoiceFor,
+  requiredApiKeyEnvFor,
+  resolveProvider,
+  resolveRealtimeSenderIsOwner,
+  VoiceClawRealtimeSession,
+} from "./session.js";
 import type {
   VoiceClawRealtimeAdapter,
   VoiceClawServerEvent,
   VoiceClawSessionConfigEvent,
 } from "./types.js";
+import { VoiceClawXaiRealtimeAdapter } from "./xai-realtime.js";
 
 describe("resolveRealtimeSenderIsOwner", () => {
   it("allows only owner-equivalent realtime brain auth", () => {
@@ -21,6 +30,40 @@ describe("resolveRealtimeSenderIsOwner", () => {
     expect(resolveRealtimeSenderIsOwner("trusted-proxy", false)).toBe(false);
     expect(resolveRealtimeSenderIsOwner("tailscale", false)).toBe(false);
     expect(resolveRealtimeSenderIsOwner("device-token", false)).toBe(false);
+  });
+});
+
+describe("realtime brain provider selection", () => {
+  it("defaults to gemini when no provider is specified (back-compat)", () => {
+    expect(resolveProvider(undefined)).toBe("gemini");
+    expect(resolveProvider("gemini")).toBe("gemini");
+    // openai is reserved in the type union but not yet wired in /voiceclaw/realtime;
+    // resolveProvider falls back to gemini for any non-xai value.
+    expect(resolveProvider("openai")).toBe("gemini");
+  });
+
+  it("resolves provider='xai' to the xAI realtime brain", () => {
+    expect(resolveProvider("xai")).toBe("xai");
+  });
+
+  it("returns ara as the xAI default voice and Zephyr as the Gemini default", () => {
+    expect(defaultVoiceFor("xai")).toBe("ara");
+    expect(defaultVoiceFor("gemini")).toBe("Zephyr");
+  });
+
+  it("requires the correct API key env per provider", () => {
+    expect(requiredApiKeyEnvFor("xai")).toBe("XAI_API_KEY");
+    expect(requiredApiKeyEnvFor("gemini")).toBe("GEMINI_API_KEY");
+  });
+
+  it("default adapter factory dispatches by provider", () => {
+    const factory = createDefaultAdapterFactory();
+    const xaiAdapter = factory({ type: "session.config", provider: "xai" });
+    const geminiAdapter = factory({ type: "session.config", provider: "gemini" });
+    const undefinedAdapter = factory({ type: "session.config" });
+    expect(xaiAdapter).toBeInstanceOf(VoiceClawXaiRealtimeAdapter);
+    expect(geminiAdapter).toBeInstanceOf(VoiceClawGeminiLiveAdapter);
+    expect(undefinedAdapter).toBeInstanceOf(VoiceClawGeminiLiveAdapter);
   });
 });
 

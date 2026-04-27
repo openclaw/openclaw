@@ -80,7 +80,7 @@ below.
 | Streaming TTS              | —                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
 | Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                                 |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                                 |
-| Realtime voice             | —                                         | Not exposed yet; different session/WebSocket contract               |
+| Realtime voice             | `/voiceclaw/realtime` `provider: "xai"`   | Yes — xAI Voice Agent (`grok-voice-think-fast-1.0`)                 |
 | Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                                     |
 
 <Note>
@@ -409,9 +409,16 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
-    - xAI Realtime voice is not registered as an OpenClaw provider yet. It
-      needs a different bidirectional voice session contract than batch STT or
-      streaming transcription.
+    - xAI Realtime voice is wired into the
+      [`/voiceclaw/realtime`](/gateway#voiceclaw-real-time-brain-endpoint)
+      gateway endpoint via `provider: "xai"`. Set `XAI_API_KEY` in the gateway
+      process environment. Default voice: `ara`. Supported voices: `eve`,
+      `ara`, `rex`, `sal`, `leo`. Default model:
+      `grok-voice-think-fast-1.0`. The Voice Agent API is documented as
+      OpenAI-Realtime-protocol-compatible
+      ([xAI docs](https://docs.x.ai/developers/model-capabilities/audio/voice-agent));
+      the OpenClaw adapter handles the documented wire deltas
+      (`response.text.delta`, single user-transcription `completed` event).
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.

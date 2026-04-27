@@ -23,6 +23,7 @@ import type {
   VoiceClawSessionConfigEvent,
   VoiceClawToolCallEvent,
 } from "./types.js";
+import { DEFAULT_XAI_VOICE, VoiceClawXaiRealtimeAdapter } from "./xai-realtime.js";
 
 const log = createSubsystemLogger("gateway").child("voiceclaw-realtime");
 
@@ -35,7 +36,7 @@ type VoiceClawRealtimeSessionOptions = {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
   releasePreauthBudget: () => void;
-  adapterFactory?: () => VoiceClawRealtimeAdapter;
+  adapterFactory?: (config: VoiceClawSessionConfigEvent) => VoiceClawRealtimeAdapter;
 };
 
 export class VoiceClawRealtimeSession {
@@ -49,7 +50,9 @@ export class VoiceClawRealtimeSession {
   private readonly allowRealIpFallback: boolean;
   private readonly rateLimiter: AuthRateLimiter | undefined;
   private readonly releasePreauthBudget: () => void;
-  private readonly adapterFactory: () => VoiceClawRealtimeAdapter;
+  private readonly adapterFactory: (
+    config: VoiceClawSessionConfigEvent,
+  ) => VoiceClawRealtimeAdapter;
   private adapter: VoiceClawRealtimeAdapter | null = null;
   private toolRuntime: VoiceClawRealtimeToolRuntime | null = null;
   private config: VoiceClawSessionConfigEvent | null = null;
@@ -66,7 +69,7 @@ export class VoiceClawRealtimeSession {
     this.allowRealIpFallback = opts.allowRealIpFallback;
     this.rateLimiter = opts.rateLimiter;
     this.releasePreauthBudget = once(opts.releasePreauthBudget);
-    this.adapterFactory = opts.adapterFactory ?? (() => new VoiceClawGeminiLiveAdapter());
+    this.adapterFactory = opts.adapterFactory ?? createDefaultAdapterFactory();
   }
 
   attach(): void {
@@ -179,17 +182,19 @@ export class VoiceClawRealtimeSession {
       return;
     }
 
+    const resolvedProvider = resolveProvider(config.provider);
     this.config = {
       ...config,
-      provider: "gemini",
-      voice: config.voice || "Zephyr",
+      provider: resolvedProvider,
+      voice: config.voice || defaultVoiceFor(resolvedProvider),
       brainAgent: config.brainAgent ?? "enabled",
     };
-    this.adapter = this.adapterFactory();
+    this.adapter = this.adapterFactory(this.config);
 
     try {
-      if (!process.env.GEMINI_API_KEY?.trim()) {
-        throw new Error("GEMINI_API_KEY is required for VoiceClaw real-time brain mode");
+      const requiredKey = requiredApiKeyEnvFor(resolvedProvider);
+      if (!process.env[requiredKey]?.trim()) {
+        throw new Error(`${requiredKey} is required for VoiceClaw real-time brain mode`);
       }
       this.toolRuntime =
         this.config.brainAgent === "none"
@@ -342,6 +347,45 @@ export function resolveRealtimeSenderIsOwner(
     return true;
   }
   return method === "none" && localDirect;
+}
+
+type ResolvedRealtimeProvider = "gemini" | "xai";
+
+/**
+ * Resolve the realtime brain provider from the client-supplied session config.
+ *
+ * Defaults to `gemini` to preserve backward compatibility for existing
+ * VoiceClaw desktop clients that did not previously send a provider.
+ *
+ * `openai` is reserved in the type union but not yet wired here.
+ */
+export function resolveProvider(
+  provider: VoiceClawSessionConfigEvent["provider"],
+): ResolvedRealtimeProvider {
+  if (provider === "xai") {
+    return "xai";
+  }
+  return "gemini";
+}
+
+export function defaultVoiceFor(provider: ResolvedRealtimeProvider): string {
+  return provider === "xai" ? DEFAULT_XAI_VOICE : "Zephyr";
+}
+
+export function requiredApiKeyEnvFor(provider: ResolvedRealtimeProvider): string {
+  return provider === "xai" ? "XAI_API_KEY" : "GEMINI_API_KEY";
+}
+
+export function createDefaultAdapterFactory(): (
+  config: VoiceClawSessionConfigEvent,
+) => VoiceClawRealtimeAdapter {
+  return (config) => {
+    const provider = resolveProvider(config.provider);
+    if (provider === "xai") {
+      return new VoiceClawXaiRealtimeAdapter();
+    }
+    return new VoiceClawGeminiLiveAdapter();
+  };
 }
 
 function sanitizeErrorMessage(message: string): string {
