@@ -16,27 +16,12 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
-
-const providerAliasCases = [
-  ["bedrock", "amazon-bedrock"],
-  ["aws-bedrock", "amazon-bedrock"],
-  ["modelstudio", "qwen"],
-  ["qwencloud", "qwen"],
-  ["z.ai", "zai"],
-  ["z-ai", "zai"],
-  ["kimi", "kimi"],
-  ["kimi-code", "kimi"],
-  ["kimi-coding", "kimi"],
-  ["bytedance", "volcengine"],
-  ["doubao", "volcengine"],
-  ["opencode-zen", "opencode"],
-  ["opencode-go-auth", "opencode-go"],
-] as const;
 
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {

@@ -1,23 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../plugins/tools.js";
+import { providerAliasCases } from "../test-helpers/provider-alias-cases.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
-
-const providerAliasCases = [
-  ["bedrock", "amazon-bedrock"],
-  ["aws-bedrock", "amazon-bedrock"],
-  ["modelstudio", "qwen"],
-  ["qwencloud", "qwen"],
-  ["z.ai", "zai"],
-  ["z-ai", "zai"],
-  ["kimi", "kimi"],
-  ["kimi-code", "kimi"],
-  ["kimi-coding", "kimi"],
-  ["bytedance", "volcengine"],
-  ["doubao", "volcengine"],
-  ["opencode-zen", "opencode"],
-  ["opencode-go-auth", "opencode-go"],
-] as const;
 
 function makeTool(name: string, ownerOnly = false): AnyAgentTool {
   return {

@@ -11,22 +11,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
-
-const providerAliasCases = [
-  ["bedrock", "amazon-bedrock"],
-  ["aws-bedrock", "amazon-bedrock"],
-  ["modelstudio", "qwen"],
-  ["qwencloud", "qwen"],
-  ["z.ai", "zai"],
-  ["z-ai", "zai"],
-  ["kimi", "kimi"],
-  ["kimi-code", "kimi"],
-  ["kimi-coding", "kimi"],
-  ["bytedance", "volcengine"],
-  ["doubao", "volcengine"],
-  ["opencode-zen", "opencode"],
-  ["opencode-go-auth", "opencode-go"],
-] as const;
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
