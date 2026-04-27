@@ -22,10 +22,34 @@ export function createCodexCommand(options: {
   };
 }
 
+export function createCodexDiagnosticsCommand(options: {
+  pluginConfig?: unknown;
+  deps?: Partial<CodexCommandDeps>;
+}): OpenClawPluginCommandDefinition {
+  return {
+    name: "diagnostics",
+    description: "Send Codex diagnostics feedback for the current thread",
+    agentPromptGuidance: [
+      "When a Codex harness run misbehaves, `/diagnostics [note]` sends the current Codex thread's feedback bundle to OpenAI and returns a `codex resume <thread-id>` CLI inspection hint.",
+    ],
+    acceptsArgs: true,
+    requireAuth: true,
+    handler: (ctx) => handleCodexDiagnosticsPluginCommand(ctx, options),
+  };
+}
+
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
 ): Promise<PluginCommandResult> {
   const { handleCodexSubcommand } = await import("./command-handlers.js");
   return await handleCodexSubcommand(ctx, options);
+}
+
+export async function handleCodexDiagnosticsPluginCommand(
+  ctx: PluginCommandContext,
+  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
+): Promise<PluginCommandResult> {
+  const { handleCodexDiagnosticsCommand } = await import("./command-handlers.js");
+  return await handleCodexDiagnosticsCommand(ctx, options);
 }

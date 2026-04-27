@@ -116,6 +116,8 @@ type ParsedComputerUseArgs = {
   help?: boolean;
 };
 
+const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
+
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
@@ -188,6 +190,11 @@ export async function handleCodexSubcommand(
       ),
     };
   }
+  if (normalized === "diagnostics") {
+    return {
+      text: await sendCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" ")),
+    };
+  }
   if (normalized === "computer-use" || normalized === "computeruse") {
     return {
       text: await handleComputerUseCommand(deps, options.pluginConfig, rest),
@@ -225,6 +232,16 @@ export async function handleCodexSubcommand(
     return { text: formatAccount(account, limits) };
   }
   return { text: `Unknown Codex command: ${subcommand}\n\n${buildHelp()}` };
+}
+
+export async function handleCodexDiagnosticsCommand(
+  ctx: PluginCommandContext,
+  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
+): Promise<PluginCommandResult> {
+  const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
+  return {
+    text: await sendCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, ctx.args ?? ""),
+  };
 }
 
 async function handleComputerUseCommand(
@@ -482,6 +499,69 @@ async function setConversationPermissions(
 async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<string | undefined> {
   const binding = await ctx.getCurrentConversationBinding();
   return readCodexConversationBindingData(binding)?.sessionFile ?? ctx.sessionFile;
+}
+
+async function sendCodexDiagnosticsFeedback(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  note: string,
+): Promise<string> {
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
+  }
+  const binding = await deps.readCodexAppServerBinding(sessionFile);
+  if (!binding?.threadId) {
+    return [
+      "No Codex thread is attached to this OpenClaw session yet.",
+      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+    ].join("\n");
+  }
+  const reason = normalizeOptionalString(note);
+  const response = await deps.safeCodexControlRequest(
+    pluginConfig,
+    CODEX_CONTROL_METHODS.feedback,
+    {
+      classification: "bug",
+      threadId: binding.threadId,
+      includeLogs: true,
+      tags: buildDiagnosticsTags(ctx),
+      ...(reason ? { reason } : {}),
+    },
+  );
+  if (!response.ok) {
+    return [
+      `Could not send Codex diagnostics for thread ${binding.threadId}: ${response.error}`,
+      `Inspect locally: codex resume ${binding.threadId}`,
+    ].join("\n");
+  }
+  const responseThreadId = isJsonObject(response.value)
+    ? readString(response.value, "threadId")
+    : undefined;
+  const threadId = responseThreadId ?? binding.threadId;
+  return [
+    `Codex diagnostics sent for thread ${threadId}.`,
+    `Inspect locally: codex resume ${threadId}`,
+    "Included Codex logs and spawned Codex subthreads when available.",
+  ].join("\n");
+}
+
+function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string> {
+  const tags: Record<string, string> = {
+    source: CODEX_DIAGNOSTICS_SOURCE,
+  };
+  addTag(tags, "openclawSessionId", ctx.sessionId);
+  addTag(tags, "openclawSessionKey", ctx.sessionKey);
+  addTag(tags, "channel", ctx.channel);
+  addTag(tags, "accountId", ctx.accountId);
+  return tags;
+}
+
+function addTag(tags: Record<string, string>, key: string, value: unknown): void {
+  if (typeof value === "string" && value.trim()) {
+    tags[key] = value.trim();
+  }
 }
 
 async function startThreadAction(

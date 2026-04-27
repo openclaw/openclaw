@@ -8,7 +8,7 @@ import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import type { CodexCommandDeps } from "./command-handlers.js";
-import { handleCodexCommand } from "./commands.js";
+import { createCodexDiagnosticsCommand, handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
 
@@ -331,6 +331,102 @@ describe("codex command", () => {
       handleCodexCommand(createContext("compact", sessionFile), { deps: createDeps() }),
     ).resolves.toEqual({
       text: "No Codex thread is attached to this OpenClaw session yet.",
+    });
+  });
+
+  it("sends diagnostics feedback for the attached Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-123" },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext("diagnostics tool loop repro", sessionFile, {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+        }),
+        { deps: createDeps({ safeCodexControlRequest }) },
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent for thread thread-123.",
+        "Inspect locally: codex resume thread-123",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      {
+        classification: "bug",
+        reason: "tool loop repro",
+        threadId: "thread-123",
+        includeLogs: true,
+        tags: {
+          source: "openclaw-diagnostics",
+          openclawSessionId: "session-1",
+          openclawSessionKey: "agent:main:session-1",
+          channel: "test",
+        },
+      },
+    );
+  });
+
+  it("registers top-level diagnostics as a Codex feedback command", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-456", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-456" },
+    }));
+    const command = createCodexDiagnosticsCommand({
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    await expect(
+      command.handler(
+        createContext("bad branch choice", sessionFile, {
+          commandBody: "/diagnostics bad branch choice",
+        }),
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent for thread thread-456.",
+        "Inspect locally: codex resume thread-456",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(command.name).toBe("diagnostics");
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({
+        reason: "bad branch choice",
+        threadId: "thread-456",
+        includeLogs: true,
+      }),
+    );
+  });
+
+  it("explains diagnostics when no Codex thread is attached", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    await expect(
+      handleCodexCommand(createContext("diagnostics", sessionFile), { deps: createDeps() }),
+    ).resolves.toEqual({
+      text: [
+        "No Codex thread is attached to this OpenClaw session yet.",
+        "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+      ].join("\n"),
     });
   });
 

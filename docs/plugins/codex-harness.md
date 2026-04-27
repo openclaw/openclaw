@@ -302,6 +302,7 @@ Agents should route user requests by intent, not by the word "Codex" alone:
 | "Bind this chat to Codex"                                | `/codex bind`                                    |
 | "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                             |
 | "Show Codex threads"                                     | `/codex threads`                                 |
+| "Send Codex diagnostics for this run"                    | `/diagnostics [note]` or `/codex diagnostics`    |
 | "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`               |
 | "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                      |
 | "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`    |
@@ -750,16 +751,41 @@ Common forms:
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an existing Codex thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
 - `/codex review` starts Codex native review for the attached thread.
+- `/codex diagnostics [note]` sends Codex diagnostics feedback for the attached thread.
 - `/codex computer-use status` checks the configured Computer Use plugin and MCP server.
 - `/codex computer-use install` installs the configured Computer Use plugin and reloads MCP servers.
 - `/codex account` shows account and rate-limit status.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
+The plugin also registers `/diagnostics [note]` as the short form for Codex
+diagnostics. It finds the Codex thread attached to the current OpenClaw session,
+calls Codex app-server `feedback/upload`, and asks app-server to include logs for
+that thread and spawned Codex subthreads when available. The upload goes through
+Codex's normal feedback path to OpenAI servers; if Codex feedback is disabled in
+that app-server, the command returns the app-server error.
+
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the
 currently selected OpenClaw model into app-server, and keeps extended history
 enabled.
+
+### Inspect a Codex thread from the CLI
+
+The fastest way to understand a bad Codex run is often to open the native Codex
+thread directly:
+
+```sh
+codex resume <thread-id>
+```
+
+Use this when you notice a bug in a channel conversation and want to inspect the
+problematic Codex session, continue it locally, or ask Codex why it made a
+particular tool or reasoning choice. `/diagnostics` prints the exact
+`codex resume <thread-id>` command after sending feedback. You can also get a
+thread id from `/codex binding` for the current chat or `/codex threads [filter]`
+for recent Codex app-server threads, then run the same `codex resume` command in
+your shell.
 
 The command surface requires Codex app-server `0.125.0` or newer. Individual
 control methods are reported as `unsupported by this Codex app-server` if a
