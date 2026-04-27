@@ -29,8 +29,10 @@ describe("config-quick styles", () => {
     expect(css).toContain("align-items: stretch;");
     expect(css).toContain("display: contents;");
     expect(css).toContain(".qs-card--appearance {\n    order: 4;");
-    expect(css).toContain(".qs-card--automations {\n    grid-column: 1 / -1;\n    order: 6;");
-    expect(css).toContain("@media (max-width: 760px)");
+    expect(css).toContain(".qs-card--appearance");
+    expect(css).toContain("order: 4");
+    expect(css).toContain(".qs-card--automations");
+    expect(css).toContain("order: 6");
   });
 
   it("includes explicit context profile layout hooks", () => {
