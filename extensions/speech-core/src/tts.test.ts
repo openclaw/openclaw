@@ -459,6 +459,69 @@ describe("speech-core native voice-note routing", () => {
     );
   });
 
+  it("uses provider-level timeoutMs when no explicit timeout is provided", async () => {
+    await synthesizeSpeech({
+      text: "Use provider timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 30_000,
+            providers: {
+              mock: {
+                timeoutMs: 300_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepareSynthesisMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 300_000,
+      }),
+    );
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 300_000,
+      }),
+    );
+  });
+
+  it("prefers explicit timeoutMs over provider-level timeoutMs", async () => {
+    await synthesizeSpeech({
+      text: "Use explicit timeout.",
+      timeoutMs: 10_000,
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 30_000,
+            providers: {
+              mock: {
+                timeoutMs: 300_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepareSynthesisMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 10_000,
+      }),
+    );
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 10_000,
+      }),
+    );
+  });
+
   it("skips unbound providers under fail policy while allowing bound fallbacks", async () => {
     installSpeechProviders([
       createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
