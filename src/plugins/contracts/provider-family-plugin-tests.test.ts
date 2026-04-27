@@ -37,6 +37,9 @@ const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedShared
     replayFamilies: ["google-gemini"],
     toolCompatFamilies: ["gemini"],
   },
+  "google-vertex-express": {
+    replayFamilies: ["google-gemini"],
+  },
   minimax: {
     replayFamilies: ["hybrid-anthropic-openai"],
   },

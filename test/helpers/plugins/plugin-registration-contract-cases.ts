@@ -62,6 +62,10 @@ export const pluginRegistrationContractCases = {
     requireDescribeImages: true,
     requireGenerateImage: true,
   },
+  "google-vertex-express": {
+    pluginId: "google-vertex-express",
+    providerIds: ["google-vertex-express"],
+  },
   groq: {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],

@@ -7,7 +7,6 @@ import {
 import {
   applyVertexExpressConfig,
   VERTEX_EXPRESS_BASE_URL,
-  VERTEX_EXPRESS_DEFAULT_MODEL_REF,
   VERTEX_EXPRESS_MODELS,
   VERTEX_EXPRESS_PROVIDER_ID,
 } from "./onboard.js";
@@ -90,8 +89,16 @@ export function buildGoogleVertexExpressProvider(): ProviderPlugin {
 
     augmentModelCatalog: () =>
       STATIC_MODEL_CATALOG.map((m) => ({
+        id: m.id,
+        name: m.name,
+        api: m.api,
+        baseUrl: m.baseUrl,
+        reasoning: m.reasoning,
+        input: [...m.input],
+        cost: { ...m.cost },
+        contextWindow: m.contextWindow,
+        maxTokens: m.maxTokens,
         provider: VERTEX_EXPRESS_PROVIDER_ID,
-        ...m,
       })),
 
     // Replay / compaction: same transcript rules as Google AI Studio.

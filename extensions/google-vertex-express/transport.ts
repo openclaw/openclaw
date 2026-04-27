@@ -224,7 +224,9 @@ function convertMessages(model: VertexExpressModel, context: Context): Array<Rec
       const parts: Array<Record<string, unknown>> = [];
       for (const block of msg.content) {
         if (block.type === "text") {
-          if (!block.text.trim()) continue;
+          if (!block.text.trim()) {
+            continue;
+          }
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
             ...(isSameProviderAndModel && block.textSignature
@@ -234,7 +236,9 @@ function convertMessages(model: VertexExpressModel, context: Context): Array<Rec
           continue;
         }
         if (block.type === "thinking") {
-          if (!block.thinking.trim()) continue;
+          if (!block.thinking.trim()) {
+            continue;
+          }
           parts.push(
             isSameProviderAndModel
               ? {
@@ -361,9 +365,13 @@ async function* parseSseChunks(
   signal?.addEventListener("abort", abortHandler);
   try {
     while (true) {
-      if (signal?.aborted) throw new Error("Request was aborted");
+      if (signal?.aborted) {
+        throw new Error("Request was aborted");
+      }
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
       let boundary = buffer.indexOf("\n\n");
       while (boundary >= 0) {
@@ -375,7 +383,9 @@ async function* parseSseChunks(
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trim())
           .join("\n");
-        if (!data || data === "[DONE]") continue;
+        if (!data || data === "[DONE]") {
+          continue;
+        }
         yield JSON.parse(data) as GoogleSseChunk;
       }
     }
@@ -390,7 +400,9 @@ function updateUsage(
   chunk: GoogleSseChunk,
 ) {
   const usage = chunk.usageMetadata;
-  if (!usage) return;
+  if (!usage) {
+    return;
+  }
   const promptTokens = usage.promptTokenCount ?? 0;
   const cacheRead = usage.cachedContentTokenCount ?? 0;
   output.usage = {
@@ -410,7 +422,9 @@ function pushBlockEnd(
   blockIndex: number,
 ) {
   const block = output.content[blockIndex];
-  if (!block) return;
+  if (!block) {
+    return;
+  }
   if (block.type === "thinking") {
     stream.push({
       type: "thinking_end",

@@ -43,6 +43,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Gradium](/providers/gradium)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
+- [Google Vertex AI (Express Mode)](/providers/google-vertex-express)
 - [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [inferrs (local models)](/providers/inferrs)
