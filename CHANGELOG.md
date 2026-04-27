@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/Telegram: preserve direct-chat thread IDs and optional account IDs when inferring reminder delivery from Telegram direct-thread session keys. Fixes #44270; carries forward #44325, #44351, and #44412. Thanks @RunMintOn, @arkyu2077, and @0xsline.
 - Process/Windows: decode command stdout and stderr from raw bytes with console-codepage awareness, while preserving valid UTF-8 output and multibyte characters split across chunks. Fixes #50519. Thanks @iready, @kevinten10, @zhangyongjie1997, @knightplat-blip, @heiqishi666, and @slepybear.
 - macOS Gateway: detect installed-but-unloaded LaunchAgent split-brain states during status, doctor, and restart, and re-bootstrap launchd supervision before falling back to unmanaged listener restarts. Fixes #67335, #53475, and #71060; refs #58890, #60885, and #70801. Thanks @ze1tgeist88, @dafacto, and @vishutdhar.
 - Plugins/install: stage bundled plugin runtime dependencies before Gateway startup, drain update restarts, and materialize plugin-owned root chunks in external mirrors so staged deps resolve under native ESM. Fixes #72058; supersedes #72084. Thanks @amnesia106 and @drvoss.

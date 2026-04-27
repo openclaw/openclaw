@@ -3,11 +3,15 @@ import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import {
@@ -398,11 +402,34 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function resolveTelegramDirectThreadId(params: {
+  peerId: string;
+  threadId?: string;
+}): string | undefined {
+  const threadId = normalizeOptionalString(params.threadId);
+  if (!threadId) {
+    return undefined;
+  }
+  const peerId = normalizeOptionalString(params.peerId);
+  if (!peerId) {
+    return undefined;
+  }
+  const [threadChatId, ...threadIdParts] = threadId.split(":");
+  if (threadIdParts.length > 0) {
+    if (threadChatId !== peerId) {
+      return undefined;
+    }
+    return normalizeOptionalString(threadIdParts.join(":"));
+  }
+  return threadId;
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
+  const threadSuffix = parseThreadSessionSuffix(rawSessionKey);
   const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
   if (!parsed || !parsed.rest) {
     return null;
@@ -444,9 +471,25 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
+  const marker = parts[markerIndex];
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
+  }
+  if (channel === "telegram" && markerIndex === 2) {
+    const accountId = normalizeOptionalString(parts[1]);
+    if (accountId) {
+      delivery.accountId = accountId;
+    }
+  }
+  if (channel === "telegram" && (marker === "direct" || marker === "dm")) {
+    const threadId = resolveTelegramDirectThreadId({
+      peerId,
+      threadId: threadSuffix.threadId,
+    });
+    if (threadId) {
+      delivery.threadId = threadId;
+    }
   }
   return delivery;
 }
