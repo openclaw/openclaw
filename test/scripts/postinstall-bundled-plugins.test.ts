@@ -114,6 +114,8 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(
       path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
       JSON.stringify({
+        name: "@snazzah/davey",
+        version: "0.1.11",
         optionalDependencies: {
           "@snazzah/davey-win32-arm64-msvc": "0.1.11",
         },
@@ -710,6 +712,35 @@ describe("bundled plugin postinstall", () => {
     });
 
     expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.4.1"]);
+  });
+
+  it("skips reinstall when the installed version satisfies a semver range", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-range-ok-");
+    await fs.mkdir(path.join(packageRoot, "dist", "extensions"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "acpx", "package.json"),
+      JSON.stringify({ name: "acpx", version: "1.2.3" }),
+      "utf8",
+    );
+    const spawnSync = vi.fn();
+
+    runBundledPluginPostinstall({
+      env: { OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1", HOME: "/tmp/home" },
+      packageRoot,
+      runtimeDeps: [
+        {
+          name: "acpx",
+          pluginIds: ["acpx"],
+          sentinelPath: path.join("node_modules", "acpx", "package.json"),
+          version: "~1.2.0",
+        },
+      ],
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("reinstalls bundled runtime deps when optional native children are missing", async () => {

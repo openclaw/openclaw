@@ -22,6 +22,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -29,6 +30,8 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const semver = require("semver");
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
@@ -356,101 +359,17 @@ function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
 }
 
-function parseComparableVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(version.trim());
-  if (!match) {
-    return null;
-  }
-
-  return {
-    major: Number.parseInt(match[1], 10),
-    minor: Number.parseInt(match[2], 10),
-    patch: Number.parseInt(match[3], 10),
-    prerelease: match[4] ?? "",
-  };
-}
-
-function comparePrereleaseIdentifiers(left, right) {
-  const leftNumeric = /^\d+$/u.test(left);
-  const rightNumeric = /^\d+$/u.test(right);
-  if (leftNumeric && rightNumeric) {
-    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
-  }
-  if (leftNumeric) {
-    return -1;
-  }
-  if (rightNumeric) {
-    return 1;
-  }
-  return left.localeCompare(right);
-}
-
-function compareComparableVersions(left, right) {
-  if (left.major !== right.major) {
-    return left.major - right.major;
-  }
-  if (left.minor !== right.minor) {
-    return left.minor - right.minor;
-  }
-  if (left.patch !== right.patch) {
-    return left.patch - right.patch;
-  }
-  if (left.prerelease === right.prerelease) {
-    return 0;
-  }
-  if (!left.prerelease) {
-    return 1;
-  }
-  if (!right.prerelease) {
-    return -1;
-  }
-
-  const leftParts = left.prerelease.split(".");
-  const rightParts = right.prerelease.split(".");
-  const maxLength = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < maxLength; index += 1) {
-    const leftPart = leftParts[index];
-    const rightPart = rightParts[index];
-    if (leftPart === undefined) {
-      return -1;
-    }
-    if (rightPart === undefined) {
-      return 1;
-    }
-    const result = comparePrereleaseIdentifiers(leftPart, rightPart);
-    if (result !== 0) {
-      return result;
-    }
-  }
-  return 0;
-}
-
 function isInstalledDependencyVersionSatisfied(installedVersion, spec) {
-  if (installedVersion === spec) {
-    return true;
+  const normalizedInstalledVersion = semver.valid(installedVersion);
+  const normalizedRange = semver.validRange(spec);
+  if (normalizedInstalledVersion && normalizedRange) {
+    // Keep postinstall aligned with bundled-runtime-deps.ts so eager install
+    // and runtime repair agree on whether an installed dep already satisfies the spec.
+    return semver.satisfies(normalizedInstalledVersion, normalizedRange, {
+      includePrerelease: true,
+    });
   }
-  if (!spec.startsWith("^")) {
-    return false;
-  }
-
-  const installed = parseComparableVersion(installedVersion);
-  const minimum = parseComparableVersion(spec.slice(1));
-  if (!installed || !minimum) {
-    return false;
-  }
-
-  const minimumSatisfied = compareComparableVersions(installed, minimum) >= 0;
-  if (!minimumSatisfied) {
-    return false;
-  }
-
-  if (minimum.major > 0) {
-    return installed.major === minimum.major;
-  }
-  if (minimum.minor > 0) {
-    return installed.major === 0 && installed.minor === minimum.minor;
-  }
-  return installed.major === 0 && installed.minor === 0 && installed.patch === minimum.patch;
+  return installedVersion === spec;
 }
 
 const KNOWN_NATIVE_PLATFORMS = new Set([
