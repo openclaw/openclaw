@@ -169,6 +169,60 @@ describe("session MCP runtime", () => {
     });
   });
 
+  it("parses a tools/list response whose inputSchema omits type (issue #63602)", () => {
+    // Regression for #63602: the SDK's strict ToolSchema requires
+    // inputSchema.type === "object" via z.literal, so servers that omit type
+    // would crash listTools() before this fix.
+    const { LenientListToolsResultSchema } = __testing;
+
+    const payload = {
+      tools: [
+        {
+          name: "typeless_tool",
+          description: "Tool emitted with no inputSchema.type",
+          inputSchema: {
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+        {
+          name: "empty_schema_tool",
+          inputSchema: {},
+        },
+        {
+          name: "valid_object_tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    };
+
+    const parsed = LenientListToolsResultSchema.parse(payload);
+    expect(parsed.tools).toHaveLength(3);
+    expect(parsed.tools[0]?.inputSchema).toEqual({
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    });
+    expect(parsed.tools[1]?.inputSchema).toEqual({});
+    expect(parsed.tools[2]?.inputSchema).toEqual({ type: "object", properties: {} });
+  });
+
+  it("rejects tools whose root inputSchema declares an explicit non-object type", () => {
+    const { isValidRootInputSchema, normalizeInputSchema } = __testing;
+
+    // A type-less schema is valid once normalized.
+    expect(isValidRootInputSchema(normalizeInputSchema({ properties: {} }))).toBe(true);
+
+    // An explicit object schema is valid.
+    expect(isValidRootInputSchema({ type: "object", properties: {} })).toBe(true);
+
+    // Explicit non-object root types are rejected; the catalog loop skips
+    // these tools to avoid breaking provider requests that require object
+    // tool parameters (e.g. OpenAI function calls).
+    expect(isValidRootInputSchema({ type: "string" })).toBe(false);
+    expect(isValidRootInputSchema({ type: "array", items: {} })).toBe(false);
+    expect(isValidRootInputSchema({ type: "number" })).toBe(false);
+  });
+
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
     let activeLeases = 0;
     const runtime = {

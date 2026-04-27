@@ -74,6 +74,16 @@ function normalizeInputSchema(raw: Record<string, unknown>): Record<string, unkn
   return { ...raw, type: "object" };
 }
 
+/**
+ * Per the MCP spec, a tool's root inputSchema must be an object schema.
+ * Schemas with an explicit non-object root type (e.g. "string", "array") are
+ * malformed and would be rejected by OpenAI-style function-call providers,
+ * failing the entire request rather than just the bad tool.
+ */
+function isValidRootInputSchema(schema: Record<string, unknown>): boolean {
+  return schema.type === "object";
+}
+
 const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -311,13 +321,21 @@ export function createSessionMcpRuntime(params: {
               if (!toolName) {
                 continue;
               }
+              const inputSchema = normalizeInputSchema(tool.inputSchema);
+              if (!isValidRootInputSchema(inputSchema)) {
+                logWarn(
+                  `bundle-mcp: skipping tool "${toolName}" from server "${serverName}": ` +
+                    `inputSchema.type is ${JSON.stringify(inputSchema.type)} (must be "object" per MCP spec).`,
+                );
+                continue;
+              }
               tools.push({
                 serverName,
                 safeServerName,
                 toolName,
                 title: tool.title,
                 description: normalizeOptionalString(tool.description),
-                inputSchema: normalizeInputSchema(tool.inputSchema),
+                inputSchema,
                 fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
               });
             }
@@ -682,4 +700,7 @@ export const __testing = {
   },
   resolveSessionMcpRuntimeIdleTtlMs,
   normalizeInputSchema,
+  isValidRootInputSchema,
+  LenientToolSchema,
+  LenientListToolsResultSchema,
 };
