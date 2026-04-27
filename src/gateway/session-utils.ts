@@ -1134,6 +1134,17 @@ export async function resolveGatewayModelSupportsImages(params: {
       normalizeLowercaseStringOrEmpty(params.model),
       normalizeLowercaseStringOrEmpty(modelEntry?.name),
     ].filter(Boolean);
+    // Name-based fallback for Anthropic/Claude models whose catalog entries
+    // may lag behind newly released model IDs (e.g. claude-opus-4-7).
+    const isAnthropicClaudeByName =
+      (normalizedProvider === "anthropic" || normalizedProvider === "claude-cli") &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      );
     if (modelEntry) {
       if (modelEntry.input?.includes("image")) {
         return true;
@@ -1153,30 +1164,12 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
-      if (
-        normalizedProvider === "claude-cli" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate === "opus" ||
-            candidate === "sonnet" ||
-            candidate === "haiku" ||
-            candidate.startsWith("claude-"),
-        )
-      ) {
+      if (isAnthropicClaudeByName) {
         return true;
       }
       return false;
     }
-    if (
-      normalizedProvider === "claude-cli" &&
-      normalizedCandidates.some(
-        (candidate) =>
-          candidate === "opus" ||
-          candidate === "sonnet" ||
-          candidate === "haiku" ||
-          candidate.startsWith("claude-"),
-      )
-    ) {
+    if (isAnthropicClaudeByName) {
       return true;
     }
     return false;

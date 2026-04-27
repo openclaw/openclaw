@@ -1262,4 +1262,31 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("treats direct anthropic Claude models as image-capable when catalog entry is stale", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "claude-opus-4-7",
+        provider: "anthropic",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "claude-opus-4-7",
+            name: "Claude Opus 4.7",
+            provider: "anthropic",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats direct anthropic Claude models as image-capable when catalog entry is missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "claude-opus-4-7",
+        provider: "anthropic",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
 });
