@@ -2,8 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { findNormalizedProviderValue } from "./provider-id.js";
 
-export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
-export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
+export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
+export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
+export const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
+export const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
 
 export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
@@ -58,8 +60,15 @@ export function resolveContextWindowInfo(params: {
 }
 
 export type ContextWindowGuardResult = ContextWindowInfo & {
+  hardMinTokens: number;
+  warnBelowTokens: number;
   shouldWarn: boolean;
   shouldBlock: boolean;
+};
+
+export type ContextWindowGuardThresholds = {
+  hardMinTokens: number;
+  warnBelowTokens: number;
 };
 
 export type ContextWindowGuardHint = {
@@ -77,13 +86,29 @@ export function resolveContextWindowGuardHint(params: {
   };
 }
 
+export function resolveContextWindowGuardThresholds(
+  contextWindowTokens: number,
+): ContextWindowGuardThresholds {
+  const tokens = Math.max(0, Math.floor(contextWindowTokens));
+  return {
+    hardMinTokens: Math.max(
+      CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      Math.floor(tokens * CONTEXT_WINDOW_HARD_MIN_RATIO),
+    ),
+    warnBelowTokens: Math.max(
+      CONTEXT_WINDOW_WARN_BELOW_TOKENS,
+      Math.floor(tokens * CONTEXT_WINDOW_WARN_BELOW_RATIO),
+    ),
+  };
+}
+
 export function formatContextWindowWarningMessage(params: {
   provider: string;
   modelId: string;
   guard: ContextWindowGuardResult;
   runtimeBaseUrl?: string | null;
 }): string {
-  const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${CONTEXT_WINDOW_WARN_BELOW_TOKENS}) source=${params.guard.source}`;
+  const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${params.guard.warnBelowTokens}) source=${params.guard.source}`;
   const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
   if (!hint.likelySelfHosted) {
     return base;
@@ -102,7 +127,7 @@ export function formatContextWindowWarningMessage(params: {
   }
   return (
     `${base}; local/self-hosted runs work best at ` +
-    `${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens and may show weaker tool use or more compaction until the server/model context limit is raised`
+    `${params.guard.warnBelowTokens}+ tokens and may show weaker tool use or more compaction until the server/model context limit is raised`
   );
 }
 
@@ -112,7 +137,7 @@ export function formatContextWindowBlockMessage(params: {
 }): string {
   const base =
     `Model context window too small (${params.guard.tokens} tokens; ` +
-    `source=${params.guard.source}). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`;
+    `source=${params.guard.source}). Minimum is ${params.guard.hardMinTokens}.`;
   const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
   if (!hint.likelySelfHosted) {
     return base;
@@ -129,7 +154,7 @@ export function formatContextWindowBlockMessage(params: {
   return (
     `${base} This looks like a local model endpoint. ` +
     `Raise the server/model context limit or choose a larger model. ` +
-    `OpenClaw local/self-hosted runs work best at ${CONTEXT_WINDOW_WARN_BELOW_TOKENS}+ tokens.`
+    `OpenClaw local/self-hosted runs work best at ${params.guard.warnBelowTokens}+ tokens.`
   );
 }
 
@@ -138,15 +163,18 @@ export function evaluateContextWindowGuard(params: {
   warnBelowTokens?: number;
   hardMinTokens?: number;
 }): ContextWindowGuardResult {
+  const tokens = Math.max(0, Math.floor(params.info.tokens));
+  const resolvedThresholds = resolveContextWindowGuardThresholds(tokens);
   const warnBelow = Math.max(
     1,
-    Math.floor(params.warnBelowTokens ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS),
+    Math.floor(params.warnBelowTokens ?? resolvedThresholds.warnBelowTokens),
   );
-  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? CONTEXT_WINDOW_HARD_MIN_TOKENS));
-  const tokens = Math.max(0, Math.floor(params.info.tokens));
+  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? resolvedThresholds.hardMinTokens));
   return {
     ...params.info,
     tokens,
+    hardMinTokens: hardMin,
+    warnBelowTokens: warnBelow,
     shouldWarn: tokens > 0 && tokens < warnBelow,
     shouldBlock: tokens > 0 && tokens < hardMin,
   };
