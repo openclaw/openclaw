@@ -22,7 +22,7 @@ export type SystemEvent = {
   trusted?: boolean;
 };
 
-const MAX_EVENTS = 20;
+export const MAX_EVENTS = 20;
 
 type SessionQueue = {
   queue: SystemEvent[];
