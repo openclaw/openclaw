@@ -499,6 +499,46 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("prefers physical LAN interfaces before Docker bridge candidates", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => ({
+          "br-c87a82b2afb7": [
+            {
+              address: "172.18.0.1",
+              family: "IPv4",
+              internal: false,
+              netmask: "255.255.0.0",
+              mac: "00:00:00:00:00:00",
+              cidr: "172.18.0.1/16",
+            },
+          ],
+          wlp13s0: [
+            {
+              address: "192.168.1.193",
+              family: "IPv4",
+              internal: false,
+              netmask: "255.255.252.0",
+              mac: "00:00:00:00:00:00",
+              cidr: "192.168.1.193/22",
+            },
+          ],
+        }),
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "password",
+        url: "ws://192.168.1.193:18789",
+        urlSource: "gateway.bind=lan",
+      },
+    });
+  });
+
   it.each([
     {
       name: "errors when gateway is loopback only",
