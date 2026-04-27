@@ -17,11 +17,11 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.tools.Features
 import java.util.Locale
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 class DeviceHandler(
   private val appContext: Context,
@@ -138,7 +138,11 @@ class DeviceHandler(
       } else {
         hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
       }
-    val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+    val motionGranted = if (Features.Motion.has) {
+      hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+    } else {
+      false
+    }
     val notificationsGranted =
       if (Build.VERSION.SDK_INT >= 33) {
         hasPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -221,13 +225,14 @@ class DeviceHandler(
               promptableWhenDenied = callLogEnabled,
             ),
           )
-          put(
-            "motion",
-            permissionStateJson(
-              granted = motionGranted,
-              promptableWhenDenied = true,
-            ),
-          )
+          if (Features.Motion.has)
+            put(
+              "motion",
+              permissionStateJson(
+                granted = motionGranted,
+                promptableWhenDenied = true,
+              ),
+            )
         },
       )
     }.toString()
