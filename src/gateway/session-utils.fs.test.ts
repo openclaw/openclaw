@@ -794,6 +794,77 @@ describe("readSessionMessages — reset archive fallback", () => {
   });
 });
 
+describe("readSessionTitleFieldsFromTranscript — reset archive fallback", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-title-fallback-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  afterEach(() => {
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (f.includes(".reset.")) {
+        fs.rmSync(path.join(tmpDir, f));
+      }
+    }
+  });
+
+  test("derives firstUserMessage from reset archive when primary file is missing", () => {
+    const sessionId = "bb000000-0000-4000-8000-000000000001";
+    const archivePath = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`);
+    fs.writeFileSync(
+      archivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "hello from archived chat" } }),
+        JSON.stringify({ message: { role: "assistant", content: "archived assistant reply" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    expect(out.firstUserMessage).toBe("hello from archived chat");
+    expect(out.lastMessagePreview).toBe("archived assistant reply");
+  });
+
+  test("prefers primary transcript over reset archive when both exist", () => {
+    const sessionId = "bb000000-0000-4000-8000-000000000002";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const archivePath = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`);
+
+    fs.writeFileSync(
+      primaryPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "current title" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      archivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "archived title" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    expect(out.firstUserMessage).toBe("current title");
+
+    fs.rmSync(primaryPath);
+  });
+
+  test("returns null fields when neither primary nor archive exists", () => {
+    const sessionId = "bb000000-0000-4000-8000-000000000003";
+    const out = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    expect(out.firstUserMessage).toBeNull();
+    expect(out.lastMessagePreview).toBeNull();
+  });
+});
+
 describe("readSessionPreviewItemsFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;

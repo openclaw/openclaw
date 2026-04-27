@@ -222,7 +222,9 @@ export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  findLatestResetArchive,
   resolveSessionTranscriptCandidates,
+  unarchiveSessionTranscript,
 } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(
@@ -259,7 +261,19 @@ export function readSessionTitleFieldsFromTranscript(
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  let filePath = candidates.find((p) => fs.existsSync(p));
+  // Fall back to the most recent reset archive when no primary transcript exists,
+  // mirroring readSessionMessages so derivedTitle (firstUserMessage) and
+  // lastMessagePreview survive a daily or manual session reset. Without this,
+  // listSessionsFromStore falls through to formatSessionIdPrefix and the UI
+  // shows a raw sessionId instead of the human-readable first user message.
+  if (!filePath && sessionId) {
+    const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
+    const candidateBasenames = candidates
+      .filter((c) => classifySessionTranscriptCandidate(sessionId, c) !== "stale")
+      .map((c) => path.basename(c));
+    filePath = findLatestResetArchive(sessionId, searchDirs, candidateBasenames);
+  }
   if (!filePath) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
