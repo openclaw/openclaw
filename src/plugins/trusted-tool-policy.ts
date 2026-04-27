@@ -1,3 +1,4 @@
+import { isPlainObject } from "../infra/plain-object.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -51,7 +52,11 @@ export async function runTrustedToolPolicies(
     // pipeline) — it does NOT short-circuit the policy chain. Params and
     // approvals are remembered so later trusted policies can still inspect or
     // block the final call.
-    if ("params" in decision && decision.params) {
+    if ("params" in decision && isPlainObject(decision.params)) {
+      // Guard against buggy trusted policies returning non-object params
+      // (string/array/primitive). The downstream tool runtime + before_tool_call
+      // hooks expect a plain Record, so propagating a non-object would break
+      // tool execution; ignore the rewrite instead.
       adjustedParams = decision.params;
       hasAdjustedParams = true;
     }
