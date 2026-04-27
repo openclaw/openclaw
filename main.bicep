@@ -350,10 +350,12 @@ node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-open
 node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai-responses.apiKey "$AZURE_OPENAI_API_KEY"
 # Token budget plugin config (provider must exist before fallbackProvider is set)
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.enabled true
-node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 2000000
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 5000000
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.warningThreshold 0.9
-node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackProvider '"azure-openai-responses"'
-node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackModel '"gpt-4o"'
+# Use openai (bundled provider) as fallback — azure-openai-responses is a custom provider whose
+# apiKey is not reachable via env-var candidates for embedded agents, causing auth failure.
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackProvider '"openai"'
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackModel '"gpt-4o-mini"'
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
