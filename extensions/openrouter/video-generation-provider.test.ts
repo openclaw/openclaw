@@ -201,6 +201,11 @@ describe("openrouter video generation provider", () => {
       expect.any(Function),
       expect.objectContaining({ auditContext: "openrouter-video-status" }),
     );
+    expect(
+      (fetchWithTimeoutGuardedMock.mock.calls[0]?.[1]?.headers as Headers | undefined)?.get(
+        "authorization",
+      ),
+    ).toBe("Bearer openrouter-key");
     expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
       2,
       "https://cdn.openrouter.test/video.mp4",
@@ -209,6 +214,11 @@ describe("openrouter video generation provider", () => {
       expect.any(Function),
       expect.objectContaining({ auditContext: "openrouter-video-download" }),
     );
+    expect(
+      (fetchWithTimeoutGuardedMock.mock.calls[1]?.[1]?.headers as Headers | undefined)?.get(
+        "authorization",
+      ),
+    ).toBeNull();
     expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(result.metadata).toEqual({
@@ -217,6 +227,68 @@ describe("openrouter video generation provider", () => {
       generationId: "gen-123",
       usage: { cost: 0.25, is_byok: false },
     });
+  });
+
+  it("does not forward auth headers to cross-origin polling URLs", async () => {
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        id: "job-123",
+        polling_url: "https://polling.example.test/videos/job-123",
+        status: "pending",
+      }),
+    );
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          id: "job-123",
+          status: "completed",
+          unsigned_urls: ["https://cdn.openrouter.test/video.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }));
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openrouter",
+      model: "google/veo-3.1",
+      prompt: "A gentle camera pan across a neon reef",
+      cfg: {} as never,
+    });
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      1,
+      "https://polling.example.test/videos/job-123",
+      expect.objectContaining({ method: "GET" }),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ auditContext: "openrouter-video-status" }),
+    );
+    expect(
+      (fetchWithTimeoutGuardedMock.mock.calls[0]?.[1]?.headers as Headers | undefined)?.get(
+        "authorization",
+      ),
+    ).toBeNull();
+  });
+
+  it("fails clearly when a completed job has no output URL", async () => {
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        id: "job-123",
+        polling_url: "https://openrouter.ai/api/v1/videos/job-123",
+        status: "completed",
+      }),
+    );
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "A tiny robot watering a bonsai",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("completed without an output URL");
+    expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
   });
 
   it("rejects video reference inputs", async () => {

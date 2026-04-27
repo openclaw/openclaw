@@ -27,19 +27,11 @@ const MAX_POLL_ATTEMPTS = 120;
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21"] as const;
 const SUPPORTED_RESOLUTIONS = ["480P", "720P", "1080P"] as const;
 
-type OpenRouterVideoStatus =
-  | "pending"
-  | "in_progress"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "expired";
-
 type OpenRouterVideoResponse = {
   id?: string;
   generation_id?: string | null;
   polling_url?: string;
-  status?: OpenRouterVideoStatus | string;
+  status?: string;
   unsigned_urls?: string[];
   error?: string | null;
   model?: string | null;
@@ -188,6 +180,7 @@ function isTerminalFailure(status: string | undefined): boolean {
 
 async function fetchOpenRouterJson(params: {
   url: string;
+  baseUrl: string;
   headers: Headers;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
@@ -199,7 +192,7 @@ async function fetchOpenRouterJson(params: {
     params.url,
     {
       method: "GET",
-      headers: params.headers,
+      headers: headersForOpenRouterGet(params.url, params.baseUrl, params.headers),
     },
     params.timeoutMs,
     fetch,
@@ -219,6 +212,7 @@ async function fetchOpenRouterJson(params: {
 
 async function pollOpenRouterVideo(params: {
   pollingUrl: string;
+  baseUrl: string;
   headers: Headers;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
@@ -232,6 +226,7 @@ async function pollOpenRouterVideo(params: {
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const payload = await fetchOpenRouterJson({
       url: params.pollingUrl,
+      baseUrl: params.baseUrl,
       headers: params.headers,
       timeoutMs: resolveProviderOperationTimeoutMs({
         deadline,
@@ -260,7 +255,7 @@ async function pollOpenRouterVideo(params: {
   throw new Error("OpenRouter video generation did not finish in time");
 }
 
-function headersForVideoDownload(url: string, baseUrl: string, requestHeaders: Headers): Headers {
+function headersForOpenRouterGet(url: string, baseUrl: string, requestHeaders: Headers): Headers {
   try {
     if (new URL(url).origin !== new URL(baseUrl).origin) {
       return new Headers();
@@ -285,7 +280,7 @@ async function downloadOpenRouterVideo(params: {
     params.url,
     {
       method: "GET",
-      headers: headersForVideoDownload(params.url, params.baseUrl, params.headers),
+      headers: headersForOpenRouterGet(params.url, params.baseUrl, params.headers),
     },
     params.timeoutMs,
     fetch,
@@ -407,10 +402,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           throw new Error("OpenRouter video generation response missing job details");
         }
         const completed =
-          submitted.status === "completed"
+          normalizeOptionalString(submitted.status) === "completed"
             ? submitted
             : await pollOpenRouterVideo({
                 pollingUrl,
+                baseUrl,
                 headers,
                 timeoutMs: resolveProviderOperationTimeoutMs({
                   deadline,
@@ -419,9 +415,10 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                 allowPrivateNetwork,
                 dispatcherPolicy,
               });
-        const videoUrl =
-          completed.unsigned_urls?.find((url) => normalizeOptionalString(url)) ??
-          `${baseUrl}/videos/${jobId}/content?index=0`;
+        const videoUrl = completed.unsigned_urls?.find((url) => normalizeOptionalString(url));
+        if (!videoUrl) {
+          throw new Error("OpenRouter video generation completed without an output URL");
+        }
         const video = await downloadOpenRouterVideo({
           url: videoUrl,
           baseUrl,
