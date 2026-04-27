@@ -3151,6 +3151,62 @@ public struct AgentsListResult: Codable, Sendable {
     }
 }
 
+public struct AgentCapabilitiesParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String?)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct AgentCapabilitiesResult: Codable, Sendable {
+    public let agentid: String
+    public let name: String?
+    public let model: [String: AnyCodable]
+    public let tools: [String: AnyCodable]
+    public let mcpservers: [String]
+    public let skills: [String]
+    public let channels: [String]
+    public let sessioncount: Int
+
+    public init(
+        agentid: String,
+        name: String?,
+        model: [String: AnyCodable],
+        tools: [String: AnyCodable],
+        mcpservers: [String],
+        skills: [String],
+        channels: [String],
+        sessioncount: Int)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.model = model
+        self.tools = tools
+        self.mcpservers = mcpservers
+        self.skills = skills
+        self.channels = channels
+        self.sessioncount = sessioncount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case model
+        case tools
+        case mcpservers = "mcpServers"
+        case skills
+        case channels
+        case sessioncount = "sessionCount"
+    }
+}
+
 public struct ModelChoice: Codable, Sendable {
     public let id: String
     public let name: String

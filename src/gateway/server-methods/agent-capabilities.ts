@@ -98,7 +98,7 @@ export const agentCapabilitiesHandlers: GatewayRequestHandlers = {
         }
       }
     }
-    const channels = [...channelSet].sort();
+    const channels = [...channelSet].toSorted();
 
     // Session count: count sessions whose key parses to this agent
     const { store } = loadCombinedSessionStoreForGateway(cfg);
