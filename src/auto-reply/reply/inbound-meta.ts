@@ -3,6 +3,7 @@ import { getLoadedChannelPluginById } from "../../channels/plugins/registry-load
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import type { InboundMetadataMode } from "../../config/types.messages.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
@@ -12,7 +13,7 @@ import type { TemplateContext } from "../templating.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 
-export type InboundUserContextMetadataMode = "full" | "compact-direct";
+export type InboundUserContextMetadataMode = InboundMetadataMode;
 
 export type InboundUserContextPrefixOptions = {
   metadataMode?: InboundUserContextMetadataMode;
