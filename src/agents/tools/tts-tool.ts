@@ -12,6 +12,12 @@ const TtsToolSchema = Type.Object({
   channel: Type.Optional(
     Type.String({ description: "Optional channel id to pick output format." }),
   ),
+  target: Type.Optional(
+    Type.Union([Type.Literal("audio-file"), Type.Literal("voice-note")], {
+      description:
+        'Optional synthesis target: "audio-file" returns a regular audio file, "voice-note" requests voice-memo-style audio. Defaults to the channel-derived value.',
+    }),
+  ),
   timeoutMs: Type.Optional(
     Type.Number({
       description: "Optional provider request timeout in milliseconds.",
@@ -19,6 +25,17 @@ const TtsToolSchema = Type.Object({
     }),
   ),
 });
+
+function readTtsTarget(args: Record<string, unknown>): "audio-file" | "voice-note" | undefined {
+  const value = readStringParam(args, "target");
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "audio-file" || value === "voice-note") {
+    return value;
+  }
+  throw new ToolInputError('target must be "audio-file" or "voice-note".');
+}
 
 function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
   const timeoutMs = readNumberParam(args, "timeoutMs", {
@@ -70,12 +87,14 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const target = readTtsTarget(params);
       const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? loadConfig();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        target,
         timeoutMs,
         agentId: opts?.agentId,
         accountId: opts?.agentAccountId,

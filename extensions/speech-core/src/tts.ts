@@ -1050,6 +1050,7 @@ export async function textToSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  target?: "audio-file" | "voice-note";
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -1101,6 +1102,7 @@ export async function synthesizeSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  target?: "audio-file" | "voice-note";
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -1118,7 +1120,10 @@ export async function synthesizeSpeech(params: {
 
   const { config, persona, providers } = setup;
   const timeoutMs = params.timeoutMs ?? config.timeoutMs;
-  const target = resolveTtsSynthesisTarget(params.channel);
+  // Honor an explicit target override from the caller (agent tool / RPC) so
+  // operators can request voice-note synthesis on channels that default to
+  // audio-file, or vice versa. Falls back to the channel-derived default.
+  const target = params.target ?? resolveTtsSynthesisTarget(params.channel);
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];

@@ -82,6 +82,11 @@ export type TtsRequestParams = {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  // Explicit synthesis target override. When omitted, the channel's declared
+  // capability is used (or "audio-file" if the channel doesn't declare voice
+  // delivery). Lets callers like the tts agent tool and the tts.convert RPC
+  // request voice-note synthesis on a channel that defaults to audio-file.
+  target?: TtsSpeechTarget;
 };
 
 export type TtsTelephonyRequestParams = {

@@ -105,6 +105,22 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
       const voiceId = normalizeOptionalString(params.voiceId);
+      const targetRaw = normalizeOptionalString(params.target);
+      let target: "audio-file" | "voice-note" | undefined;
+      if (targetRaw !== undefined) {
+        if (targetRaw !== "audio-file" && targetRaw !== "voice-note") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              'tts.convert target must be "audio-file" or "voice-note"',
+            ),
+          );
+          return;
+        }
+        target = targetRaw;
+      }
       let overrides;
       try {
         overrides = resolveExplicitTtsOverrides({
@@ -121,6 +137,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         text,
         cfg,
         channel,
+        target,
         overrides,
         disableFallback: Boolean(overrides.provider || modelId || voiceId),
       });

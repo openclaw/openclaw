@@ -208,4 +208,49 @@ describe("createTtsTool", () => {
       "TTS conversion failed: openai: not configured",
     );
   });
+
+  // Issue #72506: agent must be able to override the channel-derived synthesis
+  // target so callers can request voice-note audio on a channel that defaults
+  // to audio-file (or the reverse).
+  it("forwards an explicit target override to the TTS runtime", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.mp3",
+      provider: "test",
+      voiceCompatible: false,
+      audioAsVoice: true,
+    });
+
+    const tool = createTtsTool();
+    await tool.execute("call-1", { text: "hello", target: "voice-note" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello", target: "voice-note" }),
+    );
+  });
+
+  it("rejects an unknown target value as a tool input error", async () => {
+    const tool = createTtsTool();
+
+    await expect(tool.execute("call-1", { text: "hello", target: "ringtone" })).rejects.toThrow(
+      /target must be/,
+    );
+    expect(textToSpeechSpy).not.toHaveBeenCalled();
+  });
+
+  it("omits target when the caller does not specify one (channel-derived default)", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.mp3",
+      provider: "test",
+      voiceCompatible: false,
+    });
+
+    const tool = createTtsTool();
+    await tool.execute("call-1", { text: "hello" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+    const callArgs = textToSpeechSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArgs.target).toBeUndefined();
+  });
 });

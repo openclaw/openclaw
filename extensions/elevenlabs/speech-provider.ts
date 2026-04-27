@@ -43,6 +43,29 @@ const ELEVENLABS_TTS_MODELS = [
   "eleven_monolingual_v1",
 ] as const;
 
+// ElevenLabs `output_format` strings are codec-prefixed (e.g. `mp3_44100_128`,
+// `opus_48000_64`, `pcm_44100`, `ulaw_8000`, `flac_44100`). Pick the on-disk
+// extension from the prefix so it matches the actual bytes — the previous
+// `req.target === "voice-note" ? ".opus" : ".mp3"` heuristic mis-labelled audio
+// whenever a caller overrode `outputFormat` (e.g. requesting mp3 for BlueBubbles
+// voice memos, which reject opus).
+export function deriveElevenLabsFileExtension(outputFormat: string): string {
+  const codec = outputFormat.split("_", 1)[0]?.toLowerCase() ?? "";
+  switch (codec) {
+    case "mp3":
+      return ".mp3";
+    case "opus":
+      return ".opus";
+    case "flac":
+      return ".flac";
+    case "pcm":
+    case "ulaw":
+      return ".wav";
+    default:
+      return ".mp3";
+  }
+}
+
 type ElevenLabsProviderConfig = {
   apiKey?: string;
   baseUrl: string;
@@ -510,7 +533,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       return {
         audioBuffer,
         outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
+        fileExtension: deriveElevenLabsFileExtension(outputFormat),
         voiceCompatible: req.target === "voice-note",
       };
     },
