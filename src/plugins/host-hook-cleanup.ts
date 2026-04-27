@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -101,7 +102,7 @@ async function clearPluginOwnedSessionStores(params: {
 }
 
 export async function runPluginHostCleanup(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;
   pluginId?: string;
   reason: PluginHostCleanupReason;
@@ -113,7 +114,7 @@ export async function runPluginHostCleanup(params: {
     params.reason === "restart"
       ? 0
       : await clearPluginOwnedSessionStores({
-          cfg: params.cfg,
+          cfg: params.cfg ?? loadConfig(),
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,
         });
