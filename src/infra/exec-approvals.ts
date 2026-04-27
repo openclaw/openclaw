@@ -194,6 +194,18 @@ function emptyExecApprovalsFile(): ExecApprovalsFile {
   return normalizeExecApprovals({ version: 1, agents: {} });
 }
 
+function closedExecApprovalsFile(): ExecApprovalsFile {
+  return normalizeExecApprovals({
+    version: 1,
+    defaults: {
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+    },
+    agents: {},
+  });
+}
+
 function emptyExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
   return {
     path: filePath,
@@ -204,7 +216,7 @@ function emptyExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
   };
 }
 
-function isBestEffortReadPathError(err: unknown): boolean {
+function isUnsafeOrMissingApprovalsPathError(err: unknown): boolean {
   return (
     err instanceof UnsafeExecApprovalsPathError || (err as NodeJS.ErrnoException).code === "ENOENT"
   );
@@ -551,14 +563,7 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  try {
-    assertSafeExecApprovalsFilePath(filePath);
-  } catch (err) {
-    if (isBestEffortReadPathError(err)) {
-      return emptyExecApprovalsSnapshot(filePath);
-    }
-    throw err;
-  }
+  assertSafeExecApprovalsFilePath(filePath);
   if (!fs.existsSync(filePath)) {
     return emptyExecApprovalsSnapshot(filePath);
   }
@@ -592,8 +597,10 @@ export function loadExecApprovals(): ExecApprovalsFile {
       return emptyExecApprovalsFile();
     }
     return normalizeExecApprovals(parsed);
-  } catch {
-    return emptyExecApprovalsFile();
+  } catch (err) {
+    return isUnsafeOrMissingApprovalsPathError(err)
+      ? closedExecApprovalsFile()
+      : emptyExecApprovalsFile();
   }
 }
 
