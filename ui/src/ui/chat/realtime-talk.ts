@@ -51,11 +51,11 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
     protocol?: string;
     websocketUrl?: string;
   };
-  if (raw.protocol === "google-live-bidi" || (raw.websocketUrl && raw.provider?.trim().toLowerCase() === "google")) {
+  const provider = raw.provider?.trim().toLowerCase();
+  if (provider === "google" && (raw.protocol === "google-live-bidi" || raw.websocketUrl)) {
     return "json-pcm-websocket";
   }
-  }
-  if (raw.provider?.trim().toLowerCase() === "google") {
+  if (provider === "google") {
     throw new Error(buildGoogleWebRtcUnsupportedMessage());
   }
   return "webrtc-sdp";

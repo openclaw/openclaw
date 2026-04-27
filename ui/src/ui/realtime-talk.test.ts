@@ -120,6 +120,20 @@ describe("RealtimeTalkSession", () => {
     expect(googleCtor).not.toHaveBeenCalled();
   });
 
+  it("does not infer Google Live transport from websocketUrl on non-Google sessions", async () => {
+    const request = vi.fn(async () => ({
+      provider: "example",
+      clientSecret: "secret",
+      websocketUrl: "wss://example.test/live",
+    }));
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+
+    expect(webRtcCtor).toHaveBeenCalledTimes(1);
+    expect(googleCtor).not.toHaveBeenCalled();
+  });
+
   it("starts the Gateway relay transport for backend-only realtime providers", async () => {
     const request = vi.fn(async () => ({
       provider: "example",

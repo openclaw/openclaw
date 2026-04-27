@@ -178,4 +178,38 @@ describe("talk realtime gateway relay", () => {
       }),
     ).toThrow("Unknown realtime relay session");
   });
+
+  it("caps active relay sessions per browser connection", () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => ({
+        connect: vi.fn(async () => undefined),
+        sendAudio: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => true),
+      }),
+    };
+    const createSession = (connId: string) =>
+      createTalkRealtimeRelaySession({
+        context: { broadcastToConnIds: vi.fn() } as never,
+        connId,
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+
+    createSession("conn-1");
+    createSession("conn-1");
+
+    expect(() => createSession("conn-1")).toThrow(
+      "Too many active realtime relay sessions for this connection",
+    );
+    expect(() => createSession("conn-2")).not.toThrow();
+  });
 });
