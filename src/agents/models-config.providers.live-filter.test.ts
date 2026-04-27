@@ -9,10 +9,43 @@ function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function resolveOwners(provider: string): readonly string[] | undefined {
+  if (provider === "openai-codex") {
+    return ["openai"];
+  }
   return provider === "claude-cli" ? ["anthropic"] : undefined;
 }
 
 describe("resolveProviderDiscoveryFilterForTest", () => {
+  it("scopes non-live discovery to configured model provider owners", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "openai-codex/gpt-5.4" },
+              models: {
+                "openai-codex/gpt-5.4": {},
+              },
+            },
+          },
+        },
+        env: liveFilterEnv({}),
+        resolveOwners,
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("preserves broad non-live discovery when no model/provider hints are configured", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        config: {},
+        env: liveFilterEnv({}),
+        resolveOwners,
+        resolveModelOwners: () => [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("maps live provider backend ids to owning plugin ids", () => {
     expect(
       resolveProviderDiscoveryFilterForTest({
