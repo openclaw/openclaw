@@ -236,6 +236,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       agentId: "default",
       agentDir: "/tmp/agent-dir",
       agentSessionKey: "cron:message-tool-policy",
+      runSessionKey: "cron:message-tool-policy:run:test-session-id",
       workspaceDir: "/tmp/workspace",
       resolvedVerboseLevel: "off",
       thinkLevel: undefined,

@@ -159,6 +159,12 @@ describe("gateway codex harness live helpers", () => {
       "I couldn’t list them because the local `codex models` command requires elevated execution in this environment, and that request was rejected.",
       "I couldn’t list them because the local `codex models` command requires host permissions here, and that escalation was rejected.",
       "I couldn’t run `codex models` because the sandboxed attempt failed and the required elevated retry was not approved.",
+      [
+        "I tried `codex models`, but the sandbox blocked it due to the kernel namespace restriction.",
+        "I then requested an escalated run, but the automatic approval review failed before it could be approved.",
+        "",
+        "I can’t safely run the command from here right now.",
+      ].join("\n"),
     ];
 
     for (const text of texts) {

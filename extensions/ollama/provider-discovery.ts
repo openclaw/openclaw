@@ -3,8 +3,8 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
-  hasMeaningfulExplicitOllamaConfig,
   resolveOllamaDiscoveryResult,
+  shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import { buildOllamaProvider } from "./src/provider-models.js";
@@ -51,7 +51,7 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
   envVars: ["OLLAMA_API_KEY"],
   auth: [],
   resolveSyntheticAuth: ({ providerConfig }) => {
-    if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+    if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
       return undefined;
     }
     return {

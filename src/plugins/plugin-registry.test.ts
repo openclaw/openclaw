@@ -309,6 +309,13 @@ describe("plugin registry facade", () => {
         policyHash: resolveInstalledPluginIndexPolicyHash({
           plugins: { entries: { persisted: { enabled: true } } },
         }),
+        installRecords: {
+          persisted: {
+            source: "npm",
+            spec: "persisted-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "persisted"),
+          },
+        },
       }),
       { stateDir },
     );
@@ -329,6 +336,12 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "demo",
     ]);
+    expect(result.snapshot.installRecords).toMatchObject({
+      persisted: {
+        source: "npm",
+        spec: "persisted-plugin@1.0.0",
+      },
+    });
   });
 
   it("falls back to the derived registry when the persisted registry is missing", () => {

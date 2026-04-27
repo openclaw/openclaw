@@ -162,6 +162,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         lane: "fresh",
       }),
     );
+    expect(matrix.include).toContainEqual(
+      expect.objectContaining({
+        os_id: "macos",
+        runner: "blacksmith-6vcpu-macos-latest",
+        suite: "packaged-fresh",
+      }),
+    );
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
