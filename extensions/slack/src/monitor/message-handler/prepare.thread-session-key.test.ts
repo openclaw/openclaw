@@ -132,7 +132,7 @@ describe("thread-level session keys", () => {
   });
 
   it("keeps top-level channel messages on the per-channel session regardless of replyToMode", () => {
-    for (const mode of ["all", "first", "off"] as const) {
+    for (const mode of ["all", "first", "off", "batched"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
       const account = buildAccount(mode);
 
@@ -180,6 +180,30 @@ describe("thread-level session keys", () => {
     });
 
     expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
+  });
+
+  it("does not seed top-level group DM mentions into thread sessions", () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        text: "<@B1> send a subagent",
+        ts: "1777244692.409919",
+      }),
+      isDirectMessage: false,
+      isGroupDm: true,
+      isRoom: false,
+      isRoomish: true,
+      seedTopLevelRoomThread: true,
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(routing.sessionKey).not.toContain(":thread:");
   });
 
   it("routes a seeded thread root and replies with the same Slack thread_ts to one parent session", () => {

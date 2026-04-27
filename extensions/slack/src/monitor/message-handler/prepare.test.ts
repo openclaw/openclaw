@@ -1084,6 +1084,95 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(followUp!.ctxPayload.WasMentioned).toBe(true);
   });
 
+  it("keeps runtime-bound regex mentions on the bound parent session", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = "agent:review:slack:channel:c0ahzfcas1k";
+    const binding: SessionBindingRecord = {
+      bindingId: "slack-review-binding",
+      targetSessionKey: "agent:review:slack:channel:c0ahzfcas1k",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C0AHZFCAS1K",
+      },
+      status: "active",
+      boundAt: 1,
+    };
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      ref.conversationId === "C0AHZFCAS1K" ? binding : null,
+    );
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "review", groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
+            ],
+          },
+          channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: true,
+        replyToMode: "all",
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+      const prepared = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "reviewbot please review GitHub issue #50621",
+          ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+
+      const followUp = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: {
+          type: "message",
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "https://github.com/openclaw/openclaw/issues/50621",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(followUp).toBeTruthy();
+      expect(prepared!.route.agentId).toBe("review");
+      expect(prepared!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+      expect(followUp!.ctxPayload.WasMentioned).toBe(true);
+      expect(new Set([prepared!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(
+        1,
+      );
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
+  });
+
   it("prepares bare-ping Slack thread replies with the parent thread timestamp", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244748.777299";

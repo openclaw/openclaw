@@ -39,7 +39,7 @@ function resolveSlackBaseConversationId(params: {
     : params.message.channel;
 }
 
-export function resolveSlackInitialAgentRoute(params: {
+function resolveSlackInitialAgentRoute(params: {
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
@@ -107,7 +107,7 @@ export function resolveSlackRoutingContext(params: {
   const seedCandidateThreadId = threadContext.incomingThreadTs ?? threadContext.messageTs;
   const seededRoomThreadId =
     !isThreadReply &&
-    isRoomish &&
+    isRoom &&
     seedTopLevelRoomThread &&
     replyToMode !== "off" &&
     seedCandidateThreadId

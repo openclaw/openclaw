@@ -59,7 +59,7 @@ import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { resolveSlackInitialAgentRoute, resolveSlackRoutingContext } from "./prepare-routing.js";
+import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -286,27 +286,9 @@ export async function prepareSlackMessage(params: {
   const explicitlyMentioned = Boolean(
     ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
   );
-  const initialRoute = resolveSlackInitialAgentRoute({
-    ctx,
-    account,
-    message,
-    isDirectMessage,
-    isRoom,
-  });
-  const initialMentionRegexes = resolveCachedMentionRegexes(ctx, initialRoute.agentId);
-  const wasMentionedForRouting =
-    opts.wasMentioned ??
-    (!isDirectMessage &&
-      matchesMentionWithExplicit({
-        text: message.text ?? "",
-        mentionRegexes: initialMentionRegexes,
-        explicit: {
-          hasAnyMention,
-          isExplicitlyMentioned: explicitlyMentioned,
-          canResolveExplicit: Boolean(ctx.botUserId),
-        },
-      }));
-  const routing = resolveSlackRoutingContext({
+  const seedTopLevelRoomThreadBySource =
+    opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned;
+  let routing = resolveSlackRoutingContext({
     ctx,
     account,
     message,
@@ -314,8 +296,46 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
-    seedTopLevelRoomThread: opts.source === "app_mention" || wasMentionedForRouting,
+    seedTopLevelRoomThread: seedTopLevelRoomThreadBySource,
   });
+
+  const resolveWasMentioned = (mentionRegexes: RegExp[]) =>
+    opts.wasMentioned ??
+    (!isDirectMessage &&
+      matchesMentionWithExplicit({
+        text: message.text ?? "",
+        mentionRegexes,
+        explicit: {
+          hasAnyMention,
+          isExplicitlyMentioned: explicitlyMentioned,
+          canResolveExplicit: Boolean(ctx.botUserId),
+        },
+      }));
+  let mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+  let wasMentioned = resolveWasMentioned(mentionRegexes);
+  const hasRuntimeBoundSession = Boolean(routing.runtimeBinding?.targetSessionKey?.trim());
+  // Runtime bindings already pin the root and later thread replies to the same
+  // target session, so only unbound regex mentions need a seeded thread reroute.
+  if (
+    !seedTopLevelRoomThreadBySource &&
+    wasMentioned &&
+    isRoom &&
+    !routing.isThreadReply &&
+    !hasRuntimeBoundSession
+  ) {
+    routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message,
+      isDirectMessage,
+      isGroupDm,
+      isRoom,
+      isRoomish,
+      seedTopLevelRoomThread: true,
+    });
+    mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+    wasMentioned = resolveWasMentioned(mentionRegexes);
+  }
   const {
     route,
     runtimeBinding,
@@ -332,20 +352,6 @@ export async function prepareSlackMessage(params: {
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
     );
   }
-
-  const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
-  const wasMentioned =
-    opts.wasMentioned ??
-    (!isDirectMessage &&
-      matchesMentionWithExplicit({
-        text: message.text ?? "",
-        mentionRegexes,
-        explicit: {
-          hasAnyMention,
-          isExplicitlyMentioned: explicitlyMentioned,
-          canResolveExplicit: Boolean(ctx.botUserId),
-        },
-      }));
   const implicitMentionKinds =
     isDirectMessage || !ctx.botUserId || !message.thread_ts
       ? []
