@@ -80,7 +80,12 @@ type BonjourAdvertiserDeps = {
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
-const STUCK_ANNOUNCING_MS = 8_000;
+// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
+// previous 8s threshold was triggering false-positive teardowns on every gateway
+// restart in such environments. 20s gives healthy networks plenty of room while
+// still catching genuinely stuck advertisers (announce that never completes).
+// See https://github.com/openclaw/openclaw/issues/72481
+const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
