@@ -500,13 +500,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: Parameters<typeof registerInternalHook>[1];
     }> = [];
     for (const event of normalizedEvents) {
-      // Wrap handler to inject pluginConfig into event context
-      // so plugins can access their configured pluginConfig at invocation time
       const wrappedHandler: typeof handler = async (evt) => {
-        if (evt.context && typeof evt.context === "object") {
-          (evt.context as Record<string, unknown>).pluginConfig = pluginConfig;
-        }
-        return handler(evt);
+        // Shallow-copy to avoid mutating the shared event object
+        // passed to all handlers sequentially by triggerInternalHook
+        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });
