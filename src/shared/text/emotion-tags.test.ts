@@ -56,6 +56,22 @@ describe("sanitizeEmotionTagsForMode", () => {
     expect(result).toEqual({ text: "[warmly] hello ", changed: true });
   });
 
+  test("hides trailing partial tags that end at a separator during streaming", () => {
+    const singleWord = sanitizeEmotionTagsForMode("hello [breaking ", "full", {
+      allowTrailingPartialTag: true,
+    });
+    const multiWord = sanitizeEmotionTagsForMode("hello [voice breaking ", "on", {
+      allowTrailingPartialTag: true,
+    });
+    const technical = sanitizeEmotionTagsForMode("Use [A-Z ", "on", {
+      allowTrailingPartialTag: true,
+    });
+
+    expect(singleWord).toEqual({ text: "hello ", changed: true });
+    expect(multiWord).toEqual({ text: "hello ", changed: true });
+    expect(technical).toEqual({ text: "Use [A-Z ", changed: false });
+  });
+
   test("hides a bare trailing bracket during streaming", () => {
     const result = sanitizeEmotionTagsForMode("hello [", "on", {
       allowTrailingPartialTag: true,
