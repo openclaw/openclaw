@@ -268,6 +268,34 @@ describe("info command handlers", () => {
     );
   });
 
+  it("uses the target session context window when routing /status", async () => {
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.contextTokens = 272000;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        contextTokens: 500000,
+      },
+    };
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+          contextTokens: 500000,
+        }),
+        contextTokens: 500000,
+      }),
+    );
+  });
+
   it("forwards resolved fast mode to /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },

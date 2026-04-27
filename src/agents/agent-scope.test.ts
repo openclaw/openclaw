@@ -87,6 +87,24 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentConfig(cfg, "main")?.verboseDefault).toBe("on");
   });
 
+  it("preserves per-agent contextTokens", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          contextTokens: 272_000,
+        },
+        list: [
+          {
+            id: "main",
+            contextTokens: 500_000,
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.contextTokens).toBe(500_000);
+  });
+
   it("merges contextLimits from defaults with per-agent overrides", () => {
     const cfg: OpenClawConfig = {
       agents: {
