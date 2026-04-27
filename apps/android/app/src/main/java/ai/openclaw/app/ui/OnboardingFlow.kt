@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -97,6 +96,7 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.tools.Features
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -245,7 +245,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val callLogAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
   val motionAvailable =
     remember(context) {
-      hasMotionCapabilities(context)
+      Features.Motion.has && hasMotionCapabilities(context)
     }
   val motionPermissionRequired = true
   val notificationsPermissionRequired = Build.VERSION.SDK_INT >= 33
@@ -283,13 +283,19 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var enablePhotos by rememberSaveable { mutableStateOf(false) }
   var enableContacts by rememberSaveable { mutableStateOf(false) }
   var enableCalendar by rememberSaveable { mutableStateOf(false) }
-  var enableMotion by
-    rememberSaveable {
+  var enableMotion by rememberSaveable {
+    if (Features.Motion.has) {
       mutableStateOf(
         motionAvailable &&
-          (!motionPermissionRequired || isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)),
+            (!motionPermissionRequired || isPermissionGranted(
+              context,
+              Manifest.permission.ACTIVITY_RECOGNITION
+            )),
       )
+    } else {
+      mutableStateOf(false)
     }
+  }
   var enableSms by
     rememberSaveable {
       mutableStateOf(
@@ -316,7 +322,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       PermissionToggle.Photos -> enablePhotos = enabled
       PermissionToggle.Contacts -> enableContacts = enabled
       PermissionToggle.Calendar -> enableCalendar = enabled
-      PermissionToggle.Motion -> enableMotion = enabled && motionAvailable
+      PermissionToggle.Motion -> enableMotion = enabled && motionAvailable && Features.Motion.has
       PermissionToggle.Sms -> enableSms = enabled && smsAvailable
       PermissionToggle.CallLog -> enableCallLog = enabled && callLogAvailable
     }
@@ -341,7 +347,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         isPermissionGranted(context, Manifest.permission.READ_CALENDAR) &&
           isPermissionGranted(context, Manifest.permission.WRITE_CALENDAR)
       PermissionToggle.Motion ->
-        !motionAvailable ||
+        !Features.Motion.has || !motionAvailable ||
           !motionPermissionRequired ||
           isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
       PermissionToggle.Sms ->
@@ -386,7 +392,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enablePhotos) enabled += "Photos"
       if (enableContacts) enabled += "Contacts"
       if (enableCalendar) enabled += "Calendar"
-      if (enableMotion && motionAvailable) enabled += "Motion"
+      if (enableMotion && motionAvailable && Features.Motion.has) enabled += "Motion"
       if (smsAvailable && enableSms) enabled += "SMS"
       if (callLogAvailable && enableCallLog) enabled += "Call Log"
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
@@ -693,7 +699,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 )
               },
               onMotionChange = { checked ->
-                if (!motionAvailable) {
+                if (!Features.Motion.has || !motionAvailable) {
                   setPermissionToggleEnabled(PermissionToggle.Motion, false)
                 } else if (!motionPermissionRequired) {
                   setPermissionToggleEnabled(PermissionToggle.Motion, checked)
@@ -1350,7 +1356,7 @@ private fun PermissionsStep(
     isPermissionGranted(context, Manifest.permission.READ_CALENDAR) &&
       isPermissionGranted(context, Manifest.permission.WRITE_CALENDAR)
   val motionGranted =
-    if (!motionAvailable) {
+    if (!Features.Motion.has || !motionAvailable) {
       false
     } else if (!motionPermissionRequired) {
       true
@@ -1449,8 +1455,8 @@ private fun PermissionsStep(
       checked = enableMotion,
       granted = motionGranted,
       onCheckedChange = onMotionChange,
-      enabled = motionAvailable,
-      statusOverride = if (!motionAvailable) "Unavailable on this device" else null,
+      enabled = Features.Motion.has && motionAvailable,
+      statusOverride = if (!Features.Motion.has || !motionAvailable) "Unavailable on this device" else null,
     )
     if (smsAvailable) {
       InlineDivider()

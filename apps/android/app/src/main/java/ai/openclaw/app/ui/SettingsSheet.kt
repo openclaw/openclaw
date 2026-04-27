@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -31,16 +30,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -54,7 +50,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -69,6 +64,7 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.tools.Features
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -160,7 +156,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
       Manifest.permission.READ_EXTERNAL_STORAGE
     }
   val motionPermissionRequired = true
-  val motionAvailable = remember(context) { hasMotionCapabilities(context) }
+  val motionAvailable = remember(context) {
+    Features.Motion.has && hasMotionCapabilities(context)
+  }
 
   var notificationsPermissionGranted by
     remember {
@@ -234,11 +232,18 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   var motionPermissionGranted by
     remember {
-      mutableStateOf(
-        !motionPermissionRequired ||
-          ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
-          PackageManager.PERMISSION_GRANTED,
-      )
+      if (Features.Motion.has) {
+        mutableStateOf(
+          !motionPermissionRequired ||
+              ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACTIVITY_RECOGNITION
+              ) ==
+              PackageManager.PERMISSION_GRANTED,
+        )
+      } else {
+        mutableStateOf(false)
+      }
     }
   val motionPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -287,10 +292,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
           callLogPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
               PackageManager.PERMISSION_GRANTED
-          motionPermissionGranted =
+          motionPermissionGranted = if (Features.Motion.has) {
             !motionPermissionRequired ||
-              ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
-              PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(
+                  context,
+                  Manifest.permission.ACTIVITY_RECOGNITION
+                ) ==
+                PackageManager.PERMISSION_GRANTED
+          } else {
+            false
+          }
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
               PackageManager.PERMISSION_GRANTED &&
@@ -382,7 +393,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
             value = displayName,
             onValueChange = viewModel::setDisplayName,
             label = { Text("Name", style = mobileCaption1, color = mobileTextSecondary) },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 14.dp, vertical = 10.dp),
             textStyle = mobileBody.copy(color = mobileText),
             colors = settingsTextFieldColors(),
           )
@@ -651,7 +664,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               },
             )
           }
-          if (motionAvailable) {
+          if (Features.Motion.has && motionAvailable) {
             HorizontalDivider(color = mobileBorder)
             ListItem(
               modifier = Modifier.fillMaxWidth(),
