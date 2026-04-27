@@ -5,32 +5,11 @@
   "description": "OpenClaw Coven ACP runtime bridge",
   "type": "module",
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.4.26"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ],
-    "install": {
-      "minHostVersion": ">=2026.4.26"
-    },
-    "compat": {
-      "pluginApi": ">=2026.4.25"
-    },
-    "build": {
-      "openclawVersion": "2026.4.26"
-    },
-    "release": {
-      "publishToClawHub": true
-    }
+    ]
   }
 }
