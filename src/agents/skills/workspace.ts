@@ -481,12 +481,39 @@ function loadSkillEntries(
         candidateDirs.push({ skillDir, name });
       } else {
         // No SKILL.md here — check one level deeper for grouped skill directories.
+        // Apply the same per-root cap as the outer scan to avoid scanning huge nested trees.
         const nestedChildren = listChildDirectories(skillDir);
-        for (const nestedName of nestedChildren.toSorted()) {
+        const nestedSuspicious = nestedChildren.length > limits.maxCandidatesPerRoot;
+        if (nestedSuspicious) {
+          skillsLogger.warn(
+            "Nested skills directory looks suspiciously large, truncating discovery.",
+            {
+              dir: params.dir,
+              baseDir,
+              nestedDir: skillDir,
+              nestedChildDirCount: nestedChildren.length,
+              maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+              maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+            },
+          );
+        }
+        const limitedNested = nestedChildren.toSorted().slice(0, limits.maxCandidatesPerRoot);
+        for (const nestedName of limitedNested) {
           const nestedDir = path.join(skillDir, nestedName);
           const nestedSkillMd = path.join(nestedDir, "SKILL.md");
           if (fs.existsSync(nestedSkillMd)) {
-            candidateDirs.push({ skillDir: nestedDir, name: `${name}/${nestedName}` });
+            const nestedDirRealPath = resolveContainedSkillPath({
+              source: params.source,
+              rootDir,
+              rootRealPath: baseDirRealPath,
+              candidatePath: nestedDir,
+            });
+            if (nestedDirRealPath) {
+              candidateDirs.push({
+                skillDir: nestedDir,
+                name: `${name}/${nestedName}`,
+              });
+            }
           }
           if (candidateDirs.length >= limits.maxSkillsLoadedPerSource) {
             break;
@@ -500,15 +527,8 @@ function loadSkillEntries(
 
     for (const { skillDir, name } of candidateDirs) {
       const skillMd = path.join(skillDir, "SKILL.md");
-      const skillDirRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillDir,
-      });
-      if (!skillDirRealPath) {
-        continue;
-      }
+      // skillDir was already validated via resolveContainedSkillPath during the collection
+      // phase, so we only need to validate the SKILL.md file here.
       const skillMdRealPath = resolveContainedSkillPath({
         source: params.source,
         rootDir,
