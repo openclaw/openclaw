@@ -70,12 +70,36 @@ function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
 
+/**
+ * Returns true when a gateway close detail code indicates an explicit
+ * auth/identity failure that should force the credentials gate to reappear.
+ * Pure transport disconnects (network blip, server restart, tab focus) do
+ * NOT match here — those keep the sticky `hasEverConnected` flag set so the
+ * renderer can hold the chat UI mounted across reconnects.
+ */
+export function isAuthFailureDetailCode(code: string): boolean {
+  if (!code) {
+    return false;
+  }
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+    return true;
+  }
+  return (
+    code.startsWith("AUTH_") ||
+    code.startsWith("DEVICE_AUTH_") ||
+    code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED ||
+    code === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
+    code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED
+  );
+}
+
 type GatewayHost = {
   settings: UiSettings;
   password: string;
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hasEverConnected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -297,6 +321,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       shutdownHost.pendingShutdownMessage = null;
       host.connected = true;
+      host.hasEverConnected = true;
       host.lastError = null;
       host.lastErrorCode = null;
       host.hello = hello;
@@ -354,6 +379,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
         (typeof error?.code === "string" ? error.code : null);
+      // If the close looks like an explicit auth/identity failure, drop the
+      // sticky hasEverConnected flag so the renderer falls back to the full
+      // credentials gate instead of holding the stale chat UI in place.
+      if (host.lastErrorCode && isAuthFailureDetailCode(host.lastErrorCode)) {
+        host.hasEverConnected = false;
+      }
       if (code !== 1012) {
         if (error?.message) {
           host.lastError =

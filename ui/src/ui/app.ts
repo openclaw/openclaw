@@ -152,6 +152,12 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  // Tracks whether this tab has ever successfully completed a hello handshake.
+  // Used to keep the chat UI mounted across transient WebSocket reconnects (e.g. tab
+  // refocus, gateway restart) instead of flashing the credentials gate. Reset to
+  // false on explicit auth failures so the gate reappears when re-auth is required.
+  // See https://github.com/openclaw/openclaw/issues/72500.
+  @state() hasEverConnected = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";

@@ -641,7 +641,14 @@ export function renderApp(state: AppViewState) {
 
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
+  //
+  // hasEverConnected lets us keep the chat UI mounted across transient WebSocket
+  // reconnects (e.g. tab refocus, gateway restart) instead of flashing the full
+  // credentials gate every time `connected` briefly toggles to false. The gate
+  // still appears on the very first connect and on explicit auth failures (those
+  // reset hasEverConnected in app-gateway's onClose handler).
+  // See https://github.com/openclaw/openclaw/issues/72500.
+  if (!state.connected && !state.hasEverConnected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
