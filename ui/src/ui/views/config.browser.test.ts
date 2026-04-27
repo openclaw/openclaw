@@ -514,6 +514,29 @@ describe("config view", () => {
     expect(text).toContain('"remote"');
   });
 
+  it("renders array diff summaries without serializing array values", () => {
+    const poison = {
+      value: "TOKEN_AFTER",
+      toJSON: () => {
+        throw new Error("array value should not be serialized");
+      },
+    };
+    const { container } = renderConfigView({
+      formValue: {
+        items: [poison],
+      },
+      originalValue: {
+        items: [],
+      },
+    });
+
+    const text = normalizedText(container);
+    expect(text).toContain("View 1 pending change");
+    expect(text).toContain("items");
+    expect(text).toContain("[0 items]");
+    expect(text).toContain("[1 item]");
+  });
+
   it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
     const container = document.createElement("div");
     const props: ConfigProps = {
@@ -629,27 +652,27 @@ describe("config view", () => {
     expect(container.querySelector<HTMLDetailsElement>(".config-diff")?.open).toBe(false);
   });
 
-  it("redacts raw diff values under wildcard sensitive hints when keys contain dots", () => {
+  it("redacts raw diff values under leaf wildcard sensitive hints when keys contain dots", () => {
     const container = document.createElement("div");
     const props: ConfigProps = {
       ...baseProps(),
       formMode: "raw",
-      raw: '{\n  integrations: { "foo.bar": { id: "TOKEN_AFTER" } }\n}\n',
-      originalRaw: '{\n  integrations: { "foo.bar": { id: "TOKEN_BEFORE" } }\n}\n',
+      raw: '{\n  integrations: { "foo.bar": { credential: "TOKEN_AFTER" } }\n}\n',
+      originalRaw: '{\n  integrations: { "foo.bar": { credential: "TOKEN_BEFORE" } }\n}\n',
       uiHints: {
-        "integrations.*": { sensitive: true },
+        "integrations.*.credential": { sensitive: true },
       },
       formValue: {
         integrations: {
           "foo.bar": {
-            id: "TOKEN_AFTER",
+            credential: "TOKEN_AFTER",
           },
         },
       },
       originalValue: {
         integrations: {
           "foo.bar": {
-            id: "TOKEN_BEFORE",
+            credential: "TOKEN_BEFORE",
           },
         },
       },
@@ -670,7 +693,7 @@ describe("config view", () => {
     details!.dispatchEvent(new Event("toggle"));
 
     const text = normalizedText(container);
-    expect(text).toContain("integrations.foo.bar.id");
+    expect(text).toContain("integrations.foo.bar.credential");
     expect(text).toContain("[redacted - click reveal to view]");
     expect(text).not.toContain("TOKEN_BEFORE");
     expect(text).not.toContain("TOKEN_AFTER");

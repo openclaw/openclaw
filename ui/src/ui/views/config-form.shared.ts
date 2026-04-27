@@ -64,7 +64,7 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
   if (direct) {
     return direct;
   }
-  const segments = key.split(".");
+  const segments = path.map(String);
   for (const [hintKey, hint] of Object.entries(hints)) {
     if (!hintKey.includes("*")) {
       continue;

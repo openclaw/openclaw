@@ -534,6 +534,7 @@ function resolveSectionMeta(
 const MAX_CONFIG_DIFF_DEPTH = 64;
 const MAX_CONFIG_DIFF_NODES = 20_000;
 const MAX_CONFIG_DIFF_CHANGES = 1_000;
+const MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS = 2_000;
 const MAX_RAW_DIFF_CHARS = 200_000;
 
 type ConfigDiffPath = string[];
@@ -567,6 +568,68 @@ function computeDiff(
     }
   }
 
+  function arrayValuesDiffer(orig: unknown[], curr: unknown[], depth: number): boolean {
+    if (orig.length !== curr.length) {
+      return true;
+    }
+    if (orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
+      return true;
+    }
+    for (let index = 0; index < orig.length; index += 1) {
+      if (valuesDiffer(orig[index], curr[index], depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function objectValuesDiffer(
+    orig: Record<string, unknown>,
+    curr: Record<string, unknown>,
+    depth: number,
+  ): boolean {
+    const origKeys = Object.keys(orig);
+    const currKeys = Object.keys(curr);
+    if (origKeys.length !== currKeys.length) {
+      return true;
+    }
+    for (const key of origKeys) {
+      if (
+        !Object.prototype.hasOwnProperty.call(curr, key) ||
+        valuesDiffer(orig[key], curr[key], depth + 1)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function valuesDiffer(orig: unknown, curr: unknown, depth: number): boolean {
+    visited += 1;
+    if (visited > MAX_CONFIG_DIFF_NODES || depth > MAX_CONFIG_DIFF_DEPTH) {
+      return true;
+    }
+    if (orig === curr) {
+      return false;
+    }
+    if (typeof orig !== typeof curr) {
+      return true;
+    }
+    if (typeof orig !== "object" || orig === null || curr === null) {
+      return orig !== curr;
+    }
+    if (Array.isArray(orig) || Array.isArray(curr)) {
+      return Array.isArray(orig) && Array.isArray(curr)
+        ? arrayValuesDiffer(orig, curr, depth + 1)
+        : true;
+    }
+    return objectValuesDiffer(
+      orig as Record<string, unknown>,
+      curr as Record<string, unknown>,
+      depth + 1,
+    );
+  }
+
   function compare(orig: unknown, curr: unknown, path: ConfigDiffPath, depth: number) {
     visited += 1;
     if (
@@ -589,8 +652,10 @@ function computeDiff(
       }
       return;
     }
-    if (Array.isArray(orig) && Array.isArray(curr)) {
-      if (JSON.stringify(orig) !== JSON.stringify(curr)) {
+    if (Array.isArray(orig) || Array.isArray(curr)) {
+      if (Array.isArray(orig) && Array.isArray(curr) && arrayValuesDiffer(orig, curr, depth + 1)) {
+        pushChange(path, orig, curr);
+      } else if (!Array.isArray(orig) || !Array.isArray(curr)) {
         pushChange(path, orig, curr);
       }
       return;
@@ -642,6 +707,9 @@ function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
 }
 
 function truncateValue(value: unknown, maxLen = 40): string {
+  if (Array.isArray(value)) {
+    return `[${value.length} item${value.length === 1 ? "" : "s"}]`;
+  }
   let str: string;
   try {
     const json = JSON.stringify(value);
