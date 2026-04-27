@@ -228,6 +228,7 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload.text,
       expect.objectContaining({
         accountId: "default",
+        extraContent: pendingPayload.extraContent,
       }),
     );
     expect(reactMessage).toHaveBeenCalledWith(

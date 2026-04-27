@@ -218,7 +218,6 @@ function buildMatrixApprovalMetadata(params: {
     kind: params.view.approvalKind,
     phase: params.view.phase,
     title: params.view.title,
-    description: params.view.description ?? undefined,
     expiresAtMs: params.view.expiresAtMs,
     metadata: params.view.metadata,
     allowedDecisions: Array.from(params.allowedDecisions),
@@ -433,6 +432,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           accountId: resolved.accountId,
           client: resolved.context.client,
           threadId: preparedTarget.threadId,
+          extraContent: pendingPayload.extraContent,
         });
       }
       const messageIds = Array.from(
