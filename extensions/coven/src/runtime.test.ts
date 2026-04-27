@@ -18,7 +18,7 @@ const baseConfig: ResolvedCovenPluginConfig = {
   socketPath: "",
   workspaceDir: "",
   fallbackBackend: "acpx",
-  pollIntervalMs: 1,
+  pollIntervalMs: 25,
   harnesses: {},
 };
 
@@ -394,6 +394,72 @@ describe("CovenAcpRuntime", () => {
     );
   });
 
+  it("clamps malformed runtime poll intervals before sleeping", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const client = fakeClient({
+      listEvents: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          event({
+            id: "event-1",
+            kind: "exit",
+            payloadJson: JSON.stringify({ status: "completed", exitCode: 0 }),
+          }),
+        ]),
+      getSession: vi.fn(async () => session({ status: "running" })),
+    });
+    const runtime = new CovenAcpRuntime({
+      config: { ...config, pollIntervalMs: 0 },
+      client,
+      sleep,
+    });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await collect(
+      runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" }),
+    );
+
+    expect(sleep).toHaveBeenCalledWith(25, undefined);
+  });
+
+  it("bounds daemon events processed during one poll cycle", async () => {
+    const client = fakeClient({
+      listEvents: vi.fn(async () =>
+        Array.from({ length: 600 }, (_, index) =>
+          event({
+            id: `event-${index}`,
+            kind: "output",
+            payloadJson: JSON.stringify({ data: `line-${index}\n` }),
+          }),
+        ),
+      ),
+      getSession: vi.fn(async () => session({ status: "completed", exitCode: 0 })),
+    });
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    const events = await collect(
+      runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" }),
+    );
+
+    const outputEvents = events.filter((item) => item.type === "text_delta");
+    expect(outputEvents).toHaveLength(500);
+    expect(outputEvents).not.toContainEqual(
+      expect.objectContaining({ type: "text_delta", text: "line-500\n" }),
+    );
+  });
+
   it("converts Coven polling failures into controlled terminal events", async () => {
     const client = fakeClient({
       listEvents: vi.fn(async () => {
@@ -448,6 +514,17 @@ describe("CovenAcpRuntime", () => {
         }),
       ),
     ).toContainEqual(expect.objectContaining({ type: "done", stopReason: "completed" }));
+  });
+
+  it("drops oversized daemon event payloads before parsing", () => {
+    expect(
+      __testing.eventToRuntimeEvents(
+        event({
+          kind: "output",
+          payloadJson: JSON.stringify({ data: "x".repeat(64_001) }),
+        }),
+      ),
+    ).toEqual([]);
   });
 
   it("rejects oversized Coven runtime session metadata", () => {

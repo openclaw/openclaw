@@ -54,9 +54,12 @@ function expandTilde(raw: string): string {
   return trimmed;
 }
 
-function resolveConfiguredPath(raw: string, baseDir: string): string {
+function resolveConfiguredPath(raw: string, label: "covenHome" | "socketPath"): string {
   const expanded = expandTilde(raw);
-  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(baseDir, expanded);
+  if (!path.isAbsolute(expanded)) {
+    throw new Error(`Coven ${label} must be absolute`);
+  }
+  return path.resolve(expanded);
 }
 
 function pathIsInside(parent: string, child: string): boolean {
@@ -80,24 +83,24 @@ function lstatIfExists(filePath: string): fs.Stats | null {
   }
 }
 
-function resolveCovenHome(raw: string | undefined, baseDir: string): string {
+function resolveCovenHome(raw: string | undefined): string {
   const fromConfig = raw?.trim();
   if (fromConfig) {
-    return resolveConfiguredPath(fromConfig, baseDir);
+    return resolveConfiguredPath(fromConfig, "covenHome");
   }
   const fromEnv = process.env.COVEN_HOME?.trim();
   if (fromEnv) {
-    return resolveConfiguredPath(fromEnv, baseDir);
+    return resolveConfiguredPath(fromEnv, "covenHome");
   }
   return path.join(os.homedir(), ".coven");
 }
 
-function resolveSocketPath(covenHome: string, raw: string | undefined, baseDir: string): string {
+function resolveSocketPath(covenHome: string, raw: string | undefined): string {
   if (lstatIfExists(covenHome)?.isSymbolicLink()) {
     throw new Error("Coven covenHome must not be a symlink");
   }
   const socketPath = raw?.trim()
-    ? resolveConfiguredPath(raw, baseDir)
+    ? resolveConfiguredPath(raw, "socketPath")
     : path.join(covenHome, "coven.sock");
   if (!pathIsInside(covenHome, socketPath)) {
     throw new Error("Coven socketPath must stay inside covenHome");
@@ -138,10 +141,10 @@ export function resolveCovenPluginConfig(params: {
   }
   const config = parsed.data as CovenPluginConfig;
   const workspaceDir = path.resolve(params.workspaceDir ?? process.cwd());
-  const covenHome = resolveCovenHome(config.covenHome, workspaceDir);
+  const covenHome = resolveCovenHome(config.covenHome);
   return {
     covenHome,
-    socketPath: resolveSocketPath(covenHome, config.socketPath, workspaceDir),
+    socketPath: resolveSocketPath(covenHome, config.socketPath),
     workspaceDir,
     fallbackBackend: normalizeBackendId(config.fallbackBackend),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,

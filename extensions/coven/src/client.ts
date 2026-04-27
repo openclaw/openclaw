@@ -99,6 +99,22 @@ function lstatIfExists(filePath: string): fs.Stats | null {
   }
 }
 
+function statExistingPath(filePath: string, label: string): fs.Stats {
+  try {
+    return fs.statSync(filePath);
+  } catch {
+    throw new Error(`${label} must exist`);
+  }
+}
+
+function realpathExistingPath(filePath: string, label: string): string {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    throw new Error(`${label} must exist`);
+  }
+}
+
 function validateSocketPathForUse(socketPath: string, socketRoot: string | undefined): void {
   if (!socketRoot) {
     return;
@@ -107,21 +123,24 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   if (socketRootLstat?.isSymbolicLink()) {
     throw new Error("Coven covenHome must not be a symlink");
   }
-  const socketRootStat = fs.statSync(socketRoot);
+  const socketRootStat = statExistingPath(socketRoot, "Coven covenHome");
   validateSocketOwnerAndMode(socketRootStat, "Coven covenHome");
 
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {
     throw new Error("Coven socketPath must not be a symlink");
   }
-  const resolvedSocketStat = fs.statSync(socketPath);
+  const resolvedSocketStat = statExistingPath(socketPath, "Coven socketPath");
   if (!resolvedSocketStat.isSocket()) {
     throw new Error("Coven socketPath must be a Unix socket");
   }
   validateSocketOwnerAndMode(resolvedSocketStat, "Coven socketPath");
 
-  const realSocketRoot = fs.realpathSync.native(socketRoot);
-  const realSocketDir = fs.realpathSync.native(path.dirname(socketPath));
+  const realSocketRoot = realpathExistingPath(socketRoot, "Coven covenHome");
+  const realSocketDir = realpathExistingPath(
+    path.dirname(socketPath),
+    "Coven socketPath directory",
+  );
   if (!pathIsInside(realSocketRoot, realSocketDir)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }

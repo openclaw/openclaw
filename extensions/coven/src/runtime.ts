@@ -33,6 +33,11 @@ const DEFAULT_HARNESSES: Record<string, string> = {
 };
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const MAX_COVEN_PROMPT_BYTES = 500_000;
+const MIN_POLL_INTERVAL_MS = 25;
+const MAX_POLL_INTERVAL_MS = 10_000;
+const DEFAULT_POLL_INTERVAL_MS = 250;
+const MAX_EVENTS_PER_POLL = 500;
+const MAX_EVENT_PAYLOAD_BYTES = 64_000;
 const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_RUNTIME_SESSION_NAME_BYTES = 2_048;
 const MAX_STATUS_FIELD_CHARS = 256;
@@ -114,6 +119,9 @@ function titleFromPrompt(prompt: string): string {
 }
 
 function parsePayload(event: CovenEventRecord): Record<string, unknown> {
+  if (Buffer.byteLength(event.payloadJson, "utf8") > MAX_EVENT_PAYLOAD_BYTES) {
+    return {};
+  }
   try {
     const parsed = JSON.parse(event.payloadJson) as unknown;
     return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
@@ -161,6 +169,13 @@ function boundedCovenPrompt(input: string): string {
     throw new Error("Coven prompt exceeded size limit");
   }
   return input;
+}
+
+function normalizePollIntervalMs(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_POLL_INTERVAL_MS;
+  }
+  return Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, value));
 }
 
 function normalizeStopReason(value: unknown): string {
@@ -242,7 +257,10 @@ export class CovenAcpRuntime implements AcpRuntime {
   private readonly activeSessionIdsBySessionKey = new Map<string, string>();
 
   constructor(params: CovenAcpRuntimeParams) {
-    this.config = params.config;
+    this.config = {
+      ...params.config,
+      pollIntervalMs: normalizePollIntervalMs(params.config.pollIntervalMs),
+    };
     this.logger = params.logger;
     this.client =
       params.client ??
@@ -333,10 +351,15 @@ export class CovenAcpRuntime implements AcpRuntime {
           ? events.findIndex((event) => event.id === lastSeenEventId)
           : -1;
         const nextEvents = cursorIndex >= 0 ? events.slice(cursorIndex + 1) : events;
+        let processedEvents = 0;
         for (const event of nextEvents) {
           if (seenEventIds.has(event.id)) {
             continue;
           }
+          if (processedEvents >= MAX_EVENTS_PER_POLL) {
+            break;
+          }
+          processedEvents += 1;
           seenEventIds.add(event.id);
           seenEventQueue.push(event.id);
           while (seenEventQueue.length > MAX_TRACKED_EVENT_IDS) {

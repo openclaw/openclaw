@@ -145,6 +145,14 @@ describe("createCovenClient", () => {
     ).rejects.toThrow(/covenHome must not be a symlink/);
   });
 
+  it("rejects missing socket roots with a validation error", async () => {
+    const covenHome = path.join(tmpDir, "missing-coven");
+
+    await expect(
+      createCovenClient(path.join(covenHome, "coven.sock"), { socketRoot: covenHome }).health(),
+    ).rejects.toThrow(/covenHome must exist/);
+  });
+
   it("rejects a group or world writable socket root", async () => {
     if (process.platform === "win32") {
       return;

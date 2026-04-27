@@ -28,18 +28,16 @@ describe("resolveCovenPluginConfig", () => {
     expect(resolved.socketPath).toBe(path.join(os.homedir(), ".coven", "coven.sock"));
   });
 
-  it("resolves relative Coven paths from the workspace instead of process cwd", () => {
-    const resolved = resolveCovenPluginConfig({
-      rawConfig: {
-        covenHome: ".coven",
-        socketPath: ".coven/coven.sock",
-      },
-      workspaceDir: "/repo",
-    });
-
-    expect(resolved.workspaceDir).toBe("/repo");
-    expect(resolved.covenHome).toBe("/repo/.coven");
-    expect(resolved.socketPath).toBe("/repo/.coven/coven.sock");
+  it("rejects relative Coven paths instead of trusting workspace contents", () => {
+    expect(() =>
+      resolveCovenPluginConfig({
+        rawConfig: {
+          covenHome: ".coven",
+          socketPath: ".coven/coven.sock",
+        },
+        workspaceDir: "/repo",
+      }),
+    ).toThrow(/covenHome must be absolute/);
   });
 
   it("rejects socket paths outside covenHome", () => {
