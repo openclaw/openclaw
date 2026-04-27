@@ -54,6 +54,20 @@ function resolveAutoSelectFamily(): boolean | undefined {
   }
 }
 
+function ensureDefaultAutoSelectFamilyAttemptTimeout(): void {
+  try {
+    if (
+      typeof net.getDefaultAutoSelectFamilyAttemptTimeout === "function" &&
+      typeof net.setDefaultAutoSelectFamilyAttemptTimeout === "function" &&
+      net.getDefaultAutoSelectFamilyAttemptTimeout() === 250
+    ) {
+      net.setDefaultAutoSelectFamilyAttemptTimeout(AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS);
+    }
+  } catch {
+    // Best-effort; older Node versions may not support these APIs.
+  }
+}
+
 function resolveConnectOptions(
   autoSelectFamily: boolean | undefined,
 ): { autoSelectFamily: boolean; autoSelectFamilyAttemptTimeout: number } | undefined {
@@ -116,6 +130,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
 }
 
 export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  ensureDefaultAutoSelectFamilyAttemptTimeout();
   const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
   if (!Number.isFinite(timeoutMsRaw)) {
     return;
