@@ -19,6 +19,7 @@ export type RegistryState = {
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
+  agentEventUnsubscribe?: () => void;
 };
 
 type GlobalRegistryState = typeof globalThis & {
