@@ -193,6 +193,35 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session rows prefer per-model thinking over global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "max",
+    });
+  });
+
   test("classifySessionKey respects chat type + prefixes", () => {
     expect(classifySessionKey("global")).toBe("global");
     expect(classifySessionKey("unknown")).toBe("unknown");

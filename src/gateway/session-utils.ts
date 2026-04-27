@@ -1048,7 +1048,6 @@ function resolveGatewaySessionThinkingDefault(params: {
     : undefined;
   return (
     agentThinkingDefault ??
-    params.cfg.agents?.defaults?.thinkingDefault ??
     resolveThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
