@@ -330,3 +330,23 @@ export async function resolveDmAllowState(params: {
     isMultiUserDm: hasWildcard || allowCount > 1,
   };
 }
+
+export function normalizeEventRoutingKey(params: {
+  sessionKey: string;
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+  normalizeEntry: (entry: string) => string | undefined;
+  resolveAgentMainSessionKey: (key: string) => string;
+}): string {
+  const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+    dmScope: params.dmScope,
+    allowFrom: params.allowFrom,
+    normalizeEntry: params.normalizeEntry,
+  });
+
+  if (pinnedOwner) {
+    return params.resolveAgentMainSessionKey(params.sessionKey);
+  }
+
+  return params.sessionKey;
+}

@@ -110,6 +110,7 @@ import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
+import { normalizeEventRoutingKey } from "../security/dm-policy-shared.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -298,11 +299,26 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-          return {
+          const agentsCfg = cfg.agents;
+
+          const defaults = agentsCfg 
+          ? (agentsCfg.defaults as (typeof agentsCfg.defaults & { allowFrom?: Array<string | number> }))
+          : undefined;
+
+          const finalSessionKey = normalizeEventRoutingKey({
             sessionKey: forcedCanonical,
+            dmScope: cfg.session?.scope,
+            allowFrom: defaults?.allowFrom ?? [], 
+            normalizeEntry: (entry) => entry.toLowerCase(),
+            resolveAgentMainSessionKey: (key) => 
+              resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
+          });
+          
+          return {
+            sessionKey: finalSessionKey,
             storePath,
             store,
-            entry: store[forcedCanonical],
+            entry: store[finalSessionKey],
             suppressOriginatingContext: false,
           };
         }
