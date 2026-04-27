@@ -137,12 +137,7 @@ export function registerBuiltInMemoryEmbeddingProviders(register: {
   }
 }
 export function ensureBuiltInMemoryEmbeddingProvidersRegistered(): void {
-  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
-    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
-    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
-  })) {
-    registerMemoryEmbeddingProvider(adapter);
-  }
+  registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider });
 }
 
 export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(
