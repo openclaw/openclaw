@@ -990,6 +990,62 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.fastMode).toBe(false);
   });
 
+  it("persists, reports, and validates emotion-mode directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const onReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/emotions on"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(onReply?.text).toContain("Emotions mode enabled");
+    expect(sessionEntry.emotionMode).toBe("on");
+
+    const statusReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/emotions"),
+        sessionEntry,
+        sessionStore,
+        currentEmotionMode: sessionEntry.emotionMode,
+      }),
+    );
+    expect(statusReply?.text).toContain("Current emotions mode: on");
+    expect(statusReply?.text).toContain("Options: on, off, full.");
+
+    const fullReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/emotions full"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(fullReply?.text).toContain("Emotions mode set to full");
+    expect(sessionEntry.emotionMode).toBe("full");
+
+    const offReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/emotions off"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(offReply?.text).toContain("Emotions mode disabled");
+    expect(sessionEntry.emotionMode).toBe("off");
+
+    const invalidReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/emotions loud"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(invalidReply?.text).toContain('Unrecognized emotions mode "loud"');
+    expect(sessionEntry.emotionMode).toBe("off");
+  });
+
   it("persists and reports elevated-mode directives when allowed", async () => {
     const sessionEntry = createSessionEntry();
     const sessionStore = { [sessionKey]: sessionEntry };
