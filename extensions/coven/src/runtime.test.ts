@@ -531,6 +531,22 @@ describe("CovenAcpRuntime", () => {
     expect(__testing.decodeRuntimeSessionName(`coven:${"a".repeat(2_049)}`)).toBeNull();
   });
 
+  it("bounds encoded Coven runtime session metadata before persistence", () => {
+    const encoded = __testing.encodeRuntimeSessionName({
+      agent: "A".repeat(5_000),
+      mode: "prompt".repeat(1_000),
+      sessionMode: "persistent".repeat(1_000),
+      cwd: "/workspace/".repeat(1_000),
+    });
+
+    expect(Buffer.byteLength(encoded, "utf8")).toBeLessThanOrEqual("coven:".length + 2_048);
+    expect(__testing.decodeRuntimeSessionName(encoded)).toEqual({
+      agent: "a".repeat(128),
+      mode: "promptpromptpromptpromptpromptpr",
+      sessionMode: "persistentpersistentpersistentpe",
+    });
+  });
+
   it("rejects missing Coven cwd paths before launching", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-workspace-"));
     try {

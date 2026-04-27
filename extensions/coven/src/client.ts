@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { lstatIfExists, pathIsInside } from "./path-utils.js";
 
 export type CovenSessionRecord = {
   id: string;
@@ -85,19 +86,6 @@ export class CovenApiError extends Error {
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
-
-function pathIsInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function lstatIfExists(filePath: string): fs.Stats | null {
-  try {
-    return fs.lstatSync(filePath);
-  } catch {
-    return null;
-  }
-}
 
 function statExistingPath(filePath: string, label: string): fs.Stats {
   try {

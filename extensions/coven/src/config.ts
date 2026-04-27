@@ -1,8 +1,8 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { z } from "openclaw/plugin-sdk/zod";
+import { lstatIfExists, pathIsInside, realpathIfExists } from "./path-utils.js";
 
 export type CovenPluginConfig = {
   covenHome?: string;
@@ -60,27 +60,6 @@ function resolveConfiguredPath(raw: string, label: "covenHome" | "socketPath"): 
     throw new Error(`Coven ${label} must be absolute`);
   }
   return path.resolve(expanded);
-}
-
-function pathIsInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function realpathIfExists(filePath: string): string | null {
-  try {
-    return fs.realpathSync.native(filePath);
-  } catch {
-    return null;
-  }
-}
-
-function lstatIfExists(filePath: string): fs.Stats | null {
-  try {
-    return fs.lstatSync(filePath);
-  } catch {
-    return null;
-  }
 }
 
 function resolveCovenHome(raw: string | undefined): string {

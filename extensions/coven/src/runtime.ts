@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   AcpRuntimeError,
@@ -18,6 +17,7 @@ import {
   type CovenSessionRecord,
 } from "./client.js";
 import type { ResolvedCovenPluginConfig } from "./config.js";
+import { pathIsInside, realpathIfExists } from "./path-utils.js";
 
 export const COVEN_BACKEND_ID = "coven";
 
@@ -40,6 +40,8 @@ const MAX_EVENTS_PER_POLL = 500;
 const MAX_EVENT_PAYLOAD_BYTES = 64_000;
 const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_RUNTIME_SESSION_NAME_BYTES = 2_048;
+const MAX_RUNTIME_AGENT_CHARS = 128;
+const MAX_RUNTIME_MODE_CHARS = 32;
 const MAX_STATUS_FIELD_CHARS = 256;
 
 type CovenRuntimeSessionState = {
@@ -61,7 +63,23 @@ function normalizeAgentId(value: string | undefined): string {
 }
 
 function encodeRuntimeSessionName(state: CovenRuntimeSessionState): string {
-  return `coven:${Buffer.from(JSON.stringify(state), "utf8").toString("base64url")}`;
+  const prefix = "coven:";
+  const safeState: CovenRuntimeSessionState = {
+    agent: normalizeAgentId(state.agent).slice(0, MAX_RUNTIME_AGENT_CHARS) || "codex",
+    mode: (state.mode.trim() || "prompt").slice(0, MAX_RUNTIME_MODE_CHARS),
+    ...(state.sessionMode
+      ? { sessionMode: state.sessionMode.trim().slice(0, MAX_RUNTIME_MODE_CHARS) }
+      : {}),
+  };
+  const encoded = Buffer.from(JSON.stringify(safeState), "utf8").toString("base64url");
+  const value = `${prefix}${encoded}`;
+  if (Buffer.byteLength(value, "utf8") > prefix.length + MAX_RUNTIME_SESSION_NAME_BYTES) {
+    throw new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      "Coven runtime session metadata is too large.",
+    );
+  }
+  return value;
 }
 
 function decodeRuntimeSessionName(value: string): CovenRuntimeSessionState | null {
@@ -236,19 +254,6 @@ function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
   };
 }
 
-function pathIsInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function realpathIfExists(filePath: string): string | null {
-  try {
-    return fs.realpathSync.native(filePath);
-  } catch {
-    return null;
-  }
-}
-
 export class CovenAcpRuntime implements AcpRuntime {
   private readonly config: ResolvedCovenPluginConfig;
   private readonly client: CovenClient;
@@ -282,7 +287,6 @@ export class CovenAcpRuntime implements AcpRuntime {
         agent,
         mode: "prompt",
         sessionMode: input.mode,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
       }),
       ...(input.cwd ? { cwd: input.cwd } : {}),
     };
