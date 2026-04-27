@@ -67,8 +67,15 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       if (typeof params.newSessionId === "string" && params.newSessionId) {
         nextEntry.sessionId = params.newSessionId;
-        const storePath = typeof params.storePath === "string" ? params.storePath : rootDir;
-        nextEntry.sessionFile = path.join(path.dirname(storePath), `${params.newSessionId}.jsonl`);
+        if (typeof params.newSessionFile === "string" && params.newSessionFile) {
+          nextEntry.sessionFile = params.newSessionFile;
+        } else {
+          const storePath = typeof params.storePath === "string" ? params.storePath : rootDir;
+          nextEntry.sessionFile = path.join(
+            path.dirname(storePath),
+            `${params.newSessionId}.jsonl`,
+          );
+        }
       }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -285,6 +292,76 @@ describe("runMemoryFlushIfNeeded", () => {
         sandboxSessionKey: "agent:main:telegram:default:direct:12345",
       }),
     );
+  });
+
+  it("updates the active preflight run after transcript rotation", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const successorFile = path.join(rootDir, "session-rotated.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensAfter: 42,
+        sessionId: "session-rotated",
+        sessionFile: successorFile,
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const sessionStore = { "agent:main:main": sessionEntry };
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "agent:main:main",
+    });
+    const updateSessionId = vi.fn();
+    const replyOperation = {
+      abortSignal: new AbortController().signal,
+      setPhase: vi.fn(),
+      updateSessionId,
+    } as never;
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.sessionId).toBe("session-rotated");
+    expect(entry?.sessionFile).toBe(successorFile);
+    expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(followupRun.run.sessionFile).toBe(successorFile);
+    expect(updateSessionId).toHaveBeenCalledWith("session-rotated");
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      previousSessionId: "session",
+      nextSessionId: "session-rotated",
+      nextSessionFile: successorFile,
+    });
   });
 
   it("uses configured prompts and stored bootstrap warning signatures", async () => {

@@ -514,6 +514,23 @@ export async function runPreflightCompactionIfNeeded(params: {
     followupRun: params.followupRun,
   });
   entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  if (entry) {
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.replyOperation.updateSessionId(entry.sessionId);
+    if (entry.sessionFile) {
+      params.followupRun.run.sessionFile = entry.sessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: entry.sessionFile,
+      });
+    }
+  }
   return entry ?? params.sessionEntry;
 }
 
