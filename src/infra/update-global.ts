@@ -23,6 +23,10 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+const NPM_GLOBAL_INSTALL_FORCE_OMIT_OPTIONAL_FLAGS = [
+  "--force",
+  ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS,
+] as const;
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -317,7 +321,7 @@ export function globalInstallFallbackArgs(
   if (manager !== "npm") {
     return null;
   }
-  return ["npm", "i", "-g", ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS, "--", spec];
+  return ["npm", "i", "-g", ...NPM_GLOBAL_INSTALL_FORCE_OMIT_OPTIONAL_FLAGS, "--", spec];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

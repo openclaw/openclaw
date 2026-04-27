@@ -191,6 +191,7 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
+      "--force",
       "--omit=optional",
       "--no-fund",
       "--no-audit",
