@@ -761,6 +761,9 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.4.6
         version: 2026.4.6
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       typebox:
         specifier: 1.1.33
         version: 1.1.33
@@ -863,6 +866,19 @@ importers:
       typebox:
         specifier: 1.1.33
         version: 1.1.33
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/migrate-hermes:
+    dependencies:
       yaml:
         specifier: ^2.8.3
         version: 2.8.3

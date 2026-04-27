@@ -190,9 +190,53 @@ export function resolveChannelPluginIds(params: {
     env: params.env,
     includeDisabled: true,
   });
+  return resolveChannelPluginIdsFromRegistry({ manifestRegistry });
+}
+
+export function resolveChannelPluginIdsFromRegistry(params: {
+  manifestRegistry: PluginManifestRegistry;
+}): string[] {
+  const { manifestRegistry } = params;
   return manifestRegistry.plugins
     .filter((plugin) => plugin.channels.length > 0)
     .map((plugin) => plugin.id);
+}
+
+export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  manifestRegistry: PluginManifestRegistry;
+}): string[] {
+  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  if (configuredChannelIds.size === 0) {
+    return [];
+  }
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
+    manifestRegistry: params.manifestRegistry,
+  });
+  const activationSource = {
+    plugins: pluginsConfig,
+    rootConfig: params.config,
+  };
+  return params.index.plugins
+    .filter(
+      (plugin) =>
+        hasConfiguredStartupChannel({
+          plugin,
+          manifestRegistry: params.manifestRegistry,
+          configuredChannelIds,
+        }) &&
+        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
+        canStartConfiguredChannelPlugin({
+          plugin,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          manifestRegistry: params.manifestRegistry,
+        }),
+    )
+    .map((plugin) => plugin.pluginId);
 }
 
 export function resolveConfiguredDeferredChannelPluginIds(params: {
@@ -200,16 +244,11 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
-  if (configuredChannelIds.size === 0) {
-    return [];
-  }
   const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index,
     config: params.config,
@@ -217,45 +256,24 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
     env: params.env,
     includeDisabled: true,
   });
-  const activationSource = {
-    plugins: pluginsConfig,
-    rootConfig: params.config,
-  };
-  return index.plugins
-    .filter(
-      (plugin) =>
-        hasConfiguredStartupChannel({ plugin, manifestRegistry, configuredChannelIds }) &&
-        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
-        canStartConfiguredChannelPlugin({
-          plugin,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          manifestRegistry,
-        }),
-    )
-    .map((plugin) => plugin.pluginId);
+  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
+    config: params.config,
+    env: params.env,
+    index,
+    manifestRegistry,
+  });
 }
 
-export function resolveGatewayStartupPluginIds(params: {
+export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
+    manifestRegistry: params.manifestRegistry,
   });
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
@@ -263,7 +281,8 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const activationSourcePlugins = normalizePluginsConfigWithRegistry(
     activationSourceConfig.plugins,
-    index,
+    params.index,
+    { manifestRegistry: params.manifestRegistry },
   );
   const activationSource = {
     plugins: activationSourcePlugins,
@@ -276,17 +295,25 @@ export function resolveGatewayStartupPluginIds(params: {
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
-    normalizePluginId: createPluginRegistryIdNormalizer(index),
+    normalizePluginId: createPluginRegistryIdNormalizer(params.index, {
+      manifestRegistry: params.manifestRegistry,
+    }),
   });
-  return index.plugins
+  return params.index.plugins
     .filter((plugin) => {
-      if (hasConfiguredStartupChannel({ plugin, manifestRegistry, configuredChannelIds })) {
+      if (
+        hasConfiguredStartupChannel({
+          plugin,
+          manifestRegistry: params.manifestRegistry,
+          configuredChannelIds,
+        })
+      ) {
         return canStartConfiguredChannelPlugin({
           plugin,
           config: params.config,
           pluginsConfig,
           activationSource,
-          manifestRegistry,
+          manifestRegistry: params.manifestRegistry,
         });
       }
       if (
@@ -328,4 +355,33 @@ export function resolveGatewayStartupPluginIds(params: {
       return activationState.source === "explicit" || activationState.source === "default";
     })
     .map((plugin) => plugin.pluginId);
+}
+
+export function resolveGatewayStartupPluginIds(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const index = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeDisabled: true,
+  });
+  return resolveGatewayStartupPluginIdsFromRegistry({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+    index,
+    manifestRegistry,
+  });
 }

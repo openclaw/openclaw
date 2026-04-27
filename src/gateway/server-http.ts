@@ -8,11 +8,20 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { A2UI_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
+import {
+  A2UI_PATH,
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
+} from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -52,29 +61,31 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
+import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import {
-  type AuthorizedGatewayHttpRequest,
-  authorizeGatewayHttpRequestOrReply,
-  getBearerToken,
-  resolveHttpBrowserOriginPolicy,
-} from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
-import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
-import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-runtime-scopes.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
-  type PluginHttpRequestHandler,
   type PluginRoutePathContext,
-} from "./server/plugins-http.js";
+} from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { VOICECLAW_REALTIME_PATH } from "./voiceclaw-realtime/paths.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type PluginHttpRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -95,6 +106,11 @@ let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js"
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let voiceClawRealtimeUpgradeModulePromise:
   | Promise<typeof import("./voiceclaw-realtime/upgrade.js")>
+  | undefined;
+let canvasAuthModulePromise: Promise<typeof import("./server/http-auth.js")> | undefined;
+let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> | undefined;
+let pluginRouteRuntimeScopesModulePromise:
+  | Promise<typeof import("./server/plugin-route-runtime-scopes.js")>
   | undefined;
 
 function getIdentityAvatarModule() {
@@ -150,6 +166,21 @@ function getToolsInvokeHttpModule() {
 function getVoiceClawRealtimeUpgradeModule() {
   voiceClawRealtimeUpgradeModulePromise ??= import("./voiceclaw-realtime/upgrade.js");
   return voiceClawRealtimeUpgradeModulePromise;
+}
+
+function getCanvasAuthModule() {
+  canvasAuthModulePromise ??= import("./server/http-auth.js");
+  return canvasAuthModulePromise;
+}
+
+function getHttpAuthUtilsModule() {
+  httpAuthUtilsModulePromise ??= import("./http-auth-utils.js");
+  return httpAuthUtilsModulePromise;
+}
+
+function getPluginRouteRuntimeScopesModule() {
+  pluginRouteRuntimeScopesModulePromise ??= import("./server/plugin-route-runtime-scopes.js");
+  return pluginRouteRuntimeScopesModulePromise;
 }
 
 type HookDispatchers = {
@@ -270,6 +301,16 @@ function isA2uiPath(pathname: string): boolean {
   return pathname === A2UI_PATH || pathname.startsWith(`${A2UI_PATH}/`);
 }
 
+function isCanvasPath(pathname: string): boolean {
+  return (
+    pathname === A2UI_PATH ||
+    pathname.startsWith(`${A2UI_PATH}/`) ||
+    pathname === CANVAS_HOST_PATH ||
+    pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
+    pathname === CANVAS_WS_PATH
+  );
+}
+
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
   return (
     pathContext.malformedEncoding ||
@@ -291,6 +332,7 @@ async function canRevealReadinessDetails(params: {
     return false;
   }
 
+  const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
   const bearerToken = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.resolvedAuth,
@@ -461,6 +503,7 @@ function buildPluginRequestStages(params: {
         if ((await params.getGatewayAuthBypassPaths()).has(params.requestPath)) {
           return false;
         }
+        const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
         const requestAuth = await authorizeGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
@@ -474,6 +517,8 @@ function buildPluginRequestStages(params: {
         }
         pluginGatewayAuthSatisfied = true;
         pluginGatewayRequestAuth = requestAuth;
+        const { resolvePluginRouteRuntimeOperatorScopes } =
+          await getPluginRouteRuntimeScopesModule();
         pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
           params.req,
           requestAuth,
@@ -887,6 +932,7 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
+  loadConfig?: () => OpenClawConfig;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -908,14 +954,21 @@ export function createGatewayHttpServer(opts: {
     getReadiness,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
+  const loadGatewayConfig = opts.loadConfig ?? loadConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
-        void handleRequest(req, res);
+        void handleRequestWithTrace(req, res);
       })
     : createHttpServer((req, res) => {
-        void handleRequest(req, res);
+        void handleRequestWithTrace(req, res);
       });
+
+  function handleRequestWithTrace(req: IncomingMessage, res: ServerResponse) {
+    return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+      handleRequest(req, res),
+    );
+  }
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     setDefaultSecurityHeaders(res, {
@@ -928,7 +981,21 @@ export function createGatewayHttpServer(opts: {
     }
 
     try {
-      const configSnapshot = loadConfig();
+      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
+        await handleGatewayProbeRequest(
+          req,
+          res,
+          requestPath,
+          getResolvedAuth(),
+          [],
+          false,
+          getReadiness,
+        );
+        return;
+      }
+
+      const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -939,9 +1006,9 @@ export function createGatewayHttpServer(opts: {
       if (scopedCanvas.rewrittenUrl) {
         req.url = scopedCanvas.rewrittenUrl;
       }
-      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const scopedRequestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       const pluginPathContext = handlePluginRequest
-        ? resolvePluginRoutePathContext(requestPath)
+        ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
       const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
@@ -951,7 +1018,7 @@ export function createGatewayHttpServer(opts: {
             handleGatewayProbeRequest(
               req,
               res,
-              requestPath,
+              scopedRequestPath,
               resolvedAuth,
               trustedProxies,
               allowRealIpFallback,
@@ -963,7 +1030,7 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
-      if (openAiCompatEnabled && isOpenAiModelsPath(requestPath)) {
+      if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
           run: async () =>
@@ -975,7 +1042,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openAiCompatEnabled && isEmbeddingsPath(requestPath)) {
+      if (openAiCompatEnabled && isEmbeddingsPath(scopedRequestPath)) {
         requestStages.push({
           name: "embeddings",
           run: async () =>
@@ -987,7 +1054,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isToolsInvokePath(requestPath)) {
+      if (isToolsInvokePath(scopedRequestPath)) {
         requestStages.push({
           name: "tools-invoke",
           run: async () =>
@@ -999,7 +1066,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isSessionKillPath(requestPath)) {
+      if (isSessionKillPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-kill",
           run: async () =>
@@ -1011,7 +1078,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (isSessionHistoryPath(requestPath)) {
+      if (isSessionHistoryPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-history",
           run: async () =>
@@ -1024,7 +1091,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openResponsesEnabled && isOpenResponsesPath(requestPath)) {
+      if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {
         requestStages.push({
           name: "openresponses",
           run: async () =>
@@ -1037,7 +1104,7 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      if (openAiChatCompletionsEnabled && isOpenAiChatCompletionsPath(requestPath)) {
+      if (openAiChatCompletionsEnabled && isOpenAiChatCompletionsPath(scopedRequestPath)) {
         requestStages.push({
           name: "openai",
           run: async () =>
@@ -1054,9 +1121,10 @@ export function createGatewayHttpServer(opts: {
         requestStages.push({
           name: "canvas-auth",
           run: async () => {
-            if (!isCanvasPath(requestPath)) {
+            if (!isCanvasPath(scopedRequestPath)) {
               return false;
             }
+            const { authorizeCanvasRequest } = await getCanvasAuthModule();
             const ok = await authorizeCanvasRequest({
               req,
               auth: resolvedAuth,
@@ -1076,7 +1144,7 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "a2ui",
-          run: () => (isA2uiPath(requestPath) ? handleA2uiHttpRequest(req, res) : false),
+          run: () => (isA2uiPath(scopedRequestPath) ? handleA2uiHttpRequest(req, res) : false),
         });
         requestStages.push({
           name: "canvas-http",
@@ -1090,7 +1158,7 @@ export function createGatewayHttpServer(opts: {
         ...buildPluginRequestStages({
           req,
           res,
-          requestPath,
+          requestPath: scopedRequestPath,
           getGatewayAuthBypassPaths: () => getCachedPluginGatewayAuthBypassPaths(configSnapshot),
           pluginPathContext,
           handlePluginRequest,
@@ -1206,7 +1274,7 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
-    void (async () => {
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
@@ -1223,6 +1291,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (canvasHost) {
         if (url.pathname === CANVAS_WS_PATH) {
+          const { authorizeCanvasRequest } = await getCanvasAuthModule();
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -1325,7 +1394,7 @@ export function attachGatewayUpgradeHandler(opts: {
         releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
-    })().catch((err) => {
+    }).catch((err) => {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);

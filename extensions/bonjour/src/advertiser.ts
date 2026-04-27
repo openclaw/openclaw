@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -89,14 +90,59 @@ async function loadCiaoModule(): Promise<CiaoModule> {
   return ciaoModulePromise;
 }
 
-function isDisabledByEnv() {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
+function readBonjourDisableOverride(): boolean | null {
+  const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (isTruthyEnvValue(raw)) {
     return true;
   }
+  switch (normalized) {
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return null;
+  }
+}
+
+function isContainerEnvironment() {
+  for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
+    try {
+      if (fs.existsSync(sentinelPath)) {
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
+    return /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/u.test(
+      cgroup,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isDisabledByEnv() {
   if (process.env.NODE_ENV === "test") {
     return true;
   }
   if (process.env.VITEST) {
+    return true;
+  }
+  const envOverride = readBonjourDisableOverride();
+  if (envOverride !== null) {
+    return envOverride;
+  }
+  if (isContainerEnvironment()) {
     return true;
   }
   return false;
