@@ -496,23 +496,21 @@ export class TwilioProvider implements VoiceCallProvider {
     statusUrl.searchParams.set("callId", input.callId);
     statusUrl.searchParams.set("type", "status"); // Differentiate from TwiML requests
 
-    // Store TwiML content if provided (for notify mode)
-    // We now serve it from the webhook endpoint instead of sending inline
-    if (input.inlineTwiml) {
-      this.twimlStorage.set(input.callId, input.inlineTwiml);
-      this.notifyCalls.add(input.callId);
-    }
-
-    // Build request params - always use URL-based TwiML.
-    // Twilio silently ignores `StatusCallback` when using the inline `Twiml` parameter.
     const params: Record<string, string | string[]> = {
       To: input.to,
       From: input.from,
-      Url: url.toString(), // TwiML serving endpoint
-      StatusCallback: statusUrl.toString(), // Separate status callback endpoint
+      StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
     };
+
+    if (input.inlineTwiml) {
+      // Notify-mode calls are one-shot messages. Send their TwiML directly so the
+      // initial answer path does not depend on a public webhook/tunnel roundtrip.
+      params.Twiml = input.inlineTwiml;
+    } else {
+      params.Url = url.toString();
+    }
 
     const result = await this.apiRequest<TwilioCallResponse>("/Calls.json", params);
 
