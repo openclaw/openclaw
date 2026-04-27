@@ -550,9 +550,12 @@ describe("update-cli", () => {
         env: expect.objectContaining({
           OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1",
         }),
-        timeout: 30_000,
+        timeout: 120_000,
       }),
     );
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("Refreshing shell completion cache"))).toBe(true);
+    expect(logs.some((line) => line.includes("Completion cache refreshed in"))).toBe(true);
   });
 
   it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
@@ -575,7 +578,7 @@ describe("update-cli", () => {
     await updateCliShared.tryWriteCompletionCache(root, false);
 
     const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
+    expect(logs.some((line) => line.includes("timed out after 120s"))).toBe(true);
     expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
     expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
   });
