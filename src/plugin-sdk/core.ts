@@ -243,7 +243,7 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-var cachedSdkChatChannelMeta:
+let cachedSdkChatChannelMeta:
   | {
       cacheKey: string;
       metaById: ReturnType<typeof buildChatChannelMetaById>;
@@ -503,8 +503,12 @@ export function defineChannelPluginEntry<TPlugin>({
         registerCliMetadata?.(api);
         return;
       }
-      setRuntime?.(api.runtime);
       api.registerChannel({ plugin: plugin as ChannelPlugin });
+      setRuntime?.(api.runtime);
+      if (api.registrationMode === "discovery") {
+        registerCliMetadata?.(api);
+        return;
+      }
       if (api.registrationMode !== "full") {
         return;
       }

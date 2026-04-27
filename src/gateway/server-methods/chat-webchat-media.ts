@@ -113,8 +113,7 @@ function mimeTypeForPath(filePath: string): string {
 
 function estimateBase64DecodedBytes(base64: string): number {
   const sanitized = base64.replace(/\s+/g, "");
-  const padding =
-    sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
+  const padding = sanitized.endsWith("==") ? 2 : sanitized.endsWith("=") ? 1 : 0;
   return Math.floor((sanitized.length * 3) / 4) - padding;
 }
 
@@ -163,6 +162,9 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
   const seen = new Set<string>();
   const blocks: Array<Record<string, unknown>> = [];
   for (const payload of payloads) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
       const url = raw.trim();
@@ -195,6 +197,9 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   let hasImage = false;
 
   for (const payload of payloads) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const visibleText = payload.text?.trim();
     const text =
       visibleText && !isSuppressedControlReplyText(visibleText) ? visibleText : undefined;
@@ -232,7 +237,9 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       payloadHasImage = true;
     }
     const needsSyntheticText =
-      payloadMediaBlocks.length > 0 && (!text || replyDirectivePrefix) && transcriptTextParts.length === 0;
+      payloadMediaBlocks.length > 0 &&
+      (!text || replyDirectivePrefix) &&
+      transcriptTextParts.length === 0;
     const syntheticText = needsSyntheticText
       ? payloadHasAudio && payloadHasImage
         ? "Media reply"

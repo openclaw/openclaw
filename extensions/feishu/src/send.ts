@@ -268,7 +268,10 @@ function parseFeishuMessageItem(
     messageId: item.message_id ?? fallbackMessageId ?? "",
     chatId: item.chat_id ?? "",
     chatType:
-      item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+      item.chat_type === "group" ||
+      item.chat_type === "topic_group" ||
+      item.chat_type === "private" ||
+      item.chat_type === "p2p"
         ? item.chat_type
         : undefined,
     senderId: item.sender?.id,
@@ -276,7 +279,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };
 }

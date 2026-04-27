@@ -20,6 +20,97 @@ vi.mock("../infra/agent-events.js", () => ({
   },
 }));
 
+vi.mock("../cli/deps.js", () => ({
+  createDefaultDeps: () => ({}),
+}));
+
+vi.mock("../config/sessions.js", () => ({
+  resolveAgentMainSessionKey: () => "agent:main:main",
+  resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  updateSessionStore: vi.fn(),
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: () => "main",
+}));
+
+vi.mock("../agents/defaults.js", () => ({
+  DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  resolveThinkingDefault: () => undefined,
+}));
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({}),
+}));
+
+vi.mock("../gateway/cli-session-history.js", () => ({
+  augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
+    localMessages ?? [],
+}));
+
+vi.mock("../gateway/chat-display-projection.js", () => ({
+  projectChatDisplayMessages: (messages: unknown[]) => messages,
+  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
+  resolveEffectiveChatHistoryMaxChars: () => 100_000,
+}));
+
+vi.mock("../gateway/server-constants.js", () => ({
+  getMaxChatHistoryMessagesBytes: () => 100_000,
+}));
+
+vi.mock("../gateway/server-methods/chat.js", () => ({
+  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
+  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
+  enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
+  replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+}));
+
+vi.mock("../gateway/session-utils.js", () => ({
+  listAgentsForGateway: () => [],
+  listSessionsFromStore: () => ({ sessions: [] }),
+  loadCombinedSessionStoreForGateway: () => ({
+    storePath: "/tmp/openclaw-sessions.json",
+    store: {},
+  }),
+  loadSessionEntry: (sessionKey: string) => ({
+    cfg: {},
+    canonicalKey: sessionKey,
+    entry: {},
+  }),
+  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
+  readSessionMessages: () => [],
+  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+    canonicalKey: key,
+    storePath: "/tmp/openclaw-sessions.json",
+  }),
+  resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
+}));
+
+vi.mock("../gateway/server-model-catalog.js", () => ({
+  loadGatewayModelCatalog: () => [],
+}));
+
+vi.mock("../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
+}));
+
+vi.mock("../gateway/session-utils.fs.js", () => ({
+  capArrayByJsonBytes: (items: unknown[]) => ({ items }),
+}));
+
+vi.mock("../gateway/sessions-patch.js", () => ({
+  applySessionsPatchToStore: () => ({ entry: {} }),
+}));
+
+vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
+  injectTimestamp: (message: string) => message,
+  timestampOptsFromConfig: () => ({}),
+}));
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error?: unknown) => void;
@@ -138,6 +229,63 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
+  });
+
+  it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "answer shortly",
+      runId: "run-local-no",
+    });
+
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "assistant",
+      data: { text: "No", delta: "No" },
+    });
+    registeredListener?.({
+      runId: "run-local-no",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "No" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map(
+        (entry) =>
+          entry.payload as { state?: string; message?: { content?: Array<{ text?: string }> } },
+      );
+    const nonEmptyDeltas = chatPayloads.filter(
+      (payload) => payload.state === "delta" && payload.message?.content?.[0]?.text,
+    );
+    expect(nonEmptyDeltas).toHaveLength(0);
+    expect(chatPayloads.at(-1)).toEqual(
+      expect.objectContaining({
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "No" }],
+          timestamp: expect.any(Number),
+        },
+      }),
+    );
   });
 
   it("emits side-result events for local /btw runs", async () => {

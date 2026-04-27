@@ -205,8 +205,11 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
+  const basePrompt = cliSessionIdToUse
+    ? params.prompt
+    : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+    prependBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
@@ -270,7 +273,7 @@ export async function executePreparedCliRun(
         : undefined;
       try {
         cliBackendLog.info(
-          `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${params.prompt.length}`,
+          `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${basePrompt.length}`,
         );
         const logOutputText =
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
@@ -417,13 +420,14 @@ export async function executePreparedCliRun(
           input: stdinPayload,
           onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
         });
+        let replyBackendCompleted = false;
         const replyBackendHandle = params.replyOperation
           ? {
               kind: "cli" as const,
               cancel: () => {
                 managedRun.cancel("manual-cancel");
               },
-              isStreaming: () => false,
+              isStreaming: () => !replyBackendCompleted,
             }
           : undefined;
         if (replyBackendHandle) {
@@ -440,6 +444,7 @@ export async function executePreparedCliRun(
         try {
           result = await managedRun.wait();
         } finally {
+          replyBackendCompleted = true;
           if (replyBackendHandle) {
             params.replyOperation?.detachBackend(replyBackendHandle);
           }

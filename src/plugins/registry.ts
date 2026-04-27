@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
@@ -7,6 +6,10 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
 import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
@@ -28,15 +31,21 @@ import {
   registerDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
+import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
+import {
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
+import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
-import { PI_EMBEDDED_EXTENSION_RUNTIME_ID } from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -81,6 +90,7 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -96,6 +106,7 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -163,6 +174,7 @@ export type {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
+  allowConversationAccess?: boolean;
 };
 
 const constrainLegacyPromptInjectionHook = (
@@ -189,31 +201,53 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
 
+type PluginRegistrationCapabilities = {
+  /** Broad registry writes that discovery and live activation both need. */
+  capabilityHandlers: boolean;
+  /** Runtime channel registration is suppressed for setup-only metadata loads. */
+  runtimeChannel: boolean;
+};
+
+/**
+ * Keep mode decoding centralized. PluginRegistrationMode is the public label;
+ * registry code should consume these booleans instead of duplicating string
+ * checks across individual registration handlers.
+ */
+function resolvePluginRegistrationCapabilities(
+  mode: PluginRegistrationMode,
+): PluginRegistrationCapabilities {
+  return {
+    capabilityHandlers: mode === "full" || mode === "discovery",
+    runtimeChannel: mode !== "setup-only",
+  };
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
+  const pluginsWithChannelRegistrationConflict = new Set<string>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
   };
 
-  const registerPiEmbeddedExtensionFactory = (
+  const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerEmbeddedExtensionFactory"]>[0],
+    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
   ) => {
     if (record.origin !== "bundled") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "only bundled plugins can register Pi embedded extension factories",
+        message: "only bundled plugins can register Codex app-server extension factories",
       });
       return;
     }
     if (
       !(record.contracts?.embeddedExtensionFactories ?? []).includes(
-        PI_EMBEDDED_EXTENSION_RUNTIME_ID,
+        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
       )
     ) {
       pushDiagnostic({
@@ -221,7 +255,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message:
-          'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
+          'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
       });
       return;
     }
@@ -230,32 +264,106 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "embedded extension factory must be a function",
+        message: "codex app-server extension factory must be a function",
       });
       return;
     }
     if (
-      registry.embeddedExtensionFactories.some(
+      registry.codexAppServerExtensionFactories.some(
         (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
       )
     ) {
       return;
     }
-    const safeFactory: ExtensionFactory = async (pi) => {
+    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
       try {
-        await factory(pi);
+        await factory(codex);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         registryParams.logger.warn(
-          `[plugins] embedded extension factory failed for ${record.id}: ${detail}`,
+          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
         );
       }
     };
-    registry.embeddedExtensionFactories.push({
+    registry.codexAppServerExtensionFactories.push({
       pluginId: record.id,
       pluginName: record.name,
       rawFactory: factory,
       factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentToolResultMiddleware = (
+    record: PluginRecord,
+    handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
+    options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent tool result middleware",
+      });
+      return;
+    }
+    if (typeof (handler as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool result middleware must be a function",
+      });
+      return;
+    }
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool result middleware must target at least one supported runtime",
+      });
+      return;
+    }
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
+    if (missing.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    const existing = registry.agentToolResultMiddlewares.find(
+      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
+    );
+    if (existing) {
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      return;
+    }
+    const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+      try {
+        return await handler(event, ctx);
+      } catch (error) {
+        registryParams.logger.warn(
+          `[plugins] agent tool result middleware failed for ${record.id}`,
+        );
+        throw error;
+      }
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler: safeHandler,
+      runtimes,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -266,6 +374,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
+    if (pluginsWithChannelRegistrationConflict.has(record.id)) {
+      return;
+    }
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
@@ -479,7 +590,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting) {
+      if (!params.replaceExisting && existing.pluginId !== record.id) {
         pushDiagnostic({
           level: "error",
           pluginId: record.id,
@@ -529,6 +640,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
@@ -544,23 +656,48 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const id = plugin.id;
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (mode !== "setup-only" && existingRuntime) {
+    if (registrationCapabilities.runtimeChannel && existingRuntime) {
+      if (existingRuntime.pluginId === record.id) {
+        existingRuntime.plugin = plugin;
+        existingRuntime.pluginName = record.name;
+        existingRuntime.source = record.source;
+        existingRuntime.rootDir = record.rootDir;
+        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        if (existingSetup) {
+          existingSetup.plugin = plugin;
+          existingSetup.pluginName = record.name;
+          existingSetup.source = record.source;
+          existingSetup.enabled = record.enabled;
+          existingSetup.rootDir = record.rootDir;
+        }
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
     if (existingSetup) {
+      if (existingSetup.pluginId === record.id) {
+        existingSetup.plugin = plugin;
+        existingSetup.pluginName = record.name;
+        existingSetup.source = record.source;
+        existingSetup.enabled = record.enabled;
+        existingSetup.rootDir = record.rootDir;
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
       });
+      pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
     record.channelIds.push(id);
@@ -572,7 +709,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       enabled: record.enabled,
       rootDir: record.rootDir,
     });
-    if (mode === "setup-only") {
+    if (!registrationCapabilities.runtimeChannel) {
       return;
     }
     registry.channels.push({
@@ -876,19 +1013,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
   ) => {
+    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
+      const normalized = normalizeCommandDescriptorName(raw);
+      if (!normalized) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
+        });
+      }
+      return normalized;
+    };
     const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => ({
-        name: descriptor.name.trim(),
-        description: descriptor.description.trim(),
-        hasSubcommands: descriptor.hasSubcommands,
-      }))
-      .filter((descriptor) => descriptor.name && descriptor.description);
+      .map((descriptor) => {
+        const name = normalizeCommandRoot(descriptor.name, "descriptor");
+        const description = sanitizeCommandDescriptorDescription(descriptor.description);
+        return name && description
+          ? {
+              name,
+              description,
+              hasSubcommands: descriptor.hasSubcommands,
+            }
+          : null;
+      })
+      .filter(
+        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+      );
     const commands = [
       ...(opts?.commands ?? []),
       ...descriptors.map((descriptor) => descriptor.name),
     ]
-      .map((cmd) => cmd.trim())
-      .filter(Boolean);
+      .map((cmd) => normalizeCommandRoot(cmd, "command"))
+      .filter((command): command is string => command !== null);
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -1047,6 +1204,38 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       service,
       source: record.source,
+      origin: record.origin,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerGatewayDiscoveryService = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+  ) => {
+    const id = service.id.trim();
+    if (!id) {
+      return;
+    }
+    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    if (existing) {
+      if (existing.pluginId === record.id) {
+        return;
+      }
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.gatewayDiscoveryServiceIds.push(id);
+    registry.gatewayDiscoveryServices.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      service,
+      source: record.source,
       rootDir: record.rootDir,
     });
   };
@@ -1145,6 +1334,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ) as PluginHookHandlerMap[K];
       }
     }
+    if (isConversationHookName(hookName)) {
+      const explicitConversationAccess = policy?.allowConversationAccess;
+      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+        });
+        return;
+      }
+      if (record.origin === "bundled" && explicitConversationAccess === false) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+        });
+        return;
+      }
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -1216,6 +1428,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -1230,7 +1443,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       logger: normalizeLogger(registryParams.logger),
       resolvePath: (input: string) => resolveUserPath(input),
       handlers: {
-        ...(registrationMode === "full"
+        ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
@@ -1269,6 +1482,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
+              registerGatewayDiscoveryService: (service) =>
+                registerGatewayDiscoveryService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
@@ -1336,8 +1551,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
               },
-              registerEmbeddedExtensionFactory: (factory) => {
-                registerPiEmbeddedExtensionFactory(record, factory);
+              registerCodexAppServerExtensionFactory: (factory) => {
+                registerCodexAppServerExtensionFactory(record, factory);
+              },
+              registerAgentToolResultMiddleware: (handler, options) => {
+                registerAgentToolResultMiddleware(record, handler, options);
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

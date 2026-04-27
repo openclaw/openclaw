@@ -2,6 +2,7 @@
   "id": "anthropic",
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "modelSupport": {
     "modelPrefixes": ["claude-"]
   },
@@ -22,6 +23,17 @@
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
       "groupHint": "Claude CLI + API key"
+    },
+    {
+      "provider": "anthropic",
+      "method": "setup-token",
+      "choiceId": "setup-token",
+      "choiceLabel": "Anthropic setup-token",
+      "choiceHint": "Manual token path",
+      "assistantPriority": 40,
+      "groupId": "anthropic",
+      "groupLabel": "Anthropic",
+      "groupHint": "Claude CLI + API key + token"
     },
     {
       "provider": "anthropic",

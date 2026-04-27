@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw-mcp-channels-e2e}"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-channels-e2e" OPENCLAW_IMAGE)"
 PORT="18789"
 TOKEN="mcp-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-mcp-e2e-$$"
@@ -15,8 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Building Docker image..."
-run_logged mcp-channels-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
 
 echo "Running in-container gateway + MCP smoke..."
 set +e
@@ -27,6 +26,8 @@ docker run --rm \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
+  -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
   -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
   -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
@@ -36,12 +37,36 @@ docker run --rm \
   bash -lc "set -euo pipefail
     entry=dist/index.mjs
     [ -f \"\$entry\" ] || entry=dist/index.js
+    mock_port=44081
+    export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$mock_port/v1\"
+    MOCK_PORT=\"\$mock_port\" node scripts/e2e/mock-openai-server.mjs >/tmp/mcp-channels-mock-openai.log 2>&1 &
+    mock_pid=\$!
+    for _ in \$(seq 1 80); do
+      if node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"; then
+        break
+      fi
+      sleep 0.1
+    done
+    node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"
     node --import tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/mcp-channels-gateway.log 2>&1 &
     gateway_pid=\$!
+    stop_process() {
+      pid=\"\$1\"
+      kill \"\$pid\" >/dev/null 2>&1 || true
+      for _ in \$(seq 1 40); do
+        if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+          wait \"\$pid\" >/dev/null 2>&1 || true
+          return
+        fi
+        sleep 0.25
+      done
+      kill -9 \"\$pid\" >/dev/null 2>&1 || true
+      wait \"\$pid\" >/dev/null 2>&1 || true
+    }
     cleanup_inner() {
-      kill \"\$gateway_pid\" >/dev/null 2>&1 || true
-      wait \"\$gateway_pid\" >/dev/null 2>&1 || true
+      stop_process \"\$gateway_pid\"
+      stop_process \"\$mock_pid\"
     }
     dump_gateway_log_on_error() {
       status=\$?
@@ -53,28 +78,19 @@ docker run --rm \
     }
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
-    for _ in \$(seq 1 80); do
-      if node --input-type=module -e '
-        import net from \"node:net\";
-        const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
-        const timeout = setTimeout(() => {
-          socket.destroy();
-          process.exit(1);
-        }, 400);
-        socket.on(\"connect\", () => {
-          clearTimeout(timeout);
-          socket.end();
-          process.exit(0);
-        });
-        socket.on(\"error\", () => {
-          clearTimeout(timeout);
-          process.exit(1);
-        });
-      ' >/dev/null 2>&1; then
+    gateway_ready=0
+    for _ in \$(seq 1 160); do
+      if grep -q '\[gateway\] ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
+        gateway_ready=1
         break
       fi
       sleep 0.25
     done
+    if [ \"\$gateway_ready\" -ne 1 ]; then
+      echo \"Gateway did not become ready\"
+      tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+      exit 1
+    fi
     node --import tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

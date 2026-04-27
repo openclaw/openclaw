@@ -6,7 +6,11 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
   ProviderPlugin,
+  ProviderExtraParamsForTransportContext,
   ProviderPrepareExtraParamsContext,
+  ProviderResolveAuthProfileIdContext,
+  ProviderFollowupFallbackRouteContext,
+  ProviderFollowupFallbackRouteResult,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -98,6 +102,10 @@ export function resolveProviderPluginsForHooks(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   providerRefs?: string[];
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -123,8 +131,10 @@ export function resolveProviderPluginsForHooks(params: {
       env,
       activate: false,
       cache: false,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      applyAutoEnable: params.applyAutoEnable,
+      bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
+      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     })
   ) {
     return [];
@@ -135,8 +145,10 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     cache: false,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    applyAutoEnable: params.applyAutoEnable,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
   cacheBucket.set(cacheKey, resolved);
   return resolved;
@@ -147,12 +159,20 @@ export function resolveProviderRuntimePlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin | undefined {
   return resolveProviderPluginsForHooks({
     config: params.config,
     workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
     env: params.env,
     providerRefs: [params.provider],
+    applyAutoEnable: params.applyAutoEnable,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
@@ -180,6 +200,37 @@ export function prepareProviderExtraParams(params: {
   context: ProviderPrepareExtraParamsContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.prepareExtraParams?.(params.context) ?? undefined;
+}
+
+export function resolveProviderExtraParamsForTransport(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderExtraParamsForTransportContext;
+}) {
+  return resolveProviderHookPlugin(params)?.extraParamsForTransport?.(params.context) ?? undefined;
+}
+
+export function resolveProviderAuthProfileId(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveAuthProfileIdContext;
+}): string | undefined {
+  const resolved = resolveProviderHookPlugin(params)?.resolveAuthProfileId?.(params.context);
+  return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+}
+
+export function resolveProviderFollowupFallbackRoute(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderFollowupFallbackRouteContext;
+}): ProviderFollowupFallbackRouteResult | undefined {
+  return resolveProviderHookPlugin(params)?.followupFallbackRoute?.(params.context) ?? undefined;
 }
 
 export function wrapProviderStreamFn(params: {

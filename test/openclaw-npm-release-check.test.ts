@@ -22,13 +22,8 @@ import {
 } from "../scripts/openclaw-npm-release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
@@ -344,6 +339,8 @@ describe("collectForbiddenPackedPathErrors", () => {
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
@@ -351,13 +348,16 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("allows legacy update verifier QA runtime sidecars", () => {
+  it("rejects legacy update verifier QA runtime sidecars", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
-    ).toEqual([]);
+    ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+    ]);
   });
 
   it("rejects root dist chunks that still reference the private qa lab", () => {
@@ -519,13 +519,11 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.18.1" },
-        peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
       }),
     ).toEqual([]);
   });
 
-  it("requires node-llama-cpp to stay an optional peer", () => {
+  it("rejects node-llama-cpp as a peer dependency", () => {
     expect(
       collectReleasePackageMetadataErrors({
         name: "openclaw",
@@ -534,7 +532,39 @@ describe("collectReleasePackageMetadataErrors", () => {
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
         peerDependencies: { "node-llama-cpp": "3.18.1" },
+        peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
       }),
-    ).toContain('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+    ).toEqual([
+      'package.json peerDependencies["node-llama-cpp"] must be omitted; keep it optional.',
+      'package.json peerDependenciesMeta["node-llama-cpp"] must be omitted; keep it optional.',
+    ]);
+  });
+
+  it("rejects node-llama-cpp as a direct runtime dependency", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        dependencies: { "node-llama-cpp": "3.18.1" },
+      }),
+    ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
+  });
+
+  it("rejects node-llama-cpp as an optional dependency", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        optionalDependencies: { "node-llama-cpp": "3.18.1" },
+      }),
+    ).toContain(
+      'package.json optionalDependencies["node-llama-cpp"] must be omitted; keep it operator-installed.',
+    );
   });
 });

@@ -12,7 +12,7 @@ type TokenjuicePackageManifest = {
 
 type TokenjuicePluginManifest = {
   contracts?: {
-    embeddedExtensionFactories?: string[];
+    agentToolResultMiddleware?: string[];
   };
 };
 
@@ -22,15 +22,15 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
-    expect(packageJson.dependencies?.tokenjuice).toBe("0.6.1");
+    expect(packageJson.dependencies?.tokenjuice).toBe("0.6.3");
     expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 
-  it("declares Pi embedded extension factory ownership in the manifest contract", () => {
+  it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as TokenjuicePluginManifest;
 
-    expect(manifest.contracts?.embeddedExtensionFactories).toEqual(["pi"]);
+    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["pi", "codex"]);
   });
 });

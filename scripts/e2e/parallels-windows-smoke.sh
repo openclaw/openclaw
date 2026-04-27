@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
+
 VM_NAME="Windows 11"
 SNAPSHOT_HINT="pre-openclaw-native-e2e-2026-03-12"
 MODE="both"
@@ -9,6 +12,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
+MODEL_ID_EXPLICIT=0
 INSTALL_URL="https://openclaw.ai/install.ps1"
 HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
@@ -41,14 +45,15 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_GIT_SETUP_S=1200
 TIMEOUT_INSTALL_S=420
-TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1800}"
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1200}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=420
-TIMEOUT_AGENT_S=600
+TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S:-900}"
+PHASE_STALE_WARN_S=60
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -134,6 +139,8 @@ Options:
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
+  --model <provider/model>    Override the model used for the agent-turn smoke.
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -177,6 +184,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --model)
+      MODEL_ID="$2"
+      MODEL_ID_EXPLICIT=1
       shift 2
       ;;
     --api-key-env|--openai-api-key-env)
@@ -245,19 +257,19 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    MODEL_ID="openai/gpt-5.4"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
     AUTH_CHOICE="apiKey"
     AUTH_KEY_FLAG="anthropic-api-key"
-    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_ANTHROPIC_MODEL:-anthropic/claude-sonnet-4-6}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
     ;;
   minimax)
     AUTH_CHOICE="minimax-global-api"
     AUTH_KEY_FLAG="minimax-api-key"
-    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_MINIMAX_MODEL:-minimax/MiniMax-M2.7}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
@@ -409,27 +421,50 @@ host_timeout_exec() {
   shift
   HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
 import os
+import signal
 import subprocess
 import sys
 
 timeout = int(os.environ["HOST_TIMEOUT_S"])
 args = sys.argv[1:]
 
+process = subprocess.Popen(
+    args,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+)
 try:
-    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-except subprocess.TimeoutExpired as exc:
-    if exc.stdout:
-        sys.stdout.buffer.write(exc.stdout)
-    if exc.stderr:
-        sys.stderr.buffer.write(exc.stderr)
+    stdout, stderr = process.communicate(timeout=timeout)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        pass
+    try:
+        stdout, stderr = process.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            pass
+        stdout, stderr = process.communicate()
+    if stdout:
+        sys.stdout.buffer.write(stdout)
+    if stderr:
+        sys.stderr.buffer.write(stderr)
     sys.stderr.write(f"host timeout after {timeout}s\n")
     raise SystemExit(124)
 
-if completed.stdout:
-    sys.stdout.buffer.write(completed.stdout)
-if completed.stderr:
-    sys.stderr.buffer.write(completed.stderr)
-raise SystemExit(completed.returncode)
+if stdout:
+    sys.stdout.buffer.write(stdout)
+if stderr:
+    sys.stderr.buffer.write(stderr)
+raise SystemExit(process.returncode)
 PY
 }
 
@@ -686,15 +721,26 @@ show_log_excerpt() {
   tail -n 80 "$log_path" >&2 || true
 }
 
+terminate_process_tree() {
+  local pid="$1"
+  local signal_name="${2:-TERM}"
+  local child
+  pgrep -P "$pid" 2>/dev/null | while read -r child; do
+    terminate_process_tree "$child" "$signal_name"
+  done
+  kill "-$signal_name" "$pid" >/dev/null 2>&1 || true
+}
+
 phase_run() {
   local phase_id="$1"
   local timeout_s="$2"
   shift 2
 
-  local log_path pid start rc timed_out
+  local log_path pid start rc timed_out next_warn summary
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
   start=$SECONDS
+  next_warn=$((start + PHASE_STALE_WARN_S))
   timed_out=0
 
   (
@@ -703,11 +749,17 @@ phase_run() {
   pid=$!
 
   while child_job_running "$pid"; do
+    if (( SECONDS >= next_warn )); then
+      summary="$(parallels_log_progress_extract python3 "$log_path")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      warn "$phase_id still running after $((SECONDS - start))s: $summary"
+      next_warn=$((SECONDS + PHASE_STALE_WARN_S))
+    fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
-      kill "$pid" >/dev/null 2>&1 || true
+      terminate_process_tree "$pid" TERM
       sleep 2
-      kill -9 "$pid" >/dev/null 2>&1 || true
+      terminate_process_tree "$pid" KILL
       break
     fi
     sleep 1
@@ -848,16 +900,7 @@ PY
 }
 
 current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+  parallels_package_current_build_commit
 }
 
 source_tree_dirty_for_build() {
@@ -865,46 +908,50 @@ source_tree_dirty_for_build() {
 }
 
 acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
 }
 
 release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
 }
 
 ensure_current_build() {
-  local head build_commit
-  acquire_build_lock
+  local head build_commit rc lock_owned
+  lock_owned=0
+  if [[ "${OPENCLAW_PARALLELS_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+    acquire_build_lock
+    lock_owned=1
+  fi
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
   if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
-    release_build_lock
+    if [[ "$lock_owned" -eq 1 ]]; then
+      release_build_lock
+    fi
     return
   fi
   say "Build dist for current head"
+  set +e
   pnpm build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
   build_commit="$(current_build_commit)"
-  release_build_lock
-  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+  set -e
+  if [[ "$lock_owned" -eq 1 ]]; then
+    release_build_lock
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  if [[ "$build_commit" != "$head" ]]; then
+    warn "dist/build-info.json still does not match HEAD after build"
+    return 1
+  fi
 }
 
 write_package_dist_inventory() {
-  node --import tsx --input-type=module --eval \
-    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+  parallels_package_write_dist_inventory
 }
 
 ensure_guest_git() {
@@ -951,7 +998,7 @@ ensure_mingit_zip() {
 }
 
 pack_main_tgz() {
-  local short_head pkg packed_commit
+  local short_head pkg packed_commit rc
   ensure_mingit_zip
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
@@ -966,13 +1013,21 @@ pack_main_tgz() {
     return
   fi
   say "Pack current main tgz"
-  ensure_current_build
-  write_package_dist_inventory
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  acquire_build_lock
+  set +e
+  {
+    OPENCLAW_PARALLELS_BUILD_LOCK_HELD=1 ensure_current_build &&
+      write_package_dist_inventory &&
+      short_head="$(git rev-parse --short HEAD)" &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  release_build_lock
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
@@ -2320,8 +2375,31 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_run_openclaw "" "" models set "$MODEL_ID"
+  guest_run_openclaw "" "" config set agents.defaults.skipBootstrap true --strict-json
+  guest_powershell "$(cat <<'EOF'
+$workspace = $env:OPENCLAW_WORKSPACE_DIR
+if (-not $workspace) {
+  $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+}
+$stateDir = Join-Path $workspace '.openclaw'
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+@'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels Windows smoke test assistant.
+'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
+@'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
+Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+EOF
+)"
   guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
-    agent --agent main --message "Reply with exact ASCII text OK only." --json
+    agent --agent main --session-id parallels-windows-smoke --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {

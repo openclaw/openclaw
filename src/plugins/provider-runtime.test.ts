@@ -22,12 +22,31 @@ type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
+type ResolveExternalAuthProfileCompatFallbackPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
+type ResolveExternalAuthProfileProviderPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
+type ResolveOwningPluginIdsForProvider =
+  typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+type ResolveBundledProviderPolicySurface =
+  typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
 );
+const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
+const resolveExternalAuthProfileProviderPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
+  (_) => undefined,
+);
+const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
+  (_) => null,
+);
+const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -44,7 +63,10 @@ let applyProviderResolvedModelCompatWithPlugins: typeof import("./provider-runti
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolveProviderAuthProfileId: typeof import("./provider-runtime.js").resolveProviderAuthProfileId;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
+let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
+let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
@@ -54,6 +76,7 @@ let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
+let resolveProviderSystemPromptContribution: typeof import("./provider-runtime.js").resolveProviderSystemPromptContribution;
 let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
 let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
@@ -124,7 +147,11 @@ function createOpenAiCatalogProviderPlugin(
     suppressBuiltInModel: ({ provider, modelId }) =>
       (provider === "openai" || provider === "azure-openai-responses") &&
       modelId === "gpt-5.3-codex-spark"
-        ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
+        ? {
+            suppress: true,
+            errorMessage:
+              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+          }
         : undefined,
     augmentModelCatalog: () => [
       { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
@@ -134,11 +161,6 @@ function createOpenAiCatalogProviderPlugin(
       { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
       { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
       { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-      {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
-      },
     ],
     ...overrides,
   };
@@ -232,16 +254,31 @@ describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./provider-public-artifacts.js", () => ({
-      resolveBundledProviderPolicySurface: () => null,
+      resolveBundledProviderPolicySurface: (provider: string) =>
+        resolveBundledProviderPolicySurfaceMock(provider),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
+      resolveExternalAuthProfileCompatFallbackPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileCompatFallbackPluginIdsMock(params as never),
+      resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileProviderPluginIdsMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
+    }));
+    vi.doMock("../logging/subsystem.js", () => ({
+      createSubsystemLogger: () => ({
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: providerRuntimeWarnMock,
+        error: vi.fn(),
+      }),
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
@@ -259,7 +296,10 @@ describe("provider-runtime", () => {
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
       prepareProviderExtraParams,
+      resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
+      resolveProviderExtraParamsForTransport,
+      resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
@@ -269,6 +309,7 @@ describe("provider-runtime", () => {
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
+      resolveProviderSystemPromptContribution,
       resolveExternalAuthProfilesWithPlugins,
       resolveProviderSyntheticAuthWithPlugin,
       shouldDeferProviderSyntheticProfileAuthWithPlugin,
@@ -293,12 +334,23 @@ describe("provider-runtime", () => {
 
   beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
+    providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
+    providerRuntimeTesting.resetCatalogHookProvidersCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
     isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReset();
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
+    resolveBundledProviderPolicySurfaceMock.mockReset();
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
+    providerRuntimeWarnMock.mockReset();
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -353,6 +405,104 @@ describe("provider-runtime", () => {
     );
   });
 
+  it("skips provider runtime loading when no plugin declares external auth hooks", () => {
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([]);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("warns once with a log-safe plugin id for undeclared external auth fallback plugins", () => {
+    const unsafePluginId = "legacy-provider\nWARN forged";
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([unsafePluginId]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "legacy-provider",
+        pluginId: unsafePluginId,
+        label: "Legacy Provider",
+        auth: [],
+        resolveExternalOAuthProfiles: () => [
+          {
+            profileId: "legacy-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "legacy-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        resolveExternalAuthProfilesWithPlugins({
+          env: process.env,
+          context: {
+            env: process.env,
+            store: { version: 1, profiles: {} },
+          },
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          profileId: "legacy-provider:external",
+        }),
+      ]);
+    }
+
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+    const warning = String(providerRuntimeWarnMock.mock.calls[0]?.[0] ?? "");
+    expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
+    expect(warning).not.toContain("\n");
+  });
+
+  it("does not warn for declared external auth plugins with different provider ids", () => {
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "demo-provider",
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        auth: [],
+        resolveExternalAuthProfiles: () => [
+          {
+            profileId: "demo-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "demo-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        profileId: "demo-provider:external",
+      }),
+    ]);
+    expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
+  });
+
   it("returns provider-prepared runtime auth for the matched provider", async () => {
     const prepareRuntimeAuth = vi.fn(async () => ({
       apiKey: "runtime-token",
@@ -400,6 +550,240 @@ describe("provider-runtime", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
     });
+  });
+
+  it("exposes provider-owned transport extra params", () => {
+    const extraParamsForTransport = vi.fn((_ctx) => ({
+      patch: {
+        providerTransportPatch: true,
+      },
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        extraParamsForTransport,
+      } satisfies ProviderPlugin,
+    ]);
+
+    expect(
+      resolveProviderExtraParamsForTransport({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({
+          extraParams: { transport: "websocket" },
+          transport: "websocket" as const,
+        }),
+      }),
+    ).toEqual({
+      patch: {
+        providerTransportPatch: true,
+      },
+    });
+    expect(extraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        model: MODEL,
+        transport: "websocket",
+      }),
+    );
+  });
+
+  it("exposes provider-owned auth profile and fallback route seams", () => {
+    const resolveAuthProfileId = vi.fn(() => "profile-b");
+    const followupFallbackRoute = vi.fn(() => ({
+      route: "dispatcher" as const,
+      reason: "origin unavailable",
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        resolveAuthProfileId,
+        followupFallbackRoute,
+      } satisfies ProviderPlugin,
+    ]);
+
+    expect(
+      resolveProviderAuthProfileId({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
+          profileOrder: ["profile-a", "profile-b"],
+          authStore: { version: 1, profiles: {}, order: {} },
+        }),
+      }),
+    ).toBe("profile-b");
+    expect(
+      resolveProviderFollowupFallbackRoute({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
+          payload: { text: "hello" },
+          originRoutable: false,
+          dispatcherAvailable: true,
+        }),
+      }),
+    ).toEqual({
+      route: "dispatcher",
+      reason: "origin unavailable",
+    });
+  });
+
+  it("applies the shared GPT-5 prompt overlay for any provider", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "This is a live chat, not a memo.",
+    );
+  });
+
+  it("respects the shared GPT-5 prompt overlay personality config", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "opencode",
+      config: {
+        agents: {
+          defaults: {
+            promptOverlays: {
+              gpt5: { personality: "off" },
+            },
+          },
+        },
+      },
+      context: {
+        provider: "opencode",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
+  it("lets provider-owned prompt overlays compose after the built-in GPT-5 overlay", () => {
+    const resolvePromptOverlay = vi.fn((ctx) => ({
+      stablePrefix: "provider overlay",
+      sectionOverrides: {
+        execution_bias: ctx.baseOverlay?.stablePrefix ? "saw built-in overlay" : "missing",
+      },
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        auth: [],
+        resolvePromptOverlay,
+      } satisfies ProviderPlugin,
+    ]);
+
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.stablePrefix).toContain("provider overlay");
+    expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
+    expect(resolvePromptOverlay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        baseOverlay: expect.objectContaining({
+          stablePrefix: expect.stringContaining("<persona_latch>"),
+        }),
+      }),
+    );
+  });
+
+  it("ignores OpenAI plugin personality fallback for non-OpenAI GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "This is a live chat, not a memo.",
+    );
+  });
+
+  it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openai-codex",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
+  it("keeps OpenAI plugin personality fallback for Azure OpenAI GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "azure-openai-responses",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
+  it("does not apply the shared GPT-5 prompt overlay to non-GPT-5 models", () => {
+    expect(
+      resolveProviderSystemPromptContribution({
+        provider: "openrouter",
+        context: {
+          provider: "openrouter",
+          modelId: "openai/gpt-4.1",
+          promptMode: "full",
+        } as never,
+      }),
+    ).toBeUndefined();
   });
 
   it("can normalize model ids through provider aliases without changing ownership", () => {
@@ -454,6 +838,31 @@ describe("provider-runtime", () => {
     ).toMatchObject({
       baseUrl: "https://normalized.example.com/v1",
     });
+  });
+
+  it("does not scan provider plugins after bundled policy surface handles config", () => {
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-completions",
+      models: [],
+    };
+    const normalizeConfig = vi.fn(() => providerConfig);
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      normalizeConfig,
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "openai",
+        context: {
+          provider: "openai",
+          providerConfig,
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("resolves provider config defaults through owner plugins", () => {
@@ -625,6 +1034,7 @@ describe("provider-runtime", () => {
 
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => undefined);
     const createStreamFn = vi.fn(() => vi.fn());
     const createEmbeddingProvider = vi.fn(async () => ({
@@ -763,7 +1173,7 @@ describe("provider-runtime", () => {
         {
           ...createOpenAiCatalogProviderPlugin({
             buildMissingAuthMessage: () =>
-              'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
+              'No API key found for provider "openai". Use openai/gpt-5.5.',
             buildUnknownModelHint,
           }),
         } as ProviderPlugin,
@@ -1356,6 +1766,8 @@ describe("provider-runtime", () => {
         cache: false,
       }),
     );
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {
@@ -1391,7 +1803,7 @@ describe("provider-runtime", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps cached provider hook results available during a nested provider load", () => {
@@ -1458,6 +1870,6 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
 
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 });

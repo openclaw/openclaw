@@ -1,17 +1,24 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
+import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   __testing as providerHookRuntimeTesting,
-  clearProviderRuntimeHookCache,
+  clearProviderRuntimeHookCache as clearProviderHookRuntimeCache,
   prepareProviderExtraParams,
-  resetProviderRuntimeHookCacheForTest,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
@@ -20,7 +27,13 @@ import {
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
-import { resolveCatalogHookProviderPluginIds } from "./providers.js";
+import {
+  resolveCatalogHookProviderPluginIds,
+  resolveExternalAuthProfileCompatFallbackPluginIds,
+  resolveExternalAuthProfileProviderPluginIds,
+  resolveOwningPluginIdsForProvider,
+} from "./providers.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
@@ -69,16 +82,162 @@ import type {
   ProviderWebSocketSessionPolicy,
   PluginTextTransforms,
 } from "./types.js";
+
+const log = createSubsystemLogger("plugins/provider-runtime");
+const warnedExternalAuthFallbackPluginIds = new Set<string>();
+let catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+let catalogHookProviderIdCacheWithoutConfig = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, string[]>
+>();
+let catalogHookProviderIdCacheByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>
+>();
+
+function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+  if (!normalized) {
+    return false;
+  }
+  if (normalizeProviderId(provider.id) === normalized) {
+    return true;
+  }
+  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+    (alias) => normalizeProviderId(alias) === normalized,
+  );
+}
+
+function hasExplicitProviderRuntimePluginActivation(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  if (!params.config) {
+    return true;
+  }
+  const ownerPluginIds =
+    resolveOwningPluginIdsForProvider({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }) ?? [];
+  if (ownerPluginIds.length === 0) {
+    return false;
+  }
+  const allow = new Set(params.config.plugins?.allow ?? []);
+  const entries = params.config.plugins?.entries ?? {};
+  return ownerPluginIds.some((pluginId) => allow.has(pluginId) || entries[pluginId] !== undefined);
+}
+
+function resetExternalAuthFallbackWarningCacheForTest(): void {
+  warnedExternalAuthFallbackPluginIds.clear();
+}
+
+function resetCatalogHookProvidersCacheForTest(): void {
+  catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+}
+
+function clearCatalogHookProviderIdCache(): void {
+  catalogHookProviderIdCacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
+  catalogHookProviderIdCacheByConfig = new WeakMap<
+    OpenClawConfig,
+    WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>
+  >();
+}
+
+function resolveCatalogHookProviderIdCacheBucket(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Map<string, string[]> {
+  if (!params.config) {
+    let bucket = catalogHookProviderIdCacheWithoutConfig.get(params.env);
+    if (!bucket) {
+      bucket = new Map<string, string[]>();
+      catalogHookProviderIdCacheWithoutConfig.set(params.env, bucket);
+    }
+    return bucket;
+  }
+
+  let envBuckets = catalogHookProviderIdCacheByConfig.get(params.config);
+  if (!envBuckets) {
+    envBuckets = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
+    catalogHookProviderIdCacheByConfig.set(params.config, envBuckets);
+  }
+  let bucket = envBuckets.get(params.env);
+  if (!bucket) {
+    bucket = new Map<string, string[]>();
+    envBuckets.set(params.env, bucket);
+  }
+  return bucket;
+}
+
+function buildCatalogHookProviderIdCacheKey(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const { roots } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}`;
+}
+
+function resolveCachedCatalogHookProviderPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const env = params.env ?? process.env;
+  const bucket = resolveCatalogHookProviderIdCacheBucket({
+    config: params.config,
+    env,
+  });
+  const key = buildCatalogHookProviderIdCacheKey({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const cached = bucket.get(key);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolveCatalogHookProviderPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  bucket.set(key, resolved);
+  return resolved;
+}
+
+export function clearProviderRuntimeHookCache(): void {
+  resetCatalogHookProvidersCacheForTest();
+  clearCatalogHookProviderIdCache();
+  clearProviderHookRuntimeCache();
+}
+
+export function resetProviderRuntimeHookCacheForTest(): void {
+  clearProviderRuntimeHookCache();
+}
+
 export {
-  clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
-  resetProviderRuntimeHookCacheForTest,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 };
 
 export const __testing = {
   ...providerHookRuntimeTesting,
+  resetExternalAuthFallbackWarningCacheForTest,
+  resetCatalogHookProvidersCacheForTest,
+  resetProviderRuntimeHookCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -87,19 +246,37 @@ function resolveProviderPluginsForCatalogHooks(params: {
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
+  const env = params.env ?? process.env;
+  let envCache = catalogHookProvidersCache.get(env);
+  if (!envCache) {
+    envCache = new Map<string, ProviderPlugin[]>();
+    catalogHookProvidersCache.set(env, envCache);
+  }
+  const cacheKey = JSON.stringify({
+    workspaceDir: workspaceDir ?? "",
+    plugins: params.config?.plugins ?? null,
+  });
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const onlyPluginIds = resolveCachedCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
-    env: params.env,
+    env,
   });
   if (onlyPluginIds.length === 0) {
+    envCache.set(cacheKey, []);
     return [];
   }
-  return resolveProviderPluginsForHooks({
+  const providers = resolveProviderPluginsForHooks({
     ...params,
     workspaceDir,
+    env,
     onlyPluginIds,
   });
+  envCache.set(cacheKey, providers);
+  return providers;
 }
 
 export function runProviderDynamicModel(params: {
@@ -119,10 +296,48 @@ export function resolveProviderSystemPromptContribution(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderSystemPromptContributionContext;
 }): ProviderSystemPromptContribution | undefined {
-  return (
-    resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
-    undefined
+  const plugin = resolveProviderRuntimePlugin(params);
+  const baseOverlay = resolveGpt5SystemPromptContribution({
+    config: params.context.config ?? params.config,
+    providerId: params.context.provider ?? params.provider,
+    modelId: params.context.modelId,
+  });
+  const providerOverlay =
+    plugin?.resolvePromptOverlay?.({
+      ...params.context,
+      baseOverlay,
+    }) ?? undefined;
+  return mergeProviderSystemPromptContributions(
+    mergeProviderSystemPromptContributions(baseOverlay, providerOverlay),
+    plugin?.resolveSystemPromptContribution?.(params.context) ?? undefined,
   );
+}
+
+function mergeProviderSystemPromptContributions(
+  base?: ProviderSystemPromptContribution,
+  override?: ProviderSystemPromptContribution,
+): ProviderSystemPromptContribution | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  const stablePrefix = mergeUniquePromptSections(base.stablePrefix, override.stablePrefix);
+  const dynamicSuffix = mergeUniquePromptSections(base.dynamicSuffix, override.dynamicSuffix);
+  return {
+    ...(stablePrefix ? { stablePrefix } : {}),
+    ...(dynamicSuffix ? { dynamicSuffix } : {}),
+    sectionOverrides: {
+      ...base.sectionOverrides,
+      ...override.sectionOverrides,
+    },
+  };
+}
+
+function mergeUniquePromptSections(...sections: Array<string | undefined>): string | undefined {
+  const uniqueSections = [...new Set(sections.filter((section) => section?.trim()))];
+  return uniqueSections.length > 0 ? uniqueSections.join("\n\n") : undefined;
 }
 
 export function transformProviderSystemPrompt(params: {
@@ -349,6 +564,7 @@ export function normalizeProviderConfigWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeConfigContext;
+  allowRuntimePluginLoad?: boolean;
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
@@ -357,23 +573,15 @@ export function normalizeProviderConfigWithPlugin(params: {
     const normalized = bundledSurface.normalizeConfig(params.context);
     return normalized && hasConfigChange(normalized) ? normalized : undefined;
   }
-  const matchedPlugin = resolveProviderHookPlugin(params);
+  if (!hasExplicitProviderRuntimePluginActivation(params)) {
+    return undefined;
+  }
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
+  const matchedPlugin = resolveProviderRuntimePlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
-  if (normalizedMatched && hasConfigChange(normalizedMatched)) {
-    return normalizedMatched;
-  }
-
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeConfig || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeConfig(params.context);
-    if (normalized && hasConfigChange(normalized)) {
-      return normalized;
-    }
-  }
-
-  return undefined;
+  return normalizedMatched && hasConfigChange(normalizedMatched) ? normalizedMatched : undefined;
 }
 
 export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
@@ -382,9 +590,13 @@ export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeConfigContext;
+  allowRuntimePluginLoad?: boolean;
 }): ModelProviderConfig | undefined {
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
   return (
-    resolveProviderHookPlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
+    resolveProviderRuntimePlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
     undefined
   );
 }
@@ -395,13 +607,17 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveConfigApiKeyContext;
+  allowRuntimePluginLoad?: boolean;
 }): string | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
   if (bundledSurface?.resolveConfigApiKey) {
     return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
   }
+  if (params.allowRuntimePluginLoad === false) {
+    return undefined;
+  }
   return normalizeOptionalString(
-    resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context),
+    resolveProviderRuntimePlugin(params)?.resolveConfigApiKey?.(params.context),
   );
 }
 
@@ -714,7 +930,44 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+  const discoveryPluginIds =
+    resolveOwningPluginIdsForProvider({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }) ?? [];
+  const discoveryProvider = (
+    discoveryPluginIds.length > 0
+      ? resolvePluginDiscoveryProvidersRuntime({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          onlyPluginIds: discoveryPluginIds,
+          discoveryEntriesOnly: true,
+        })
+      : []
+  ).find((provider) => matchesProviderPluginRef(provider, params.provider));
+  if (typeof discoveryProvider?.resolveSyntheticAuth === "function") {
+    return discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined;
+  }
+  const runtimeResolved = resolveProviderRuntimePlugin({
+    ...params,
+    applyAutoEnable: false,
+    bundledProviderAllowlistCompat: false,
+    bundledProviderVitestCompat: false,
+    installBundledRuntimeDeps: false,
+  })?.resolveSyntheticAuth?.(params.context);
+  if (runtimeResolved) {
+    return runtimeResolved;
+  }
+  return resolvePluginDiscoveryProvidersRuntime({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .find((provider) => provider.id === params.provider)
+    ?.resolveSyntheticAuth?.(params.context);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {
@@ -723,13 +976,48 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveExternalAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
+  const declaredPluginIds = new Set(externalAuthPluginIds);
+  const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+    declaredPluginIds,
+  });
+  const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  if (pluginIds.length === 0) {
+    return [];
+  }
   const matches: ProviderExternalAuthProfile[] = [];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHooks({
+    ...params,
+    workspaceDir,
+    env,
+    onlyPluginIds: pluginIds,
+  })) {
     const profiles =
       plugin.resolveExternalAuthProfiles?.(params.context) ??
       plugin.resolveExternalOAuthProfiles?.(params.context);
     if (!profiles || profiles.length === 0) {
       continue;
+    }
+    const pluginId = plugin.pluginId ?? plugin.id;
+    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
+      warnedExternalAuthFallbackPluginIds.add(pluginId);
+      // Deprecated compatibility path for plugins that still implement
+      // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders.
+      // Remove this warning with the fallback resolver after the migration window.
+      log.warn(
+        `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+      );
     }
     matches.push(...profiles);
   }

@@ -16,6 +16,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../subagent-spawn.js", () => ({
+  SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
@@ -32,6 +33,7 @@ vi.mock("../subagent-registry.js", () => ({
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
+let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
 
 describe("sessions_spawn tool", () => {
   let previousStateDir: string | undefined;
@@ -39,12 +41,14 @@ describe("sessions_spawn tool", () => {
 
   beforeAll(async () => {
     ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+    acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
   });
 
   beforeEach(async () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-spawn-tool-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
+    acpRuntimeRegistry.__testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -65,6 +69,114 @@ describe("sessions_spawn tool", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(testStateDir, { recursive: true, force: true });
+  });
+
+  function registerAcpBackendForTest() {
+    acpRuntimeRegistry.registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:codex:acp:1",
+          backend: "acpx",
+          runtimeSessionName: "codex",
+        })),
+        async *runTurn() {},
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
+    });
+  }
+
+  it("hides ACP runtime affordances when no ACP backend is loaded", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runtime?: { enum?: string[] };
+        resumeSessionId?: unknown;
+        streamTo?: unknown;
+      };
+    };
+
+    expect(tool.displaySummary).toBe("Spawn sub-agent sessions.");
+    expect(tool.description).not.toContain("ACP");
+    expect(tool.description).not.toContain('runtime="acp"');
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
+    expect(schema.properties?.resumeSessionId).toBeUndefined();
+    expect(schema.properties?.streamTo).toBeUndefined();
+  });
+
+  it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
+    registerAcpBackendForTest();
+
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runtime?: { enum?: string[] };
+        resumeSessionId?: unknown;
+        streamTo?: unknown;
+      };
+    };
+
+    expect(tool.displaySummary).toBe("Spawn sub-agent or ACP sessions.");
+    expect(tool.description).toContain('runtime="acp"');
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+    expect(schema.properties?.resumeSessionId).toBeDefined();
+    expect(schema.properties?.streamTo).toBeDefined();
+  });
+
+  it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
+    acpRuntimeRegistry.registerAcpRuntimeBackend({
+      id: "acpx",
+      healthy: () => false,
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:codex:acp:1",
+          backend: "acpx",
+          runtimeSessionName: "codex",
+        })),
+        async *runTurn() {},
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
+    });
+
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as { properties?: { runtime?: { enum?: string[] } } };
+
+    expect(tool.description).not.toContain("ACP");
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
+  });
+
+  it("rejects stale ACP runtime calls when no ACP backend is loaded", async () => {
+    const tool = createSessionsSpawnTool();
+
+    const result = await tool.execute("call-acp-unavailable", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      role: "codex",
+    });
+    expect(JSON.stringify(result.details)).toContain("no ACP runtime backend is loaded");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("hides ACP runtime affordances when ACP policy is disabled", () => {
+    registerAcpBackendForTest();
+
+    const tool = createSessionsSpawnTool({
+      config: {
+        acp: { enabled: false },
+      },
+    });
+    const schema = tool.parameters as { properties?: { runtime?: { enum?: string[] } } };
+
+    expect(tool.description).not.toContain("ACP");
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
   });
 
   it("uses subagent runtime by default", async () => {
@@ -276,6 +388,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it('rejects lightContext when runtime is not "subagent"', async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -293,6 +406,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "quietchat",
@@ -306,6 +420,7 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
+      runTimeoutSeconds: 45,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -321,6 +436,7 @@ describe("sessions_spawn tool", () => {
         task: "investigate the failing CI run",
         agentId: "codex",
         cwd: "/workspace",
+        runTimeoutSeconds: 45,
         thread: true,
         mode: "session",
         streamTo: "parent",
@@ -333,7 +449,31 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
+  it("forwards model override to ACP runtime spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2-model", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        model: "github-copilot/claude-sonnet-4.6",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("adds requested role to forwarded ACP failures", async () => {
+    registerAcpBackendForTest();
     hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
       status: "forbidden",
       error: "ACP disabled",
@@ -357,10 +497,10 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("forwards ACP sandbox options and requester sandbox context", async () => {
+  it("forwards ACP sandbox options", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
-      sandboxed: true,
     });
 
     await tool.execute("call-2b", {
@@ -377,7 +517,6 @@ describe("sessions_spawn tool", () => {
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:subagent:parent",
-        sandboxed: true,
       }),
     );
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
@@ -392,7 +531,29 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-sandboxed-acp", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      role: "codex",
+    });
+    expect(JSON.stringify(result.details)).toContain("sandboxed sessions");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("passes resumeSessionId through to ACP spawns", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -430,6 +591,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects attachments for ACP runtime", async () => {
+    registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "quietchat",

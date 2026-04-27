@@ -102,6 +102,7 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
@@ -201,6 +202,7 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
@@ -308,8 +310,13 @@ export const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
+    baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z
+      .array(
+        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
+      )
+      .optional(),
     cost: z
       .object({
         input: z.number().optional(),
@@ -337,6 +344,7 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 
@@ -493,12 +501,37 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
+const TtsPersonaPromptSchema = z
+  .object({
+    profile: z.string().optional(),
+    scene: z.string().optional(),
+    sampleContext: z.string().optional(),
+    style: z.string().optional(),
+    accent: z.string().optional(),
+    pacing: z.string().optional(),
+    constraints: z.array(z.string()).optional(),
+  })
+  .strict();
+const TtsPersonaSchema = z
+  .object({
+    label: z.string().optional(),
+    description: z.string().optional(),
+    provider: TtsProviderSchema.optional(),
+    fallbackPolicy: z
+      .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
+      .optional(),
+    prompt: TtsPersonaPromptSchema.optional(),
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
+  })
+  .strict();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
     enabled: z.boolean().optional(),
     mode: TtsModeSchema.optional(),
     provider: TtsProviderSchema.optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), TtsPersonaSchema).optional(),
     summaryModel: z.string().optional(),
     modelOverrides: z
       .object({
@@ -561,6 +594,7 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileArg: z.string().optional(),
     systemPromptFileConfigArg: z.string().optional(),
     systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),

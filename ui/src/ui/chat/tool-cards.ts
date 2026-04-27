@@ -7,7 +7,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./message-normalizer.ts";
+import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
@@ -303,10 +303,14 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(value: string): SidebarContent {
+export function buildSidebarContent(
+  value: string,
+  options?: { rawText?: string | null },
+): SidebarContent {
   return {
     kind: "markdown",
     content: value,
+    ...(options?.rawText ? { rawText: options.rawText } : {}),
   };
 }
 

@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -45,6 +46,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -54,6 +56,7 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -85,6 +88,7 @@ export type StatusArgs = {
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: boolean;
+  resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -149,7 +153,7 @@ function resolveConfiguredTextVerbosity(params: {
   );
 }
 
-function resolveRuntimeLabel(
+function resolveExecutionLabel(
   args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
@@ -191,6 +195,51 @@ function resolveRuntimeLabel(
   })();
   const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
   return `${runtime}/${sandboxMode}`;
+}
+
+const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
+  pi: "OpenClaw Pi Default",
+  codex: "OpenAI Codex",
+  "codex-cli": "OpenAI Codex",
+  "claude-cli": "Claude CLI",
+  "google-gemini-cli": "Gemini CLI",
+};
+
+function resolveAgentRuntimeLabel(
+  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
+    fallbackProvider?: string;
+  },
+): string {
+  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
+  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
+  if (acpAgent) {
+    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
+    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
+    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
+  }
+
+  const runtimeRaw =
+    normalizeOptionalString(args.resolvedHarness) ??
+    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
+    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
+  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  if (runtime && runtime !== "auto" && runtime !== "default") {
+    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  }
+
+  const providerRaw =
+    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+    normalizeOptionalString(args.fallbackProvider);
+  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
+  if (provider && isCliProvider(provider, args.config)) {
+    return (
+      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
+      `${provider} (cli)`
+    );
+  }
+
+  return AGENT_RUNTIME_LABELS.pi;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
@@ -402,6 +451,7 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
 const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  agentId?: string,
 ): string | null => {
   if (!config) {
     return null;
@@ -409,11 +459,33 @@ const formatVoiceModeLine = (
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
+    agentId,
   });
   if (!snapshot) {
     return null;
   }
-  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
+  const parts = [`🔊 Voice: ${snapshot.autoMode}`, `provider=${snapshot.provider}`];
+  if (snapshot.persona) {
+    parts.push(`persona=${snapshot.persona}`);
+  }
+  if (snapshot.displayName) {
+    parts.push(`name=${snapshot.displayName}`);
+  }
+  if (snapshot.model) {
+    parts.push(`model=${snapshot.model}`);
+  }
+  if (snapshot.voice) {
+    parts.push(`voice=${snapshot.voice}`);
+  }
+  if (snapshot.baseUrl) {
+    parts.push(
+      snapshot.customBaseUrl
+        ? `endpoint=custom(${snapshot.baseUrl})`
+        : `endpoint=${snapshot.baseUrl}`,
+    );
+  }
+  parts.push(`limit=${snapshot.maxLength}`, `summary=${snapshot.summarize ? "on" : "off"}`);
+  return parts.join(" · ");
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -650,7 +722,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.agent?.elevatedDefault ??
     "on";
 
-  const runtime = { label: resolveRuntimeLabel(args) };
+  const execution = { label: resolveExecutionLabel(args) };
+  const agentRuntimeLabel = resolveAgentRuntimeLabel({
+    config: args.config,
+    sessionEntry: args.sessionEntry,
+    resolvedHarness: args.resolvedHarness,
+    fallbackProvider: activeProvider,
+  });
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
@@ -703,9 +781,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: activeModel,
   });
   const optionParts = [
-    `Runtime: ${runtime.label}`,
+    `Execution: ${execution.label}`,
+    `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    fastMode ? "Fast: on" : null,
+    formatFastModeLabel(fastMode),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -834,7 +913,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
   return [
     versionLine,

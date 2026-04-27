@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  buildRestartSuccessContinuation,
   consumeRestartSentinel,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -90,6 +92,20 @@ describe("restart sentinel", () => {
     expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
   });
 
+  it("uses the exact auto-recovery message for config recovery notices", () => {
+    const payload = {
+      kind: "config-auto-recovery" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message:
+        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
+      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
+  });
+
   it("formatRestartSentinelMessage falls back to summary when no message", () => {
     const payload = {
       kind: "update" as const,
@@ -167,6 +183,31 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+});
+
+describe("restart success continuation", () => {
+  it("builds the default agent turn for session-scoped restarts", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("keeps explicit continuation messages", () => {
+    expect(
+      buildRestartSuccessContinuation({
+        sessionKey: "agent:main:main",
+        continuationMessage: "wake after restart",
+      }),
+    ).toEqual({
+      kind: "agentTurn",
+      message: "wake after restart",
+    });
+  });
+
+  it("stays silent without session context", () => {
+    expect(buildRestartSuccessContinuation({})).toBeNull();
   });
 });
 

@@ -53,7 +53,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.4` model string is still
+ * so an Anthropic request with an `openai/gpt-5.5` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -78,7 +78,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.4` or `claude-opus-4-6`.
+  // `gpt-5.5` or `claude-opus-4-6`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -99,6 +99,7 @@ type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
+  plannedToolArgs?: Record<string, unknown>;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -146,10 +147,17 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa che
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
   "The previous attempt did not produce a user-visible answer.";
+const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
+  /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
+const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
+const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -333,21 +341,33 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
-function countImageInputs(input: ResponsesInputItem[]) {
+function countImageInputs(value: unknown): number {
+  const seen = new WeakSet<object>();
+  const stack = [value];
   let count = 0;
-  for (const item of input) {
-    if (!Array.isArray(item.content)) {
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    visited += 1;
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        stack.push(entry);
+      }
       continue;
     }
-    for (const entry of item.content) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_image"
-      ) {
-        count += 1;
-      }
+    if (!current || typeof current !== "object") {
+      continue;
     }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
+      count += 1;
+    }
+    stack.push(record.content, record.image_url, record.source);
   }
   return count;
 }
@@ -517,6 +537,14 @@ function extractExactReplyDirective(text: string) {
   return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
+function extractFinishExactlyDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+}
+
 function extractExactMarkerDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
   if (backtickedMatch) {
@@ -577,6 +605,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   }
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
+  const context = extractBareToolArg(text, "context")?.toLowerCase();
   const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
   const runTimeoutSeconds =
     runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
@@ -587,6 +616,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
+    ...(context === "fork" || context === "isolated" ? { context } : {}),
     ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
@@ -641,6 +671,8 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
@@ -724,6 +756,16 @@ function buildAssistantText(
   if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
+    return [
+      "Animated GIF QA checklist ready.",
+      "- Confirm true animation, not a static preview.",
+      "- Verify dimensions and product UI fit.",
+      "- Record attribution and license.",
+      "- Keep a local copy before using the asset.",
+      "- Re-open the copied file for final verification.",
+    ].join("\n");
+  }
   if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
     return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
@@ -745,10 +787,29 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
+  }
+  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
+    return "FORKED-CONTEXT-ALPHA";
+  }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
   if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
+  }
+  if (
+    /forked subagent context qa check/i.test(prompt) &&
+    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
+  ) {
+    return [
+      "Worked",
+      "- FORKED-CONTEXT-ALPHA",
+      "Evidence",
+      "- The forked child recovered the visible code from requester transcript context.",
+      "Blocked",
+      "- None.",
+    ].join("\n");
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
@@ -778,6 +839,9 @@ function buildAssistantText(
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
   }
+  if (finishExactlyDirective) {
+    return finishExactlyDirective;
+  }
   if (prompt) {
     return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;
   }
@@ -789,6 +853,79 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
   return buildToolCallEventsWithArgs("read", { path: targetPath });
 }
 
+function buildReleaseAuditJson() {
+  return `${JSON.stringify(
+    {
+      verified: true,
+      findings: [
+        {
+          id: "REL-GATEWAY-417",
+          source: "src/gateway/reconnect.ts",
+          status: "retry jitter verified, resume token fallback still needs manual spot check",
+        },
+        {
+          id: "REL-CHANNEL-238",
+          source: "src/channels/delivery.ts",
+          status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+        },
+        {
+          id: "REL-CRON-904",
+          source: "src/scheduling/cron.ts",
+          status: "single-run lock verified for restart wakeups",
+        },
+        {
+          id: "REL-MEMORY-552",
+          source: "src/memory/recall.ts",
+          status:
+            "fallback summary survives empty memory search; ranking sample needs second reviewer",
+        },
+        {
+          id: "REL-PLUGIN-319",
+          source: "src/plugins/runtime.ts",
+          status: "bundled runtime manifest loads cleanly after restart",
+        },
+        {
+          id: "REL-INSTALL-846",
+          source: "install/update.ts",
+          status: "update smoke passed from previous stable tag",
+        },
+        {
+          id: "REL-DOCS-611",
+          source: "docs/operator-notes.md",
+          status:
+            "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+        },
+        {
+          id: "REL-UI-BLOCKED",
+          source: "ui/control-panel.ts",
+          status: "blocked: source file was referenced by checklist but missing from the fixture",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function buildReleaseHandoffMarkdown() {
+  return [
+    "# Release Handoff",
+    "",
+    "Ready:",
+    "- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.",
+    "- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.",
+    "- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.",
+    "- REL-INSTALL-846: installer update path checked in `install/update.ts`.",
+    "",
+    "Follow-up:",
+    "- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.",
+    "- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.",
+    "- REL-DOCS-611: docs update status needs channel ordering and UI notes.",
+    "- `ui/control-panel.ts` is blocked/not found in the fixture.",
+    "",
+  ].join("\n");
+}
+
 function extractPlannedToolName(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
@@ -797,6 +934,25 @@ function extractPlannedToolName(events: StreamEvent[]) {
     const item = event.item as { type?: unknown; name?: unknown };
     if (item.type === "function_call" && typeof item.name === "string") {
       return item.name;
+    }
+  }
+  return undefined;
+}
+
+function extractPlannedToolArgs(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; arguments?: unknown };
+    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(item.arguments);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
     }
   }
   return undefined;
@@ -1003,6 +1159,29 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  if (
+    allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
+    /Internal task completion event/i.test(allInputText)
+  ) {
+    return buildAssistantEvents("");
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+        runTimeoutSeconds: 30,
+      });
+    }
+    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+      });
+    }
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
@@ -1089,6 +1268,63 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      JSON.stringify({
+        action: "create",
+        skillName: "animated-gif-workflow",
+        title: "Animated GIF Workflow",
+        reason: "Transcript captured a reusable animated media QA checklist.",
+        description: "Reusable workflow notes for animated GIF QA tasks.",
+        body: [
+          "- Confirm the asset has true animation, not a static preview.",
+          "- Check dimensions against the target product UI slot.",
+          "- Record attribution and license before using the file.",
+          "- Keep a local copy under the workspace before integration.",
+          "- Re-open the local copy for final verification.",
+        ].join("\n"),
+      }),
+    );
+  }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("write", {
+      path: "animated-gif-qa-checklist.md",
+      content: [
+        "# Animated GIF QA Checklist",
+        "",
+        "- Confirm true animation.",
+        "- Verify dimensions.",
+        "- Record attribution.",
+        "- Keep a local copy.",
+        "- Perform final verification.",
+      ].join("\n"),
+    });
+  }
+  if (QA_RELEASE_AUDIT_PROMPT_RE.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "audit-fixture/README.md" });
+    }
+    if (/Release readiness task|current checklist/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("read", {
+        path: "audit-fixture/docs/current-readiness-checklist.md",
+      });
+    }
+    if (/Current release readiness requires checking eight areas/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-audit.json",
+        content: buildReleaseAuditJson(),
+      });
+    }
+    if (/release-audit\.json/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-handoff.md",
+        content: buildReleaseHandoffMarkdown(),
+      });
+    }
+    if (/release-handoff\.md/i.test(toolOutput)) {
+      return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
+    }
   }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
@@ -1191,6 +1427,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
+        corpus: "sessions",
       });
     }
     const results = Array.isArray(toolJson?.results)
@@ -1277,6 +1514,14 @@ async function buildResponsesPayload(
   if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
+  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "Report the visible code from the requester transcript.",
+      label: "qa-fork-context",
+      mode: "run",
+      context: "fork",
+    });
+  }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
@@ -1347,7 +1592,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.4) and one against the "baseline"
+// "candidate" (openai/gpt-5.5) and one against the "baseline"
 // (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -1736,8 +1981,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         data: [
-          { id: "gpt-5.4", object: "model" },
-          { id: "gpt-5.4-alt", object: "model" },
+          { id: "gpt-5.5", object: "model" },
+          { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
           { id: "claude-opus-4-6", object: "model" },
@@ -1814,6 +2059,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
@@ -1869,6 +2115,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(normalizedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {

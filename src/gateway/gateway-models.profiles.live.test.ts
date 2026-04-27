@@ -57,7 +57,7 @@ const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SM
 const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -331,6 +331,9 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   }
   const [provider, ...rest] = modelKey.split("/");
   const modelId = rest.join("/");
+  if (provider === "anthropic") {
+    return true;
+  }
   if (provider === "minimax" || provider === "minimax-portal") {
     // MiniMax transcript persistence can mirror our <final> wrapper style even
     // though user-visible surfaces already strip it. Keep the live reader
@@ -348,7 +351,14 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
   if (!shouldStripAssistantScaffoldingForLiveModel(modelKey)) {
     return text;
   }
-  return stripAssistantInternalScaffolding(text).trim();
+  return stripAssistantInternalScaffolding(stripKnownLiveReasoningWrappers(text)).trim();
+}
+
+function stripKnownLiveReasoningWrappers(text: string): string {
+  return text
+    .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
+    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -422,6 +432,20 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "google/gemini-3.1-pro-preview-customtools",
       ),
     ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        [
+          "<think>",
+          "1. Inspect",
+          "```",
+          "draft",
+          "```",
+          "2. Draft the explanation",
+          "</think>The event loop drains the microtask queue before the next macrotask.",
+        ].join("\n"),
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("The event loop drains the microtask queue before the next macrotask.");
   });
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
@@ -431,6 +455,15 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
     ).toBe("<final>Visible</final>");
+  });
+
+  it("strips Anthropic antml transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<antml:thinking>hidden</thinking>Visible",
+        "anthropic/claude-opus-4-6",
+      ),
+    ).toBe("Visible");
   });
 
   it("strips scaffolding for MiniMax transcript wrappers", () => {
@@ -503,7 +536,7 @@ describe("resolveGatewayLiveMaxModels", () => {
   });
 
   it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
-    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.4,anthropic/claude-opus-4-6";
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.5,anthropic/claude-opus-4-6";
     delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
     delete process.env.OPENCLAW_LIVE_MAX_MODELS;
 
@@ -1465,7 +1498,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
     }
-    const sessionKey = `agent:${agentId}:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
     let skippedCount = 0;
     const total = params.candidates.length;
@@ -1473,6 +1505,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     for (const [index, model] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
+      // Use a separate session per model: live providers can finalize late after
+      // skip/retry paths, and a reset on a reused key does not isolate those
+      // delayed transcript writes from the next model probe.
+      const sessionKey = `agent:${agentId}:${params.label}:model-${index + 1}`;
 
       const attemptMax =
         model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;

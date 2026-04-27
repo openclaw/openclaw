@@ -6,6 +6,7 @@ import {
   AgentSandboxSchema,
   AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
+  AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -39,6 +40,7 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
@@ -69,8 +71,23 @@ export const AgentDefaultsSchema = z
     silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    promptOverlays: z
+      .object({
+        gpt5: z
+          .object({
+            personality: z
+              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skipBootstrap: z.boolean().optional(),
-    contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    contextInjection: z
+      .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
+      .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z

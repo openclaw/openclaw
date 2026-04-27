@@ -2,10 +2,8 @@
 summary: "When OpenClaw shows typing indicators and how to tune them"
 read_when:
   - Changing typing indicator behavior or defaults
-title: "Typing Indicators"
+title: "Typing indicators"
 ---
-
-# Typing indicators
 
 Typing indicators are sent to the chat channel while a run is active. Use
 `agents.defaults.typingMode` to control **when** typing starts and `typingIntervalSeconds`
@@ -73,3 +71,8 @@ You can override mode or cadence per session:
   channel does not support typing.
 - `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
   The default is 6 seconds.
+
+## Related
+
+- [Presence](/concepts/presence)
+- [Streaming and chunking](/concepts/streaming)
