@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveMergedAssistantText } from "./live-chat-projector.js";
+import {
+  MAX_LIVE_CHAT_BUFFER_CHARS,
+  resolveMergedAssistantText,
+} from "./live-chat-projector.js";
 
 describe("server chat stream text merge", () => {
   it.each([
@@ -55,5 +58,16 @@ describe("server chat stream text merge", () => {
         nextDelta: "\nAfter tool call",
       }),
     ).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("caps merged live text while preserving the newest assistant output", () => {
+    const result = resolveMergedAssistantText({
+      previousText: "a".repeat(MAX_LIVE_CHAT_BUFFER_CHARS - 2),
+      nextText: "",
+      nextDelta: "bbbb",
+    });
+
+    expect(result).toHaveLength(MAX_LIVE_CHAT_BUFFER_CHARS);
+    expect(result.endsWith("bbbb")).toBe(true);
   });
 });

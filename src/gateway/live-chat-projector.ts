@@ -13,6 +13,15 @@ import {
 
 export { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 
+export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+
+function capLiveAssistantBuffer(text: string): string {
+  if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
+    return text;
+  }
+  return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
+}
+
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -21,19 +30,19 @@ export function resolveMergedAssistantText(params: {
   const { previousText, nextText, nextDelta } = params;
   if (nextText && previousText) {
     if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
-      return nextText;
+      return capLiveAssistantBuffer(nextText);
     }
     if (previousText.startsWith(nextText) && !nextDelta) {
-      return previousText;
+      return capLiveAssistantBuffer(previousText);
     }
   }
   if (nextDelta) {
-    return previousText + nextDelta;
+    return capLiveAssistantBuffer(previousText + nextDelta);
   }
   if (nextText) {
-    return nextText;
+    return capLiveAssistantBuffer(nextText);
   }
-  return previousText;
+  return capLiveAssistantBuffer(previousText);
 }
 
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
