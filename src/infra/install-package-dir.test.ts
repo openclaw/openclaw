@@ -325,7 +325,7 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
       expect.objectContaining({
         cwd: expect.stringContaining(".openclaw-install-stage-"),
       }),
@@ -433,7 +433,7 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
       expect.objectContaining({
         env: expect.objectContaining({
           npm_config_global: "false",
@@ -454,5 +454,58 @@ describe("installPackageDir", () => {
         }),
       }),
     );
+  });
+
+  it("surfaces npm's stderr in the failure message instead of swallowing it", async () => {
+    // Regression for the case where npm exits non-zero but the failure
+    // handler renders "npm install failed:" with no detail. Before the fix
+    // the spawned npm ran with `--silent`, which suppresses both stdout
+    // and stderr — leaving the `(stderr || stdout).trim()` formatter with
+    // empty buffers. Switching to `--loglevel=error` keeps info-level
+    // chatter quiet but lets real errors through; this test asserts the
+    // failure surface includes whatever npm wrote to stderr so users have
+    // something actionable (registry 4xx, ERESOLVE, EUNSUPPORTEDPROTOCOL,
+    // network timeouts, etc.) instead of an opaque empty colon.
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: { zod: "^4.0.0" },
+      }),
+      "utf-8",
+    );
+
+    const npmStderr =
+      "npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type \"workspace:\": workspace:^\n";
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr: npmStderr,
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return; // narrow for TS
+    expect(result.error).toContain("npm install failed:");
+    expect(result.error).toContain("EUNSUPPORTEDPROTOCOL");
+    expect(result.error).toContain("workspace:");
   });
 });

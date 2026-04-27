@@ -258,7 +258,12 @@ export async function installPackageDir(params: {
           return await runCommandWithTimeout(
             // Plugins install into isolated directories, so omitting peer deps can strip
             // runtime requirements that npm would otherwise materialize for the package.
-            ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+            // `--loglevel=error` (rather than `--silent`) keeps npm's normal stdout chatter
+            // suppressed while preserving error output — without it, the failure handler
+            // below at line ~278 sees empty stderr+stdout buffers on a non-zero exit and
+            // surfaces only `npm install failed:` with no detail, leaving users no way to
+            // diagnose registry 4xx, ERESOLVE, EUNSUPPORTEDPROTOCOL, or network errors.
+            ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
