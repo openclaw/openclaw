@@ -30,6 +30,7 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "./session.runtime.js";
+import { wrapAgentWithTcpKeepalive } from "./tcp-keepalive-agent.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -144,8 +145,9 @@ export async function createWaSocket(
     await writeCredsJsonAtomically(authDir, state.creds);
   };
   const { version } = await fetchLatestBaileysVersion();
-  const agent = await resolveEnvProxyAgent(sessionLogger);
-  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  const baseAgent = await resolveEnvProxyAgent(sessionLogger);
+  const agent = wrapAgentWithTcpKeepalive(baseAgent);
+  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, baseAgent);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
