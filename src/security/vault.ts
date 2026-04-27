@@ -11,7 +11,13 @@ export class TokenVault {
     for (const [k, v] of Object.entries(this.map)) {
       this.reverse[v] = k;
     }
-    this.counter = Object.keys(this.map).length;
+    this.counter = 0;
+    for (const k of Object.keys(this.map)) {
+      const num = Number.parseInt(k.replace(/\[VAULT_|\]/g, ""), 10);
+      if (num > this.counter) {
+        this.counter = num;
+      }
+    }
   }
 
   private nextToken(): string {

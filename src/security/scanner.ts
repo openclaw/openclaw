@@ -24,7 +24,6 @@ export interface GuardrailOptions {
 
 export interface ScanResult {
   vault: TokenVault;
-  sanitizedPrompt: string;
   findingsCount: number;
   /** 标记本次脱敏是通过哪种方式完成的 */
   method: "local-llm" | "regex-only" | "skipped";
@@ -134,7 +133,7 @@ async function callLocalModelForSensitiveValues(
     // 剥离 Qwen3 等模型的 <think>...</think> 思考标签
     content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
-    console.log(`[Guardrail] 本地模型返回: ${content.substring(0, 300)}`);
+    console.log(`[Guardrail] 本地模型返回 ${content.length} 字符`);
 
     // 提取 JSON 数组
     const arrayMatch =
@@ -202,7 +201,6 @@ export async function applyGuardrail(
   if (options?.enable === false) {
     return {
       vault: new TokenVault(),
-      sanitizedPrompt: prompt,
       findingsCount: 0,
       method: "skipped",
     };
@@ -225,18 +223,10 @@ export async function applyGuardrail(
       }));
       const vault = new TokenVault();
       // 对完整 prompt 执行替换（不只是用户消息部分）
-      let sanitizedPrompt = vault.redact(prompt, findings);
-
-      // 注入指令：告诉云端模型每个占位符的语义类型，并直接使用，系统会在执行前自动还原
-      const vaultDict = vault.toDict();
-      const hints = Object.entries(vaultDict)
-        .map(([token, value]) => `${token}: ${classifyRedactedValue(value)}`)
-        .join("; ");
-      sanitizedPrompt += `\n\n[Security Guardrail Notice] The following placeholders have been redacted for transit security: ${hints}. Treat each placeholder as an opaque but COMPLETE value of the described type. Use them directly in commands, connection strings, and tool calls — the runtime resolves them to real values before execution. Do NOT ask the user to re-provide these values or break them into subfields.`;
+      vault.redact(prompt, findings);
 
       return {
         vault,
-        sanitizedPrompt,
         findingsCount: Object.keys(vault.toDict()).length,
         method: "local-llm",
       };
@@ -246,7 +236,6 @@ export async function applyGuardrail(
     if (sensitiveValues && sensitiveValues.length === 0) {
       return {
         vault: new TokenVault(),
-        sanitizedPrompt: prompt,
         findingsCount: 0,
         method: "local-llm",
       };
@@ -257,7 +246,6 @@ export async function applyGuardrail(
       console.error("[Guardrail] 本地模型不可用且禁止回退，跳过脱敏");
       return {
         vault: new TokenVault(),
-        sanitizedPrompt: prompt,
         findingsCount: 0,
         method: "skipped",
       };
@@ -268,11 +256,10 @@ export async function applyGuardrail(
   // 回退：使用正则匹配模式
   const regexFindings = scanSensitive(prompt);
   const vault = new TokenVault();
-  const sanitizedPrompt = vault.redact(prompt, regexFindings);
+  vault.redact(prompt, regexFindings);
 
   return {
     vault,
-    sanitizedPrompt,
     findingsCount: Object.keys(vault.toDict()).length,
     method: "regex-only",
   };
