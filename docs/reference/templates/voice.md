@@ -107,7 +107,7 @@ Bad:
 
 These notes help choose syntax, but runtime routing still decides which provider receives which text variant.
 
-### ElevenLabs Eleven v3 and Eleven v3 Conversational
+### ElevenLabs v3 and v3 Conversational
 
 - Best target for bracketed expressive tags.
 - Documented tag families include emotional delivery, whispering, laughter, sighs, throat-clearing, and short or long pauses.

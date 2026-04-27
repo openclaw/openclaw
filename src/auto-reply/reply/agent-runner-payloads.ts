@@ -1,4 +1,5 @@
 import {
+  cloneReplyPayloadMetadata,
   resolveSendableOutboundReplyParts,
   setReplyPayloadMetadata,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -146,7 +147,7 @@ export async function buildReplyPayloads(params: {
             text = emotionSanitized.text;
           }
           return [
-            {
+            cloneReplyPayloadMetadata(payload, {
               ...payload,
               text,
               // Per chatgpt-codex P2 + Copilot reviews on PR-D's
@@ -159,7 +160,7 @@ export async function buildReplyPayloads(params: {
               ...(typeof rawEmotionTtsText === "string"
                 ? { [EMOTION_RAW_TTS_TEXT_KEY]: rawEmotionTtsText }
                 : {}),
-            },
+            }),
           ];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
@@ -176,14 +177,14 @@ export async function buildReplyPayloads(params: {
         }
         const emotionSanitized = sanitizeEmotionTagsForMode(stripped.text, emotionMode);
         return [
-          {
+          cloneReplyPayloadMetadata(payload, {
             ...payload,
             text: emotionSanitized.text,
             // See note above on the `/emotions full` no-op sanitizer issue.
             ...(typeof rawEmotionTtsText === "string"
               ? { [EMOTION_RAW_TTS_TEXT_KEY]: rawEmotionTtsText }
               : {}),
-          },
+          }),
         ];
       });
 
