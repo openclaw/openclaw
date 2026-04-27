@@ -533,7 +533,7 @@ async function sendCodexDiagnosticsFeedback(
   if (!response.ok) {
     return [
       `Could not send Codex diagnostics for thread ${binding.threadId}: ${response.error}`,
-      `Inspect locally: codex resume ${binding.threadId}`,
+      `Inspect locally: ${formatCodexResumeCommand(binding.threadId)}`,
     ].join("\n");
   }
   const responseThreadId = isJsonObject(response.value)
@@ -542,7 +542,7 @@ async function sendCodexDiagnosticsFeedback(
   const threadId = responseThreadId ?? binding.threadId;
   return [
     `Codex diagnostics sent for thread ${threadId}.`,
-    `Inspect locally: codex resume ${threadId}`,
+    `Inspect locally: ${formatCodexResumeCommand(threadId)}`,
     "Included Codex logs and spawned Codex subthreads when available.",
   ].join("\n");
 }
@@ -551,10 +551,7 @@ function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string>
   const tags: Record<string, string> = {
     source: CODEX_DIAGNOSTICS_SOURCE,
   };
-  addTag(tags, "openclawSessionId", ctx.sessionId);
-  addTag(tags, "openclawSessionKey", ctx.sessionKey);
   addTag(tags, "channel", ctx.channel);
-  addTag(tags, "accountId", ctx.accountId);
   return tags;
 }
 
@@ -562,6 +559,14 @@ function addTag(tags: Record<string, string>, key: string, value: unknown): void
   if (typeof value === "string" && value.trim()) {
     tags[key] = value.trim();
   }
+}
+
+function formatCodexResumeCommand(threadId: string): string {
+  return `codex resume ${shellSingleQuote(threadId)}`;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function startThreadAction(
