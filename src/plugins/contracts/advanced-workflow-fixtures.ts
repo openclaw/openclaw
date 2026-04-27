@@ -1,4 +1,5 @@
 import { APPROVALS_SCOPE } from "../../gateway/operator-scopes.js";
+import { getPluginSessionExtensionSync } from "../host-hook-state.js";
 import type {
   OpenClawPluginApi,
   PluginSessionSchedulerJobHandle,
@@ -6,6 +7,7 @@ import type {
 } from "../types.js";
 
 const SESSION_KEY = "agent:main:main";
+const APPROVAL_PLUGIN_ID = "approval-workflow-fixture";
 
 export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
   api.registerSessionExtension({
@@ -87,10 +89,20 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
       };
     },
   });
-  api.on("inbound_claim", () => ({
-    handled: true,
-    reply: { text: "An approval is pending. Use the approval card to continue." },
-  }));
+  api.on("inbound_claim", (event, ctx) => {
+    const approval = getPluginSessionExtensionSync<{ status?: string }>({
+      pluginId: APPROVAL_PLUGIN_ID,
+      sessionKey: ctx.sessionKey ?? event.sessionKey,
+      namespace: "approval",
+    });
+    if (approval?.status !== "pending") {
+      return undefined;
+    }
+    return {
+      handled: true,
+      reply: { text: "An approval is pending. Use the approval card to continue." },
+    };
+  });
 }
 
 export function registerPolicyGateFixture(api: OpenClawPluginApi, calls: string[] = []) {

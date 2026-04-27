@@ -237,6 +237,21 @@ describe("advanced workflow plugin contract fixtures", () => {
         },
       });
 
+      await expect(
+        createHookRunner(registry.registry).runInboundClaim(
+          {
+            content: "continue please",
+            channel: "telegram",
+            sessionKey: "agent:main:main",
+            isGroup: false,
+          },
+          { channelId: "telegram" },
+        ),
+      ).resolves.toEqual({
+        handled: true,
+        reply: { text: "An approval is pending. Use the approval card to continue." },
+      });
+
       const success = await callPluginGatewayMethod({
         method: "plugins.sessionAction",
         body: {
@@ -283,6 +298,13 @@ describe("advanced workflow plugin contract fixtures", () => {
         }),
       ]);
 
+      await updateSessionStore(storePath, (store) => {
+        const extension = store["agent:main:main"]?.pluginExtensions?.["approval-workflow-fixture"];
+        if (extension) {
+          extension.approval = { status: "approved", title: "Deploy production" };
+        }
+        return undefined;
+      });
       await expect(
         createHookRunner(registry.registry).runInboundClaim(
           {
@@ -293,10 +315,7 @@ describe("advanced workflow plugin contract fixtures", () => {
           },
           { channelId: "telegram" },
         ),
-      ).resolves.toEqual({
-        handled: true,
-        reply: { text: "An approval is pending. Use the approval card to continue." },
-      });
+      ).resolves.toBeUndefined();
 
       const typedError = await callPluginGatewayMethod({
         method: "plugins.sessionAction",
@@ -377,7 +396,7 @@ describe("advanced workflow plugin contract fixtures", () => {
         record: createPluginRecord({
           id: "background-monitor-fixture",
           name: "Background Monitor Fixture",
-          origin: "workspace",
+          origin: "bundled",
         }),
         register(api) {
           registerBackgroundMonitorFixture(api, scheduled);
@@ -479,7 +498,7 @@ describe("advanced workflow plugin contract fixtures", () => {
         record: createPluginRecord({
           id: "artifact-reply-fixture",
           name: "Artifact Reply Fixture",
-          origin: "workspace",
+          origin: "bundled",
         }),
         register(api) {
           registerArtifactReplyFixture(api, artifactPath);
