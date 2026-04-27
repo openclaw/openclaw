@@ -128,6 +128,116 @@ describe("thread-level session keys", () => {
     }
   });
 
+  it("keeps unseeded top-level room messages with self thread_ts on the channel session", () => {
+    const ctx = buildCtx({ replyToMode: "off" });
+    const account = buildAccount("off");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        ts: "1777244692.409919",
+        thread_ts: "1777244692.409919",
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
+  });
+
+  it("routes a seeded thread root and replies with the same Slack thread_ts to one parent session", () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    const account = buildAccount("all");
+    const rootTs = "1777244692.409919";
+
+    const root = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "C0AHZFCAS1K",
+        text: "<@B1> send a subagent to review issue #50621",
+        ts: rootTs,
+        thread_ts: rootTs,
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+      seedTopLevelRoomThread: true,
+    });
+    const followUp = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "C0AHZFCAS1K",
+        text: "https://github.com/openclaw/openclaw/issues/50621",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+        parent_user_id: "U1",
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+    expect(root.sessionKey).toBe(expectedSessionKey);
+    expect(followUp.sessionKey).toBe(expectedSessionKey);
+    expect(root.historyKey).toBe("C0AHZFCAS1K");
+    expect(followUp.historyKey).toBe(expectedSessionKey);
+    expect(new Set([root.sessionKey, followUp.sessionKey]).size).toBe(1);
+  });
+
+  it("seeds top-level app mentions into the same parent session used by later thread replies", () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    const account = buildAccount("all");
+    const rootTs = "1777244692.409919";
+
+    const rootMention = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "C0AHZFCAS1K",
+        text: "<@B1> send a subagent to review issue #50621",
+        ts: rootTs,
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+      seedTopLevelRoomThread: true,
+    });
+    const urlFollowUp = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "C0AHZFCAS1K",
+        text: "https://github.com/openclaw/openclaw/issues/50621",
+        ts: "1777244714.000100",
+        thread_ts: rootTs,
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    const parentSessions = [rootMention.sessionKey, urlFollowUp.sessionKey];
+    const spawnedSubagentsByParent = new Set(parentSessions);
+
+    expect(rootMention.sessionKey).toBe(urlFollowUp.sessionKey);
+    expect(rootMention.sessionKey).toBe(
+      "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
+    );
+    expect(rootMention.historyKey).toBe("C0AHZFCAS1K");
+    expect(urlFollowUp.historyKey).toBe(rootMention.sessionKey);
+    expect(spawnedSubagentsByParent.size).toBe(1);
+  });
+
   it("does not add thread suffix for DMs when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });
     const account = buildAccount("off");

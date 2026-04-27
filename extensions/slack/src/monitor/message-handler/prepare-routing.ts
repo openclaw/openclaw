@@ -47,8 +47,18 @@ export function resolveSlackRoutingContext(params: {
   isGroupDm: boolean;
   isRoom: boolean;
   isRoomish: boolean;
+  seedTopLevelRoomThread?: boolean;
 }): SlackRoutingContext {
-  const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish } = params;
+  const {
+    ctx,
+    account,
+    message,
+    isDirectMessage,
+    isGroupDm,
+    isRoom,
+    isRoomish,
+    seedTopLevelRoomThread,
+  } = params;
   let route = resolveAgentRoute({
     cfg: ctx.cfg,
     channel: "slack",
@@ -72,21 +82,32 @@ export function resolveSlackRoutingContext(params: {
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  // Only fork channel/group messages into thread-specific sessions when they are
-  // actual thread replies (thread_ts present, different from message ts).
-  // Top-level channel messages must stay on the per-channel session for continuity.
-  // Before this fix, every channel message used its own ts as threadId, creating
-  // isolated sessions per message (regression from #10686).
+  // Keep ordinary top-level room messages on the per-channel session for
+  // continuity, but preserve Slack thread identity when the event already has
+  // one or when an actionable app mention will seed a reply thread.
+  // This keeps a thread root and its later replies on one parent session
+  // without returning to the old "every channel message is its own thread"
+  // behavior (regression from #10686).
+  const seedCandidateThreadId = threadContext.conversationThreadTs ?? threadContext.messageTs;
+  const seededRoomThreadId =
+    !isThreadReply &&
+    isRoomish &&
+    seedTopLevelRoomThread &&
+    replyToMode !== "off" &&
+    seedCandidateThreadId
+      ? seedCandidateThreadId
+      : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
-  const boundThreadRoute = canonicalThreadId
+  const boundThreadRoute = routedThreadId
     ? resolveRuntimeConversationBindingRoute({
         route,
         conversation: {
           channel: "slack",
           accountId: account.accountId,
-          conversationId: canonicalThreadId,
+          conversationId: routedThreadId,
           parentConversationId: baseConversationId,
         },
       })
@@ -107,9 +128,8 @@ export function resolveSlackRoutingContext(params: {
     ? { sessionKey: route.sessionKey, parentSessionKey: undefined }
     : resolveThreadSessionKeys({
         baseSessionKey: route.sessionKey,
-        threadId: canonicalThreadId,
-        parentSessionKey:
-          canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+        threadId: routedThreadId,
+        parentSessionKey: routedThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
       });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =

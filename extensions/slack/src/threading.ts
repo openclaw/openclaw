@@ -5,6 +5,7 @@ export type SlackThreadContext = {
   incomingThreadTs?: string;
   messageTs?: string;
   isThreadReply: boolean;
+  conversationThreadTs?: string;
   replyToId?: string;
   messageThreadId?: string;
 };
@@ -19,6 +20,7 @@ export function resolveSlackThreadContext(params: {
   const hasThreadTs = typeof incomingThreadTs === "string" && incomingThreadTs.length > 0;
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
+  const conversationThreadTs = hasThreadTs ? incomingThreadTs : undefined;
   const replyToId = incomingThreadTs ?? messageTs;
   const messageThreadId = isThreadReply
     ? incomingThreadTs
@@ -29,6 +31,7 @@ export function resolveSlackThreadContext(params: {
     incomingThreadTs,
     messageTs,
     isThreadReply,
+    conversationThreadTs,
     replyToId,
     messageThreadId,
   };

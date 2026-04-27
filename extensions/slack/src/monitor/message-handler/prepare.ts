@@ -282,6 +282,10 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
+  const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+  const explicitlyMentioned = Boolean(
+    ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
+  );
   const routing = resolveSlackRoutingContext({
     ctx,
     account,
@@ -290,6 +294,8 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    seedTopLevelRoomThread:
+      opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned,
   });
   const {
     route,
@@ -309,10 +315,6 @@ export async function prepareSlackMessage(params: {
   }
 
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
-  const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
-  const explicitlyMentioned = Boolean(
-    ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
-  );
   const wasMentioned =
     opts.wasMentioned ??
     (!isDirectMessage &&
