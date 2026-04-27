@@ -57,5 +57,10 @@ export function classifyCompactionReason(reason?: string): string {
   ) {
     return "provider_error_5xx";
   }
-  return "unknown";
+  // Preserve original error message for unknown errors instead of masking it.
+  // Replace spaces with underscores for logfmt compatibility; cap at 100 chars
+  // to avoid flooding the diagnostic log line.
+  const MAX_DETAIL_LENGTH = 100;
+  const sanitized = (reason?.replace(/\s+/g, "_") ?? "unspecified").slice(0, MAX_DETAIL_LENGTH);
+  return `unknown:${sanitized}`;
 }
