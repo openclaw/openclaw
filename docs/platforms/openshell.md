@@ -168,14 +168,7 @@ export NODE_OPTIONS="--require /sandbox/openclaw-ws-proxy-patch.js"
 export BOT_TOKEN="<your-bot-token>"
 export API_KEY="<your-api-key>"
 
-# 5. Self-heal local patches that are wiped by `npm install` (see below).
-#    No `|| true`: the heal script exits non-zero when the upstream bundle
-#    format drifts past its sed pattern, and the launcher must surface
-#    that fail-fast signal to the sandbox supervisor so operators notice
-#    the drift on the next restart (see "Fetch-guard self-heal" below).
-bash /sandbox/heal-fetch-guard.sh
-
-# 6. Start the gateway in the foreground so the sandbox supervisor owns its
+# 5. Start the gateway in the foreground so the sandbox supervisor owns its
 #    lifecycle. For background use, redirect to a logfile and write a pidfile.
 exec /sandbox/node_modules/openclaw/openclaw.mjs gateway run --allow-unconfigured
 ```
@@ -364,61 +357,24 @@ If you see the third line, Slack is live end-to-end.
 ## Media-generation SSRF fetch guard
 
 OpenClaw routes image, music, video, and audio generation providers
-through a strict fetch guard (`fetchWithSsrFGuard`). In its default mode,
-this guard does a pinned DNS lookup **before** making the HTTP request —
-which cannot succeed in a sandbox where UDP DNS is blocked and all traffic
-must go through a CONNECT proxy. LLM chat paths work because they use the
-global undici dispatcher installed by the WebSocket proxy patch; media
-generation bypasses that and tries to pin DNS itself.
+through a strict fetch guard (`fetchWithSsrFGuard`). In strict mode, that
+guard may do a pinned DNS lookup before making the HTTP request. That is
+intentional SSRF protection, but it can fail in sandboxes where UDP DNS is
+blocked and all outbound traffic must traverse a CONNECT proxy.
+
+Do **not** patch the compiled fetch-guard bundle to skip pinned-host
+resolution whenever `HTTPS_PROXY` is present. That turns a proxy deployment
+detail into a global SSRF-policy bypass for every strict guarded fetch
+call, including media downloads. If you need media generation in a
+proxy-only sandbox before upstream support lands, carry a narrow local
+change at the media provider call site and keep it scoped to the audited
+trusted-env-proxy mode; do not change the global strict-mode guard.
 
 The tracking issue is
 [openclaw/openclaw#52162](https://github.com/openclaw/openclaw/issues/52162).
-Until it is fixed upstream, a two-line local patch on the fetch-guard
-bundle lets media generation reach the proxy the same way chat does.
-
-The semantic patch, applied to `dist/fetch-guard-*.js`:
-
-```diff
-- if (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured())
--     dispatcher = createHttp1EnvHttpProxyAgent();
-+ if (hasProxyEnvConfigured()) { /* PATCHED: skip DNS pinning in proxy env */ }
-```
-
-The empty-block form is deliberate: `dispatcher` stays `null`, the `init`
-object does not include a `dispatcher` key, and `defaultFetch` falls
-through to the global undici dispatcher already set up by the proxy
-preload. Same mechanism chat uses.
-
-Because the bundle filename includes a content hash and changes every
-release, the patch is wiped by `npm install` on each upgrade. Put the
-heal in the launcher so it runs on every start:
-
-```bash
-# /sandbox/heal-fetch-guard.sh
-FETCH_GUARD=$(ls /sandbox/node_modules/openclaw/dist/fetch-guard-*.js 2>/dev/null | head -1)
-if [ -n "$FETCH_GUARD" ] && ! grep -q "PATCHED" "$FETCH_GUARD"; then
-  sed -i \
-    's|if (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured()) dispatcher = createHttp1EnvHttpProxyAgent();|if (hasProxyEnvConfigured()) { /* PATCHED: skip DNS pinning in proxy env */ }|' \
-    "$FETCH_GUARD"
-  if grep -q "PATCHED" "$FETCH_GUARD"; then
-    echo "[heal] Re-applied fetch-guard patch to $(basename "$FETCH_GUARD")"
-  else
-    echo "[heal] WARNING: fetch-guard pattern did not match in $(basename "$FETCH_GUARD") — upstream bundle format likely changed; update the sed expression" >&2
-    exit 1
-  fi
-fi
-```
-
-Idempotent (checks the marker before applying), version-resilient
-(filename glob, not literal), and safe to run on every start. The
-post-`sed` re-grep is load-bearing: after an upstream bundle rewrite the
-original pattern can silently fail to match, and without the verification
-gate the launcher would print "Re-applied" while the DNS-pinning code is
-still live — media generation would then keep failing in proxy-only
-sandboxes. The launcher fails fast instead, so operators notice the
-drift on the next restart. Remove it
-once the upstream issue is fixed and you have rolled through a release
-that includes the fix.
+Until a scoped upstream fix is available, treat media generation as a
+known limitation in proxy-only sandboxes. Chat/model traffic can still use
+the global undici dispatcher installed by the WebSocket proxy preload.
 
 ## Upgrading OpenClaw inside a sandbox
 
@@ -444,7 +400,7 @@ openshell sandbox exec --name agent -- sh -lc \
 openshell sandbox exec --name agent -- sh -lc \
   'openclaw --version; ls /sandbox/node_modules/openclaw/dist/server.impl-*.js'
 
-# 5. Start the gateway (launcher reapplies local patches automatically)
+# 5. Start the gateway
 openshell sandbox exec --name agent -- sh -lc 'bash /sandbox/start-gateway.sh'
 ```
 
@@ -465,8 +421,9 @@ A canonical smoke test after every upgrade:
 3. `openclaw sessions` — list recent sessions
 4. End-to-end channel test (Slack DM, Discord DM, or whatever channel the
    agent is on) — ensures the Socket Mode patch still works
-5. If image gen is in use, generate a tiny test image — verifies the
-   fetch-guard heal fired on startup
+5. If image generation is required, run a tiny test image and confirm the
+   deployment is on an OpenClaw release or local call-site fix that supports
+   proxied strict fetches.
 
 ## Troubleshooting
 
@@ -515,16 +472,12 @@ Check in order:
 
 ### Gateway starts, image generation fails
 
-Almost always the fetch-guard patch is missing or was wiped by an upgrade.
-Verify:
-
-```bash
-openshell sandbox exec --name agent -- sh -lc \
-  'grep -c PATCHED /sandbox/node_modules/openclaw/dist/fetch-guard-*.js'
-```
-
-Expect `1`. If it is `0`, your launcher's heal block did not run — check
-the launcher path and ordering.
+If logs show `EAI_AGAIN`, `ENOTFOUND`, or pinned-DNS failures from
+`fetchWithSsrFGuard`, you are hitting the strict media-fetch limitation
+described above. Do not work around this by globally patching the
+compiled fetch guard. Use a release with scoped proxy support for the
+media provider path, or carry a narrow local call-site fix that preserves
+strict-mode SSRF behavior for unrelated fetches.
 
 ### Gateway environment is missing a variable your CLI tool needs
 
