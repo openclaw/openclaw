@@ -201,7 +201,7 @@ describe("exec approvals store helpers", () => {
     ).toContain('"security": "full"');
   });
 
-  it("refuses to traverse symlinked approvals components below a symlinked home", () => {
+  it("accepts a trusted first-level .openclaw symlink", () => {
     const realHome = makeTempDir();
     const linkedHome = `${realHome}-link`;
     const linkedStateTarget = path.join(realHome, "state-target");
@@ -211,10 +211,53 @@ describe("exec approvals store helpers", () => {
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
     process.env.OPENCLAW_HOME = linkedHome;
 
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(path.join(linkedStateTarget, "exec-approvals.json"), "utf8")).toContain(
+      '"security": "full"',
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a group-writable first-level .openclaw symlink target",
+    () => {
+      const dir = createHomeDir();
+      const linkedStateTarget = path.join(dir, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o777 });
+      fs.chmodSync(linkedStateTarget, 0o777);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink target/);
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it("refuses a dangling first-level .openclaw symlink", () => {
+    const dir = createHomeDir();
+    const missingTarget = path.join(dir, "missing-state-target");
+    fs.symlinkSync(missingTarget, path.join(dir, ".openclaw"), "dir");
+
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
-    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
-    expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    ).toThrow(/ENOENT|no such file or directory/i);
+    expect(fs.existsSync(path.join(missingTarget, "exec-approvals.json"))).toBe(false);
+  });
+
+  it("still refuses to write approvals through a symlink destination inside .openclaw", () => {
+    const dir = createHomeDir();
+    const linkedStateTarget = path.join(dir, "state-target");
+    const targetPath = path.join(dir, "elsewhere.json");
+    fs.mkdirSync(linkedStateTarget, { recursive: true });
+    fs.writeFileSync(targetPath, '{"sentinel":true}\n', "utf8");
+    fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+    fs.symlinkSync(targetPath, path.join(linkedStateTarget, "exec-approvals.json"));
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to write exec approvals via symlink/);
+    expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

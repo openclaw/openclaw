@@ -231,8 +231,8 @@ function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
   assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
-  const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+  const dirStat = fs.statSync(dir);
+  if (!dirStat.isDirectory()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
   return dir;
@@ -248,19 +248,46 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
   const relative = path.relative(resolvedRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
   let current = resolvedRoot;
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
+    let stat: fs.Stats;
     try {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
-      }
+      stat = fs.lstatSync(current);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      if (index !== 0 || segment !== ".openclaw") {
+        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+      }
+      current = resolveTrustedOpenClawSymlink(current);
     }
   }
+}
+
+function resolveTrustedOpenClawSymlink(linkPath: string): string {
+  const realPath = fs.realpathSync(linkPath);
+  const targetStat = fs.statSync(realPath);
+  if (!targetStat.isDirectory()) {
+    throw new Error(`Refusing to use unsafe exec approvals .openclaw symlink target: ${linkPath}`);
+  }
+  if (process.platform !== "win32") {
+    const getuid = process.getuid;
+    if (typeof getuid === "function" && targetStat.uid !== getuid.call(process)) {
+      throw new Error(
+        `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
+      );
+    }
+    if ((targetStat.mode & 0o022) !== 0) {
+      throw new Error(
+        `Refusing to use group/other-writable exec approvals .openclaw symlink target: ${linkPath}`,
+      );
+    }
+  }
+  return realPath;
 }
 
 function assertSafeExecApprovalsDestination(filePath: string): void {
