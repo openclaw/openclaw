@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { projectSafeChannelAccountSnapshotFields } from "../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -256,6 +257,7 @@ async function resolveHealthAccountContext(params: {
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
@@ -287,6 +289,7 @@ export async function getHealthSnapshot(params?: {
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
+  const includeSensitive = params?.includeSensitive !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupRuntimeFallback: false,
@@ -368,12 +371,12 @@ export async function getHealthSnapshot(params?: {
         params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
       const snapshot: ChannelAccountSnapshot = {
-        ...runtimeSnapshot,
+        ...projectSafeChannelAccountSnapshotFields(runtimeSnapshot),
         accountId,
         enabled,
         configured,
       };
-      if (probe !== undefined) {
+      if (includeSensitive && probe !== undefined) {
         snapshot.probe = probe;
       }
       if (lastProbeAt) {
@@ -392,16 +395,18 @@ export async function getHealthSnapshot(params?: {
         summary && typeof summary === "object"
           ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
           : ({
+              ...snapshot,
               accountId,
               configured,
-              probe,
-              lastProbeAt,
             } satisfies ChannelAccountHealthSummary);
       if (record.configured === undefined) {
         record.configured = configured;
       }
-      if (record.probe === undefined && probe !== undefined) {
+      if (includeSensitive && record.probe === undefined && probe !== undefined) {
         record.probe = probe;
+      }
+      if (!includeSensitive) {
+        delete record.probe;
       }
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;

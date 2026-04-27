@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -32,13 +31,17 @@ const {
   loadConfigMock: vi.fn(() => ({
     gateway: {
       auth: { mode: "none" },
-      controlUi: {},
+      controlUi: {
+        allowedOrigins: ["http://127.0.0.1:19001"],
+        dangerouslyDisableDeviceAuth: true,
+      },
     },
   })),
   upsertPresenceMock: vi.fn(),
 }));
 
 vi.mock("../../../config/config.js", () => ({
+  getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
 
@@ -81,29 +84,39 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           resolveRefresh = () => resolve({} as never);
         }),
     ) as GatewayRequestContext["refreshHealthSnapshot"];
-    const socket = Object.assign(new EventEmitter(), {
+    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+      cb?.();
+    });
+    let onMessage: ((data: string) => void) | undefined;
+    const socket = {
       _receiver: {},
-      send: vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-        cb?.();
+      send: socketSend,
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
       }),
-    }) as unknown as WebSocket;
+    } as unknown as WebSocket;
+    const send = vi.fn();
+    const isClosed = vi.fn(() => false);
     let client: unknown = null;
     const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "token",
-      token: "test-token",
+      mode: "none",
       allowTailscale: false,
     };
 
     attachGatewayWsMessageHandler({
       socket,
       upgradeReq: {
-        headers: { host: "127.0.0.1:19001" },
+        headers: { host: "127.0.0.1:19001", origin: "http://127.0.0.1:19001" },
         socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
       } as unknown as IncomingMessage,
       connId: "conn-1",
       remoteAddr: "127.0.0.1",
       localAddr: "127.0.0.1",
       requestHost: "127.0.0.1:19001",
+      requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
       getResolvedAuth: () => resolvedAuth,
       gatewayMethods: [],
@@ -111,13 +124,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       extraHandlers: {},
       buildRequestContext: () => ({}) as GatewayRequestContext,
       refreshHealthSnapshot,
-      send: vi.fn(),
+      send,
       close: vi.fn(),
-      isClosed: () => false,
+      isClosed,
       clearHandshakeTimer: vi.fn(),
       getClient: () => client as never,
       setClient: (next) => {
         client = next;
+        return true;
       },
       setHandshakeState: vi.fn(),
       setCloseCause: vi.fn(),
@@ -128,8 +142,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       logWsControl: createLogger() as never,
     });
 
-    socket.emit(
-      "message",
+    expect(onMessage).toBeDefined();
+
+    onMessage?.(
       JSON.stringify({
         type: "req",
         id: "connect-1",
@@ -138,17 +153,22 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           minProtocol: PROTOCOL_VERSION,
           maxProtocol: PROTOCOL_VERSION,
           client: {
-            id: "test",
+            id: "openclaw-control-ui",
             version: "dev",
             platform: "test",
-            mode: "test",
+            mode: "ui",
           },
-          auth: { token: "test-token" },
           role: "operator",
           caps: [],
         },
       }),
     );
+
+    await vi.waitFor(() => {
+      expect(socketSend).toHaveBeenCalled();
+    });
+    const hello = JSON.parse(socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    expect(hello.ok).toBe(true);
 
     await vi.waitFor(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });

@@ -477,6 +477,69 @@ describe("getHealthSnapshot", () => {
     expect(telegram.accounts?.default?.probe?.ok).toBe(true);
   });
 
+  it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-1" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    buildTelegramHealthSummaryForTest = (snapshot) => ({
+      accountId: snapshot.accountId,
+      configured: Boolean(snapshot.configured),
+      probe: { ok: true, token: "summary-secret" },
+    });
+    probeTelegramAccountForTestOverride = async () => ({
+      ok: true,
+      bot: { username: "runtime_bot" },
+      token: "probe-secret",
+    });
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            connected: true,
+            lastConnectedAt: 123,
+            channelAccessToken: "line-token",
+            channelSecret: "line-secret", // pragma: allowlist secret
+            webhookUrl: "https://example.test/hook?secret=1",
+          },
+        },
+        channelAccounts: {},
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      connected?: boolean;
+      lastConnectedAt?: number;
+      probe?: unknown;
+      channelAccessToken?: string;
+      channelSecret?: string;
+      webhookUrl?: string;
+      accounts?: Record<
+        string,
+        {
+          connected?: boolean;
+          lastConnectedAt?: number;
+          probe?: unknown;
+          channelAccessToken?: string;
+          channelSecret?: string;
+          webhookUrl?: string;
+        }
+      >;
+    };
+
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.probe).toBeUndefined();
+    expect(telegram.channelAccessToken).toBeUndefined();
+    expect(telegram.channelSecret).toBeUndefined();
+    expect(telegram.webhookUrl).toBeUndefined();
+    expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.probe).toBeUndefined();
+    expect(telegram.accounts?.default?.channelAccessToken).toBeUndefined();
+  });
+
   it("returns structured telegram probe errors", async () => {
     testConfig = { channels: { telegram: { botToken: "bad-token" } } };
     testStore = {};

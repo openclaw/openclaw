@@ -134,6 +134,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       resolvedAuth: createResolvedAuth("token"),
       gatewayMethods: [],
       events: [],
+      refreshHealthSnapshot: vi.fn(),
       logGateway: createLogger() as never,
       logHealth: createLogger() as never,
       logWsControl: createLogger() as never,

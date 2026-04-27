@@ -13,6 +13,7 @@ let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
+let sensitiveHealthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
@@ -72,26 +73,44 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
 
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
+  includeSensitive?: boolean;
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
 }) {
-  if (!healthRefresh) {
-    healthRefresh = (async () => {
+  const includeSensitive = opts?.includeSensitive === true;
+  let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
+  if (!refresh) {
+    refresh = (async () => {
       let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
       try {
         runtimeSnapshot = opts?.getRuntimeSnapshot?.();
       } catch {
         runtimeSnapshot = undefined;
       }
-      const snap = await getHealthSnapshot({ probe: opts?.probe, runtimeSnapshot });
-      healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
+      const snap = await getHealthSnapshot({
+        probe: opts?.probe,
+        includeSensitive,
+        runtimeSnapshot,
+      });
+      if (!includeSensitive) {
+        healthCache = snap;
+        healthVersion += 1;
+        if (broadcastHealthUpdate) {
+          broadcastHealthUpdate(snap);
+        }
       }
       return snap;
     })().finally(() => {
-      healthRefresh = null;
+      if (includeSensitive) {
+        sensitiveHealthRefresh = null;
+      } else {
+        healthRefresh = null;
+      }
     });
+    if (includeSensitive) {
+      sensitiveHealthRefresh = refresh;
+    } else {
+      healthRefresh = refresh;
+    }
   }
-  return healthRefresh;
+  return refresh;
 }
