@@ -4776,7 +4776,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("excludes checkpoint transcripts from exported qmd session documents", async () => {
+  it("exports valid session transcripts whose IDs contain checkpoint words", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -4802,15 +4802,15 @@ describe("QmdMemoryManager", () => {
       `${JSON.stringify({ type: "message", message: { role: "user", content: "live" } })}\n`,
     );
     await fs.writeFile(
-      path.join(sessionsDir, "live-session.checkpoint.123.jsonl"),
-      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
+      path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
     );
 
     const { manager } = await createManager({ mode: "full" });
     const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
     const exported = (await fs.readdir(sessionExportDir)).toSorted();
 
-    expect(exported).toEqual(["live-session.md"]);
+    expect(exported).toEqual(["live-session.md", "team.checkpoint.notes.md"]);
     await manager.close();
   });
 
