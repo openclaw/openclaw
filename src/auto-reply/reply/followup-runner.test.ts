@@ -458,7 +458,7 @@ function mockCompactionRun(params: {
 }
 
 function createAsyncReplySpy() {
-  return vi.fn(async () => {});
+  return vi.fn(async (_payload: unknown) => {});
 }
 
 describe("createFollowupRunner runtime config", () => {
@@ -1375,7 +1375,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0]?.[0];
+    const payload = onBlockReply.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
     expect(getReplyPayloadMetadata(payload)).toMatchObject({
       ttsSourceText: "[warmly] hello there",
@@ -1393,7 +1393,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0]?.[0];
+    const payload = onBlockReply.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
     expect(getReplyPayloadMetadata(payload)).toBeUndefined();
   });

@@ -79,7 +79,9 @@ function stripAssistantEmotionTags(messages: AgentMessage[]): AgentMessage[] {
     }
     if (typeof message.content === "string") {
       const stripped = stripEmotionTags(message.content);
-      return stripped.changed ? { ...message, content: stripped.text } : message;
+      return stripped.changed
+        ? ({ ...message, content: stripped.text } as unknown as AgentMessage)
+        : message;
     }
     if (!Array.isArray(message.content)) {
       return message;
