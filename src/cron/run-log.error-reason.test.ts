@@ -17,4 +17,34 @@ describe("cron run log errorReason", () => {
     const page = await readCronRunLogEntriesPage(file, { limit: 10 });
     expect(page.entries[0]?.errorReason).toBe("timeout");
   });
+
+  it("validates persisted errorReason before exposing entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-run-log-"));
+    const file = path.join(dir, "job.jsonl");
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "error",
+          error: "upstream unavailable: 503 overloaded",
+          errorReason: "not-a-real-reason",
+        }),
+        JSON.stringify({
+          ts: 2,
+          jobId: "job-1",
+          action: "finished",
+          status: "error",
+          errorReason: "auth_permanent",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const page = await readCronRunLogEntriesPage(file, { limit: 10, sortDir: "asc" });
+    expect(page.entries[0]?.errorReason).toBe("overloaded");
+    expect(page.entries[1]?.errorReason).toBe("auth_permanent");
+  });
 });

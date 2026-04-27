@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
-import { CronDeliverySchema, CronJobStateSchema } from "../gateway/protocol/schema.js";
+import {
+  CronDeliverySchema,
+  CronJobStateSchema,
+  CronRunLogEntrySchema,
+} from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -99,11 +103,8 @@ describe("cron protocol conformance", () => {
     expect(swift.includes("let jobs:")).toBe(true);
   });
 
-  it("cron job state schema keeps the full failover reason set", () => {
-    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
-    const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
-    expect(lastErrorReason).toBeDefined();
-    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual([
+  it("cron public schemas keep the full failover reason set", () => {
+    const expectedReasons = [
       "auth",
       "auth_permanent",
       "format",
@@ -114,6 +115,16 @@ describe("cron protocol conformance", () => {
       "model_not_found",
       "session_expired",
       "unknown",
-    ]);
+    ];
+
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    const lastErrorReason = stateProperties.lastErrorReason as SchemaLike | undefined;
+    expect(lastErrorReason).toBeDefined();
+    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual(expectedReasons);
+
+    const runLogProperties = (CronRunLogEntrySchema as SchemaLike).properties ?? {};
+    const errorReason = runLogProperties.errorReason as SchemaLike | undefined;
+    expect(errorReason).toBeDefined();
+    expect(extractConstUnionValues(errorReason ?? {})).toEqual(expectedReasons);
   });
 });

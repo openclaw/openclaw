@@ -66,6 +66,25 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   jobNameById?: Record<string, string>;
 };
 
+const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "format",
+  "rate_limit",
+  "overloaded",
+  "billing",
+  "timeout",
+  "model_not_found",
+  "session_expired",
+  "unknown",
+]);
+
+function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
+  return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
+    ? (value as FailoverReason)
+    : undefined;
+}
+
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
   if (!trimmed) {
@@ -307,16 +326,17 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
           ? (obj.usage as Record<string, unknown>)
           : undefined;
       const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
+      const normalizedErrorReason =
+        normalizeCronRunLogErrorReason(obj.errorReason) ??
+        resolveFailoverReasonFromError(normalizedError) ??
+        undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
         error: normalizedError,
-        errorReason:
-          typeof obj.errorReason === "string"
-            ? obj.errorReason
-            : (resolveFailoverReasonFromError(normalizedError) ?? undefined),
+        errorReason: normalizedErrorReason,
         summary: obj.summary,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,

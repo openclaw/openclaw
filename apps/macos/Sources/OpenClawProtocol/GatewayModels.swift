@@ -3742,7 +3742,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         action: String,
         status: AnyCodable?,
         error: String?,
-        errorreason: AnyCodable?,
+        errorreason: AnyCodable? = nil,
         summary: String?,
         delivered: Bool?,
         deliverystatus: AnyCodable?,
