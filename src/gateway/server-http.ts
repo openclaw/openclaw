@@ -70,15 +70,24 @@ import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-r
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
-  type PluginHttpRequestHandler,
   type PluginRoutePathContext,
-} from "./server/plugins-http.js";
+} from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { VOICECLAW_REALTIME_PATH } from "./voiceclaw-realtime/paths.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type PluginHttpRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;

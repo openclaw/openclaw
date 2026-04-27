@@ -1,4 +1,4 @@
-import type { Server as HttpServer } from "node:http";
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
@@ -18,6 +18,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -35,11 +36,8 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
-import {
-  createGatewayPluginRequestHandler,
-  shouldEnforceGatewayAuthForPluginPath,
-  type PluginRoutePathContext,
-} from "./server/plugins-http.js";
+import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
+import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
 import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
@@ -47,6 +45,17 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+
+type GatewayPluginRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -145,10 +154,26 @@ export async function createGatewayRuntimeState(params: {
       logHooks: params.logHooks,
     });
 
-    const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: params.pluginRegistry,
-      log: params.logPlugins,
-    });
+    let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
+    const handlePluginRequest: GatewayPluginRequestHandler = async (
+      req,
+      res,
+      pathContext,
+      dispatchContext,
+    ) => {
+      const registry = resolveActivePluginHttpRouteRegistry(params.pluginRegistry);
+      if ((registry.httpRoutes ?? []).length === 0) {
+        return false;
+      }
+      if (!loadedPluginRequestHandler) {
+        const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
+        loadedPluginRequestHandler = createGatewayPluginRequestHandler({
+          registry: params.pluginRegistry,
+          log: params.logPlugins,
+        });
+      }
+      return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+    };
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
       return shouldEnforceGatewayAuthForPluginPath(
         resolveActivePluginHttpRouteRegistry(params.pluginRegistry),

@@ -144,6 +144,13 @@ as the cache-hit signal.
 If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
 stops injecting those OpenRouter-specific Anthropic cache markers.
 
+### DeepSeek direct API
+
+- `prompt_cache_key` is supported for `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro` via the OpenAI-compatible transport when a session ID is present.
+- Live testing on `deepseek-v4-flash` shows **72–92% cache hit rates** on system prompts of ~1287 tokens within the same session, with cache hits appearing as early as Turn 1.
+- Cache hit rate improves with session continuity: Turn 1 ~72%, Turns 2–4 ~87–92% of prompt tokens served from cache.
+- `cacheRetention` settings (`none`/`short`/`long`) are respected; set to `none` to suppress `prompt_cache_key` injection.
+
 ### Other providers
 
 If the provider does not support this cache mode, `cacheRetention` has no effect.
