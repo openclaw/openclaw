@@ -220,8 +220,10 @@ When provider-based **audio** and **video** media understanding is enabled, Open
 
 - `HTTPS_PROXY`
 - `HTTP_PROXY`
+- `ALL_PROXY`
 - `https_proxy`
 - `http_proxy`
+- `all_proxy`
 
 If no proxy env vars are set, media understanding uses direct egress. If the proxy value is malformed, OpenClaw logs a warning and falls back to direct fetch.
 

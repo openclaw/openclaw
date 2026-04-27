@@ -113,6 +113,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
@@ -224,12 +225,26 @@ function resolvePluginRegistrationCapabilities(
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
-  const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
+  const coreGatewayMethods = new Set([
+    ...(registryParams.coreGatewayMethodNames ?? []),
+    ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
+  ]);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
+  };
+
+  const throwRegistrationError = (message: string): never => {
+    throw new Error(message);
+  };
+
+  const requireRegistrationValue = (value: string | undefined, message: string): string => {
+    if (!value) {
+      throw new Error(message);
+    }
+    return value;
   };
 
   const registerCodexAppServerExtensionFactory = (
@@ -407,27 +422,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<typeof registerInternalHook>[1],
     opts: OpenClawPluginHookOptions | undefined,
     config: OpenClawPluginApi["config"],
+    pluginConfig: unknown,
   ) => {
     const eventList = Array.isArray(events) ? events : [events];
     const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
     const entry = opts?.entry ?? null;
-    const name = entry?.hook.name ?? opts?.name?.trim();
-    if (!name) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: "hook registration missing name",
-      });
-      return;
-    }
-    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === name);
+    const hookName = requireRegistrationValue(
+      entry?.hook.name ?? opts?.name?.trim(),
+      "hook registration missing name",
+    );
+    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === hookName);
     if (existingHook) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `hook already registered: ${name} (${existingHook.pluginId})`,
+        message: `hook already registered: ${hookName} (${existingHook.pluginId})`,
       });
       return;
     }
@@ -438,7 +448,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           ...entry,
           hook: {
             ...entry.hook,
-            name,
+            name: hookName,
             description,
             source: "openclaw-plugin",
             pluginId: record.id,
@@ -450,7 +460,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         }
       : {
           hook: {
-            name,
+            name: hookName,
             description,
             source: "openclaw-plugin",
             pluginId: record.id,
@@ -463,7 +473,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           invocation: { enabled: true },
         };
 
-    record.hookNames.push(name);
+    record.hookNames.push(hookName);
     registry.hooks.push({
       pluginId: record.id,
       entry: hookEntry,
@@ -480,7 +490,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
-    const previousRegistrations = activePluginHookRegistrations.get(name) ?? [];
+    const previousRegistrations = activePluginHookRegistrations.get(hookName) ?? [];
     for (const registration of previousRegistrations) {
       unregisterInternalHook(registration.event, registration.handler);
     }
@@ -490,13 +500,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: Parameters<typeof registerInternalHook>[1];
     }> = [];
     for (const event of normalizedEvents) {
-      registerInternalHook(event, handler);
-      nextRegistrations.push({ event, handler });
+      const wrappedHandler: typeof handler = async (evt) => {
+        // Shallow-copy to avoid mutating the shared event object
+        // passed to all handlers sequentially by triggerInternalHook
+        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+      };
+      registerInternalHook(event, wrappedHandler);
+      nextRegistrations.push({ event, handler: wrappedHandler });
     }
-    activePluginHookRegistrations.set(name, nextRegistrations);
+    activePluginHookRegistrations.set(hookName, nextRegistrations);
     const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
     rollbackEntries.push({
-      name,
+      name: hookName,
       previousRegistrations: [...previousRegistrations],
     });
     pluginHookRollback.set(record.id, rollbackEntries);
@@ -1008,6 +1023,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMigrationProvider = (record: PluginRecord, provider: MigrationProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "migration provider",
+      registrations: registry.migrationProviders,
+      ownedIds: record.migrationProviderIds,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -1447,7 +1472,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
-                registerHook(record, events, handler, opts, params.config),
+                registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
@@ -1479,6 +1504,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMusicGenerationProvider(record, provider),
               registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
+              registerMigrationProvider: (provider) => registerMigrationProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
@@ -1559,13 +1585,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory capability",
-                  });
-                  return;
+                  throwRegistrationError("only memory plugins can register a memory capability");
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1585,13 +1605,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryPromptSection: (builder) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory prompt section",
-                  });
-                  return;
+                  throwRegistrationError(
+                    "only memory plugins can register a memory prompt section",
+                  );
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1617,13 +1633,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory flush plan",
-                  });
-                  return;
+                  throwRegistrationError("only memory plugins can register a memory flush plan");
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1643,13 +1653,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory runtime",
-                  });
-                  return;
+                  throwRegistrationError("only memory plugins can register a memory runtime");
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1778,6 +1782,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,
     registerWebSearchProvider,
+    registerMigrationProvider,
     registerGatewayMethod,
     registerCli,
     registerReload,

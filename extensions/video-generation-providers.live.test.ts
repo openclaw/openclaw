@@ -1,40 +1,41 @@
-import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
-import { isModelNotFoundErrorMessage } from "../src/agents/live-model-errors.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
 import {
+  resolveApiKeyForProvider,
+  resolveOpenClawAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  DEFAULT_LIVE_VIDEO_MODELS,
+  canRunBufferBackedImageToVideoLiveLane,
+  canRunBufferBackedVideoToVideoLiveLane,
+  collectProviderApiKeys,
+  encodePngRgba,
+  fillPixel,
+  getShellEnvAppliedKeys,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
+  isTruthyEnvValue,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../src/agents/pi-embedded-helpers/failover-matches.js";
-import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
-import { normalizeVideoGenerationDuration } from "../src/video-generation/duration-support.js";
-import {
-  canRunBufferBackedImageToVideoLiveLane,
-  canRunBufferBackedVideoToVideoLiveLane,
-  DEFAULT_LIVE_VIDEO_MODELS,
+  normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
+  parseVideoGenerationModelRef,
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
-} from "../src/video-generation/live-test-helpers.js";
-import { parseVideoGenerationModelRef } from "../src/video-generation/model-ref.js";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationMode,
-  VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "../src/video-generation/types.js";
+  type GeneratedVideoAsset,
+  type VideoGenerationMode,
+  type VideoGenerationModeCapabilities,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -326,7 +327,7 @@ function resolveLiveSmokeDurationSeconds(params: {
 }
 
 async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(loadConfig());
+  const cfg = withPluginsEnabled(getRuntimeConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveOpenClawAgentDir();
   const attempted: string[] = [];

@@ -23,6 +23,10 @@ const mockState = vi.hoisted(() => ({
   finalPayload: null as {
     text?: string;
     mediaUrl?: string;
+    mediaUrls?: string[];
+    spokenText?: string;
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
     sensitiveMedia?: boolean;
     replyToId?: string;
     replyToCurrent?: boolean;
@@ -34,6 +38,8 @@ const mockState = vi.hoisted(() => ({
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      spokenText?: string;
+      audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
@@ -113,6 +119,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         sendFinalReply: (payload: {
           text?: string;
           mediaUrl?: string;
+          mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
+          trustedLocalMedia?: boolean;
           sensitiveMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -122,6 +132,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -131,6 +143,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          spokenText?: string;
+          audioAsVoice?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -257,6 +271,7 @@ function createTranscriptFixture(prefix: string) {
     "utf-8",
   );
   mockState.transcriptPath = transcriptPath;
+  return dir;
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -577,6 +592,121 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+
+  it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "This text is already in the model transcript.",
+          spokenText: "This text is already in the model transcript.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
+    expect(assistantUpdates[0]).toMatchObject({
+      message: {
+        role: "assistant",
+        idempotencyKey: "idem-agent-tts:assistant-media",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
+      "This text is already in the model transcript.",
+    );
+  });
+
+  it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.finalPayload = {
+      text: "Command result with TTS.",
+      spokenText: "Command result with TTS.",
+      mediaUrl: audioPath,
+      mediaUrls: [audioPath],
+      trustedLocalMedia: true,
+      audioAsVoice: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-tts",
+    });
+
+    expect(payload?.message).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Command result with TTS." },
+        {
+          type: "audio",
+          source: {
+            type: "base64",
+            media_type: "audio/mpeg",
+          },
+        },
+      ],
+    });
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
+    expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
   it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {

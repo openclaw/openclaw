@@ -6,7 +6,7 @@ import {
 } from "./subagent-announce-capture.js";
 import {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -19,13 +19,13 @@ const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   readLatestAssistantReply: typeof readLatestAssistantReply;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   readLatestAssistantReply,
 };
 
@@ -523,7 +523,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.loadConfig();
+  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];

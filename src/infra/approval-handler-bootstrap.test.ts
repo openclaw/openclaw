@@ -98,6 +98,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const lease = registerApprovalContext(channelRuntime);
 
     const cleanup = await startTestBootstrap({ channelRuntime });
+    await flushTransitions();
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
@@ -105,6 +106,22 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
     expect(stop).toHaveBeenCalledTimes(1);
     lease.dispose();
+  });
+
+  it("does not block bootstrap return on an existing runtime context", async () => {
+    const channelRuntime = createRuntimeChannel();
+    createChannelApprovalHandlerFromCapability.mockReturnValue(new Promise(() => {}));
+    registerApprovalContext(channelRuntime);
+
+    const result = await Promise.race([
+      startTestBootstrap({ channelRuntime }).then((cleanup) => ({ cleanup })),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+
+    expect(result).not.toBe("timeout");
+    if (result !== "timeout") {
+      await result.cleanup();
+    }
   });
 
   it("does not start a handler after the runtime context is unregistered mid-boot", async () => {

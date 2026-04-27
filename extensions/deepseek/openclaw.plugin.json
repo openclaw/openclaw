@@ -3,6 +3,19 @@
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "deepseek-native",
+      "hosts": ["api.deepseek.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "deepseek": {
+        "family": "deepseek"
+      }
+    }
+  },
   "modelCatalog": {
     "providers": {
       "deepseek": {

@@ -576,6 +576,10 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
 }
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
+  // Tests mutate testState-backed config before server startup; discard earlier
+  // helper reads so startup observes the current fixture state.
+  resetConfigRuntimeState();
+  clearSessionStoreCacheForTest();
   const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;

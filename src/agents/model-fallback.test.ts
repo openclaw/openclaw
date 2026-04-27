@@ -663,7 +663,7 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("treats LiveSessionModelSwitchError as failover on last candidate (#58466)", async () => {
+  it("treats LiveSessionModelSwitchError as failover on last candidate (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
@@ -686,10 +686,11 @@ describe("runWithModelFallback", () => {
     // Should NOT be a LiveSessionModelSwitchError — the outer retry loop must
     // not restart with the conflicting model.
     expect(err).not.toBeInstanceOf(LiveSessionModelSwitchError);
+    expect((err as { reason?: string }).reason).toBe("unknown");
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58466)", async () => {
+  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
@@ -753,6 +754,31 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
       ["anthropic", "claude-sonnet-4-6"],
+    ]);
+  });
+
+  it("does not redirect stale live-session switch errors back to the current candidate (#58496 family)", async () => {
+    const cfg = makeCfg();
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+    const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("unknown");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
     ]);
   });
 

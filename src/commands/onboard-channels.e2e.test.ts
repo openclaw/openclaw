@@ -473,6 +473,69 @@ vi.mock("../plugin-sdk/matrix-deps.js", () => ({
   isMatrixSdkAvailable: vi.fn(() => true),
 }));
 
+vi.mock("../channels/plugins/bundled.js", () => ({
+  getBundledChannelSetupPlugin: (channel: string) =>
+    channel === "telegram"
+      ? {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+          setup: {
+            applyAccountConfig: ({
+              cfg,
+              input,
+            }: {
+              cfg: OpenClawConfig;
+              input: { token?: string };
+            }) =>
+              ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  telegram: {
+                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
+                    ...(input.token ? { botToken: input.token } : {}),
+                  },
+                },
+              }) as OpenClawConfig,
+          },
+          setupWizard: {
+            channel: "telegram",
+            status: {
+              configuredLabel: "configured",
+              unconfiguredLabel: "not configured",
+              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                Boolean(cfg.channels?.telegram?.botToken),
+            },
+            credentials: [
+              {
+                inputKey: "token",
+                providerHint: "BotFather",
+                credentialLabel: "Telegram bot token",
+                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
+                keepPrompt: "Keep current Telegram bot token?",
+                inputPrompt: "Enter Telegram bot token",
+                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
+                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
+                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
+                }),
+              },
+            ],
+          },
+        }
+      : undefined,
+}));
+
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));

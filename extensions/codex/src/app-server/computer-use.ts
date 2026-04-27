@@ -6,9 +6,9 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
+import type { v2 } from "./protocol-generated/typescript/index.js";
 import type { JsonValue } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
 
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,

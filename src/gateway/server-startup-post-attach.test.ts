@@ -20,6 +20,7 @@ const hoisted = vi.hoisted(() => {
   const scheduleSubagentOrphanRecovery = vi.fn();
   const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
+  const refreshLatestUpdateRestartSentinel = vi.fn(async () => null);
   const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
@@ -42,6 +43,7 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentOrphanRecovery,
     shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
+    refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
   };
@@ -104,6 +106,7 @@ vi.mock("../acp/runtime/registry.js", () => ({
 }));
 
 vi.mock("./server-restart-sentinel.js", () => ({
+  refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
 }));
@@ -124,7 +127,7 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime, startGatewaySidecars } =
+const { startGatewayPostAttachRuntime, startGatewaySidecars, __testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
   await import("./server-startup-unavailable-methods.js");
@@ -157,9 +160,11 @@ describe("startGatewayPostAttachRuntime", () => {
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const onSidecarsReady = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      log,
       unavailableGatewayMethods,
       onSidecarsReady,
     });
@@ -174,6 +179,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
+    expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
@@ -217,6 +223,35 @@ describe("startGatewayPostAttachRuntime", () => {
     resumeSidecars();
     await runtimePromise;
     expect(returned).toBe(true);
+  });
+
+  it("continues channel startup when primary model prewarm hangs", async () => {
+    vi.useFakeTimers();
+    const log = { warn: vi.fn() };
+    const prewarm = vi.fn(async () => {
+      await new Promise(() => undefined);
+    });
+
+    try {
+      const promise = __testing.prewarmConfiguredPrimaryModelWithTimeout(
+        {
+          cfg: {} as never,
+          log,
+          timeoutMs: 25,
+        },
+        prewarm as never,
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await promise;
+
+      expect(prewarm).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        "startup model warmup timed out after 25ms; continuing channel startup",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
@@ -356,6 +391,10 @@ describe("startGatewayPostAttachRuntime", () => {
         hooks: { internal: { enabled: false } },
         plugins: { entries: { demo: { enabled: true } } },
       } as never,
+      pluginRegistry: {
+        ...createPostAttachParams().pluginRegistry,
+        typedHooks: [{ hookName: "gateway_start" }],
+      } as never,
       deps: { cron: initialCron } as never,
     });
 
@@ -392,6 +431,62 @@ describe("startGatewayPostAttachRuntime", () => {
     params.deps.cron = reloadedCron as never;
     expect(getCron()).toBe(reloadedCron);
   });
+
+  it("does not resolve the global hook runner when no gateway_start hooks are registered", async () => {
+    const getGlobalHookRunner = vi.fn(async () => {
+      throw new Error("should not load hook runner");
+    });
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({ getGlobalHookRunner }),
+    );
+
+    expect(getGlobalHookRunner).not.toHaveBeenCalled();
+  });
+
+  it("resolves gateway_start cron from the live runtime getter before deps fallback", async () => {
+    const runGatewayStart = vi.fn<
+      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
+    >(async () => undefined);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const depsCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const liveCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const reloadedCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    let currentLiveCron = liveCron;
+    const params = createPostAttachParams({
+      deps: { cron: depsCron } as never,
+      getCronService: () => currentLiveCron,
+      pluginRegistry: {
+        ...createPostAttachParams().pluginRegistry,
+        typedHooks: [{ hookName: "gateway_start" }],
+      } as never,
+    });
+
+    await startGatewayPostAttachRuntime(
+      params,
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
+
+    const ctx = runGatewayStart.mock.calls[0]?.[1];
+    if (!ctx?.getCron) {
+      throw new Error("gateway_start context did not expose getCron");
+    }
+    expect(ctx.getCron()).toBe(liveCron);
+
+    params.deps.cron = depsCron as never;
+    currentLiveCron = reloadedCron;
+    expect(ctx.getCron()).toBe(reloadedCron);
+  });
 });
 
 function createPostAttachRuntimeDeps(
@@ -400,6 +495,7 @@ function createPostAttachRuntimeDeps(
   return {
     getGlobalHookRunner: vi.fn(() => null),
     logGatewayStartup: hoisted.logGatewayStartup,
+    refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null })),
     startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
@@ -434,6 +530,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
         { id: "cold", status: "disabled" },
         { id: "broken", status: "error" },
       ],
+      typedHooks: [],
     } as never,
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     deps: {} as never,

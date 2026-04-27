@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -147,7 +147,7 @@ export function registerPluginsCli(program: Command) {
     .option("--verbose", "Show detailed entries", false)
     .action(async (opts: PluginsListOptions) => {
       const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const report = buildPluginRegistrySnapshotReport({
         config: cfg,
         ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -262,7 +262,7 @@ export function registerPluginsCli(program: Command) {
       } = await import("../plugins/status.js");
       const { loadInstalledPluginIndexInstallRecords } =
         await import("../plugins/installed-plugin-index-records.js");
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const installRecords = await loadInstalledPluginIndexInstallRecords();
       const report = buildPluginDiagnosticsReport({
         config: cfg,
@@ -774,7 +774,7 @@ export function registerPluginsCli(program: Command) {
     .action(async (opts: PluginRegistryOptions) => {
       const { inspectPluginRegistry, refreshPluginRegistry } =
         await import("../plugins/plugin-registry.js");
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
 
       if (opts.refresh) {
         const index = await refreshPluginRegistry({
@@ -836,7 +836,7 @@ export function registerPluginsCli(program: Command) {
         buildPluginDiagnosticsReport,
         formatPluginCompatibilityNotice,
       } = await import("../plugins/status.js");
-      const report = buildPluginDiagnosticsReport();
+      const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });

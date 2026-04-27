@@ -59,6 +59,7 @@ describe("debug proxy runtime", () => {
   });
 
   afterEach(() => {
+    finalizeDebugProxyCapture();
     globalThis.fetch = originalFetch;
     for (const key of envKeys) {
       const value = savedEnv[key];
@@ -71,7 +72,7 @@ describe("debug proxy runtime", () => {
   });
 
   it("captures ambient global fetch calls when debug proxy mode is enabled", async () => {
-    globalThis.fetch = vi.fn(async () => ({ status: 200 }) as Response) as typeof fetch;
+    globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as typeof fetch;
 
     initializeDebugProxyCapture("test");
     await globalThis.fetch("https://api.minimax.io/anthropic/messages", {
@@ -79,6 +80,7 @@ describe("debug proxy runtime", () => {
       headers: { "content-type": "application/json" },
       body: '{"input":"hello"}',
     });
+    await new Promise((resolve) => setImmediate(resolve));
     finalizeDebugProxyCapture();
 
     const events = storeState.events.filter((event) => event.sessionId === "runtime-test-session");

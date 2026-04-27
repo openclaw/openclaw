@@ -103,6 +103,18 @@ openclaw channels logs --channel whatsapp
 Each line in the log file is a JSON object. The CLI and Control UI parse these
 entries to render structured output (time, level, subsystem, message).
 
+File-log JSONL records also include machine-filterable top-level fields when
+available:
+
+- `hostname`: gateway host name.
+- `message`: flattened log message text for full-text search.
+- `agent_id`: active agent id when the log call carries agent context.
+- `session_id`: active session id/key when the log call carries session context.
+- `channel`: active channel when the log call carries channel context.
+
+OpenClaw preserves the original structured log arguments alongside these fields
+so existing parsers that read numbered tslog argument keys keep working.
+
 ### Console output
 
 Console logs are **TTY-aware** and formatted for readability:
@@ -163,6 +175,13 @@ File logs are JSONL. When a log call carries a valid diagnostic trace context,
 OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
 `parentSpanId`, `traceFlags`) so external log processors can correlate the line
 with OTEL spans and provider `traceparent` propagation.
+
+Gateway HTTP requests and Gateway WebSocket frames establish an internal request
+trace scope. Logs and diagnostic events emitted inside that async scope inherit
+the request trace when they do not pass an explicit trace context. Agent run and
+model-call traces become children of the active request trace, so local logs,
+diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
+be joined by `traceId` without logging raw request or model content.
 
 ### Model call size and timing
 

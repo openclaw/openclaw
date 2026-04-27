@@ -8,8 +8,7 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
@@ -21,6 +20,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -39,7 +39,7 @@ import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
-type LoadedConfig = ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+type LoadedConfig = OpenClawConfig;
 type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 

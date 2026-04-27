@@ -41,7 +41,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "subagent_spawning",
   ],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
-  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
 } as const satisfies Record<
@@ -54,19 +54,19 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/diffs/src/plugin.ts": [
     "resolveLivePluginConfigObject(",
     '"diffs"',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
     "resolveMemoryCorePluginConfig(startupCfg)",
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
   "extensions/skill-workshop/index.ts": ["resolveLivePluginConfigObject(", '"skill-workshop"'],
   "extensions/thread-ownership/index.ts": [
     "resolveLivePluginConfigObject(",
     '"thread-ownership"',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    "api.runtime.config?.current?.() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {

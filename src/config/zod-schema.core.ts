@@ -195,6 +195,8 @@ export const ModelCompatSchema = z
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
+    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
+    reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -204,8 +206,6 @@ export const ModelCompatSchema = z
         z.literal("openrouter"),
         z.literal("deepseek"),
         z.literal("zai"),
-        z.literal("qwen"),
-        z.literal("qwen-chat-template"),
       ])
       .optional(),
     requiresToolResultName: z.boolean().optional(),
@@ -342,6 +342,7 @@ export const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
@@ -356,6 +357,10 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
+    maxTokens: z.number().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),

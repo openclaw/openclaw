@@ -7,11 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-This document describes **provider-specific fixes** applied to transcripts before a run
-(building model context). Most of these are **in-memory** adjustments used to satisfy
-strict provider requirements. A separate session-file repair pass may also rewrite
-stored JSONL before the session is loaded, either by dropping malformed JSONL lines or
-by repairing persisted turns that are syntactically valid but known to be rejected by a
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, either by dropping malformed JSONL lines or by repairing persisted turns that are syntactically valid but known to be rejected by a
 provider during replay. When a repair occurs, the original file is backed up alongside
 the session file.
 
@@ -122,6 +118,13 @@ external end-user instructions.
 - Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
+**OpenAI-compatible Gemma 4**
+
+- Historical assistant thinking/reasoning blocks are stripped before replay so local
+  OpenAI-compatible Gemma 4 servers do not receive prior-turn reasoning content.
+- Current same-turn tool-call continuations keep the assistant reasoning block
+  attached to the tool call until the tool result has been replayed.
+
 **Google (Generative AI / Gemini CLI / Antigravity)**
 
 - Tool call id sanitization: strict alphanumeric.
@@ -134,6 +137,8 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
+  payloads when thinking is enabled, including Cloudflare AI Gateway routes.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.
