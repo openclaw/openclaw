@@ -1,11 +1,11 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,

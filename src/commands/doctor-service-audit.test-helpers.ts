@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 export const testServiceAuditCodes = {
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
+  gatewayPortMismatch: "gateway-port-mismatch",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
 } as const;

@@ -1,5 +1,5 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";

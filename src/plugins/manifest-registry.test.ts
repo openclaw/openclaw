@@ -370,7 +370,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
-  it("reports explicit installed globals as the effective duplicate winner", () => {
+  it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -399,11 +399,41 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("bundled plugin will be overridden by global plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      installRecords: {
+        zalouser: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+      ],
+    });
+
+    expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("global");
   });

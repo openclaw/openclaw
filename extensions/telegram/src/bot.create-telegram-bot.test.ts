@@ -4,7 +4,8 @@ import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/env
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
-const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
+const configMutation = await import("openclaw/plugin-sdk/config-mutation");
+const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const {
   answerCallbackQuerySpy,
@@ -121,7 +122,7 @@ function installPerKeySequentializer(): void {
 }
 
 function mockTelegramConfigWrites() {
-  return vi.spyOn(configRuntime, "replaceConfigFile").mockResolvedValue({} as never);
+  return vi.spyOn(configMutation, "replaceConfigFile").mockResolvedValue({} as never);
 }
 
 async function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>) {
@@ -3638,7 +3639,7 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const updateSessionStoreSpy = vi.spyOn(configRuntime, "updateSessionStore");
+    const updateSessionStoreSpy = vi.spyOn(sessionStoreRuntime, "updateSessionStore");
     updateSessionStoreSpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = {

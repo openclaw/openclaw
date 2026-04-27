@@ -129,6 +129,27 @@ releases.
     must receive config from their boundary, and long-lived runtime modules have
     zero allowed ambient `loadConfig()` calls.
 
+    New plugin code should also avoid importing the broad
+    `openclaw/plugin-sdk/config-runtime` compatibility barrel. Use the narrow
+    SDK subpath that matches the job:
+
+    | Need | Import |
+    | --- | --- |
+    | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-types` |
+    | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
+    | Config writes | `openclaw/plugin-sdk/config-mutation` |
+    | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
+    | Markdown table config | `openclaw/plugin-sdk/markdown-table-runtime` |
+    | Group policy runtime helpers | `openclaw/plugin-sdk/runtime-group-policy` |
+    | Secret input resolution | `openclaw/plugin-sdk/secret-input-runtime` |
+    | Model/session overrides | `openclaw/plugin-sdk/model-session-runtime` |
+
+    Bundled plugins and their tests are scanner-guarded against the broad
+    barrel so imports and mocks stay local to the behavior they need. The broad
+    barrel still exists for external compatibility, but new code should not
+    depend on it.
+
   </Step>
 
   <Step title="Migrate Pi tool-result extensions to middleware">
@@ -214,6 +235,7 @@ releases.
 
     ```bash
     grep -r "plugin-sdk/compat" my-plugin/
+    grep -r "plugin-sdk/config-runtime" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
 

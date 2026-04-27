@@ -8,10 +8,7 @@ import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
@@ -29,6 +26,7 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
@@ -744,25 +742,19 @@ export async function spawnSubagentDirect(
     requesterGroupSpace: ctx.agentGroupSpace,
     requesterMemberRoleIds: ctx.agentMemberRoleIds,
   });
-  if (targetAgentId !== requesterAgentId) {
-    const allowAgents =
+  const targetPolicy = resolveSubagentTargetPolicy({
+    requesterAgentId,
+    targetAgentId,
+    requestedAgentId,
+    allowAgents:
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-      cfg?.agents?.defaults?.subagents?.allowAgents ??
-      [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = normalizeLowercaseStringOrEmpty(targetAgentId);
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeLowercaseStringOrEmpty(normalizeAgentId(value))),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
-      return {
-        status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
-      };
-    }
+      cfg?.agents?.defaults?.subagents?.allowAgents,
+  });
+  if (!targetPolicy.ok) {
+    return {
+      status: "forbidden",
+      error: targetPolicy.error,
+    };
   }
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({

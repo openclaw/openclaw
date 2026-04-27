@@ -55,6 +55,7 @@ export function createChangedCheckPlan(result, options = {}) {
 
   add("conflict markers", ["check:no-conflict-markers"]);
   add("changelog attributions", ["check:changelog-attributions"]);
+  add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
 
   if (result.docsOnly) {
     return {

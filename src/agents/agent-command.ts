@@ -471,11 +471,17 @@ async function agentCommandInternal(
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
-        const { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } =
-          await loadAcpPolicyRuntime();
-        const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
-        if (dispatchPolicyError) {
-          throw dispatchPolicyError;
+        const {
+          resolveAcpAgentPolicyError,
+          resolveAcpDispatchPolicyError,
+          resolveAcpExplicitTurnPolicyError,
+        } = await loadAcpPolicyRuntime();
+        const turnPolicyError =
+          opts.acpTurnSource === "manual_spawn"
+            ? resolveAcpExplicitTurnPolicyError(cfg)
+            : resolveAcpDispatchPolicyError(cfg);
+        if (turnPolicyError) {
+          throw turnPolicyError;
         }
         const acpAgent = normalizeAgentId(
           acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),

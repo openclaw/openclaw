@@ -43,7 +43,7 @@ describe("unit-fast vitest lane", () => {
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
-    expect(isUnitFastTestFile("src/tts/status-config.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/tts/tts-config.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",

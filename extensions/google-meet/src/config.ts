@@ -79,8 +79,11 @@ export type GoogleMeetConfig = {
 };
 
 export const DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
-  "rec",
+  "sox",
   "-q",
+  "-t",
+  "coreaudio",
+  "BlackHole 2ch",
   "-t",
   "raw",
   "-r",
@@ -96,7 +99,7 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
 ] as const;
 
 export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
-  "play",
+  "sox",
   "-q",
   "-t",
   "raw",
@@ -110,6 +113,9 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
   "16",
   "-L",
   "-",
+  "-t",
+  "coreaudio",
+  "BlackHole 2ch",
 ] as const;
 
 export const LEGACY_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [

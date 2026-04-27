@@ -101,6 +101,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,

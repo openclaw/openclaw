@@ -710,6 +710,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.threadId).toBe("child-thread");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
+    expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: expect.stringMatching(/^agent:codex:acp:/),
@@ -1091,6 +1092,38 @@ describe("spawnAcpDirect", () => {
       {
         ...createRequesterContext(),
         agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("agentId is not allowed");
+  });
+
+  it("rejects explicit ACP self-targets when the subagent allowlist excludes the requester", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "writer"],
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["writer"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "codex",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:codex:subagent:parent",
       },
     );
 

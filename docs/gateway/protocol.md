@@ -553,6 +553,10 @@ rather than the pre-handshake defaults.
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
+- `device.token.rotate` returns rotation metadata. It echoes the replacement
+  bearer token only for same-device calls that are already authenticated with
+  that device token, so token-only clients can persist their replacement before
+  reconnecting. Shared/admin rotations do not echo the bearer token.
 - Token issuance, rotation, and revocation stay bounded to the approved role set
   recorded in that device's pairing entry; token mutation cannot expand or
   target a device role that pairing approval never granted.

@@ -192,7 +192,9 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   measure?: GatewayStartupConfigMeasure;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
-  let configSnapshot = await measure("config.snapshot.read", () => readConfigFileSnapshot());
+  let configSnapshot = await measure("config.snapshot.read", () =>
+    readConfigFileSnapshot({ measure }),
+  );
   let wroteConfig = false;
   let degradedStartupConfig = false;
   let degradedPluginConfig = false;
@@ -241,7 +243,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
         );
         configSnapshot = await measure("config.snapshot.recovery-read", () =>
-          readConfigFileSnapshot(),
+          readConfigFileSnapshot({ measure }),
         );
         if (configSnapshot.valid) {
           enqueueConfigRecoveryNotice({
@@ -258,7 +260,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
         );
         configSnapshot = await measure("config.snapshot.prefix-recovery-read", () =>
-          readConfigFileSnapshot(),
+          readConfigFileSnapshot({ measure }),
         );
       }
     }
@@ -287,7 +289,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     });
     wroteConfig = true;
     configSnapshot = await measure("config.snapshot.auto-enable-read", () =>
-      readConfigFileSnapshot(),
+      readConfigFileSnapshot({ measure }),
     );
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(

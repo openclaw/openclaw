@@ -1,5 +1,5 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";

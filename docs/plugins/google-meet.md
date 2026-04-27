@@ -50,7 +50,7 @@ After reboot, verify both pieces:
 
 ```bash
 system_profiler SPAudioDataType | grep -i BlackHole
-command -v rec play
+command -v sox
 ```
 
 Enable the plugin:
@@ -192,7 +192,7 @@ After reboot, verify the VM can see the audio device and SoX commands:
 
 ```bash
 system_profiler SPAudioDataType | grep -i BlackHole
-command -v rec play
+command -v sox
 ```
 
 Install or update OpenClaw in the VM, then enable the bundled plugin there:
@@ -335,8 +335,8 @@ Common failure checks:
 
 The Chrome realtime default uses two external tools:
 
-- `sox`: command-line audio utility. The plugin uses its `rec` and `play`
-  commands for the default 24 kHz PCM16 audio bridge.
+- `sox`: command-line audio utility. The plugin uses explicit CoreAudio
+  device commands for the default 24 kHz PCM16 audio bridge.
 - `blackhole-2ch`: macOS virtual audio driver. It creates the `BlackHole 2ch`
   audio device that Chrome/Meet can route through.
 
@@ -892,10 +892,10 @@ Defaults:
 - `chrome.audioFormat: "pcm16-24khz"`: command-pair audio format. Use
   `"g711-ulaw-8khz"` only for legacy/custom command pairs that still emit
   telephony audio.
-- `chrome.audioInputCommand`: SoX `rec` command writing audio in
-  `chrome.audioFormat`
-- `chrome.audioOutputCommand`: SoX `play` command reading audio in
-  `chrome.audioFormat`
+- `chrome.audioInputCommand`: SoX command reading from CoreAudio `BlackHole 2ch`
+  and writing audio in `chrome.audioFormat`
+- `chrome.audioOutputCommand`: SoX command reading audio in `chrome.audioFormat`
+  and writing to CoreAudio `BlackHole 2ch`
 - `realtime.provider: "openai"`
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
@@ -1231,7 +1231,7 @@ Also verify:
 - A realtime provider key is available on the Gateway host, such as
   `OPENAI_API_KEY` or `GEMINI_API_KEY`.
 - `BlackHole 2ch` is visible on the Chrome host.
-- `rec` and `play` exist on the Chrome host.
+- `sox` exists on the Chrome host.
 - Meet microphone and speaker are routed through the virtual audio path used by
   OpenClaw.
 

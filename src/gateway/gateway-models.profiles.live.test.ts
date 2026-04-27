@@ -84,6 +84,8 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/kimi-k2p5",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
@@ -501,6 +503,12 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
   it("matches hosted Fireworks models that execute but miss readback nonces", () => {
     expect(
       shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/glm-5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p6"),
     ).toBe(true);
     expect(
       shouldSkipExecReadNonceMissForLiveModel(

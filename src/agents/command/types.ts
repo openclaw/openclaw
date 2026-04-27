@@ -19,6 +19,8 @@ export type AgentCommandResultMetaOverrides = {
   fallbackFrom?: "gateway";
 };
 
+export type AcpTurnSource = "manual_spawn";
+
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -105,6 +107,8 @@ export type AgentCommandOpts = {
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
   promptMode?: PromptMode;
+  /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
+  acpTurnSource?: AcpTurnSource;
 };
 
 export type AgentCommandIngressOpts = Omit<

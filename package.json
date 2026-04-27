@@ -186,6 +186,22 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/config-types": {
+      "types": "./dist/plugin-sdk/config-types.d.ts",
+      "default": "./dist/plugin-sdk/config-types.js"
+    },
+    "./plugin-sdk/plugin-config-runtime": {
+      "types": "./dist/plugin-sdk/plugin-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-config-runtime.js"
+    },
+    "./plugin-sdk/config-mutation": {
+      "types": "./dist/plugin-sdk/config-mutation.d.ts",
+      "default": "./dist/plugin-sdk/config-mutation.js"
+    },
+    "./plugin-sdk/cron-store-runtime": {
+      "types": "./dist/plugin-sdk/cron-store-runtime.d.ts",
+      "default": "./dist/plugin-sdk/cron-store-runtime.js"
+    },
     "./plugin-sdk/config-schema": {
       "types": "./dist/plugin-sdk/config-schema.d.ts",
       "default": "./dist/plugin-sdk/config-schema.js"
@@ -269,6 +285,14 @@
     "./plugin-sdk/runtime-group-policy": {
       "types": "./dist/plugin-sdk/runtime-group-policy.d.ts",
       "default": "./dist/plugin-sdk/runtime-group-policy.js"
+    },
+    "./plugin-sdk/model-session-runtime": {
+      "types": "./dist/plugin-sdk/model-session-runtime.d.ts",
+      "default": "./dist/plugin-sdk/model-session-runtime.js"
+    },
+    "./plugin-sdk/talk-config-runtime": {
+      "types": "./dist/plugin-sdk/talk-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/talk-config-runtime.js"
     },
     "./plugin-sdk/ssrf-policy": {
       "types": "./dist/plugin-sdk/ssrf-policy.d.ts",
@@ -1424,6 +1448,7 @@
     "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
     "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
+    "lint:extensions:no-plugin-sdk-wildcard-reexports": "node scripts/check-plugin-sdk-wildcard-reexports.mjs",
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
     "lint:fix": "node scripts/run-oxlint.mjs --fix && pnpm format",

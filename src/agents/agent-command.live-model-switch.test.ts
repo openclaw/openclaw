@@ -8,6 +8,9 @@ const state = vi.hoisted(() => ({
   buildAcpResultMock: vi.fn(),
   createAcpVisibleTextAccumulatorMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
+  resolveAcpAgentPolicyErrorMock: vi.fn(),
+  resolveAcpDispatchPolicyErrorMock: vi.fn(),
+  resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
@@ -83,12 +86,16 @@ vi.mock("./command/session.js", () => ({
 vi.mock("./command/types.js", () => ({}));
 
 vi.mock("../acp/policy.js", () => ({
-  resolveAcpAgentPolicyError: () => null,
-  resolveAcpDispatchPolicyError: () => null,
+  resolveAcpAgentPolicyError: (...args: unknown[]) => state.resolveAcpAgentPolicyErrorMock(...args),
+  resolveAcpDispatchPolicyError: (...args: unknown[]) =>
+    state.resolveAcpDispatchPolicyErrorMock(...args),
+  resolveAcpExplicitTurnPolicyError: (...args: unknown[]) =>
+    state.resolveAcpExplicitTurnPolicyErrorMock(...args),
 }));
 
 vi.mock("../acp/runtime/errors.js", () => ({
-  toAcpRuntimeError: vi.fn(),
+  toAcpRuntimeError: ({ error }: { error: unknown }) =>
+    error instanceof Error ? error : new Error(String(error)),
 }));
 
 vi.mock("../acp/runtime/session-identifiers.js", () => ({
@@ -404,6 +411,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.acpResolveSessionMock.mockReturnValue(null);
+    state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
+    state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
@@ -627,6 +637,55 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
+      new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
+    );
+
+    await agentCommand({
+      message: "bootstrap ACP child",
+      sessionKey: "agent:main",
+      senderIsOwner: true,
+      acpTurnSource: "manual_spawn",
+    });
+
+    expect(state.resolveAcpExplicitTurnPolicyErrorMock).toHaveBeenCalledTimes(1);
+    expect(state.resolveAcpDispatchPolicyErrorMock).not.toHaveBeenCalled();
+    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary ACP turns blocked when ACP dispatch is disabled", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
+      new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
+    );
+
+    await expect(
+      agentCommand({
+        message: "automatic ACP turn",
+        sessionKey: "agent:main",
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("ACP dispatch is disabled");
+
+    expect(state.resolveAcpExplicitTurnPolicyErrorMock).not.toHaveBeenCalled();
+    expect(state.resolveAcpDispatchPolicyErrorMock).toHaveBeenCalledTimes(1);
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
   });
 
   it("flips hasSessionModelOverride on provider-only switch with same model", async () => {

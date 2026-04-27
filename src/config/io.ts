@@ -227,6 +227,7 @@ export type ReadConfigFileSnapshotForWriteResult = {
 };
 
 export type ConfigWriteNotification = RuntimeConfigWriteNotification;
+export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -903,6 +904,7 @@ export type ConfigIoDeps = {
   homedir?: () => string;
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
+  measure?: ConfigSnapshotReadMeasure;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -960,6 +962,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
       overrides.homedir ?? (() => resolveRequiredHomeDir(overrides.env ?? process.env, os.homedir)),
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
+    measure: overrides.measure ?? (async (_name, run) => await run()),
   };
 }
 
@@ -1637,11 +1640,15 @@ export function createConfigIO(
     let fallbackHash = hashConfigRaw(null);
 
     try {
-      const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const rawHash = hashConfigRaw(raw);
+      const raw = await deps.measure("config.snapshot.read.file", () =>
+        deps.fs.readFileSync(configPath, "utf-8"),
+      );
+      const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
       fallbackRaw = raw;
       fallbackHash = rawHash;
-      const parsedRes = parseConfigJson5(raw, deps.json5);
+      const parsedRes = await deps.measure("config.snapshot.read.parse", () =>
+        parseConfigJson5(raw, deps.json5),
+      );
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -1663,12 +1670,14 @@ export function createConfigIO(
       fallbackSourceConfig = coerceConfig(parsedRes.parsed);
 
       // Resolve $include directives
-      const recovered = await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw,
-        parsed: parsedRes.parsed,
-      });
+      const recovered = await deps.measure("config.snapshot.read.recovery-check", () =>
+        maybeRecoverSuspiciousConfigRead({
+          deps,
+          configPath,
+          raw,
+          parsed: parsedRes.parsed,
+        }),
+      );
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
       const hash = hashConfigRaw(effectiveRaw);
@@ -1679,7 +1688,9 @@ export function createConfigIO(
 
       let resolved: unknown;
       try {
-        resolved = resolveConfigIncludesForRead(effectiveParsed, configPath, deps);
+        resolved = await deps.measure("config.snapshot.read.includes", () =>
+          resolveConfigIncludesForRead(effectiveParsed, configPath, deps),
+        );
       } catch (err) {
         const message =
           err instanceof ConfigIncludeError
@@ -1703,7 +1714,9 @@ export function createConfigIO(
         });
       }
 
-      const readResolution = resolveConfigForRead(resolved, deps.env);
+      const readResolution = await deps.measure("config.snapshot.read.env", () =>
+        resolveConfigForRead(resolved, deps.env),
+      );
 
       // Convert missing env var references to config warnings instead of fatal errors.
       // This allows the gateway to start in degraded mode when non-critical config
@@ -1714,13 +1727,16 @@ export function createConfigIO(
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
-      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
-        legacyResolution.effectiveConfigRaw,
-        {
-          persist: options.persistShippedPluginInstallMigration !== false,
-          rootConfigRaw: effectiveParsed,
-        },
+      const legacyResolution = await deps.measure("config.snapshot.read.legacy", () =>
+        resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed),
+      );
+      const installMigration = await deps.measure(
+        "config.snapshot.read.plugin-install-migration",
+        () =>
+          migrateAndStripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw, {
+            persist: options.persistShippedPluginInstallMigration !== false,
+            rootConfigRaw: effectiveParsed,
+          }),
       );
       const effectiveConfigRaw = installMigration.config;
       const snapshotRaw = installMigration.persistedRootRaw ?? effectiveRaw;
@@ -1729,10 +1745,12 @@ export function createConfigIO(
         ? hashConfigRaw(installMigration.persistedRootRaw)
         : hash;
       fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
-        env: deps.env,
-        pluginValidation: overrides.pluginValidation,
-      });
+      const validated = await deps.measure("config.snapshot.read.validate", () =>
+        validateConfigObjectWithPlugins(effectiveConfigRaw, {
+          env: deps.env,
+          pluginValidation: overrides.pluginValidation,
+        }),
+      );
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -1752,25 +1770,29 @@ export function createConfigIO(
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const snapshotConfig = materializeRuntimeConfig(validated.config, "snapshot");
-      return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: createConfigFileSnapshot({
-          path: configPath,
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
-          // for config set/unset operations (issue #6070)
-          sourceConfig: coerceConfig(effectiveConfigRaw),
-          valid: true,
-          runtimeConfig: snapshotConfig,
-          hash: snapshotHash,
-          issues: [],
-          warnings: [...validated.warnings, ...envVarWarnings],
-          legacyIssues: legacyResolution.sourceLegacyIssues,
+      const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
+        materializeRuntimeConfig(validated.config, "snapshot"),
+      );
+      return await deps.measure("config.snapshot.read.observe", () =>
+        finalizeReadConfigSnapshotInternalResult(deps, {
+          snapshot: createConfigFileSnapshot({
+            path: configPath,
+            exists: true,
+            raw: snapshotRaw,
+            parsed: snapshotParsed,
+            // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
+            // for config set/unset operations (issue #6070)
+            sourceConfig: coerceConfig(effectiveConfigRaw),
+            valid: true,
+            runtimeConfig: snapshotConfig,
+            hash: snapshotHash,
+            issues: [],
+            warnings: [...validated.warnings, ...envVarWarnings],
+            legacyIssues: legacyResolution.sourceLegacyIssues,
+          }),
+          envSnapshotForRestore: readResolution.envSnapshotForRestore,
         }),
-        envSnapshotForRestore: readResolution.envSnapshotForRestore,
-      });
+      );
     } catch (err) {
       const nodeErr = err as NodeJS.ErrnoException;
       let message: string;
@@ -2304,8 +2326,12 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
 
-export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-  return await createConfigIO().readConfigFileSnapshot();
+export async function readConfigFileSnapshot(options?: {
+  measure?: ConfigSnapshotReadMeasure;
+}): Promise<ConfigFileSnapshot> {
+  return await createConfigIO(
+    options?.measure ? { measure: options.measure } : {},
+  ).readConfigFileSnapshot();
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(

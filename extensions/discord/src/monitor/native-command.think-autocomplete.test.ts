@@ -2,10 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import {
-  clearSessionStoreCacheForTest,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 

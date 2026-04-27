@@ -161,6 +161,23 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);
   });
 
+  it("advertises ACP runtime affordances when only automatic ACP dispatch is disabled", () => {
+    registerAcpBackendForTest();
+
+    const tool = createSessionsSpawnTool({
+      config: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: false },
+        },
+      },
+    });
+    const schema = tool.parameters as { properties?: { runtime?: { enum?: string[] } } };
+
+    expect(tool.description).toContain('runtime="acp"');
+    expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+  });
+
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

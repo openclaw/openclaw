@@ -120,6 +120,14 @@ Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
 then runs an announce step and posts the announce reply to the requester
 chat channel.
 
+Availability depends on the caller's effective tool policy. The `coding` and
+`full` profiles expose `sessions_spawn` by default. The `messaging` profile
+does not; add `tools.alsoAllow: ["sessions_spawn", "sessions_yield",
+"subagents"]` or use `tools.profile: "coding"` for agents that should delegate
+work. Channel/group, provider, sandbox, and per-agent allow/deny policies can
+still remove the tool after the profile stage. Use `/tools` from the same
+session to confirm the effective tool list.
+
 **Defaults:**
 
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
@@ -236,7 +244,7 @@ See [Configuration reference](/gateway/configuration-reference) and
 ### Allowlist
 
 <ParamField path="agents.list[].subagents.allowAgents" type="string[]">
-  List of agent ids that can be targeted via `agentId` (`["*"]` allows any). Default: only the requester agent.
+  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
 </ParamField>
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
   Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.

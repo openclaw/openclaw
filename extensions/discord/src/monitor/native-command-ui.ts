@@ -24,9 +24,9 @@ import {
   type CommandArgValues,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   chunkItems,
   normalizeLowercaseStringOrEmpty,

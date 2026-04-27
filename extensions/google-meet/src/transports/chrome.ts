@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -245,6 +245,57 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
   );
 }
 
+function mergeBrowserNotes(
+  browser: GoogleMeetChromeHealth | undefined,
+  notes: string[],
+): GoogleMeetChromeHealth | undefined {
+  if (!browser || notes.length === 0) {
+    return browser;
+  }
+  return {
+    ...browser,
+    notes: [...new Set([...(browser.notes ?? []), ...notes])],
+  };
+}
+
+function parsePermissionGrantNotes(result: unknown): string[] {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
+    ? record.unsupportedPermissions.filter((value): value is string => typeof value === "string")
+    : [];
+  const notes = ["Granted Meet microphone/camera permissions through browser control."];
+  if (unsupportedPermissions.includes("speakerSelection")) {
+    notes.push("Chrome did not accept the optional Meet speaker-selection permission.");
+  }
+  return notes;
+}
+
+async function grantMeetMediaPermissions(params: {
+  callBrowser: BrowserRequestCaller;
+  timeoutMs: number;
+}): Promise<string[]> {
+  try {
+    const result = await params.callBrowser({
+      method: "POST",
+      path: "/permissions/grant",
+      body: {
+        origin: "https://meet.google.com",
+        permissions: ["audioCapture", "videoCapture"],
+        optionalPermissions: ["speakerSelection"],
+        timeoutMs: Math.min(params.timeoutMs, 5_000),
+      },
+      timeoutMs: Math.min(params.timeoutMs, 5_000),
+    });
+    return parsePermissionGrantNotes(result);
+  } catch (error) {
+    return [
+      `Could not grant Meet media permissions automatically: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    ];
+  }
+}
+
 function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
@@ -273,6 +324,7 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   const pageText = text(document.body).toLowerCase();
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
+  const permissionNeeded = /permission needed|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(pageText);
   const join = ${JSON.stringify(params.autoJoin)}
     ? findButton(/join now|ask to join/i)
     : null;
@@ -292,9 +344,9 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
     manualActionReason = "meet-admission-required";
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
-  } else if (!inCall && /allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
+  } else if (permissionNeeded) {
     manualActionReason = "meet-permission-required";
-    manualActionMessage = "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry.";
+    manualActionMessage = "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry.";
   } else if (!inCall && !microphoneChoice && /do you want people to hear you in the meeting/i.test(pageText)) {
     manualActionReason = "meet-audio-choice-required";
     manualActionMessage = "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry.";
@@ -389,11 +441,16 @@ async function openMeetWithBrowserRequest(params: {
     };
   }
 
+  const permissionNotes = await grantMeetMediaPermissions({
+    callBrowser: params.callBrowser,
+    timeoutMs,
+  });
   const deadline = Date.now() + Math.max(0, params.config.chrome.waitForInCallMs);
   let browser: GoogleMeetChromeHealth | undefined = {
     status: "browser-control",
     browserUrl: tab?.url,
     browserTitle: tab?.title,
+    notes: permissionNotes,
   };
   do {
     try {
@@ -410,7 +467,7 @@ async function openMeetWithBrowserRequest(params: {
         },
         timeoutMs: Math.min(timeoutMs, 10_000),
       });
-      browser = parseMeetBrowserStatus(evaluated) ?? browser;
+      browser = mergeBrowserNotes(parseMeetBrowserStatus(evaluated) ?? browser, permissionNotes);
       if (browser?.inCall === true) {
         return { launched: true, browser };
       }
@@ -426,6 +483,7 @@ async function openMeetWithBrowserRequest(params: {
         manualActionMessage:
           "Open the OpenClaw browser profile, finish Google Meet login, admission, or permission prompts, then retry.",
         notes: [
+          ...permissionNotes,
           `Browser control could not inspect or auto-join Meet: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -467,6 +525,10 @@ async function inspectRecoverableMeetTab(params: {
     body: { targetId: params.targetId },
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
+  const permissionNotes = await grantMeetMediaPermissions({
+    callBrowser: params.callBrowser,
+    timeoutMs: params.timeoutMs,
+  });
   const evaluated = await params.callBrowser({
     method: "POST",
     path: "/act",
@@ -480,7 +542,14 @@ async function inspectRecoverableMeetTab(params: {
     },
     timeoutMs: Math.min(params.timeoutMs, 10_000),
   });
-  const browser = parseMeetBrowserStatus(evaluated);
+  const browser = mergeBrowserNotes(
+    parseMeetBrowserStatus(evaluated) ?? {
+      status: "browser-control",
+      browserUrl: params.tab.url,
+      browserTitle: params.tab.title,
+    },
+    permissionNotes,
+  );
   const manual = browser?.manualActionRequired
     ? browser.manualActionMessage || browser.manualActionReason
     : undefined;

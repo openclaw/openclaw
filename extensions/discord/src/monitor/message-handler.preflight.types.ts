@@ -1,5 +1,5 @@
 import type { ChannelType, Client, User } from "@buape/carbon";
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -19,7 +19,7 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
+    import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
   >["discord"];
   accountId: string;
   token: string;

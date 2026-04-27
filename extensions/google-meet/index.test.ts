@@ -124,6 +124,14 @@ function mockLocalMeetBrowserRequest(
       if (request.path === "/tabs/focus") {
         return { ok: true };
       }
+      if (request.path === "/permissions/grant") {
+        return {
+          ok: true,
+          origin: "https://meet.google.com",
+          grantedPermissions: ["audioCapture", "videoCapture", "speakerSelection"],
+          unsupportedPermissions: [],
+        };
+      }
       if (request.path === "/act") {
         return { result: JSON.stringify(browserActResult) };
       }
@@ -299,8 +307,11 @@ describe("google-meet plugin", () => {
         waitForInCallMs: 20000,
         audioFormat: "pcm16-24khz",
         audioInputCommand: [
-          "rec",
+          "sox",
           "-q",
+          "-t",
+          "coreaudio",
+          "BlackHole 2ch",
           "-t",
           "raw",
           "-r",
@@ -315,7 +326,7 @@ describe("google-meet plugin", () => {
           "-",
         ],
         audioOutputCommand: [
-          "play",
+          "sox",
           "-q",
           "-t",
           "raw",
@@ -329,6 +340,9 @@ describe("google-meet plugin", () => {
           "16",
           "-L",
           "-",
+          "-t",
+          "coreaudio",
+          "BlackHole 2ch",
         ],
       },
       voiceCall: { enabled: true, requestTimeoutMs: 30000, dtmfDelayMs: 2500 },
@@ -1253,7 +1267,7 @@ describe("google-meet plugin", () => {
             if (argv[0] === "/usr/sbin/system_profiler") {
               return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
             }
-            if (argv[0] === "/bin/sh" && argv.at(-1) === "play") {
+            if (argv[0] === "/bin/sh" && argv.at(-1) === "sox") {
               return { code: 1, stdout: "", stderr: "" };
             }
             return { code: 0, stdout: "", stderr: "" };
@@ -1275,7 +1289,7 @@ describe("google-meet plugin", () => {
           expect.objectContaining({
             id: "chrome-local-audio-commands",
             ok: false,
-            message: "Chrome audio command missing: play",
+            message: "Chrome audio command missing: sox",
           }),
         ]),
       );
@@ -1407,6 +1421,20 @@ describe("google-meet plugin", () => {
           method: "POST",
           path: "/tabs/open",
           body: { url: "https://meet.google.com/abc-defg-hij" },
+        }),
+        { progress: false },
+      );
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "browser.request",
+        expect.any(Object),
+        expect.objectContaining({
+          method: "POST",
+          path: "/permissions/grant",
+          body: expect.objectContaining({
+            origin: "https://meet.google.com",
+            permissions: ["audioCapture", "videoCapture"],
+            optionalPermissions: ["speakerSelection"],
+          }),
         }),
         { progress: false },
       );
