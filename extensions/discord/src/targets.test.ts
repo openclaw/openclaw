@@ -62,6 +62,20 @@ describe("parseDiscordTarget", () => {
       );
     }
   });
+
+  it("ambiguity error guides the model with all three target formats", () => {
+    let captured: Error | undefined;
+    try {
+      parseDiscordTarget("123456789");
+    } catch (err) {
+      captured = err as Error;
+    }
+    expect(captured, "expected parseDiscordTarget to throw on bare numeric id").toBeDefined();
+    const message = captured!.message;
+    expect(message, "must show user:<id> DM format").toMatch(/user:123456789/);
+    expect(message, "must show channel:<id> format").toMatch(/channel:123456789/);
+    expect(message, "must show <@id> mention format").toMatch(/<@123456789>/);
+  });
 });
 
 describe("resolveDiscordChannelId", () => {
