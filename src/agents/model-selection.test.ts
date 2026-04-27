@@ -1555,6 +1555,33 @@ describe("resolveSubagentSpawnModelSelection", () => {
     ).toBe("anthropic/claude-opus-4-6");
   });
 
+  it("resolves bare configured aliases with the target agent runtime default provider", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "claude-opus-4-6": { alias: "opus" },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "OPUS",
+      }),
+    ).toBe("anthropic/claude-opus-4-6");
+  });
+
   it("resolves alias in configured subagent model", () => {
     const cfg = {
       agents: {
