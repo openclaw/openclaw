@@ -36,11 +36,13 @@ export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
 
 export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
-export const SecretRefSourceSchema = Type.Union([
-  Type.Literal("env"),
-  Type.Literal("file"),
-  Type.Literal("exec"),
-]);
+// Wire-protocol SecretRef source: open string. Built-in sources (env/file/exec)
+// are still validated tightly through the per-source schemas below; non-built-in
+// strings (e.g. "gcp", "keyring", any third-party plugin source) are accepted
+// via PluginSecretRefSchema. Mirrors the open `SecretRefSource` union in
+// `src/config/types.secrets.ts` so a SecretRef that passes config validation
+// also passes wire-protocol validation.
+export const SecretRefSourceSchema = Type.String({ minLength: 1 });
 
 const SecretProviderAliasString = Type.String({
   pattern: SECRET_PROVIDER_ALIAS_PATTERN.source,
@@ -86,10 +88,27 @@ const ExecSecretRefSchema = Type.Object(
   { additionalProperties: false },
 );
 
+// Plugin-owned source: any non-empty string that is NOT a built-in literal.
+// The negative-lookahead pattern keeps a malformed built-in ref (e.g. an env
+// source with a lowercase id) from being silently rescued by this arm —
+// it must fail at the strict per-source schema above.
+const PluginSecretRefSchema = Type.Object(
+  {
+    source: Type.String({
+      minLength: 1,
+      pattern: "^(?!(?:env|file|exec)$).+$",
+    }),
+    provider: SecretProviderAliasString,
+    id: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+
 export const SecretRefSchema = Type.Union([
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  PluginSecretRefSchema,
 ]);
 
 export const SecretInputSchema = Type.Union([Type.String(), SecretRefSchema]);
