@@ -172,12 +172,64 @@ export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const POSIX_OWNER_WRITE = 0o200;
+const POSIX_GROUP_OR_OTHER_WRITE = 0o022;
+const POSIX_STICKY = 0o1000;
+
+class UnsafeExecApprovalsPathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnsafeExecApprovalsPathError";
+  }
+}
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
     .update(raw ?? "")
     .digest("hex");
+}
+
+function emptyExecApprovalsFile(): ExecApprovalsFile {
+  return normalizeExecApprovals({ version: 1, agents: {} });
+}
+
+function closedExecApprovalsFile(): ExecApprovalsFile {
+  return normalizeExecApprovals({
+    version: 1,
+    defaults: {
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+    },
+    agents: {},
+  });
+}
+
+function emptyExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
+  return {
+    path: filePath,
+    exists: false,
+    raw: null,
+    file: emptyExecApprovalsFile(),
+    hash: hashExecApprovalsRaw(null),
+  };
+}
+
+function closedExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
+  return {
+    path: filePath,
+    exists: false,
+    raw: null,
+    file: closedExecApprovalsFile(),
+    hash: hashExecApprovalsRaw(null),
+  };
+}
+
+function isUnsafeOrMissingApprovalsPathError(err: unknown): boolean {
+  return (
+    err instanceof UnsafeExecApprovalsPathError || (err as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 export function resolveExecApprovalsPath(): string {
@@ -229,16 +281,25 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
-  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
+  assertSafeExecApprovalsDirectoryPath(dir);
   fs.mkdirSync(dir, { recursive: true });
-  const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-    throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+  assertSafeExecApprovalsDirectoryPath(dir);
+  const dirStat = fs.statSync(dir);
+  if (!dirStat.isDirectory()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use unsafe exec approvals directory: ${dir}`,
+    );
   }
   return dir;
 }
 
-function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
+function assertSafeExecApprovalsFilePath(filePath: string): void {
+  assertSafeExecApprovalsDirectoryPath(path.dirname(filePath));
+  assertSafeExecApprovalsDestination(filePath);
+}
+
+function assertSafeExecApprovalsDirectoryPath(targetPath: string): void {
+  const trustedRoot = resolveRequiredHomeDir();
   const resolvedTarget = path.resolve(targetPath);
   const resolvedRoot = path.resolve(trustedRoot);
   if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
@@ -248,18 +309,160 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
   const relative = path.relative(resolvedRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
   let current = resolvedRoot;
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
+    let stat: fs.Stats;
     try {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
-      }
+      stat = fs.lstatSync(current);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
+      continue;
     }
+    if (stat.isSymbolicLink()) {
+      if (index !== 0 || segment !== ".openclaw") {
+        throw new UnsafeExecApprovalsPathError(
+          `Refusing to traverse symlink in exec approvals path: ${current}`,
+        );
+      }
+      current = resolveTrustedOpenClawSymlink(current);
+    }
+  }
+}
+
+function resolveTrustedOpenClawSymlink(linkPath: string): string {
+  const targetPath = resolveOpenClawSymlinkDestinationPath(linkPath);
+  if (process.platform === "win32") {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target on Windows without ACL validation: ${linkPath}`,
+    );
+  }
+  const getuid = process.getuid;
+  if (typeof getuid !== "function") {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target without ownership validation: ${linkPath}`,
+    );
+  }
+  const currentUid = getuid.call(process);
+  assertStableOpenClawSymlinkLocation(linkPath, currentUid);
+  assertNoAdditionalOpenClawSymlinkTargetHops(targetPath, linkPath, currentUid);
+  const realPath = fs.realpathSync(linkPath);
+  const targetStat = fs.statSync(realPath);
+  if (!targetStat.isDirectory()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use unsafe exec approvals .openclaw symlink target: ${linkPath}`,
+    );
+  }
+  if (targetStat.uid !== currentUid) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
+    );
+  }
+  if ((targetStat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use group/other-writable exec approvals .openclaw symlink target: ${linkPath}`,
+    );
+  }
+  assertStableResolvedOpenClawSymlinkTarget(realPath, linkPath, currentUid);
+  return realPath;
+}
+
+function resolveOpenClawSymlinkDestinationPath(linkPath: string): string {
+  const destination = fs.readlinkSync(linkPath);
+  return path.resolve(path.dirname(linkPath), destination);
+}
+
+function assertStableOpenClawSymlinkLocation(linkPath: string, currentUid: number): void {
+  const linkStat = fs.lstatSync(linkPath);
+  if (linkStat.uid !== currentUid) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink not owned by current user: ${linkPath}`,
+    );
+  }
+  const parentRealPath = fs.realpathSync(path.dirname(linkPath));
+  assertStableResolvedOpenClawSymlinkTarget(parentRealPath, linkPath, currentUid);
+}
+
+function assertNoAdditionalOpenClawSymlinkTargetHops(
+  targetPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const root = path.parse(targetPath).root;
+  let current = root;
+  const relative = path.relative(root, targetPath);
+  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      if (isTrustedSystemSymlink(stat)) {
+        assertStableOpenClawSymlinkHopLocation(current, linkPath, currentUid);
+        continue;
+      }
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to use exec approvals .openclaw symlink target that resolves through another symlink: ${current} (${linkPath})`,
+      );
+    }
+  }
+}
+
+function isTrustedSystemSymlink(stat: fs.Stats): boolean {
+  return process.platform !== "win32" && stat.uid === 0;
+}
+
+function assertStableOpenClawSymlinkHopLocation(
+  hopPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const parentRealPath = fs.realpathSync(path.dirname(hopPath));
+  assertStableResolvedOpenClawSymlinkTarget(parentRealPath, linkPath, currentUid);
+}
+
+function assertStableResolvedOpenClawSymlinkTarget(
+  realPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const root = path.parse(realPath).root;
+  let current = root;
+  assertStableResolvedOpenClawDirectory(current, linkPath, currentUid);
+
+  const relative = path.relative(root, realPath);
+  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    assertStableResolvedOpenClawDirectory(current, linkPath, currentUid);
+  }
+}
+
+function assertStableResolvedOpenClawDirectory(
+  dirPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const stat = fs.lstatSync(dirPath);
+  if (!stat.isDirectory()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink ancestor that is not a directory: ${dirPath} (${linkPath})`,
+    );
+  }
+  if (stat.isSymbolicLink()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink ancestor that resolves through another symlink: ${dirPath} (${linkPath})`,
+    );
+  }
+  if (stat.uid !== currentUid && stat.uid !== 0 && (stat.mode & POSIX_OWNER_WRITE) !== 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use owner-writable exec approvals .openclaw symlink ancestor not owned by current user: ${dirPath} (${linkPath})`,
+    );
+  }
+  if ((stat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0 && (stat.mode & POSIX_STICKY) === 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use group/other-writable exec approvals .openclaw symlink ancestor: ${dirPath} (${linkPath})`,
+    );
   }
 }
 
@@ -267,7 +470,9 @@ function assertSafeExecApprovalsDestination(filePath: string): void {
   try {
     const stat = fs.lstatSync(filePath);
     if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to use exec approvals via symlink: ${filePath}`,
+      );
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -429,50 +634,51 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  if (!fs.existsSync(filePath)) {
-    const file = normalizeExecApprovals({ version: 1, agents: {} });
+  try {
+    assertSafeExecApprovalsFilePath(filePath);
+    if (!fs.existsSync(filePath)) {
+      return emptyExecApprovalsSnapshot(filePath);
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    let parsed: ExecApprovalsFile | null = null;
+    try {
+      parsed = JSON.parse(raw) as ExecApprovalsFile;
+    } catch {
+      parsed = null;
+    }
+    const file = parsed?.version === 1 ? normalizeExecApprovals(parsed) : emptyExecApprovalsFile();
     return {
       path: filePath,
-      exists: false,
-      raw: null,
+      exists: true,
+      raw,
       file,
-      hash: hashExecApprovalsRaw(null),
+      hash: hashExecApprovalsRaw(raw),
     };
+  } catch (err) {
+    if (isUnsafeOrMissingApprovalsPathError(err)) {
+      return closedExecApprovalsSnapshot(filePath);
+    }
+    throw err;
   }
-  const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null = null;
-  try {
-    parsed = JSON.parse(raw) as ExecApprovalsFile;
-  } catch {
-    parsed = null;
-  }
-  const file =
-    parsed?.version === 1
-      ? normalizeExecApprovals(parsed)
-      : normalizeExecApprovals({ version: 1, agents: {} });
-  return {
-    path: filePath,
-    exists: true,
-    raw,
-    file,
-    hash: hashExecApprovalsRaw(raw),
-  };
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   try {
+    assertSafeExecApprovalsFilePath(filePath);
     if (!fs.existsSync(filePath)) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return emptyExecApprovalsFile();
     }
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as ExecApprovalsFile;
     if (parsed?.version !== 1) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return emptyExecApprovalsFile();
     }
     return normalizeExecApprovals(parsed);
-  } catch {
-    return normalizeExecApprovals({ version: 1, agents: {} });
+  } catch (err) {
+    return isUnsafeOrMissingApprovalsPathError(err)
+      ? closedExecApprovalsFile()
+      : emptyExecApprovalsFile();
   }
 }
 
@@ -516,19 +722,26 @@ export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): v
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
-  const loaded = loadExecApprovals();
-  const next = normalizeExecApprovals(loaded);
-  const socketPath = next.socket?.path?.trim();
-  const token = next.socket?.token?.trim();
-  const updated: ExecApprovalsFile = {
-    ...next,
-    socket: {
-      path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
-      token: token && token.length > 0 ? token : generateToken(),
-    },
-  };
-  saveExecApprovals(updated);
-  return updated;
+  try {
+    const loaded = loadExecApprovals();
+    const next = normalizeExecApprovals(loaded);
+    const socketPath = next.socket?.path?.trim();
+    const token = next.socket?.token?.trim();
+    const updated: ExecApprovalsFile = {
+      ...next,
+      socket: {
+        path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
+        token: token && token.length > 0 ? token : generateToken(),
+      },
+    };
+    saveExecApprovals(updated);
+    return updated;
+  } catch (err) {
+    if (isUnsafeOrMissingApprovalsPathError(err)) {
+      return closedExecApprovalsFile();
+    }
+    throw err;
+  }
 }
 
 function isExecSecurity(value: unknown): value is ExecSecurity {

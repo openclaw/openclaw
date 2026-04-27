@@ -560,7 +560,9 @@ enum ExecApprovalsSocketPathKind: Equatable {
 
 enum ExecApprovalsSocketPathGuardError: LocalizedError {
     case lstatFailed(path: String, code: Int32)
+    case approvalsFilePathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
     case parentPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case parentSymlinkTargetInvalid(path: String, message: String)
     case socketPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
     case unlinkFailed(path: String, code: Int32)
     case createParentDirectoryFailed(path: String, message: String)
@@ -570,8 +572,12 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
         switch self {
         case let .lstatFailed(path, code):
             "lstat failed for \(path) (errno \(code))"
+        case let .approvalsFilePathInvalid(path, kind):
+            "exec approvals file path invalid (\(kind)) at \(path)"
         case let .parentPathInvalid(path, kind):
             "socket parent path invalid (\(kind)) at \(path)"
+        case let .parentSymlinkTargetInvalid(path, message):
+            "socket parent symlink target invalid at \(path): \(message)"
         case let .socketPathInvalid(path, kind):
             "socket path invalid (\(kind)) at \(path)"
         case let .unlinkFailed(path, code):
@@ -586,6 +592,14 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
 
 enum ExecApprovalsSocketPathGuard {
     static let parentDirectoryPermissions = 0o700
+    private static let posixOwnerWrite = mode_t(0o200)
+    private static let posixGroupOrOtherWrite = mode_t(0o022)
+    private static let posixSticky = mode_t(0o1000)
+
+    private struct TrustedParentDirectory {
+        let url: URL
+        let hardenFromURL: URL?
+    }
 
     static func pathKind(at path: String) throws -> ExecApprovalsSocketPathKind {
         var status = stat()
@@ -604,33 +618,401 @@ enum ExecApprovalsSocketPathGuard {
         return .other
     }
 
-    static func hardenParentDirectory(for socketPath: String) throws {
+    static func hardenParentDirectory(
+        for socketPath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
         let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
-        let parentPath = parentURL.path
+        let trustedParent = try self.trustedParentDirectory(
+            for: parentURL,
+            allowingSymlinksIn: stateDirURL)
+        try self.createHardenedDirectoryPath(
+            trustedParent.url,
+            hardenFrom: trustedParent.hardenFromURL)
+    }
 
-        switch try self.pathKind(at: parentPath) {
-        case .missing, .directory:
-            break
-        case let kind:
-            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
+    static func validateApprovalsFilePath(
+        for filePath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
+        let parentURL = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        _ = try self.trustedParentDirectory(for: parentURL, allowingSymlinksIn: stateDirURL)
+        try self.validateApprovalsFileDestination(at: filePath)
+    }
+
+    static func hardenApprovalsFilePath(
+        for filePath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
+        let parentURL = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        let trustedParent = try self.trustedParentDirectory(
+            for: parentURL,
+            allowingSymlinksIn: stateDirURL)
+        try self.createHardenedDirectoryPath(
+            trustedParent.url,
+            hardenFrom: trustedParent.hardenFromURL)
+        try self.validateApprovalsFileDestination(at: filePath)
+    }
+
+    private static func validateApprovalsFileDestination(at filePath: String) throws {
+        let kind = try self.pathKind(at: filePath)
+        switch kind {
+        case .missing, .other:
+            return
+        case .directory, .socket, .symlink:
+            throw ExecApprovalsSocketPathGuardError.approvalsFilePathInvalid(
+                path: filePath,
+                kind: kind)
+        }
+    }
+
+    private static func createHardenedDirectoryPath(
+        _ directoryURL: URL,
+        hardenFrom hardenFromURL: URL?
+    ) throws {
+        let standardizedURL = directoryURL.standardizedFileURL
+        let components = standardizedURL.pathComponents
+        guard !components.isEmpty else {
+            return
         }
 
+        let hardenFromPath = (hardenFromURL ?? standardizedURL).standardizedFileURL.path
+        var currentURL = URL(fileURLWithPath: components[0], isDirectory: true)
+        for component in components.dropFirst() {
+            currentURL.appendPathComponent(component, isDirectory: true)
+            let shouldHarden = currentURL.path == hardenFromPath
+                || currentURL.path.hasPrefix("\(hardenFromPath)/")
+            switch try self.pathKind(at: currentURL.path) {
+            case .missing:
+                try self.createHardenedDirectory(currentURL)
+            case .directory:
+                if shouldHarden {
+                    try self.setHardenedDirectoryPermissions(currentURL)
+                }
+            case let kind:
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: currentURL.path,
+                    kind: kind)
+            }
+        }
+    }
+
+    private static func createHardenedDirectory(_ directoryURL: URL) throws {
         do {
-            try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
+            try FileManager().createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: self.parentDirectoryPermissions])
         } catch {
-            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
-                path: parentPath,
-                message: error.localizedDescription)
+            if (try? self.pathKind(at: directoryURL.path)) != .directory {
+                throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                    path: directoryURL.path,
+                    message: error.localizedDescription)
+            }
         }
+        try self.setHardenedDirectoryPermissions(directoryURL)
+    }
 
+    private static func setHardenedDirectoryPermissions(_ directoryURL: URL) throws {
         do {
             try FileManager().setAttributes(
                 [.posixPermissions: self.parentDirectoryPermissions],
-                ofItemAtPath: parentPath)
+                ofItemAtPath: directoryURL.path)
         } catch {
             throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
-                path: parentPath,
+                path: directoryURL.path,
                 message: error.localizedDescription)
+        }
+    }
+
+    private static func trustedParentDirectory(
+        for parentURL: URL,
+        allowingSymlinksIn stateDirURL: URL?
+    ) throws -> TrustedParentDirectory {
+        let standardizedURL = parentURL.standardizedFileURL
+        let components = standardizedURL.pathComponents
+        guard !components.isEmpty else {
+            return TrustedParentDirectory(url: standardizedURL, hardenFromURL: nil)
+        }
+
+        var rawURL = URL(fileURLWithPath: components[0], isDirectory: true)
+        var hardenedURL = rawURL
+        var hardenFromURL: URL?
+        var acceptedDefaultStateSymlink = false
+
+        for component in components.dropFirst() {
+            rawURL.appendPathComponent(component, isDirectory: true)
+            let nextHardenedURL = hardenedURL.appendingPathComponent(component, isDirectory: true)
+            switch try self.pathKind(at: rawURL.path) {
+            case .missing, .directory:
+                hardenedURL = nextHardenedURL
+                if hardenFromURL == nil,
+                   self.isStateDirectoryBoundary(rawURL.path, stateDirURL: stateDirURL)
+                    || (stateDirURL == nil && component == ".openclaw")
+                {
+                    hardenFromURL = hardenedURL
+                }
+            case .symlink:
+                let isConfiguredStateSymlink = self.isStateDirectoryPrefix(
+                    rawURL.path,
+                    stateDirURL: stateDirURL)
+                let isStateBoundary = self.isStateDirectoryBoundary(
+                    rawURL.path,
+                    stateDirURL: stateDirURL)
+                let isDefaultStateSymlink = stateDirURL == nil
+                    && component == ".openclaw"
+                    && !acceptedDefaultStateSymlink
+                guard isConfiguredStateSymlink || isDefaultStateSymlink else {
+                    throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                        path: rawURL.path,
+                        kind: .symlink)
+                }
+                if isDefaultStateSymlink {
+                    acceptedDefaultStateSymlink = true
+                }
+                if !isStateBoundary,
+                   !isDefaultStateSymlink,
+                   try self.isTrustedSystemSymlink(at: rawURL.path)
+                {
+                    hardenedURL = try self.trustedSystemParentSymlinkTarget(for: rawURL)
+                } else {
+                    hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
+                }
+                if hardenFromURL == nil,
+                   isStateBoundary
+                    || (stateDirURL == nil && component == ".openclaw")
+                {
+                    hardenFromURL = hardenedURL
+                }
+            case let kind:
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: rawURL.path,
+                    kind: kind)
+            }
+        }
+
+        return TrustedParentDirectory(url: hardenedURL, hardenFromURL: hardenFromURL)
+    }
+
+    private static func isStateDirectoryPrefix(_ path: String, stateDirURL: URL?) -> Bool {
+        guard let stateDirPath = stateDirURL?.standardizedFileURL.path else {
+            return false
+        }
+        let candidatePath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        return stateDirPath == candidatePath || stateDirPath.hasPrefix("\(candidatePath)/")
+    }
+
+    private static func isStateDirectoryBoundary(_ path: String, stateDirURL: URL?) -> Bool {
+        guard let stateDirPath = stateDirURL?.standardizedFileURL.path else {
+            return false
+        }
+        let candidatePath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        return stateDirPath == candidatePath
+    }
+
+    private static func trustedSystemParentSymlinkTarget(for parentURL: URL) throws -> URL {
+        let parentPath = parentURL.path
+        try self.validateStableSymlinkHopLocation(at: parentPath, reportedPath: parentPath)
+        let targetURL = parentURL.resolvingSymlinksInPath()
+        switch try self.pathKind(at: targetURL.path) {
+        case .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "resolved system symlink target kind is \(kind)")
+        }
+        try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
+        return targetURL
+    }
+
+    private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {
+        let parentPath = parentURL.path
+        try self.validateParentSymlinkLocation(for: parentURL)
+        var status = stat()
+        if stat(parentPath, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "stat failed (errno \(errno))")
+        }
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        guard fileType == mode_t(S_IFDIR) else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is not a directory")
+        }
+        guard status.st_uid == getuid() else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is not owned by the current user")
+        }
+        guard (status.st_mode & mode_t(0o022)) == 0 else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is group/other-writable")
+        }
+        let destinationPath = try self.symlinkDestinationPath(for: parentURL)
+        try self.validateNoAdditionalSymlinkTargetHops(
+            in: destinationPath,
+            reportedPath: parentPath)
+        let targetURL = parentURL.resolvingSymlinksInPath()
+        switch try self.pathKind(at: targetURL.path) {
+        case .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "resolved target kind is \(kind)")
+        }
+        try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
+        return targetURL
+    }
+
+    private static func validateParentSymlinkLocation(for parentURL: URL) throws {
+        let parentPath = parentURL.path
+        var linkStatus = stat()
+        if lstat(parentPath, &linkStatus) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "symlink lstat failed (errno \(errno))")
+        }
+        guard linkStatus.st_uid == getuid() else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "symlink is not owned by the current user")
+        }
+
+        let locationURL = parentURL.deletingLastPathComponent().standardizedFileURL
+        try self.validateNoAdditionalSymlinkTargetHops(
+            in: locationURL.path,
+            reportedPath: parentPath)
+        try self.validateResolvedAncestorChain(
+            for: locationURL.resolvingSymlinksInPath(),
+            reportedPath: parentPath)
+    }
+
+    private static func symlinkDestinationPath(for parentURL: URL) throws -> String {
+        let parentPath = parentURL.path
+        do {
+            let destination = try FileManager().destinationOfSymbolicLink(atPath: parentPath)
+            if destination.hasPrefix("/") {
+                return URL(fileURLWithPath: destination).standardizedFileURL.path
+            }
+            return parentURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(destination)
+                .standardizedFileURL
+                .path
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "readlink failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func validateNoAdditionalSymlinkTargetHops(
+        in targetPath: String,
+        reportedPath: String
+    ) throws {
+        var ancestors: [String] = []
+        var current = URL(fileURLWithPath: targetPath).standardizedFileURL
+
+        while true {
+            ancestors.append(current.path)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        for path in ancestors.reversed() {
+            let kind = try self.pathKind(at: path)
+            if kind == .symlink {
+                if try self.isTrustedSystemSymlink(at: path) {
+                    try self.validateStableSymlinkHopLocation(at: path, reportedPath: reportedPath)
+                    continue
+                }
+                throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                    path: reportedPath,
+                    message: "target resolves through another symlink at \(path)")
+            }
+        }
+    }
+
+    private static func isTrustedSystemSymlink(at path: String) throws -> Bool {
+        var status = stat()
+        if lstat(path, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: path,
+                message: "symlink lstat failed (errno \(errno))")
+        }
+        return status.st_uid == 0
+    }
+
+    private static func validateStableSymlinkHopLocation(at path: String, reportedPath: String)
+        throws
+    {
+        let parentURL = URL(fileURLWithPath: path)
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+        try self.validateResolvedAncestorChain(for: parentURL, reportedPath: reportedPath)
+    }
+
+    private static func validateResolvedAncestorChain(for targetURL: URL, reportedPath: String)
+        throws
+    {
+        let currentUID = getuid()
+        var ancestors: [URL] = []
+        var current = targetURL.standardizedFileURL
+
+        while true {
+            ancestors.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        for url in ancestors.reversed() {
+            try self.validateStableResolvedAncestor(
+                at: url.path,
+                reportedPath: reportedPath,
+                currentUID: currentUID)
+        }
+    }
+
+    private static func validateStableResolvedAncestor(
+        at path: String,
+        reportedPath: String,
+        currentUID: uid_t
+    ) throws {
+        var status = stat()
+        if lstat(path, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor lstat failed at \(path) (errno \(errno))")
+        }
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        guard fileType == mode_t(S_IFDIR) else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is not a directory at \(path)")
+        }
+        guard status.st_uid == currentUID || status.st_uid == 0
+            || (status.st_mode & self.posixOwnerWrite) == 0
+        else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is owner-writable by an untrusted user at \(path)")
+        }
+        guard (status.st_mode & self.posixGroupOrOtherWrite) == 0
+            || (status.st_mode & self.posixSticky) != 0
+        else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is group/other-writable at \(path)")
         }
     }
 
@@ -730,7 +1112,9 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             return -1
         }
         do {
-            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+                for: self.socketPath,
+                allowingSymlinksIn: OpenClawPaths.stateDirURL)
             try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
         } catch {
             self.logger

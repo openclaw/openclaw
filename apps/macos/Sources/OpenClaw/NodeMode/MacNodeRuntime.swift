@@ -775,7 +775,7 @@ actor MacNodeRuntime {
             : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
 
-        ExecApprovalsStore.saveFile(normalized)
+        try ExecApprovalsStore.saveFile(normalized)
         let nextSnapshot = ExecApprovalsStore.readSnapshot()
         let redacted = ExecApprovalsSnapshot(
             path: nextSnapshot.path,

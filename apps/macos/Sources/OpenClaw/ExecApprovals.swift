@@ -226,7 +226,6 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .onMiss
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
-    private static let secureStateDirPermissions = 0o700
 
     static func fileURL() -> URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
@@ -271,12 +270,22 @@ enum ExecApprovalsStore {
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
         let url = self.fileURL()
+        do {
+            try self.validateStateFilePath()
+        } catch {
+            self.logUnsafeStatePath(error)
+            return ExecApprovalsSnapshot(
+                path: url.path,
+                exists: false,
+                hash: self.hashRaw(nil),
+                file: self.emptyFile())
+        }
         guard FileManager().fileExists(atPath: url.path) else {
             return ExecApprovalsSnapshot(
                 path: url.path,
                 exists: false,
                 hash: self.hashRaw(nil),
-                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+                file: self.emptyFile())
         }
         let raw = try? String(contentsOf: url, encoding: .utf8)
         let data = raw.flatMap { $0.data(using: .utf8) }
@@ -284,7 +293,7 @@ enum ExecApprovalsStore {
             if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data), file.version == 1 {
                 return file
             }
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            return self.emptyFile()
         }()
         return ExecApprovalsSnapshot(
             path: url.path,
@@ -311,42 +320,46 @@ enum ExecApprovalsStore {
 
     static func loadFile() -> ExecApprovalsFile {
         let url = self.fileURL()
+        do {
+            try self.validateStateFilePath()
+        } catch {
+            self.logUnsafeStatePath(error)
+            return self.emptyFile()
+        }
         guard FileManager().fileExists(atPath: url.path) else {
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            return self.emptyFile()
         }
         do {
             let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
             if decoded.version != 1 {
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                return self.emptyFile()
             }
             return decoded
         } catch {
             self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            return self.emptyFile()
         }
     }
 
-    static func saveFile(_ file: ExecApprovalsFile) {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(file)
-            let url = self.fileURL()
-            self.ensureSecureStateDirectory()
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
-            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    static func saveFile(_ file: ExecApprovalsFile) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(file)
+        let url = self.fileURL()
+        try self.hardenStateFilePath()
+        try data.write(to: url, options: [.atomic])
+        try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     static func ensureFile() -> ExecApprovalsFile {
-        self.ensureSecureStateDirectory()
         let url = self.fileURL()
+        do {
+            try self.hardenStateFilePath()
+        } catch {
+            self.logUnsafeStatePath(error)
+            return self.emptyFile()
+        }
         let existed = FileManager().fileExists(atPath: url.path)
         let loaded = self.loadFile()
         let loadedHash = self.hashFile(loaded)
@@ -363,7 +376,12 @@ enum ExecApprovalsStore {
         }
         if file.agents == nil { file.agents = [:] }
         if !existed || loadedHash != self.hashFile(file) {
-            self.saveFile(file)
+            do {
+                try self.saveFile(file)
+            } catch {
+                self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+                return self.emptyFile()
+            }
         }
         return file
     }
@@ -535,23 +553,32 @@ enum ExecApprovalsStore {
     private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
         var file = self.ensureFile()
         mutate(&file)
-        self.saveFile(file)
+        do {
+            try self.saveFile(file)
+        } catch {
+            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
-    private static func ensureSecureStateDirectory() {
-        let url = OpenClawPaths.stateDirURL
-        do {
-            try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
-            try FileManager().setAttributes(
-                [.posixPermissions: self.secureStateDirPermissions],
-                ofItemAtPath: url.path)
-        } catch {
-            let message =
-                "exec approvals state dir permission hardening failed: \(error.localizedDescription)"
-            self.logger
-                .warning(
-                    "\(message, privacy: .public)")
-        }
+    private static func emptyFile() -> ExecApprovalsFile {
+        ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+    }
+
+    private static func validateStateFilePath() throws {
+        try ExecApprovalsSocketPathGuard.validateApprovalsFilePath(
+            for: self.fileURL().path,
+            allowingSymlinksIn: OpenClawPaths.stateDirURL)
+    }
+
+    private static func hardenStateFilePath() throws {
+        try ExecApprovalsSocketPathGuard.hardenApprovalsFilePath(
+            for: self.fileURL().path,
+            allowingSymlinksIn: OpenClawPaths.stateDirURL)
+    }
+
+    private static func logUnsafeStatePath(_ error: Error) {
+        self.logger.warning(
+            "exec approvals state path hardening failed: \(error.localizedDescription, privacy: .public)")
     }
 
     private static func generateToken() -> String {

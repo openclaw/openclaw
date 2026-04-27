@@ -16,6 +16,7 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
 let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
+let loadExecApprovals: ExecApprovalsModule["loadExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
@@ -23,6 +24,7 @@ let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
+let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
@@ -35,6 +37,7 @@ beforeAll(async () => {
     addAllowlistEntry,
     addDurableCommandApproval,
     ensureExecApprovals,
+    loadExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
     persistAllowAlwaysPatterns,
@@ -42,6 +45,7 @@ beforeAll(async () => {
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
+    resolveExecApprovals,
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
@@ -65,7 +69,7 @@ afterEach(() => {
 });
 
 function createHomeDir(): string {
-  const dir = makeTempDir();
+  const dir = fs.realpathSync(makeTempDir());
   tempDirs.push(dir);
   process.env.OPENCLAW_HOME = dir;
   return dir;
@@ -77,6 +81,26 @@ function approvalsFilePath(homeDir: string): string {
 
 function readApprovalsFile(homeDir: string): ExecApprovalsFile {
   return JSON.parse(fs.readFileSync(approvalsFilePath(homeDir), "utf8")) as ExecApprovalsFile;
+}
+
+function expectUnsafeApprovalsReadFailsClosed() {
+  const closed = normalizeExecApprovals({
+    version: 1,
+    defaults: { security: "deny", ask: "always", askFallback: "deny" },
+    agents: {},
+  });
+  expect(loadExecApprovals()).toEqual(closed);
+  expect(ensureExecApprovals()).toEqual(closed);
+  expect(resolveExecApprovals("main").agent).toMatchObject({
+    security: "deny",
+    ask: "always",
+    askFallback: "deny",
+  });
+  expect(readExecApprovalsSnapshot()).toMatchObject({
+    exists: false,
+    raw: null,
+    file: closed,
+  });
 }
 
 describe("exec approvals store helpers", () => {
@@ -183,12 +207,12 @@ describe("exec approvals store helpers", () => {
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
-    ).toThrow(/Refusing to write exec approvals via symlink/);
+    ).toThrow(/Refusing to use exec approvals via symlink/);
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
   it("accepts a symlinked OPENCLAW_HOME as the trusted approvals root", () => {
-    const realHome = makeTempDir();
+    const realHome = fs.realpathSync(makeTempDir());
     const linkedHome = `${realHome}-link`;
     tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome, "dir");
@@ -201,8 +225,8 @@ describe("exec approvals store helpers", () => {
     ).toContain('"security": "full"');
   });
 
-  it("refuses to traverse symlinked approvals components below a symlinked home", () => {
-    const realHome = makeTempDir();
+  it.runIf(process.platform !== "win32")("accepts a trusted first-level .openclaw symlink", () => {
+    const realHome = fs.realpathSync(makeTempDir());
     const linkedHome = `${realHome}-link`;
     const linkedStateTarget = path.join(realHome, "state-target");
     tempDirs.push(realHome, linkedHome);
@@ -211,10 +235,133 @@ describe("exec approvals store helpers", () => {
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
     process.env.OPENCLAW_HOME = linkedHome;
 
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(path.join(linkedStateTarget, "exec-approvals.json"), "utf8")).toContain(
+      '"security": "full"',
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "accepts a trusted first-level .openclaw symlink target under a system tmp path",
+    () => {
+      const dir = createHomeDir();
+      const rawTargetRoot = fs.mkdtempSync(path.join("/tmp", "openclaw-approvals-target-"));
+      tempDirs.push(rawTargetRoot);
+      const linkedStateTarget = path.join(rawTargetRoot, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+      expect(
+        fs.readFileSync(path.join(linkedStateTarget, "exec-approvals.json"), "utf8"),
+      ).toContain('"security": "full"');
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a group-writable first-level .openclaw symlink target",
+    () => {
+      const dir = createHomeDir();
+      const linkedStateTarget = path.join(dir, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o777 });
+      fs.chmodSync(linkedStateTarget, 0o777);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink target/);
+      expectUnsafeApprovalsReadFailsClosed();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink target below a writable ancestor",
+    () => {
+      const dir = createHomeDir();
+      const sharedParent = path.join(dir, "shared-parent");
+      const linkedStateTarget = path.join(sharedParent, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(sharedParent, 0o777);
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink ancestor/);
+      expectUnsafeApprovalsReadFailsClosed();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink in a writable location",
+    () => {
+      const dir = createHomeDir();
+      const targetRoot = fs.realpathSync(makeTempDir());
+      tempDirs.push(targetRoot);
+      const linkedStateTarget = path.join(targetRoot, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.chmodSync(dir, 0o777);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink ancestor/);
+      expectUnsafeApprovalsReadFailsClosed();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink target that resolves through another symlink",
+    () => {
+      const dir = createHomeDir();
+      const linkedStateTarget = path.join(dir, "state-target");
+      const intermediateLink = path.join(dir, "current-state");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, intermediateLink, "dir");
+      fs.symlinkSync(intermediateLink, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/resolves through another symlink/);
+      expectUnsafeApprovalsReadFailsClosed();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it("refuses a dangling first-level .openclaw symlink", () => {
+    const dir = createHomeDir();
+    const missingTarget = path.join(dir, "missing-state-target");
+    fs.symlinkSync(missingTarget, path.join(dir, ".openclaw"), "dir");
+
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
-    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
-    expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    ).toThrow(/ENOENT|no such file or directory/i);
+    expectUnsafeApprovalsReadFailsClosed();
+    expect(fs.existsSync(path.join(missingTarget, "exec-approvals.json"))).toBe(false);
+  });
+
+  it("still refuses to write approvals through a symlink destination inside .openclaw", () => {
+    const dir = createHomeDir();
+    const linkedStateTarget = path.join(dir, "state-target");
+    const targetPath = path.join(dir, "elsewhere.json");
+    fs.mkdirSync(linkedStateTarget, { recursive: true });
+    fs.writeFileSync(targetPath, '{"sentinel":true}\n', "utf8");
+    fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+    fs.symlinkSync(targetPath, path.join(linkedStateTarget, "exec-approvals.json"));
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to use exec approvals via symlink/);
+    expectUnsafeApprovalsReadFailsClosed();
+    expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

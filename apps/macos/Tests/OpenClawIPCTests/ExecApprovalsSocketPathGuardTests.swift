@@ -6,7 +6,7 @@ import Testing
 struct ExecApprovalsSocketPathGuardTests {
     @Test
     func `harden parent directory creates directory with0700 permissions`() throws {
-        let root = FileManager().temporaryDirectory
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
         let socketPath = root
@@ -24,8 +24,333 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
+    func `harden parent directory accepts secure symlink parent`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        let attrs = try FileManager().attributesOfItem(atPath: target.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(permissions & 0o777 == 0o700)
+    }
+
+    @Test
+    func `harden parent directory accepts nested socket below secure symlink parent`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("run", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        let nestedTarget = target.appendingPathComponent("run", isDirectory: true)
+        #expect(FileManager().fileExists(atPath: nestedTarget.path))
+        let attrs = try FileManager().attributesOfItem(atPath: nestedTarget.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(permissions & 0o777 == 0o700)
+    }
+
+    @Test
+    func `harden parent directory secures every created nested directory`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("run", isDirectory: true)
+            .appendingPathComponent("cache", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        let previousUmask = umask(0)
+        defer { umask(previousUmask) }
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        for directory in [
+            target.appendingPathComponent("run", isDirectory: true),
+            target.appendingPathComponent("run", isDirectory: true)
+                .appendingPathComponent("cache", isDirectory: true),
+        ] {
+            #expect(FileManager().fileExists(atPath: directory.path))
+            let attrs = try FileManager().attributesOfItem(atPath: directory.path)
+            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            #expect(permissions & 0o777 == 0o700)
+        }
+    }
+
+    @Test
+    func `harden parent directory secures existing nested directories below state directory`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let run = target.appendingPathComponent("run", isDirectory: true)
+        let cache = run.appendingPathComponent("cache", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: cache, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: run.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: cache.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("run", isDirectory: true)
+            .appendingPathComponent("cache", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        for directory in [target, run, cache] {
+            let attrs = try FileManager().attributesOfItem(atPath: directory.path)
+            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            #expect(permissions & 0o777 == 0o700)
+        }
+    }
+
+    @Test
+    func `harden parent directory rejects deeper symlink below state directory`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let release = target.appendingPathComponent("release-123", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        let current = target.appendingPathComponent("current", isDirectory: true)
+        try FileManager().createDirectory(at: release, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: release.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+        try FileManager().createSymbolicLink(at: current, withDestinationURL: release)
+
+        let socketPath = linkedState
+            .appendingPathComponent("current", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected deeper symlink rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentPathInvalid(path, kind):
+                #expect(path == linkedState.appendingPathComponent("current", isDirectory: true).path)
+                #expect(kind == .symlink)
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func `harden parent directory accepts secure symlink parent under system tmp path`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        let rawTargetRoot = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("openclaw-socket-target-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager().removeItem(at: root)
+            try? FileManager().removeItem(at: rawTargetRoot)
+        }
+        let target = rawTargetRoot.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        let attrs = try FileManager().attributesOfItem(atPath: target.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(permissions & 0o777 == 0o700)
+    }
+
+    @Test
+    func `harden parent directory rejects writable symlink parent target`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected writable symlink parent target rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("group/other-writable"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func `harden parent directory rejects nested socket below writable symlink parent target`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("run", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected nested writable symlink parent target rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("group/other-writable"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func `harden parent directory rejects symlink target through another symlink`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let intermediate = root.appendingPathComponent("current-state", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: intermediate, withDestinationURL: target)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: intermediate)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected symlink target hop rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("resolves through another symlink"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func `harden parent directory rejects symlink target below writable ancestor`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let sharedParent = root.appendingPathComponent("shared-parent", isDirectory: true)
+        let target = sharedParent.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: sharedParent.path)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected symlink target ancestor rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("ancestor is group/other-writable"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
+    func `harden parent directory rejects symlink parent in writable location`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let sharedParent = root.appendingPathComponent("shared-link-parent", isDirectory: true)
+        let linkedState = sharedParent.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createDirectory(at: sharedParent, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: sharedParent.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected symlink parent location rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("ancestor is group/other-writable"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
     func `remove existing socket rejects symlink path`() throws {
-        let root = FileManager().temporaryDirectory
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
@@ -51,7 +376,7 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `remove existing socket rejects regular file path`() throws {
-        let root = FileManager().temporaryDirectory
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
