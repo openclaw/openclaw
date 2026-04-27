@@ -1491,7 +1491,7 @@ describe("normalizeModelSelection", () => {
 });
 
 describe("resolveSubagentConfiguredModelSelection", () => {
-  it("prefers the agent primary model over agents.defaults.subagents.model", () => {
+  it("prefers agents.defaults.subagents.model over the agent primary model", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1508,11 +1508,11 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     } as OpenClawConfig;
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
-      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.4",
     );
   });
 
-  it("still prefers agent subagents.model over the agent primary model", () => {
+  it("still prefers agent subagents.model over the global subagent default", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1532,5 +1532,35 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
     );
+  });
+
+  it("falls back to the agent primary model when no subagent default is configured", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "anthropic/claude-opus-4-6",
+    );
+  });
+
+  it("returns undefined when no subagent default and no agent model are configured", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBeUndefined();
   });
 });

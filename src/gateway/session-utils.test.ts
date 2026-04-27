@@ -962,6 +962,113 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
+
+  test("subagent entries with empty model fall back to the configured subagent default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          subagents: { model: "openai-codex/gpt-5.5" },
+        },
+        list: [{ id: "main", default: true, model: { primary: "anthropic/claude-opus-4-7" } }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "subagent-race",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "leaf",
+      } as SessionEntry,
+      "main",
+    );
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
+  });
+
+  test("subagent entries detected by subagentRole alone still use the subagent default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          subagents: { model: "openai-codex/gpt-5.5" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "subagent-role-only",
+        updatedAt: Date.now(),
+        subagentRole: "orchestrator",
+      } as SessionEntry,
+      "main",
+    );
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
+  });
+
+  test("agent-scoped subagents.model takes precedence over global subagent default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          subagents: { model: "openai-codex/gpt-5.5" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-7" },
+            subagents: { model: "google-gemini-cli/gemini-3-pro-preview" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "subagent-scoped",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+      } as SessionEntry,
+      "research",
+    );
+
+    expect(resolved).toEqual({
+      provider: "google-gemini-cli",
+      model: "gemini-3-pro-preview",
+    });
+  });
+
+  test("non-subagent entries with empty model still resolve to the agent primary", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          subagents: { model: "openai-codex/gpt-5.5" },
+        },
+        list: [{ id: "main", default: true, model: { primary: "anthropic/claude-opus-4-7" } }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        spawnDepth: 0,
+      } as SessionEntry,
+      "main",
+    );
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
+  });
 });
 
 describe("listSessionsFromStore selected model display", () => {
