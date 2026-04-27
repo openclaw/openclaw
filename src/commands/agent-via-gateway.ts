@@ -33,6 +33,54 @@ type GatewayAgentResponse = {
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAgentResultEnvelope(value: JsonRecord): boolean {
+  return Object.hasOwn(value, "payloads") || Object.hasOwn(value, "delivery");
+}
+
+function withEmbeddedFallbackMeta(value: unknown): unknown {
+  if (!isJsonRecord(value) || !isAgentResultEnvelope(value)) {
+    return value;
+  }
+
+  const meta = isJsonRecord(value.meta) ? value.meta : {};
+  return {
+    ...value,
+    meta: {
+      ...meta,
+      transport: "embedded",
+      fallbackFrom: "gateway",
+    },
+  };
+}
+
+function createEmbeddedFallbackJsonRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  return {
+    ...runtime,
+    log: (...args: unknown[]) => {
+      if (args.length !== 1 || typeof args[0] !== "string") {
+        runtime.log(...args);
+        return;
+      }
+      const raw = args[0].trim();
+      if (!raw.startsWith("{")) {
+        runtime.log(...args);
+        return;
+      }
+      try {
+        runtime.log(JSON.stringify(withEmbeddedFallbackMeta(JSON.parse(raw)), null, 2));
+      } catch {
+        runtime.log(...args);
+      }
+    },
+  };
+}
+
 export type AgentCliOpts = {
   message: string;
   agent?: string;
@@ -201,7 +249,11 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
-    runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
-    return await agentCommand(localOpts, runtime, deps);
+    runtime.error?.(
+      `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
+    );
+    const localRuntime = opts.json === true ? createEmbeddedFallbackJsonRuntime(runtime) : runtime;
+    const result = await agentCommand(localOpts, localRuntime, deps);
+    return withEmbeddedFallbackMeta(result);
   }
 }

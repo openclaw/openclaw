@@ -158,26 +158,58 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
+      );
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
 
-  it("keeps diagnostics on stderr before JSON embedded fallback", async () => {
+  it("marks JSON embedded fallback output while keeping diagnostics on stderr", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(new Error("gateway not connected"));
       agentCommand.mockImplementationOnce(async (_opts, rt) => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
-        rt?.log?.("local");
+        rt?.log?.(
+          JSON.stringify(
+            {
+              payloads: [{ text: "local" }],
+              meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+            },
+            null,
+            2,
+          ),
+        );
         return {
           payloads: [{ text: "local" }],
           meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
         } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
       });
 
-      await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
+      const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(jsonRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
+      );
       expect(loggingState.forceConsoleToStderr).toBe(true);
+      expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(String(jsonRuntime.log.mock.calls[0]?.[0]));
+      expect(payload).toMatchObject({
+        payloads: [{ text: "local" }],
+        meta: {
+          durationMs: 1,
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      });
+      expect(result).toMatchObject({
+        meta: {
+          durationMs: 1,
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      });
     });
   });
 
