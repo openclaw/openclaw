@@ -93,6 +93,7 @@ describe("extractTextCached", () => {
       content: [{ type: "text", text: "<final>\n\nHello there\n\n</final>" }],
     };
     expect(extractText(message)).toBe("Hello there\n\n");
+    expect(extractTextCached(message)).toBe("Hello there\n\n");
   });
 
   it("strips mixed <think> and <final> tags from assistant content", () => {
@@ -101,6 +102,7 @@ describe("extractTextCached", () => {
       content: [{ type: "text", text: "<think>reasoning\n</think>\n\n<final>Hello</final>" }],
     };
     expect(extractText(message)).toBe("Hello");
+    expect(extractTextCached(message)).toBe("Hello");
   });
 
   it("strips <final> tags from assistant text property", () => {
@@ -109,6 +111,7 @@ describe("extractTextCached", () => {
       text: "<final>Hello world</final>",
     };
     expect(extractText(message)).toBe("Hello world");
+    expect(extractTextCached(message)).toBe("Hello world");
   });
 });
 
