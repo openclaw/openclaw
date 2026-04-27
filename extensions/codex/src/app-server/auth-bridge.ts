@@ -13,15 +13,25 @@ import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/type
 import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentDir: string;
   authProfileId?: string;
 }): Promise<CodexAppServerStartOptions> {
-  void params.agentDir;
-  void params.authProfileId;
-  return params.startOptions;
+  if (params.startOptions.transport !== "stdio") {
+    return params.startOptions;
+  }
+  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
+    store,
+    authProfileId: params.authProfileId,
+  });
+  return shouldClearInheritedOpenAiApiKey
+    ? withClearedEnvironmentVariable(params.startOptions, OPENAI_API_KEY_ENV_VAR)
+    : params.startOptions;
 }
 
 export async function applyCodexAppServerAuthProfile(params: {
@@ -159,6 +169,38 @@ async function resolveOAuthCredentialForCodexAppServer(
 
 function isCodexAppServerAuthProvider(provider: string): boolean {
   return resolveProviderIdForAuth(provider) === CODEX_APP_SERVER_AUTH_PROVIDER;
+}
+
+function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
+  store: ReturnType<typeof ensureAuthProfileStore>;
+  authProfileId?: string;
+}): boolean {
+  const profileId = params.authProfileId?.trim();
+  const credential = profileId
+    ? params.store.profiles[profileId]
+    : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+  return isCodexSubscriptionCredential(credential);
+}
+
+function isCodexSubscriptionCredential(credential: AuthProfileCredential | undefined): boolean {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
+    return false;
+  }
+  return credential.type === "oauth" || credential.type === "token";
+}
+
+function withClearedEnvironmentVariable(
+  startOptions: CodexAppServerStartOptions,
+  envVar: string,
+): CodexAppServerStartOptions {
+  const clearEnv = startOptions.clearEnv ?? [];
+  if (clearEnv.includes(envVar)) {
+    return startOptions;
+  }
+  return {
+    ...startOptions,
+    clearEnv: [...clearEnv, envVar],
+  };
 }
 
 function buildChatgptAuthTokensParams(

@@ -8,6 +8,7 @@ import {
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
 } from "./auth-bridge.js";
+import type { CodexAppServerStartOptions } from "./config.js";
 
 const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -96,28 +97,177 @@ afterEach(() => {
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
 });
 
+function createStartOptions(
+  overrides: Partial<CodexAppServerStartOptions> = {},
+): CodexAppServerStartOptions {
+  return {
+    transport: "stdio",
+    command: "codex",
+    args: ["app-server"],
+    headers: { authorization: "Bearer dev-token" },
+    ...overrides,
+  };
+}
+
+async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "auth.json"),
+    JSON.stringify({
+      tokens: {
+        access_token: "cli-access-token",
+        refresh_token: "cli-refresh-token",
+        account_id: "cli-account-123",
+      },
+    }),
+  );
+}
+
 describe("bridgeCodexAppServerStartOptions", () => {
-  it("leaves Codex app-server start options unchanged", async () => {
+  it("clears an inherited OpenAI API key when local Codex CLI OAuth is available", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const startOptions = {
-      transport: "stdio" as const,
-      command: "codex",
-      args: ["app-server"],
-      headers: { authorization: "Bearer dev-token" },
+    const codexHome = path.join(agentDir, "codex-home");
+    const startOptions = createStartOptions({
       env: { CODEX_HOME: "/tmp/source-codex-home", EXISTING: "1" },
       clearEnv: ["FOO"],
-    };
+    });
+    vi.stubEnv("CODEX_HOME", codexHome);
     try {
+      await writeCodexCliAuthFile(codexHome);
+
       await expect(
         bridgeCodexAppServerStartOptions({
           startOptions,
           agentDir,
-          authProfileId: "openai-codex:default",
         }),
-      ).resolves.toBe(startOptions);
+      ).resolves.toEqual({
+        ...startOptions,
+        clearEnv: ["FOO", "OPENAI_API_KEY"],
+      });
+      expect(startOptions.clearEnv).toEqual(["FOO"]);
       await expect(fs.access(path.join(agentDir, "harness-auth"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears an inherited OpenAI API key for an explicit Codex OAuth profile", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({ clearEnv: ["FOO"] });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        clearEnv: ["FOO", "OPENAI_API_KEY"],
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears an inherited OpenAI API key for an explicit Codex token profile", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({ clearEnv: ["FOO"] });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "token",
+          provider: "openai-codex",
+          token: "access-token",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        clearEnv: ["FOO", "OPENAI_API_KEY"],
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an inherited OpenAI API key for an explicit Codex api-key profile", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({ clearEnv: ["FOO"] });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "explicit-api-key",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toBe(startOptions);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear process environment for websocket app-server connections", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      transport: "websocket",
+      url: "ws://127.0.0.1:1455",
+      clearEnv: ["FOO"],
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toBe(startOptions);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
