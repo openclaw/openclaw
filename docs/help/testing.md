@@ -15,6 +15,16 @@ of Docker runners. This doc is a "how we test" guide:
 - How live tests discover credentials and select models/providers.
 - How to add regressions for real-world model/provider issues.
 
+<Note>
+**QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
+
+- [QA overview](/concepts/qa-e2e-automation) — architecture, command surface, scenario authoring.
+- [Matrix QA](/concepts/qa-matrix) — reference for `pnpm openclaw qa matrix`.
+- [QA channel](/channels/qa-channel) — the synthetic transport plugin used by repo-backed scenarios.
+
+This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
+</Note>
+
 ## Quick start
 
 Most days:
@@ -84,7 +94,9 @@ When debugging real providers/models (requires real creds):
   against `moonshot/kimi-k2.6`. Verify the JSON reports Moonshot/K2.6 and the
   assistant transcript stores normalized `usage.cost`.
 
-Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+<Tip>
+When you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+</Tip>
 
 ## QA-specific runners
 
@@ -92,9 +104,13 @@ These commands sit beside the main test suites when you need QA-lab realism:
 
 CI runs QA Lab in dedicated workflows. `Parity gate` runs on matching PRs and
 from manual dispatch with mock providers. `QA-Lab - All Lanes` runs nightly on
-`main` and from manual dispatch with the mock parity gate, live Matrix lane, and
-Convex-managed live Telegram lane as parallel jobs. `OpenClaw Release Checks`
-runs the same lanes before release approval.
+`main` and from manual dispatch with the mock parity gate, live Matrix lane,
+Convex-managed live Telegram lane, and Convex-managed live Discord lane as
+parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
+explicitly, while the Matrix CLI and manual workflow input default remain
+`all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
+`e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
+the fast Matrix and Telegram lanes before release approval.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
@@ -136,10 +152,13 @@ runs the same lanes before release approval.
     then seeds an affected broken session JSONL and verifies
     `openclaw doctor --fix` rewrites it to the active branch with a backup.
 - `pnpm test:docker:npm-telegram-live`
-  - Installs a published OpenClaw package in Docker, runs installed-package
+  - Installs an OpenClaw package candidate in Docker, runs installed-package
     onboarding, configures Telegram through the installed CLI, then reuses the
     live Telegram QA lane with that installed package as the SUT Gateway.
-  - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`.
+  - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`; set
+    `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
+    `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
+    installing from the registry.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
@@ -151,6 +170,43 @@ runs the same lanes before release approval.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases.
+- GitHub Actions also exposes `Package Acceptance` for side-run product proof
+  against one candidate package. It accepts a trusted ref, published npm spec,
+  HTTPS tarball URL plus SHA-256, or tarball artifact from another run, uploads
+  the normalized `openclaw-current.tgz` as `package-under-test`, then runs the
+  existing Docker E2E scheduler with smoke, package, product, full, or custom
+  lane profiles. Set `telegram_mode=mock-openai` or `live-frontier` to run the
+  Telegram QA workflow against the same `package-under-test` artifact.
+  - Latest beta product proof:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f source=npm \
+  -f package_spec=openclaw@beta \
+  -f suite_profile=product \
+  -f telegram_mode=mock-openai
+```
+
+- Exact tarball URL proof requires a digest:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f source=url \
+  -f package_url=https://registry.npmjs.org/openclaw/-/openclaw-VERSION.tgz \
+  -f package_sha256=<sha256> \
+  -f suite_profile=package
+```
+
+- Artifact proof downloads a tarball artifact from another Actions run:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f source=artifact \
+  -f artifact_run_id=<run-id> \
+  -f artifact_name=<artifact-name> \
+  -f suite_profile=smoke
+```
+
 - `pnpm test:docker:bundled-channel-deps`
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
@@ -202,16 +258,8 @@ runs the same lanes before release approval.
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
 - `pnpm openclaw qa matrix`
-  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
-  - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
-    `qa-lab`, so they do not expose `openclaw qa`.
-  - Repo checkouts load the bundled runner directly; no separate plugin install
-    step is needed.
-  - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
-  - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
-  - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
-  - Writes a Matrix QA report, summary, observed-events artifact, and combined stdout/stderr output log under `.artifacts/qa-e2e/...`.
-  - Emits progress by default and enforces a hard run timeout with `OPENCLAW_QA_MATRIX_TIMEOUT_MS` (default 30 minutes). Cleanup is bounded by `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` and failures include the recovery `docker compose ... down --remove-orphans` command.
+  - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver. Source-checkout only — packaged installs do not ship `qa-lab`.
+  - Full CLI, profile/scenario catalog, env vars, and artifact layout: [Matrix QA](/concepts/qa-matrix).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
@@ -222,15 +270,7 @@ runs the same lanes before release approval.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
   - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
-Live transport lanes share one standard contract so new transports do not drift:
-
-`qa-channel` remains the broad synthetic QA suite and is not part of the live
-transport coverage matrix.
-
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
-| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+Live transport lanes share one standard contract so new transports do not drift; the per-lane coverage matrix lives in [QA overview → Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage). `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)
 
@@ -312,80 +352,7 @@ Payload shape for Telegram kind:
 
 ### Adding a channel to QA
 
-Adding a channel to the markdown QA system requires exactly two things:
-
-1. A transport adapter for the channel.
-2. A scenario pack that exercises the channel contract.
-
-Do not add a new top-level QA command root when the shared `qa-lab` host can
-own the flow.
-
-`qa-lab` owns the shared host mechanics:
-
-- the `openclaw qa` command root
-- suite startup and teardown
-- worker concurrency
-- artifact writing
-- report generation
-- scenario execution
-- compatibility aliases for older `qa-channel` scenarios
-
-Runner plugins own the transport contract:
-
-- how `openclaw qa <runner>` is mounted beneath the shared `qa` root
-- how the gateway is configured for that transport
-- how readiness is checked
-- how inbound events are injected
-- how outbound messages are observed
-- how transcripts and normalized transport state are exposed
-- how transport-backed actions are executed
-- how transport-specific reset or cleanup is handled
-
-The minimum adoption bar for a new channel is:
-
-1. Keep `qa-lab` as the owner of the shared `qa` root.
-2. Implement the transport runner on the shared `qa-lab` host seam.
-3. Keep transport-specific mechanics inside the runner plugin or channel harness.
-4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
-   Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
-   Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
-6. Use the generic scenario helpers for new scenarios.
-7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
-
-The decision rule is strict:
-
-- If behavior can be expressed once in `qa-lab`, put it in `qa-lab`.
-- If behavior depends on one channel transport, keep it in that runner plugin or plugin harness.
-- If a scenario needs a new capability that more than one channel can use, add a generic helper instead of a channel-specific branch in `suite.ts`.
-- If a behavior is only meaningful for one transport, keep the scenario transport-specific and make that explicit in the scenario contract.
-
-Preferred generic helper names for new scenarios are:
-
-- `waitForTransportReady`
-- `waitForChannelReady`
-- `injectInboundMessage`
-- `injectOutboundMessage`
-- `waitForTransportOutboundMessage`
-- `waitForChannelOutboundMessage`
-- `waitForNoTransportOutbound`
-- `getTransportSnapshot`
-- `readTransportMessage`
-- `readTransportTranscript`
-- `formatTransportTranscript`
-- `resetTransport`
-
-Compatibility aliases remain available for existing scenarios, including:
-
-- `waitForQaChannelReady`
-- `waitForOutboundMessage`
-- `waitForNoOutbound`
-- `formatConversationTranscript`
-- `resetBus`
-
-New channel work should use the generic helper names.
-Compatibility aliases exist to avoid a flag day migration, not as the model for
-new scenario authoring.
+The architecture and scenario-helper names for new channel adapters live in [QA overview → Adding a channel](/concepts/qa-e2e-automation#adding-a-channel). The minimum bar: implement the transport runner on the shared `qa-lab` host seam, declare `qaRunners` in the plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under `qa/scenarios/`.
 
 ## Test suites (what runs where)
 
@@ -395,7 +362,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test`
 - Config: untargeted runs use the `vitest.full-*.config.ts` shard set and may expand multi-project shards into per-project configs for parallel scheduling
-- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
+- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, and `test/**/*.test.ts`; UI unit tests run in the dedicated `unit-ui` shard
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -607,7 +574,10 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
   explicitly want the larger exhaustive scan.
-- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
+- `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. `workflow_ref` selects the trusted workflow/harness scripts, while `package_ref` selects the source commit/branch/tag to pack when `source=ref`; this lets current acceptance logic validate older trusted commits. Profiles are ordered by breadth: `smoke` is quick install/channel/agent plus gateway/config, `package` is the package/update/plugin contract and the default native replacement for most Parallels package/update coverage, `product` adds MCP channels, cron/subagent cleanup, OpenAI web search, and OpenWebUI, and `full` runs the release-path Docker chunks with OpenWebUI. Release validation runs a custom package delta (`bundled-channel-deps-compat plugins-offline`) plus Telegram package QA because the release-path Docker chunks already cover the overlapping package/update/plugin lanes. Targeted GitHub Docker rerun commands generated from artifacts include prior package artifact and prepared image inputs when available, so failed lanes can avoid rebuilding the package and images.
+- Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if pre-dispatch startup imports package dependencies such as Commander, prompt UI, undici, or logging before command dispatch. Packaged CLI smoke also covers root help, onboard help, doctor help, status, config schema, and a model-list command.
+- Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:update-channel-switch`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
@@ -637,7 +607,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
   Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the live ClawHub block, or override the default package with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`.
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Config reload metadata smoke: `pnpm test:docker:config-reload` (script: `scripts/e2e/config-reload-source-docker.sh`)
-- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate pre-packs this tarball once, then shards bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
+- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate and release-path `bundled-channels` chunk pre-pack this tarball once, then shard bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. The release workflow also splits provider installer chunks and bundled plugin install/uninstall chunks; legacy `package-update`, `plugins-runtime`, and `plugins-integrations` chunks remain aggregate aliases for manual reruns. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
 - Narrow bundled plugin runtime deps while iterating by disabling unrelated scenarios, for example:
   `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 pnpm test:docker:bundled-channel-deps`.
 

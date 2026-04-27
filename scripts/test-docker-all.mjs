@@ -36,10 +36,15 @@ const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
-const cliArgs = new Set(process.argv.slice(2));
-for (const arg of cliArgs) {
-  if (arg !== "--plan-json") {
-    throw new Error(`unknown argument: ${arg}`);
+const IS_MAIN = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+const cliArgs = new Set(IS_MAIN ? process.argv.slice(2) : []);
+if (IS_MAIN) {
+  for (const arg of cliArgs) {
+    if (arg !== "--plan-json") {
+      throw new Error(`unknown argument: ${arg}`);
+    }
   }
 }
 
@@ -82,6 +87,12 @@ function resourceLimitEnvName(resource) {
   return `OPENCLAW_DOCKER_ALL_${resource.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_LIMIT`;
 }
 
+export function describeDockerSchedulerLimits(parallelism, options) {
+  return `parallelism=${parallelism} weightLimit=${options.weightLimit} resources=${resourceLimitsSummary(
+    options.resourceLimits,
+  )}`;
+}
+
 function parseResourceLimit(env, resource, parallelism, fallback) {
   const envName = resourceLimitEnvName(resource);
   return parsePositiveInt(env[envName], Math.min(parallelism, fallback), envName);
@@ -101,6 +112,26 @@ function parseSchedulerOptions(env, parallelism) {
     resourceLimits,
     weightLimit,
   };
+}
+
+export function canStartSchedulerLane(candidate, active, parallelism, options) {
+  const weight = laneWeight(candidate);
+  if (active.count >= parallelism) {
+    return false;
+  }
+
+  const exceedsWeightLimit = active.weight + weight > options.weightLimit;
+  const exceedsResourceLimit = laneResources(candidate).some((resource) => {
+    const limit = options.resourceLimits[resource] ?? options.weightLimit;
+    const current = active.resources.get(resource) ?? 0;
+    return current + weight > limit;
+  });
+
+  if (!exceedsWeightLimit && !exceedsResourceLimit) {
+    return true;
+  }
+
+  return active.count === 0;
 }
 
 function timingSeconds(timingStore, poolLane) {
@@ -163,7 +194,7 @@ function shellQuote(value) {
 }
 
 function githubWorkflowRerunCommand(laneNames, ref) {
-  return [
+  const fields = [
     "gh workflow run",
     shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
     "-f",
@@ -180,7 +211,29 @@ function githubWorkflowRerunCommand(laneNames, ref) {
     "include_live_suites=false",
     "-f",
     "live_models_only=false",
-  ].join(" ");
+  ];
+  if (process.env.GITHUB_RUN_ID) {
+    fields.push("-f", `package_artifact_run_id=${shellQuote(process.env.GITHUB_RUN_ID)}`);
+    fields.push(
+      "-f",
+      `package_artifact_name=${shellQuote(
+        process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
+      )}`,
+    );
+  }
+  if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
+    fields.push(
+      "-f",
+      `docker_e2e_bare_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE)}`,
+    );
+  }
+  if (process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE) {
+    fields.push(
+      "-f",
+      `docker_e2e_functional_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE)}`,
+    );
+  }
+  return fields.join(" ");
 }
 
 function buildLaneRerunCommand(name, baseEnv) {
@@ -270,6 +323,7 @@ async function writeRunSummary(logDir, summary) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
+    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     finishedAt: new Date().toISOString(),
     github: {
       ref: process.env.GITHUB_REF_NAME || undefined,
@@ -279,6 +333,7 @@ async function writeRunSummary(logDir, summary) {
         process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
           ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
           : undefined,
+      selectedSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || undefined,
       sha: process.env.GITHUB_SHA || undefined,
       workflow: process.env.GITHUB_WORKFLOW || undefined,
     },
@@ -290,7 +345,13 @@ async function writeRunSummary(logDir, summary) {
 }
 
 async function writeFailureIndex(logDir, summary) {
-  const ref = summary.github?.sha || summary.github?.ref || process.env.GITHUB_SHA || "HEAD";
+  const ref =
+    summary.github?.selectedSha ||
+    process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ||
+    summary.github?.sha ||
+    summary.github?.ref ||
+    process.env.GITHUB_SHA ||
+    "HEAD";
   const failures = Array.isArray(summary.failures)
     ? summary.failures
     : (summary.lanes ?? []).filter((lane) => lane.status !== 0);
@@ -315,7 +376,9 @@ async function writeFailureIndex(logDir, summary) {
         : undefined,
     generatedAt: new Date().toISOString(),
     lanes,
-    note: "Targeted GitHub reruns prepare a fresh OpenClaw npm tarball for the selected ref before lane execution.",
+    note: "Targeted GitHub reruns reuse this run's package artifact and shared Docker images when the generated command includes package_artifact_run_id and docker_e2e_*_image inputs.",
+    images: summary.images,
+    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
     runUrl: summary.github?.runUrl,
     status: summary.status,
@@ -746,18 +809,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   }
 
   function canStartLane(candidate) {
-    const weight = laneWeight(candidate);
-    if (active.count >= parallelism || active.weight + weight > options.weightLimit) {
-      return false;
-    }
-    for (const resource of laneResources(candidate)) {
-      const limit = options.resourceLimits[resource] ?? options.weightLimit;
-      const current = active.resources.get(resource) ?? 0;
-      if (current + weight > limit) {
-        return false;
-      }
-    }
-    return true;
+    return canStartSchedulerLane(candidate, active, parallelism, options);
   }
 
   function reserve(candidate) {
@@ -818,7 +870,12 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
       }
       if (running.size === 0) {
         const blocked = pending.map(laneSummary).join(", ");
-        throw new Error(`No Docker lanes fit scheduler limits: ${blocked}`);
+        throw new Error(
+          `No Docker lanes fit scheduler limits (${describeDockerSchedulerLimits(
+            parallelism,
+            options,
+          )}): ${blocked}. Tune OPENCLAW_DOCKER_ALL_PARALLELISM, OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT, or OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT.`,
+        );
       }
 
       const { promise, result } = await Promise.race(running);
@@ -1217,7 +1274,9 @@ async function main() {
   console.log("==> Docker test suite passed");
 }
 
-await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (IS_MAIN) {
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

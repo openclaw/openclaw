@@ -1,75 +1,70 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runChannelPluginStartupMaintenanceMock = vi.fn().mockResolvedValue(undefined);
+const runChannelPluginStartupMaintenanceMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance: runChannelPluginStartupMaintenanceMock,
+  runChannelPluginStartupMaintenance: (params: unknown) =>
+    runChannelPluginStartupMaintenanceMock(params),
 }));
 
-import {
-  getFreePort,
-  installGatewayTestHooks,
-  startGatewayServer,
-  testState,
-} from "./test-helpers.js";
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: () => "/workspace",
+  resolveDefaultAgentId: () => "default",
+}));
 
-installGatewayTestHooks({ scope: "suite" });
+vi.mock("../agents/subagent-registry.js", () => ({
+  initSubagentRegistry: vi.fn(),
+}));
 
 describe("gateway startup channel maintenance wiring", () => {
-  it("runs startup channel maintenance with the resolved startup config", async () => {
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve(process.cwd(), "extensions");
-    process.env.OPENCLAW_SKIP_CHANNELS = "0";
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
+  beforeEach(() => {
+    vi.resetModules();
     runChannelPluginStartupMaintenanceMock.mockClear();
+  });
 
-    testState.channelsConfig = {
-      matrix: {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "tok-123",
+  it("runs startup channel maintenance with the resolved startup config", async () => {
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {
+        plugins: { enabled: true },
       },
-    };
+      startupRuntimeConfig: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "tok-123",
+          },
+        },
+      },
+      minimalTestGateway: true,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-    try {
-      server = await startGatewayServer(await getFreePort());
-
-      expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledTimes(1);
-      expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: expect.objectContaining({
-            channels: expect.objectContaining({
-              matrix: expect.objectContaining({
-                homeserver: "https://matrix.example.org",
-                userId: "@bot:example.org",
-                accessToken: "tok-123",
-              }),
+    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            matrix: expect.objectContaining({
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              accessToken: "tok-123",
             }),
           }),
-          env: process.env,
-          log: expect.anything(),
         }),
-      );
-    } finally {
-      await server?.close();
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      clearPluginDiscoveryCache();
-      clearPluginManifestRegistryCache();
-    }
+        env: process.env,
+        log: expect.anything(),
+      }),
+    );
   });
 });

@@ -245,12 +245,13 @@ async function scanLaunchdDir(params: {
 async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
+  includeManagedOpenClaw?: boolean;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".service",
-    isIgnoredName: isIgnoredSystemdName,
+    isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredSystemdName,
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
@@ -258,7 +259,11 @@ async function scanSystemdDir(params: {
     if (!marker) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+    if (
+      !params.includeManagedOpenClaw &&
+      marker === "openclaw" &&
+      isOpenClawGatewaySystemdService(name, contents)
+    ) {
       continue;
     }
     results.push({
@@ -269,6 +274,29 @@ async function scanSystemdDir(params: {
       marker,
       legacy: marker !== "openclaw",
     });
+  }
+
+  return results;
+}
+
+export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
+  if (process.platform !== "linux") {
+    return [];
+  }
+
+  const results: ExtraGatewayService[] = [];
+  try {
+    for (const dir of ["/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"]) {
+      results.push(
+        ...(await scanSystemdDir({
+          dir,
+          scope: "system",
+          includeManagedOpenClaw: true,
+        })),
+      );
+    }
+  } catch {
+    return [];
   }
 
   return results;

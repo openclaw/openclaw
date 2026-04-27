@@ -61,20 +61,32 @@ export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
+  enable?: boolean;
   successMessage?: string;
   warningMessage?: string;
 }): Promise<OpenClawConfig> {
-  const installConfig = removeInstalledPluginFromDenylist(
-    addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
-    params.pluginId,
-  );
-  let next = enablePluginInConfig(installConfig, params.pluginId).config;
+  const installConfig =
+    params.enable === false
+      ? params.snapshot.config
+      : removeInstalledPluginFromDenylist(
+          addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
+          params.pluginId,
+        );
+  let next =
+    params.enable === false
+      ? installConfig
+      : enablePluginInConfig(installConfig, params.pluginId, {
+          updateChannelConfig: false,
+        }).config;
   const installRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
+  const slotResult =
+    params.enable === false
+      ? { config: next, warnings: [] }
+      : applySlotSelectionForPlugin(next, params.pluginId);
   next = withoutPluginInstallRecords(slotResult.config);
   await commitPluginInstallRecordsWithConfig({
     previousInstallRecords: installRecords,

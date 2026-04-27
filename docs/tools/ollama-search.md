@@ -97,6 +97,8 @@ reuse that host instead:
 }
 ```
 
+The Ollama model provider uses `baseUrl` as the canonical key. The web-search provider also honors `baseURL` on `models.providers.ollama` for compatibility with OpenAI SDK-style config examples.
+
 If no explicit Ollama base URL is set, OpenClaw uses `http://127.0.0.1:11434`.
 
 If your Ollama host expects bearer auth, OpenClaw reuses

@@ -35,6 +35,7 @@ import {
 } from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
+  resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -400,8 +401,25 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof persistedTotalTokens === "number" &&
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
+  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
+  const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
+  const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
+    ? await readSessionLogSnapshot({
+        sessionId: entry.sessionId,
+        sessionEntry: entry,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        opts: { storePath: params.storePath },
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    : undefined;
+  const activeTranscriptBytes = transcriptSizeSnapshot?.byteSize;
+  const shouldCompactByTranscriptBytes =
+    typeof activeTranscriptBytes === "number" &&
+    typeof maxActiveTranscriptBytes === "number" &&
+    activeTranscriptBytes >= maxActiveTranscriptBytes;
   const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
+  if (!shouldUseTranscriptFallback && !shouldCompactByTranscriptBytes) {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
@@ -434,24 +452,31 @@ export async function runPreflightCompactionIfNeeded(params: {
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
-      `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"} ` +
+      `sizeTrigger=${shouldCompactByTranscriptBytes}`,
   );
 
-  const shouldCompact = shouldRunPreflightCompaction({
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
     entry,
     tokenCount: tokenCountForCompaction,
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
   });
+  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
     return entry ?? params.sessionEntry;
   }
 
+  const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
-      `threshold=${threshold}`,
+      `threshold=${threshold} trigger=${compactionTrigger} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
   );
 
   params.replyOperation.setPhase("preflight_compacting");
@@ -486,7 +511,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
-    currentTokenCount: tokenCountForCompaction,
+    currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
     senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
@@ -514,6 +539,23 @@ export async function runPreflightCompactionIfNeeded(params: {
     followupRun: params.followupRun,
   });
   entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  if (entry) {
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.replyOperation.updateSessionId(entry.sessionId);
+    if (entry.sessionFile) {
+      params.followupRun.run.sessionFile = entry.sessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: entry.sessionFile,
+      });
+    }
+  }
   return entry ?? params.sessionEntry;
 }
 

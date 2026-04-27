@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Official installer E2E harness for Docker.
+#
+# Installs OpenClaw through the public one-liner, verifies the resolved npm
+# version, then exercises onboard + local embedded agent tool turns for the
+# configured model providers. Keep this script package-install based: it should
+# validate the installed npm artifact, not repo sources.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -432,6 +438,12 @@ if (missing.length > 0) {
 NODE
 }
 
+session_jsonl_path() {
+  local profile="$1"
+  local session_id="$2"
+  echo "$HOME/.openclaw-${profile}/agents/main/sessions/${session_id}.jsonl"
+}
+
 run_profile() {
   local profile="$1"
   local port="$2"
@@ -496,6 +508,10 @@ run_profile() {
   test -f "$workspace/USER.md"
   test -f "$workspace/SOUL.md"
   test -f "$workspace/TOOLS.md"
+  # The remaining checks are deterministic tool smokes, not the interactive
+  # first-run identity ritual. Drop BOOTSTRAP.md so provider prompts stay focused
+  # on the fixture task and do not spend turns following onboarding copy.
+  rm -f "$workspace/BOOTSTRAP.md"
 
   echo "==> Configure models ($profile)"
   local agent_model
@@ -525,8 +541,8 @@ run_profile() {
   HOSTNAME_TXT="$workspace/hostname.txt"
   IMAGE_PNG="$workspace/proof.png"
   IMAGE_TXT="$workspace/image.txt"
-  SESSION_ID="e2e-tools-${profile}"
-  SESSION_JSONL="$HOME/.openclaw-${profile}/agents/main/sessions/${SESSION_ID}.jsonl"
+  SESSION_ID_PREFIX="e2e-tools-${profile}"
+  SESSION_JSONL=""
 
   PROOF_VALUE="$(node -e 'console.log(require("node:crypto").randomBytes(16).toString("hex"))')"
   echo -n "$PROOF_VALUE" >"$PROOF_TXT"
@@ -568,7 +584,9 @@ run_profile() {
 
   echo "==> Agent turns ($profile)"
 
-  run_agent_turn "$profile" "$SESSION_ID" \
+  TURN1_SESSION_ID="${SESSION_ID_PREFIX}-read-proof"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN1_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN1_SESSION_ID" \
     "Use the read tool (not exec) to read ${PROOF_TXT}. Reply with the exact contents only (no extra whitespace)." \
     "$TURN1_JSON"
   assert_agent_json_has_text "$TURN1_JSON"
@@ -582,7 +600,9 @@ run_profile() {
 
   local prompt2
   prompt2=$'Use the write tool (not exec) to write exactly this string into '"${PROOF_COPY}"$':\n'"${reply1}"$'\nReply with exactly: WROTE'
-  run_agent_turn "$profile" "$SESSION_ID" "$prompt2" "$TURN2_JSON"
+  TURN2_SESSION_ID="${SESSION_ID_PREFIX}-write-copy"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON"
   assert_agent_json_has_text "$TURN2_JSON"
   assert_agent_json_ok "$TURN2_JSON" "$agent_model_provider"
   local copy_value
@@ -591,7 +611,9 @@ run_profile() {
     echo "ERROR: copy.txt did not match proof.txt ($profile)" >&2
     exit 1
   fi
-  run_agent_turn "$profile" "$SESSION_ID" \
+  TURN2B_SESSION_ID="${SESSION_ID_PREFIX}-read-copy"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN2B_SESSION_ID" \
     "Use the read tool (not exec) to read ${PROOF_COPY}. Reply with the exact contents only (no extra whitespace)." \
     "$TURN2B_JSON"
   assert_agent_json_has_text "$TURN2B_JSON"
@@ -603,7 +625,9 @@ run_profile() {
     exit 1
   fi
 
-  run_agent_turn "$profile" "$SESSION_ID" \
+  TURN3_SESSION_ID="${SESSION_ID_PREFIX}-exec-hostname"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN3_SESSION_ID" \
     "Use the exec tool to run this command: hostname. Reply with the exact stdout only (trim trailing newline)." \
     "$TURN3_JSON"
   assert_agent_json_has_text "$TURN3_JSON"
@@ -616,7 +640,9 @@ run_profile() {
   fi
   local prompt3b
   prompt3b=$'Use the write tool to write exactly this string into '"${HOSTNAME_TXT}"$':\n'"${reply3}"$'\nReply with exactly: WROTE'
-  run_agent_turn "$profile" "$SESSION_ID" "$prompt3b" "$TURN3B_JSON"
+  TURN3B_SESSION_ID="${SESSION_ID_PREFIX}-write-hostname"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN3B_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN3B_SESSION_ID" "$prompt3b" "$TURN3B_JSON"
   assert_agent_json_has_text "$TURN3B_JSON"
   assert_agent_json_ok "$TURN3B_JSON" "$agent_model_provider"
   if [[ "$(cat "$HOSTNAME_TXT" 2>/dev/null | tr -d '\r\n' || true)" != "$EXPECTED_HOSTNAME" ]]; then
@@ -624,7 +650,9 @@ run_profile() {
     exit 1
   fi
 
-  run_agent_turn "$profile" "$SESSION_ID" \
+  TURN4_SESSION_ID="${SESSION_ID_PREFIX}-image-write"
+  SESSION_JSONL="$(session_jsonl_path "$profile" "$TURN4_SESSION_ID")"
+  run_agent_turn "$profile" "$TURN4_SESSION_ID" \
     "Use the image tool on ${IMAGE_PNG}. Determine which color is on the left half and which is on the right half. Then use the write tool to write exactly: LEFT=RED RIGHT=GREEN into ${IMAGE_TXT}. Reply with exactly: LEFT=RED RIGHT=GREEN" \
     "$TURN4_JSON"
   assert_agent_json_has_text "$TURN4_JSON"
@@ -643,12 +671,12 @@ run_profile() {
   echo "==> Verify tool usage via session transcript ($profile)"
   # Give the gateway a moment to flush transcripts.
   sleep 1
-  if [[ ! -f "$SESSION_JSONL" ]]; then
-    echo "ERROR: missing session transcript ($profile): $SESSION_JSONL" >&2
-    ls -la "$HOME/.openclaw-${profile}/agents/main/sessions" >&2 || true
-    exit 1
-  fi
-  assert_session_used_tools "$SESSION_JSONL" read write exec image
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN1_SESSION_ID")" read
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")" write
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")" read
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")" exec
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3B_SESSION_ID")" write
+  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN4_SESSION_ID")" image write
 
   cleanup_profile
   trap - EXIT

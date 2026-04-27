@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
+  normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
+  resolveLmstudioReasoningCompat,
   resolveLmstudioReasoningCapability,
   resolveLmstudioServerBase,
 } from "./models.js";
@@ -89,6 +91,37 @@ describe("lmstudio-models", () => {
     expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
   });
 
+  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://192.168.1.10:1234",
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://192.168.1.10:1234/v1",
+      request: { allowPrivateNetwork: true },
+      models: [],
+    });
+
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://gpu-box.local:1234/v1",
+        request: {
+          allowPrivateNetwork: false,
+          headers: { "X-Proxy-Auth": "token" },
+        },
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://gpu-box.local:1234/v1",
+      request: {
+        allowPrivateNetwork: false,
+        headers: { "X-Proxy-Auth": "token" },
+      },
+      models: [],
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -111,6 +144,40 @@ describe("lmstudio-models", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("maps LM Studio native reasoning options into OpenAI-compatible effort compat", () => {
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["off", "on"],
+            default: "on",
+          },
+        },
+      }),
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["off", "on"],
+      reasoningEffortMap: expect.objectContaining({
+        off: "off",
+        none: "off",
+        low: "on",
+        medium: "on",
+        high: "on",
+      }),
+    });
+
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["off"],
+            default: "off",
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("discovers llm models and maps metadata", async () => {
@@ -173,7 +240,17 @@ describe("lmstudio-models", () => {
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsUsageInStreaming: true },
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["off", "on"],
+        reasoningEffortMap: expect.objectContaining({
+          off: "off",
+          none: "off",
+          medium: "on",
+          high: "on",
+        }),
+      },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,

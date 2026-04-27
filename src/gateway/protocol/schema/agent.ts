@@ -164,6 +164,7 @@ export const AgentParamsSchema = Type.Object(
     bootstrapContextRunKind: Type.Optional(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
+    acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     voiceWakeTrigger: Type.Optional(Type.String()),

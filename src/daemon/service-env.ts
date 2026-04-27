@@ -40,12 +40,11 @@ type SharedServiceEnvironmentFields = {
   configPath: string | undefined;
   tmpDir: string;
   minimalPath: string | undefined;
-  proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
 };
 
-const SERVICE_PROXY_ENV_KEYS = [
+export const SERVICE_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
@@ -55,24 +54,6 @@ const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
-
-function readServiceProxyEnvironment(
-  env: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  const out: Record<string, string | undefined> = {};
-  for (const key of SERVICE_PROXY_ENV_KEYS) {
-    const value = env[key];
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      continue;
-    }
-    out[key] = trimmed;
-  }
-  return out;
-}
 
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   if (dir) {
@@ -295,12 +276,14 @@ export function buildServiceEnvironment(params: {
     params.execPath,
   );
   const profile = env.OPENCLAW_PROFILE;
+  const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
+    OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
@@ -349,7 +332,6 @@ function buildCommonServiceEnvironment(
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
-    ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
@@ -384,7 +366,6 @@ function resolveSharedServiceEnvironmentFields(
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = resolveServiceTmpDir(env, platform);
-  const proxyEnv = readServiceProxyEnvironment(env);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
@@ -404,7 +385,6 @@ function resolveSharedServiceEnvironmentFields(
       platform === "win32"
         ? undefined
         : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
-    proxyEnv,
     nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
     nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
   };

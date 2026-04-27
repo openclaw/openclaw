@@ -585,6 +585,10 @@ API key auth, and dynamic model resolution.
           label: "Acme Realtime Voice",
           isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
           createBridge: (req) => ({
+            // Set this only if the provider accepts multiple tool responses for
+            // one call, for example an immediate "working" response followed by
+            // the final result.
+            supportsToolResultContinuation: false,
             connect: async () => {},
             sendAudio: () => {},
             setMediaTimestamp: () => {},

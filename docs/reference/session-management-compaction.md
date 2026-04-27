@@ -7,15 +7,15 @@ read_when:
 title: "Session management deep dive"
 ---
 
-This page explains how OpenClaw manages sessions end-to-end:
+OpenClaw manages sessions end-to-end across these areas:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
 - **Transcript persistence** (`*.jsonl`) and its structure
 - **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
-- **Compaction** (manual + auto-compaction) and where to hook pre-compaction work
-- **Silent housekeeping** (e.g. memory writes that shouldn’t produce user-visible output)
+- **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
+- **Silent housekeeping** (memory writes that should not produce user-visible output)
 
 If you want a higher-level overview first, start with:
 
@@ -50,6 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
+   - Large pre-compaction debug checkpoints are skipped once the active
+     transcript exceeds the checkpoint size cap, avoiding a second giant
+     `.checkpoint.*.jsonl` copy.
 
 ---
 
@@ -76,6 +79,8 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
+
+Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
@@ -259,6 +264,13 @@ Where:
 
 These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
+OpenClaw can also trigger a preflight local compaction before opening the next
+run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
+active transcript file reaches that size. This is a file-size guard for local
+reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
+and it requires `truncateAfterCompaction` so the compacted summary can become a
+new successor transcript.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -285,6 +297,11 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
+  string such as `"20mb"` to run local compaction before a turn when the active
+  transcript gets large. This guard is active only when
+  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
+  disable.
 - When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
   OpenClaw rotates the active transcript to a compacted successor JSONL after
   compaction. The old full transcript remains archived and linked from the

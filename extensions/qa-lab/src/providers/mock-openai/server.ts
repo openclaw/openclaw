@@ -150,6 +150,7 @@ const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_IMAGE_GENERATION_PROMPT_RE = /image generation check|capability flip image check/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -671,10 +672,10 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
-  const finishExactlyDirective =
-    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const imageInputCount = countImageInputs(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
@@ -703,10 +704,10 @@ function buildAssistantText(
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
@@ -753,7 +754,7 @@ function buildAssistantText(
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
@@ -794,7 +795,9 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  const isFanoutCompletionTurn =
+    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
+  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -1146,6 +1149,8 @@ async function buildResponsesPayload(
   const allInputText = extractAllRequestTexts(input, body);
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const firstExactMarkerDirective = extractLabeledMarkerDirective(
     allInputText,
     "first exact marker",
@@ -1187,6 +1192,12 @@ async function buildResponsesPayload(
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
+  }
+  if (/fanout worker alpha/i.test(prompt)) {
+    return buildAssistantEvents("ALPHA-OK");
+  }
+  if (/fanout worker beta/i.test(prompt)) {
+    return buildAssistantEvents("BETA-OK");
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {
@@ -1268,6 +1279,12 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -1485,7 +1502,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && !toolOutput) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",

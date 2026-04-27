@@ -2,12 +2,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  loadConfig,
-  loadSessionStore,
-  resolveStorePath,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/config-runtime";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -16,8 +11,13 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import { createAsyncLock } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "openclaw/plugin-sdk/session-store-runtime";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -26,6 +26,7 @@ type SubagentSurface = {
     idempotencyKey: string;
     sessionKey: string;
     message: string;
+    model?: string;
     extraSystemPrompt?: string;
     lane?: string;
     lightContext?: boolean;
@@ -147,6 +148,7 @@ async function startNarrativeRunOrFallback(params: {
   workspaceDir: string;
   nowMs: number;
   timezone?: string;
+  model?: string;
   logger: Logger;
 }): Promise<string | null> {
   try {
@@ -154,6 +156,7 @@ async function startNarrativeRunOrFallback(params: {
       idempotencyKey: params.sessionKey,
       sessionKey: params.sessionKey,
       message: params.message,
+      ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
@@ -171,7 +174,7 @@ async function startNarrativeRunOrFallback(params: {
         nowMs: params.nowMs,
         timezone: params.timezone,
       });
-      params.logger.warn(
+      params.logger.info(
         `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
       );
     } catch (fallbackErr) {
@@ -714,7 +717,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 }
 
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[] = [];
   try {
@@ -846,6 +849,7 @@ export async function generateAndAppendDreamNarrative(params: {
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
+  model?: string;
   logger: Logger;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -861,6 +865,7 @@ export async function generateAndAppendDreamNarrative(params: {
   });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
+  let shouldDeleteSession = false;
   try {
     runId = await startNarrativeRunOrFallback({
       subagent: params.subagent,
@@ -870,11 +875,13 @@ export async function generateAndAppendDreamNarrative(params: {
       workspaceDir: params.workspaceDir,
       nowMs,
       timezone: params.timezone,
+      model: params.model,
       logger: params.logger,
     });
     if (!runId) {
       return;
     }
+    shouldDeleteSession = true;
 
     const result = await params.subagent.waitForRun({
       runId,
@@ -917,8 +924,9 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
-    if (params.subagent) {
+    // Only cleanup after a run was accepted. Request-scoped fallback writes a
+    // local diary entry without creating a subagent session.
+    if (shouldDeleteSession && params.subagent) {
       try {
         await params.subagent.deleteSession({ sessionKey });
       } catch (cleanupErr) {

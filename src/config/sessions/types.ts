@@ -145,6 +145,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Plugin id that created this session through api.runtime.subagent. */
+  pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Timestamp (ms) when the current sessionId first became active. */
@@ -377,10 +379,20 @@ function resolveMergedUpdatedAt(
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
 ): number {
+  const now = options?.now ?? Date.now();
+  const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
+  const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
   if (options?.policy === "preserve-activity" && existing) {
-    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+    return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
-  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+  return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
+}
+
+function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.min(value, now);
 }
 
 export function mergeSessionEntryWithPolicy(

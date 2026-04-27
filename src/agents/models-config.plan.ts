@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
 import {
   mergeProviders,
@@ -18,7 +19,9 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
 }) => Promise<Record<string, ProviderConfig>>;
 
 export type ModelsJsonPlan =
@@ -38,6 +41,8 @@ export async function resolveProvidersForModelsJsonWithDeps(
     cfg: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
+    workspaceDir?: string;
+    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -50,7 +55,11 @@ export async function resolveProvidersForModelsJsonWithDeps(
     agentDir,
     config: cfg,
     env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     explicitProviders,
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
   });
   return mergeProviders({
     implicit: implicitProviders,
@@ -88,15 +97,28 @@ export async function planOpenClawModelsJsonWithDeps(
     sourceConfigForSecrets?: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
+    workspaceDir?: string;
     existingRaw: string;
     existingParsed: unknown;
+    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
   },
 ): Promise<ModelsJsonPlan> {
   const { cfg, agentDir, env } = params;
-  const providers = await resolveProvidersForModelsJsonWithDeps({ cfg, agentDir, env }, deps);
+  const providers = await resolveProvidersForModelsJsonWithDeps(
+    {
+      cfg,
+      agentDir,
+      env,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+    },
+    deps,
+  );
 
   if (Object.keys(providers).length === 0) {
     return { action: "skip" };

@@ -8,11 +8,16 @@ import type { SessionEntry } from "./types.js";
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
-  loadConfig: vi.fn().mockReturnValue({}),
+  getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
 
-import { loadConfig } from "../config.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import { getRuntimeConfig } from "../config.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStore,
+} from "./store.js";
 
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
@@ -86,7 +91,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   beforeEach(async () => {
-    mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
+    mockLoadConfig = vi.mocked(getRuntimeConfig) as ReturnType<typeof vi.fn>;
     mockLoadConfig.mockReset();
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
@@ -285,6 +290,72 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.oldest).toBeUndefined();
     expect(loaded.recent).toBeDefined();
     expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore batches entry-count cleanup until the high-water mark", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 51 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(51);
+  });
+
+  it("loadSessionStore caps production-sized stores once they reach the high-water mark", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(50);
+    expect(loaded["session-0"]).toBeDefined();
+    expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 50 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 50,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    await updateSessionStore(storePath, (next) => {
+      next["session-50"] = makeEntry(now + 1);
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(loaded)).toHaveLength(51);
+    expect(loaded["session-50"]).toBeDefined();
   });
 
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {

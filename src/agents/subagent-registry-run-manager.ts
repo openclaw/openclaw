@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -62,7 +62,7 @@ export function createSubagentRunManager(params: {
   endedHookInFlightRunIds: Set<string>;
   persist(): void;
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   ensureRuntimePluginsLoaded:
     | typeof ensureRuntimePluginsLoadedFn
     | ((args: {
@@ -254,7 +254,7 @@ export function createSubagentRunManager(params: {
     }
 
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -320,7 +320,7 @@ export function createSubagentRunManager(params: {
       return;
     }
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -499,7 +499,7 @@ export function createSubagentRunManager(params: {
           });
           continue;
         }
-        const cfg = params.loadConfig();
+        const cfg = params.getRuntimeConfig();
         void Promise.resolve(
           params.ensureRuntimePluginsLoaded({
             config: cfg,

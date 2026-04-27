@@ -5,6 +5,7 @@ import {
   approveNodePairing,
   getPairedNode,
   listNodePairing,
+  removePairedNode,
   requestNodePairing,
   verifyNodeToken,
 } from "./node-pairing.js";
@@ -148,6 +149,32 @@ describe("node pairing tokens", () => {
 
       await expect(verifyNodeToken("node-1", multibyteToken, baseDir)).resolves.toEqual({
         ok: false,
+      });
+    });
+  });
+
+  test("removes paired nodes without disturbing pending requests", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-2",
+          platform: "darwin",
+        },
+        baseDir,
+      );
+
+      await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
+      await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(listNodePairing(baseDir)).resolves.toEqual({
+        pending: [
+          expect.objectContaining({
+            requestId: pending.request.requestId,
+            nodeId: "node-2",
+          }),
+        ],
+        paired: [],
       });
     });
   });

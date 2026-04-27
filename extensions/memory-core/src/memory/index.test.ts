@@ -12,6 +12,7 @@ import {
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
   DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
@@ -382,6 +383,42 @@ describe("memory index", () => {
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("caches embedding probe readiness across transient status managers", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const first = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(first);
+
+    await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(embedBatchCalls).toBe(1);
+    await first.close();
+
+    const second = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(second);
+
+    expect(second.getCachedEmbeddingAvailability?.()).toEqual(
+      expect.objectContaining({
+        ok: true,
+        checked: true,
+        cached: true,
+        checkedAtMs: expect.any(Number),
+        cacheExpiresAtMs: expect.any(Number),
+      }),
+    );
+    await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
+      expect.objectContaining({ ok: true, cached: true }),
+    );
+    expect(embedBatchCalls).toBe(1);
+
+    const cached = second.getCachedEmbeddingAvailability?.();
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
+      EMBEDDING_PROBE_CACHE_TTL_MS,
+    );
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {

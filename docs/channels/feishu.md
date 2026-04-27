@@ -16,7 +16,9 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.25 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+<Note>
+Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
+</Note>
 
 <Steps>
   <Step title="Run the channel setup wizard">
@@ -70,6 +72,7 @@ Default: `allowlist`
 - `true` — require @mention (default)
 - `false` — respond without @mention
 - Per-group override: `channels.feishu.groups.<chat_id>.requireMention`
+- Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
 ---
 
@@ -169,7 +172,9 @@ openclaw pairing list feishu
 | `/reset`  | Reset the current session   |
 | `/model`  | Show or switch the AI model |
 
-> Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
+<Note>
+Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
+</Note>
 
 ---
 
