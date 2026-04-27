@@ -761,6 +761,10 @@
       "destination": "/reference/templates/SOUL"
     },
     {
+      "source": "/templates/VOICE",
+      "destination": "/reference/templates/voice"
+    },
+    {
       "source": "/templates/TOOLS",
       "destination": "/reference/templates/TOOLS"
     },
@@ -1634,6 +1638,7 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
+                  "reference/templates/voice",
                   "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]

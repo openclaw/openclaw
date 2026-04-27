@@ -474,6 +474,7 @@ export async function ensureAgentWorkspace(params?: {
   dir: string;
   agentsPath?: string;
   soulPath?: string;
+  voicePath?: string;
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
@@ -491,6 +492,7 @@ export async function ensureAgentWorkspace(params?: {
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
   const soulPath = path.join(dir, DEFAULT_SOUL_FILENAME);
+  const voicePath = path.join(dir, DEFAULT_VOICE_FILENAME);
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
@@ -499,7 +501,15 @@ export async function ensureAgentWorkspace(params?: {
   const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const templatePaths = [
+      agentsPath,
+      soulPath,
+      voicePath,
+      toolsPath,
+      identityPath,
+      userPath,
+      heartbeatPath,
+    ];
     const userContentPaths = [path.join(dir, "memory"), path.join(dir, ".git")];
     const paths = [...templatePaths, ...userContentPaths];
     const existing = await Promise.all(
@@ -518,12 +528,14 @@ export async function ensureAgentWorkspace(params?: {
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
+  const voiceTemplate = await loadTemplate(DEFAULT_VOICE_FILENAME);
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
+  await writeFileIfMissing(voicePath, voiceTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
   const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
@@ -593,6 +605,7 @@ export async function ensureAgentWorkspace(params?: {
     dir,
     agentsPath,
     soulPath,
+    voicePath,
     toolsPath,
     identityPath,
     userPath,
@@ -643,9 +656,9 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  // PR-C: optionally splice voice.md into the bootstrap entries when present.
-  // It is operator-supplied; absence is silent (no synthetic [MISSING] block,
-  // since voice.md is meaningful only when paired with `/emotions on|full`).
+  // PR-C: splice voice.md into the bootstrap entries when present. Workspace
+  // setup creates a default for new installs; absence remains silent for legacy
+  // or intentionally minimal workspaces.
   const voicePath = path.join(resolvedDir, DEFAULT_VOICE_FILENAME);
   try {
     await fs.access(voicePath);

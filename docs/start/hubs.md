@@ -184,6 +184,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Templates: HEARTBEAT](/reference/templates/HEARTBEAT)
 - [Templates: IDENTITY](/reference/templates/IDENTITY)
 - [Templates: SOUL](/reference/templates/SOUL)
+- [Templates: voice](/reference/templates/voice)
 - [Templates: TOOLS](/reference/templates/TOOLS)
 - [Templates: USER](/reference/templates/USER)
 
