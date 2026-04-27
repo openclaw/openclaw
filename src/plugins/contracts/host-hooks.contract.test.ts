@@ -35,6 +35,7 @@ import {
   projectPluginSessionExtensions,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
+import { schedulePluginSessionTurn, sendPluginSessionAttachment } from "../host-hook-workflow.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -83,6 +84,10 @@ describe("host-hook fixture plugin contract", () => {
       "agent_turn_prepare",
       "heartbeat_prompt_contribution",
     ]);
+  });
+
+  it("initializes all host-hook registry arrays on empty registries", () => {
+    expect(createEmptyPluginRegistry().sessionActions).toEqual([]);
   });
 
   it("rejects external plugins from trusted policy and reserved command ownership", () => {
@@ -952,6 +957,43 @@ describe("host-hook fixture plugin contract", () => {
       }
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps workflow delivery and scheduling failures non-fatal", async () => {
+    await expect(
+      sendPluginSessionAttachment({
+        origin: "workspace",
+        sessionKey: "agent:main:main",
+        files: [{ path: "/tmp/secret.txt" }],
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "session attachments are restricted to bundled plugins",
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "workspace",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1000,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          at: "not-a-date",
+        },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {

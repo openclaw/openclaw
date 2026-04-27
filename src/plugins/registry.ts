@@ -2211,9 +2211,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 schedulePluginSessionTurn({
                   pluginId: record.id,
                   pluginName: record.name,
+                  origin: record.origin,
                   schedule,
                 }),
-              sendSessionAttachment: (params) => sendPluginSessionAttachment(params),
+              sendSessionAttachment: (params) =>
+                sendPluginSessionAttachment({ ...params, origin: record.origin }),
               registerSessionAction: (action) => registerSessionAction(record, action),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

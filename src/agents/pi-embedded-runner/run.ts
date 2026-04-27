@@ -43,6 +43,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { clearAgentHarnessFinalizeRetryBudget } from "../harness/lifecycle-hook-helpers.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
@@ -2434,6 +2435,7 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         forgetPromptBuildDrainCacheForRun(params.runId);
+        clearAgentHarnessFinalizeRetryBudget({ runId: params.runId });
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {

@@ -15,6 +15,24 @@ const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 
+function getFinalizeRetryBudget(): Map<string, number> {
+  return resolveGlobalSingleton<Map<string, number>>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
+}
+
+export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
+  const budget = getFinalizeRetryBudget();
+  if (!params?.runId) {
+    budget.clear();
+    return;
+  }
+  const prefix = `${params.runId}:`;
+  for (const key of [...budget.keys()]) {
+    if (key.startsWith(prefix)) {
+      budget.delete(key);
+    }
+  }
+}
+
 export function runAgentHarnessLlmInputHook(params: {
   event: PluginHookLlmInputEvent;
   ctx: AgentHarnessHookContext;
@@ -105,10 +123,7 @@ function normalizeBeforeAgentFinalizeResult(
         event?.runId ?? event?.sessionId ?? "unknown-run",
         result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160),
       ].join(":");
-      const budget = resolveGlobalSingleton<Map<string, number>>(
-        FINALIZE_RETRY_BUDGET_KEY,
-        () => new Map(),
-      );
+      const budget = getFinalizeRetryBudget();
       const nextCount = (budget.get(retryKey) ?? 0) + 1;
       budget.set(retryKey, nextCount);
       if (nextCount > maxAttempts) {

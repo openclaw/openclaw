@@ -42,6 +42,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],
+    sessionActions: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

@@ -1,7 +1,17 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
-export const PluginJsonValueSchema = Type.Unknown();
+export const PluginJsonValueSchema = Type.Union(
+  [
+    Type.Null(),
+    Type.String(),
+    Type.Number(),
+    Type.Boolean(),
+    Type.Array(Type.This()),
+    Type.Record(Type.String(), Type.This()),
+  ],
+  { $id: "PluginJsonValue" },
+);
 
 export const PluginControlUiDescriptorSchema = Type.Object(
   {
