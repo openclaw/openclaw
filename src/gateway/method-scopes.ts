@@ -161,6 +161,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "push.web.unsubscribe",
     "push.web.test",
     "node.pending.enqueue",
+    "sessions.createSharedToken",
+    "sessions.revokeSharedToken",
   ],
   [ADMIN_SCOPE]: [
     "channels.start",

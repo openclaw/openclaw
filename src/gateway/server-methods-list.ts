@@ -96,6 +96,8 @@ const BASE_METHODS = [
   "sessions.compaction.restore",
   "sessions.create",
   "sessions.send",
+  "sessions.createSharedToken",
+  "sessions.revokeSharedToken",
   "sessions.abort",
   "sessions.patch",
   "sessions.pluginPatch",
