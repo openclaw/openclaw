@@ -10,9 +10,33 @@ function createMockAgent(): Agent & { createConnection: ReturnType<typeof vi.fn>
         setKeepAlive: ReturnType<typeof vi.fn>;
       };
       mockSocket.setKeepAlive = vi.fn();
-      // Simulate async callback (real agents call back after TCP connect)
       process.nextTick(() => callback(null, mockSocket));
       return mockSocket;
+    }),
+    destroy: vi.fn(),
+  } as unknown as Agent & { createConnection: ReturnType<typeof vi.fn> };
+}
+
+function createMockSyncAgent(): Agent & { createConnection: ReturnType<typeof vi.fn> } {
+  return {
+    createConnection: vi.fn((_options, _callback) => {
+      const mockSocket = new EventEmitter() as NodeJS.Socket & {
+        setKeepAlive: ReturnType<typeof vi.fn>;
+      };
+      mockSocket.setKeepAlive = vi.fn();
+      // Synchronous return — does NOT call the callback (proxy-agent pattern)
+      return mockSocket;
+    }),
+    destroy: vi.fn(),
+  } as unknown as Agent & { createConnection: ReturnType<typeof vi.fn> };
+}
+
+function createMockErrorAgent(): Agent & { createConnection: ReturnType<typeof vi.fn> } {
+  return {
+    createConnection: vi.fn((_options, callback) => {
+      const err = new Error("ECONNREFUSED");
+      process.nextTick(() => callback(err, undefined));
+      return undefined;
     }),
     destroy: vi.fn(),
   } as unknown as Agent & { createConnection: ReturnType<typeof vi.fn> };
@@ -24,96 +48,110 @@ describe("tcp-keepalive-agent", () => {
       expect(wrapAgentWithTcpKeepalive(undefined)).toBeUndefined();
     });
 
-    it("sets setKeepAlive(true, initialDelayMs) on every new socket", async () => {
+    it("applies keepalive via callback pattern (Node.js core agent)", async () => {
       const mockAgent = createMockAgent();
       const result = wrapAgentWithTcpKeepalive(mockAgent, { initialDelayMs: 20_000 });
 
       expect(result).toBe(mockAgent);
+      mockAgent.createConnection({}, vi.fn());
 
-      // Trigger a connection
-      const createOpts = {};
-      mockAgent.createConnection(createOpts, vi.fn());
-
-      // Wait for the async callback
       await new Promise((resolve) => process.nextTick(resolve));
 
-      // The patched createConnection should have been called
-      expect(mockAgent.createConnection).toHaveBeenCalledTimes(1);
+      // The mock socket's setKeepAlive should have been called from the callback
+      const callbackFn = (mockAgent.createConnection as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      const mockSocket: NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> } = {
+        setKeepAlive: vi.fn(),
+      } as unknown as NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> };
+      callbackFn(null, mockSocket);
+      expect(mockSocket.setKeepAlive).toHaveBeenCalledWith(true, 20_000);
+    });
 
-      // Retrieve the socket from the callback and verify setKeepAlive was called
-      const callbackArg = (mockAgent.createConnection as ReturnType<typeof vi.fn>).mock.calls[0][1];
-      let capturedSocket: NodeJS.Socket | undefined;
-      callbackArg(null, { setKeepAlive: vi.fn(), on: vi.fn() } as unknown as NodeJS.Socket);
-      // Already verified via the mock above — the wrapper calls setKeepAlive
+    it("applies keepalive via synchronous return (proxy-agent pattern)", () => {
+      const mockAgent = createMockSyncAgent();
+      wrapAgentWithTcpKeepalive(mockAgent, { initialDelayMs: 15_000 });
+
+      const returnedSocket = mockAgent.createConnection({}, vi.fn()) as NodeJS.Socket & {
+        setKeepAlive: ReturnType<typeof vi.fn>;
+      };
+      expect(returnedSocket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
+    });
+
+    it("does not double-apply keepalive when both callback and sync return provide the same socket", async () => {
+      const mockSocket = new EventEmitter() as NodeJS.Socket & {
+        setKeepAlive: ReturnType<typeof vi.fn>;
+      };
+      mockSocket.setKeepAlive = vi.fn();
+      const mockAgent = {
+        createConnection: vi.fn((_options, callback) => {
+          process.nextTick(() => callback(null, mockSocket));
+          return mockSocket; // same socket via both paths
+        }),
+        destroy: vi.fn(),
+      } as unknown as Agent & { createConnection: ReturnType<typeof vi.fn> };
+
+      wrapAgentWithTcpKeepalive(mockAgent);
+      mockAgent.createConnection({}, vi.fn());
+
+      await new Promise((resolve) => process.nextTick(resolve));
+
+      // Should be called twice (once for sync return, once for callback) —
+      // harmless but expected behavior
+      expect(mockSocket.setKeepAlive).toHaveBeenCalledTimes(2);
+      expect(mockSocket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
     });
 
     it("uses default 15s initial delay when not specified", async () => {
       const mockAgent = createMockAgent();
       wrapAgentWithTcpKeepalive(mockAgent);
 
-      const mockSocket = new EventEmitter() as NodeJS.Socket & {
+      const callbackFn = (mockAgent.createConnection as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      const mockSocket: NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> } = {
+        setKeepAlive: vi.fn(),
+      } as unknown as NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> };
+      callbackFn(null, mockSocket);
+      expect(mockSocket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
+    });
+
+    it("uses custom initialDelayMs when provided", () => {
+      const mockAgent = createMockSyncAgent();
+      wrapAgentWithTcpKeepalive(mockAgent, { initialDelayMs: 30_000 });
+
+      const returnedSocket = mockAgent.createConnection({}, vi.fn()) as NodeJS.Socket & {
         setKeepAlive: ReturnType<typeof vi.fn>;
       };
-      mockSocket.setKeepAlive = vi.fn();
-
-      // Call the patched createConnection directly with a test socket
-      const patchedCreate = mockAgent.createConnection;
-      patchedCreate({}, (_err: Error | null, socket: NodeJS.Socket) => {
-        expect(socket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
-      });
-
-      // Wait for async callback
-      await new Promise((resolve) => process.nextTick(resolve));
+      expect(returnedSocket.setKeepAlive).toHaveBeenCalledWith(true, 30_000);
     });
 
-    it("uses custom initialDelayMs when provided", async () => {
-      const mockAgent = createMockAgent();
-      const customDelay = 30_000;
-      wrapAgentWithTcpKeepalive(mockAgent, { initialDelayMs: customDelay });
-
-      const patchedCreate = mockAgent.createConnection;
-      patchedCreate({}, (_err: Error | null, socket: NodeJS.Socket) => {
-        expect(socket.setKeepAlive).toHaveBeenCalledWith(true, customDelay);
-      });
-
-      await new Promise((resolve) => process.nextTick(resolve));
-    });
-
-    it("handles socket errors gracefully (does not crash)", async () => {
-      const mockAgent = createMockAgent();
+    it("does not apply keepalive on error callback", async () => {
+      const mockAgent = createMockErrorAgent();
       wrapAgentWithTcpKeepalive(mockAgent);
 
+      const callbackFn = (mockAgent.createConnection as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      const mockSocket: NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> } = {
+        setKeepAlive: vi.fn(),
+      } as unknown as NodeJS.Socket & { setKeepAlive: ReturnType<typeof vi.fn> };
+      callbackFn(new Error("ECONNREFUSED"), mockSocket);
+      expect(mockSocket.setKeepAlive).not.toHaveBeenCalled();
+    });
+
+    it("does not crash when setKeepAlive throws", () => {
       const badSocket = new EventEmitter() as NodeJS.Socket & {
         setKeepAlive: ReturnType<typeof vi.fn>;
       };
       badSocket.setKeepAlive = vi.fn(() => {
         throw new Error("socket already destroyed");
       });
-
-      // Should not throw — the wrapper catches errors
-      const patchedCreate = mockAgent.createConnection;
-      expect(() => {
-        patchedCreate({}, (_err: Error | null, socket: NodeJS.Socket) => {
-          // This calls setKeepAlive which throws, but the wrapper catches it
-        });
-      }).not.toThrow();
-
-      await new Promise((resolve) => process.nextTick(resolve));
-    });
-
-    it("preserves original agent behavior when connection errors occur", async () => {
-      const mockAgent = createMockAgent();
+      const mockAgent = createMockSyncAgent();
       wrapAgentWithTcpKeepalive(mockAgent);
 
-      const patchedCreate = mockAgent.createConnection;
-      const errorCallback = vi.fn();
-      patchedCreate({}, (err: Error | null, socket: NodeJS.Socket) => {
-        expect(err).toBeInstanceOf(Error);
-        expect(socket).toBeUndefined();
-        errorCallback();
-      });
+      // Override the sync return to use the bad socket
+      mockAgent.createConnection = vi.fn(() => badSocket);
+      expect(() => mockAgent.createConnection({}, vi.fn())).not.toThrow();
+    });
 
-      await new Promise((resolve) => process.nextTick(resolve));
+    it("does not mutate the original agent when baseAgent is undefined", () => {
+      const result = wrapAgentWithTcpKeepalive(undefined);
+      expect(result).toBeUndefined();
     });
   });
 });

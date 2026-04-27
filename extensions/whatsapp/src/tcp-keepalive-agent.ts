@@ -21,14 +21,14 @@ const DEFAULT_INITIAL_DELAY_MS = 15_000;
 /**
  * Wraps an HTTP/HTTPS agent to enable TCP keepalive on every underlying socket.
  *
- * When a proxy agent is provided, the wrapper delegates socket creation to it
- * and applies keepalive to the resulting tunnel socket. Without a proxy, it
- * delegates to the default agent behavior. In both cases, keepalive is set
- * on the raw TCP socket before the TLS handshake completes, which is the
- * correct time to do it.
+ * Handles two creation patterns used by different agent implementations:
+ * - **Callback pattern** (Node.js core `http.Agent`): socket delivered via
+ *   the `(err, socket) => void` callback.
+ * - **Synchronous return pattern** (`proxy-agent` via `agent-base`): socket
+ *   returned directly from `createConnection()` without invoking the callback.
  *
- * This covers both initial connections and reconnects because `createConnection`
- * is called for every new socket.
+ * Both paths apply keepalive, ensuring coverage regardless of which agent
+ * implementation is active.
  *
  * Returns `undefined` when `baseAgent` is `undefined` — callers can use this
  * to avoid passing an agent wrapper when no proxy is configured.
@@ -48,12 +48,20 @@ export function wrapAgentWithTcpKeepalive(
   const self = baseAgent as any;
   self.createConnection = function (...args: Parameters<Agent["createConnection"]>) {
     const [options, callback] = args;
-    return originalCreateConnection(options, (err: Error | null, stream: Duplex) => {
+    const result = originalCreateConnection(options, (err: Error | null, stream: Duplex) => {
       if (!err && stream) {
         applyTcpKeepAlive(stream as Socket | TLSSocket, initialDelayMs);
       }
       callback?.(err, stream);
     });
+
+    // proxy-agent (via agent-base) returns the socket synchronously and may
+    // not invoke the callback. Apply keepalive to the returned value too.
+    if (result && typeof result !== "function") {
+      applyTcpKeepAlive(result as Socket | TLSSocket, initialDelayMs);
+    }
+
+    return result;
   };
 
   return baseAgent;

@@ -146,8 +146,8 @@ export async function createWaSocket(
   };
   const { version } = await fetchLatestBaileysVersion();
   const baseAgent = await resolveEnvProxyAgent(sessionLogger);
-  const agent = wrapAgentWithTcpKeepalive(baseAgent) as HttpsAgent | undefined;
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, baseAgent);
+  const agent = wrapAgentWithTcpKeepalive(baseAgent) as HttpsAgent | undefined;
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
