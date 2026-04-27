@@ -112,16 +112,14 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
 
   it("does not retry when stopReason=stop and output=0 (out of scope)", async () => {
     // Clean stop with no output is a legitimate silent reply (e.g. NO_REPLY
-    // token path), not a crash. This retry must not trigger there. Use a
-    // provider/model outside the empty-response continuation allowlist so this
-    // assertion isolates the silent-error retry path.
+    // token path), not a crash. This retry must not trigger there.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           stopReason: "stop",
-          provider: "test-provider",
-          model: "test-model",
+          provider: "ollama",
+          model: "glm-5.1:cloud",
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
@@ -130,8 +128,8 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
 
     await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      provider: "test-provider",
-      model: "test-model",
+      provider: "ollama",
+      model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-skip-clean-stop",
     });
 
