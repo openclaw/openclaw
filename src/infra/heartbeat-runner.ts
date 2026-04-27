@@ -250,7 +250,7 @@ function resolveHeartbeatSession(
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
 ) {
-  const sessionCfg = cfg.session;
+  const sessionCfg = cfg?.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey =
@@ -299,16 +299,15 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-          const agentsCfg = cfg.agents;
-          const defaults = agentsCfg 
-            ? (agentsCfg.defaults as any)
-            : undefined;
+          const agentsCfg = (cfg as any)?.agents;
+          const allowFrom = agentsCfg?.defaults?.allowFrom ?? [];
+          const dmScope = (cfg as any)?.session?.scope;
 
           const finalSessionKey = (resolvedAgentId)
             ? normalizeEventRoutingKey({
                 sessionKey: forcedCanonical,
-                dmScope: cfg.session?.scope,
-                allowFrom: defaults?.allowFrom ?? [], 
+                dmScope: dmScope,
+                allowFrom: allowFrom, 
                 normalizeEntry: (entry) => entry.toLowerCase(),
                 resolveAgentMainSessionKey: (key) => 
                   resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
