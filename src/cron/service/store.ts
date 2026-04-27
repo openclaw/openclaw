@@ -55,7 +55,17 @@ export async function ensureLoaded(
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
   for (const [index, job] of jobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
-    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
+    const { legacyJobIdIssue, backfilledMissingId } = normalizeCronJobIdentityFields(raw);
+    if (backfilledMissingId) {
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          jobName: typeof raw.name === "string" ? raw.name : undefined,
+          newId: typeof raw.id === "string" ? raw.id : undefined,
+        },
+        "cron: backfilled missing id for job; prior runs may have collided on undefined id (#72849). Run openclaw doctor --fix to persist canonical shape.",
+      );
+    }
     let normalized: Record<string, unknown> | null;
     try {
       normalized = normalizeCronJobInput(raw);

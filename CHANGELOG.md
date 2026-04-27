@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Cron: backfill a UUID for legacy jobs missing `id` at load time so `applyOutcomeToStoredJob`'s `jobs.find(entry => entry.id === result.jobId)` cannot collapse every job's runtime state into the first entry on `undefined === undefined`. Adds a defensive guard that refuses to apply outcomes with missing jobId. Fixes #72849.
+
 ## 2026.4.26
 
 ### Changes

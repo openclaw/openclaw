@@ -648,6 +648,18 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   if (!store) {
     return;
   }
+  // Defensive: when `result.jobId` is undefined/empty, `jobs.find` would
+  // match the first entry whose `entry.id` is also undefined and write
+  // every job's runtime outcome into that single slot (#72849). Refuse to
+  // apply an outcome with a missing id; the load-time backfill should have
+  // already prevented this, but guard remains as a belt-and-suspenders.
+  if (typeof result.jobId !== "string" || result.jobId.length === 0) {
+    state.deps.log.error(
+      { resultJobId: result.jobId },
+      "cron: refusing to apply outcome with missing jobId (#72849); result discarded",
+    );
+    return;
+  }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
