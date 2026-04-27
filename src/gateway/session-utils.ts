@@ -428,6 +428,7 @@ function resolveTranscriptUsageFallback(params: {
     model,
     // Gateway/session listing is read-only; don't start async model discovery.
     allowAsyncLoad: false,
+    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
   });
   const estimatedCostUsd = resolveEstimatedSessionCostUsd({
     cfg: params.cfg,
@@ -1396,6 +1397,12 @@ export function buildGatewaySessionRow(params: {
         model,
         // Gateway/session listing is read-only; don't start async model discovery.
         allowAsyncLoad: false,
+        // Fall back to the default context window when neither the session entry
+        // nor the synchronous cache have a value. The gateway process skips eager
+        // context-window cache warmup, so Anthropic/Claude models (whose windows
+        // come from model discovery rather than config) would otherwise resolve to
+        // undefined and the Control UI meter would show 0%.
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       }),
     );
 
