@@ -1605,6 +1605,17 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      // Expose the agent's session key as `OPENCLAW_SESSION_KEY` so commands
+      // executed under this turn can reference it without derivation. Use case:
+      // session-aware HTTP backends (e.g. signed-session proxies) require a
+      // header that maps to the agent's runtime session — exposing it here
+      // means the agent uses `-H "X-Session: $OPENCLAW_SESSION_KEY"` instead
+      // of inferring the format from upstream 401 reasons. Caller-supplied env
+      // wins to preserve override semantics (e.g. tests injecting a fixed key).
+      if (defaults?.sessionKey && env.OPENCLAW_SESSION_KEY === undefined) {
+        env.OPENCLAW_SESSION_KEY = defaults.sessionKey;
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
