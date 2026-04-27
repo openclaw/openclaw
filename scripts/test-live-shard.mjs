@@ -50,7 +50,7 @@ export function collectAllLiveTestFiles(repoRoot = process.cwd()) {
     .flatMap((dir) => walkFiles(path.join(repoRoot, dir)))
     .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
     .filter((file) => file.endsWith(LIVE_TEST_SUFFIX))
-    .sort((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function extensionKey(file) {
