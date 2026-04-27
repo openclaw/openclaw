@@ -1,6 +1,26 @@
 import Foundation
 
 enum ToolResultTextFormatter {
+    static func preview(text: String, toolName: String?) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if trimmed.count > 2_000 {
+            let label = toolName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let label, !label.isEmpty {
+                return "\(label) returned a large result."
+            }
+            return "Large tool output."
+        }
+
+        guard self.looksLikeJSON(trimmed) else {
+            return trimmed
+        }
+
+        // Keep collapsed cards cheap: only attempt full JSON parsing for modest payloads.
+        return self.format(text: trimmed, toolName: toolName)
+    }
+
     static func format(text: String, toolName: String?) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }

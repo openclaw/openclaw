@@ -1,6 +1,11 @@
 import OpenClawKit
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
@@ -144,6 +149,7 @@ struct ChatMessageBubble: View {
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
     let showsAssistantTrace: Bool
+    let requestToolResultDetail: @MainActor @Sendable (String) async -> String?
 
     var body: some View {
         ChatMessageBody(
@@ -152,7 +158,8 @@ struct ChatMessageBubble: View {
             style: self.style,
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
-            showsAssistantTrace: self.showsAssistantTrace)
+            showsAssistantTrace: self.showsAssistantTrace,
+            requestToolResultDetail: self.requestToolResultDetail)
             .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(.horizontal, 2)
@@ -169,20 +176,30 @@ private struct ChatMessageBody: View {
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
     let showsAssistantTrace: Bool
+    let requestToolResultDetail: @MainActor @Sendable (String) async -> String?
 
     var body: some View {
         let text = self.primaryText
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
-            if self.isToolResultMessage, self.showsAssistantTrace {
-                if !text.isEmpty {
-                    ToolResultCard(
-                        title: self.toolResultTitle,
-                        text: text,
-                        isUser: self.isUser,
-                        toolName: self.message.toolName)
+            if ChatPlatformFeatures.showsExplicitCopyButton,
+               let copyableText = self.copyableText
+            {
+                HStack {
+                    Spacer(minLength: 0)
+                    ChatCopyButton(text: copyableText)
                 }
+            }
+
+            if self.isToolResultMessage {
+                ToolResultDisclosureCard(
+                    title: self.toolResultTitle,
+                    toolCallId: self.message.toolCallId,
+                    toolName: self.message.toolName,
+                    requestDetail: self.requestToolResultDetail)
+            } else if self.isSlashCommandMessage {
+                SlashCommandEchoCard(text: text)
             } else if self.isUser {
                 ChatMarkdownRenderer(
                     text: text,
@@ -203,27 +220,18 @@ private struct ChatMessageBody: View {
                 }
             }
 
-            if self.showsAssistantTrace, !self.toolCalls.isEmpty {
-                ForEach(self.toolCalls.indices, id: \.self) { idx in
-                    ToolCallCard(
-                        content: self.toolCalls[idx],
-                        isUser: self.isUser)
-                }
-            }
-
-            if self.showsAssistantTrace, !self.inlineToolResults.isEmpty {
+            if !self.inlineToolResults.isEmpty {
                 ForEach(self.inlineToolResults.indices, id: \.self) { idx in
                     let toolResult = self.inlineToolResults[idx]
                     let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
-                    ToolResultCard(
+                    ToolResultDisclosureCard(
                         title: "\(display.emoji) \(display.title)",
-                        text: toolResult.text ?? "",
-                        isUser: self.isUser,
-                        toolName: toolResult.name)
+                        toolCallId: toolResult.id,
+                        toolName: toolResult.name,
+                        requestDetail: self.requestToolResultDetail)
                 }
             }
         }
-        .textSelection(.enabled)
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .foregroundStyle(textColor)
@@ -233,6 +241,7 @@ private struct ChatMessageBody: View {
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
         .padding(.leading, self.tailPaddingLeading)
         .padding(.trailing, self.tailPaddingTrailing)
+        .copyContextMenu(text: self.copyableText)
     }
 
     private var primaryText: String {
@@ -275,6 +284,15 @@ private struct ChatMessageBody: View {
     private var isToolResultMessage: Bool {
         let role = self.message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
+    }
+
+    private var isSlashCommandMessage: Bool {
+        guard self.isUser else { return false }
+        guard self.inlineAttachments.isEmpty else { return false }
+        let trimmed = self.primaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return false }
+        let firstToken = trimmed.split(whereSeparator: \.isWhitespace).first
+        return firstToken?.contains("/") == true
     }
 
     private var toolResultTitle: String {
@@ -348,6 +366,129 @@ private struct ChatMessageBody: View {
     private var bubbleShadowYOffset: CGFloat {
         self.style == .onboarding && !self.isUser ? 2 : 0
     }
+
+    private var copyableText: String? {
+        let text = self.primaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+}
+
+private struct SlashCommandEchoCard: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "terminal")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(self.text)
+                .font(.system(.footnote, design: .monospaced).weight(.semibold))
+                .foregroundStyle(OpenClawChatTheme.userText)
+            Spacer(minLength: 0)
+            if ChatPlatformFeatures.showsExplicitCopyButton {
+                ChatCopyButton(text: self.text)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .chatMessageTextSelection()
+        .background(Color.white.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .copyContextMenu(text: self.text)
+    }
+}
+
+private struct ToolResultDisclosureCard: View {
+    let title: String
+    let toolCallId: String?
+    let toolName: String?
+    let requestDetail: @MainActor @Sendable (String) async -> String?
+    @State private var expanded = false
+    @State private var isLoading = false
+    @State private var detailText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                self.toggleExpanded()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "hammer.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(self.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text("Tool output")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if ChatPlatformFeatures.showsExplicitCopyButton,
+                       let detailText = self.detailText,
+                       !detailText.isEmpty
+                    {
+                        ChatCopyButton(text: detailText)
+                    }
+                    Image(systemName: self.expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if self.expanded {
+                if self.isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading tool output…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let detailText, !detailText.isEmpty {
+                    Text(detailText)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(OpenClawChatTheme.assistantText)
+                        .lineLimit(12)
+                        .chatMessageTextSelection()
+                } else {
+                    Text("Tool output unavailable.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(OpenClawChatTheme.subtleCard)
+                .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private func toggleExpanded() {
+        self.expanded.toggle()
+        guard self.expanded else { return }
+        guard self.detailText == nil else { return }
+        guard let toolCallId = self.toolCallId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !toolCallId.isEmpty
+        else {
+            self.detailText = "Tool output unavailable."
+            return
+        }
+
+        self.isLoading = true
+        Task {
+            let detail = await self.requestDetail(toolCallId)
+            await MainActor.run {
+                self.isLoading = false
+                let formatted = detail.map { ToolResultTextFormatter.format(text: $0, toolName: self.toolName) } ?? ""
+                self.detailText = formatted.isEmpty ? "Tool output unavailable." : formatted
+            }
+        }
+    }
 }
 
 private struct AttachmentRow: View {
@@ -375,10 +516,16 @@ private struct ToolCallCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "hammer.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text(self.toolName)
                     .font(.footnote.weight(.semibold))
                 Spacer(minLength: 0)
+                Text("Running")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
 
             if let summary = self.summary, !summary.isEmpty {
@@ -407,66 +554,6 @@ private struct ToolCallCard: View {
 
     private var display: ToolDisplaySummary {
         ToolDisplayRegistry.resolve(name: self.content.name ?? "tool", args: self.content.arguments)
-    }
-}
-
-private struct ToolResultCard: View {
-    let title: String
-    let text: String
-    let isUser: Bool
-    let toolName: String?
-    @State private var expanded = false
-
-    var body: some View {
-        if !self.displayContent.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text(self.title)
-                        .font(.footnote.weight(.semibold))
-                    Spacer(minLength: 0)
-                }
-
-                Text(self.displayText)
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-                    .lineLimit(self.expanded ? nil : Self.previewLineLimit)
-
-                if self.shouldShowToggle {
-                    Button(self.expanded ? "Show less" : "Show full output") {
-                        self.expanded.toggle()
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(OpenClawChatTheme.subtleCard)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
-        }
-    }
-
-    private static let previewLineLimit = 8
-
-    private var displayContent: String {
-        ToolResultTextFormatter.format(text: self.text, toolName: self.toolName)
-    }
-
-    private var lines: [Substring] {
-        self.displayContent.components(separatedBy: .newlines).map { Substring($0) }
-    }
-
-    private var displayText: String {
-        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.displayContent }
-        return self.lines.prefix(Self.previewLineLimit).joined(separator: "\n") + "\n…"
-    }
-
-    private var shouldShowToggle: Bool {
-        self.lines.count > Self.previewLineLimit
     }
 }
 
@@ -527,6 +614,7 @@ struct ChatStreamingAssistantBubble: View {
         }
         .padding(12)
         .assistantBubbleContainerStyle()
+        .copyContextMenu(text: self.text)
     }
 }
 
@@ -577,39 +665,42 @@ extension ChatPendingToolsBubble: @MainActor Equatable {
 private struct TypingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @State private var animate = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { idx in
-                Circle()
-                    .fill(Color.secondary.opacity(0.55))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(self.reduceMotion ? 0.85 : (self.animate ? 1.05 : 0.70))
-                    .opacity(self.reduceMotion ? 0.55 : (self.animate ? 0.95 : 0.30))
-                    .animation(
-                        self.reduceMotion ? nil : .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(idx) * 0.16),
-                        value: self.animate)
+        TimelineView(.animation(minimumInterval: self.reduceMotion ? 0.8 : 1.0 / 30.0)) { context in
+            let phase = self.currentPhase(at: context.date)
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { idx in
+                    let emphasis = self.emphasis(for: idx, phase: phase)
+                    Circle()
+                        .fill(Color.secondary.opacity(0.34 + (0.56 * emphasis)))
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(0.74 + (0.42 * emphasis))
+                        .opacity(0.28 + (0.72 * emphasis))
+                        .offset(y: self.reduceMotion ? 0 : (1.8 - (4.8 * emphasis)))
+                }
             }
-        }
-        .onAppear { self.updateAnimationState() }
-        .onDisappear { self.animate = false }
-        .onChange(of: self.scenePhase) { _, _ in
-            self.updateAnimationState()
-        }
-        .onChange(of: self.reduceMotion) { _, _ in
-            self.updateAnimationState()
         }
     }
 
-    private func updateAnimationState() {
+    private func currentPhase(at date: Date) -> Double {
         guard !self.reduceMotion, self.scenePhase == .active else {
-            self.animate = false
-            return
+            return 0
         }
-        self.animate = true
+        let cycle = date.timeIntervalSinceReferenceDate * 2.1
+        return cycle.truncatingRemainder(dividingBy: 3.0)
+    }
+
+    private func emphasis(for index: Int, phase: Double) -> Double {
+        guard !self.reduceMotion, self.scenePhase == .active else {
+            return index == 0 ? 0.7 : 0.35
+        }
+        let distance = min(
+            abs(Double(index) - phase),
+            abs(Double(index) - phase + 3.0),
+            abs(Double(index) - phase - 3.0))
+        let normalized = max(0, 1.0 - min(distance, 1.15) / 1.15)
+        return normalized
     }
 }
 
@@ -631,5 +722,61 @@ private struct ChatAssistantTextBody: View {
                     textColor: OpenClawChatTheme.assistantText)
             }
         }
+    }
+}
+
+private extension View {
+    func chatMessageTextSelection() -> some View {
+        self.textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    func copyContextMenu(text: String?) -> some View {
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.contextMenu {
+                Button("Copy", systemImage: "doc.on.doc") {
+                    ChatCopyboard.copy(text)
+                }
+            }
+        } else {
+            self
+        }
+    }
+}
+
+private struct ChatCopyButton: View {
+    let text: String
+
+    var body: some View {
+        Button {
+            ChatCopyboard.copy(self.text)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Copy")
+    }
+}
+
+private enum ChatCopyboard {
+    static func copy(_ text: String) {
+#if canImport(UIKit)
+        UIPasteboard.general.string = text
+#elseif canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
+    }
+}
+
+private enum ChatPlatformFeatures {
+    static var showsExplicitCopyButton: Bool {
+#if canImport(UIKit)
+        ProcessInfo.processInfo.isiOSAppOnMac
+#else
+        false
+#endif
     }
 }

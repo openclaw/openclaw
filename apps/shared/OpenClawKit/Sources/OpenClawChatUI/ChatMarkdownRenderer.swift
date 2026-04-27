@@ -33,6 +33,7 @@ struct ChatMarkdownRenderer: View {
                 InlineImageList(images: processed.images)
             }
         }
+        .chatMessageTextSelection()
     }
 }
 
@@ -43,7 +44,7 @@ private struct ChatMarkdownStyle: ViewModifier {
     let textColor: Color
 
     func body(content: Content) -> some View {
-        Group {
+        let styled = Group {
             if self.variant == .compact {
                 content.textual.structuredTextStyle(.default)
             } else {
@@ -53,7 +54,8 @@ private struct ChatMarkdownStyle: ViewModifier {
         .font(self.font)
         .foregroundStyle(self.textColor)
         .textual.inlineStyle(self.inlineStyle)
-        .textual.textSelection(.enabled)
+
+        styled
     }
 
     private var inlineStyle: InlineStyle {
@@ -62,6 +64,12 @@ private struct ChatMarkdownStyle: ViewModifier {
         return InlineStyle()
             .code(.monospaced, .fontScale(codeScale))
             .link(.foregroundColor(linkColor))
+    }
+}
+
+private extension View {
+    func chatMessageTextSelection() -> some View {
+        self.textSelection(.enabled)
     }
 }
 

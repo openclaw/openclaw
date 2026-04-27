@@ -17,12 +17,7 @@ struct HomeToolbar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(.white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
-                .frame(height: self.contrast == .increased ? 1.0 : 0.6)
-                .allowsHitTesting(false)
-
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
                 HomeToolbarStatusButton(
                     gateway: self.gateway,
                     voiceWakeEnabled: self.voiceWakeEnabled,
@@ -32,7 +27,7 @@ struct HomeToolbar: View {
 
                 Spacer(minLength: 0)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 14) {
                     HomeToolbarActionButton(
                         systemImage: "text.bubble.fill",
                         accessibilityLabel: "Chat",
@@ -56,22 +51,30 @@ struct HomeToolbar: View {
                         action: self.onSettingsTap)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
         }
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [
-                    .white.opacity(self.brighten ? 0.10 : 0.06),
-                    .clear,
-                ],
-                startPoint: .top,
-                endPoint: .bottom)
-                .allowsHitTesting(false)
+        .background {
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                LinearGradient(
+                    colors: [
+                        .white.opacity(self.brighten ? 0.14 : 0.09),
+                        .white.opacity(self.brighten ? 0.03 : 0.015),
+                        .clear,
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom)
+                Rectangle()
+                    .fill(.white.opacity(self.contrast == .increased ? 0.42 : (self.brighten ? 0.16 : 0.1)))
+                    .frame(height: self.contrast == .increased ? 1.0 : 0.6)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
         }
+        .shadow(color: .black.opacity(0.16), radius: 18, y: -4)
     }
 }
 
@@ -121,16 +124,26 @@ private struct HomeToolbarStatusButton: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(self.brighten ? 0.12 : 0.06),
+                                Color.black.opacity(self.brighten ? 0.1 : 0.18),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom)
+                    )
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
                                 .white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.22 : 0.16)),
                                 lineWidth: self.contrast == .increased ? 1.0 : 0.6)
                     }
+                    .shadow(color: .black.opacity(0.14), radius: 12, y: 5)
             }
         }
         .buttonStyle(.plain)
@@ -187,15 +200,23 @@ private struct HomeToolbarActionButton: View {
     var body: some View {
         Button(action: self.action) {
             Image(systemName: self.systemImage)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(self.isActive ? (self.tint ?? .primary) : .primary)
-                .frame(width: 40, height: 40)
+                .frame(width: 48, height: 48)
                 .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(self.brighten ? 0.11 : 0.05),
+                                    Color.black.opacity(self.brighten ? 0.1 : 0.18),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom)
+                        )
                         .overlay {
                             if let tint {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .fill(
                                         LinearGradient(
                                             colors: [
@@ -209,7 +230,14 @@ private struct HomeToolbarActionButton: View {
                             }
                         }
                         .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            if self.isActive, let tint {
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .strokeBorder(tint.opacity(0.24), lineWidth: 1.2)
+                                    .blur(radius: 0.2)
+                            }
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .strokeBorder(
                                     (self.tint ?? .white).opacity(
                                         self.isActive
@@ -218,7 +246,12 @@ private struct HomeToolbarActionButton: View {
                                     ),
                                     lineWidth: self.contrast == .increased ? 1.0 : (self.isActive ? 0.8 : 0.6))
                         }
+                        .shadow(
+                            color: (self.isActive ? (self.tint ?? .black) : .black).opacity(self.isActive ? 0.22 : 0.14),
+                            radius: self.isActive ? 14 : 10,
+                            y: self.isActive ? 6 : 4)
                 }
+                .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(self.accessibilityLabel)

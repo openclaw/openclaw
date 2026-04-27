@@ -148,6 +148,7 @@ final class NodeAppModel {
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
+    private var execApprovalSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
     private let gatewayHealthMonitor = GatewayHealthMonitor()
@@ -730,6 +731,55 @@ final class NodeAppModel {
                     }
                     guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
                     self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
+                default:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func startExecApprovalSync() async {
+        self.execApprovalSyncTask?.cancel()
+        self.execApprovalSyncTask = Task { [weak self] in
+            guard let self else { return }
+
+            struct ApprovalRequestedPayload: Decodable {
+                var id: String
+            }
+
+            struct ApprovalResolvedPayload: Decodable {
+                var id: String
+            }
+
+            let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
+            for await evt in stream {
+                if Task.isCancelled { return }
+                guard let payload = evt.payload else { continue }
+                switch evt.event {
+                case "exec.approval.requested":
+                    guard
+                        let decoded = try? GatewayPayloadDecoding.decode(payload, as: ApprovalRequestedPayload.self)
+                    else { continue }
+                    let approvalId = decoded.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !approvalId.isEmpty else { continue }
+                    let outcome = await self.fetchExecApprovalPrompt(
+                        approvalId: approvalId,
+                        sourceReason: "live_request")
+                    switch outcome {
+                    case let .loaded(prompt):
+                        self.presentFetchedExecApprovalPrompt(prompt)
+                    case .stale:
+                        self.clearPendingExecApprovalPromptIfMatches(approvalId)
+                    case .failed:
+                        continue
+                    }
+                case "exec.approval.resolved":
+                    guard
+                        let decoded = try? GatewayPayloadDecoding.decode(payload, as: ApprovalResolvedPayload.self)
+                    else { continue }
+                    let approvalId = decoded.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !approvalId.isEmpty else { continue }
+                    self.clearPendingExecApprovalPromptIfMatches(approvalId)
                 default:
                     continue
                 }
@@ -1832,6 +1882,8 @@ extension NodeAppModel {
         self.operatorGatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
+        self.execApprovalSyncTask?.cancel()
+        self.execApprovalSyncTask = nil
         LiveActivityManager.shared.handleDisconnect()
         self.gatewayHealthMonitor.stop()
         Task {
@@ -1870,6 +1922,8 @@ private extension NodeAppModel {
         self.operatorConnected = false
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
+        self.execApprovalSyncTask?.cancel()
+        self.execApprovalSyncTask = nil
         LiveActivityManager.shared.handleDisconnect()
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
@@ -2104,6 +2158,7 @@ private extension NodeAppModel {
                             await self.refreshShareRouteFromGateway()
                             await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
+                            await self.startExecApprovalSync()
                             await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
                         },
@@ -2116,6 +2171,10 @@ private extension NodeAppModel {
                             }
                             GatewayDiagnostics.log("operator gateway disconnected reason=\(reason)")
                             await MainActor.run { self.stopGatewayHealthMonitor() }
+                            await MainActor.run {
+                                self.execApprovalSyncTask?.cancel()
+                                self.execApprovalSyncTask = nil
+                            }
                         },
                         onInvoke: { req in
                             // Operator session should not handle node.invoke requests.
@@ -2384,15 +2443,10 @@ private extension NodeAppModel {
         password: String?,
         storedOperatorScopes: [String]
     ) -> Bool {
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            return true
-        }
-        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPassword.isEmpty {
-            return true
-        }
-        return storedOperatorScopes.contains("operator.approvals")
+        _ = token
+        _ = password
+        _ = storedOperatorScopes
+        return true
     }
 
     func makeOperatorConnectOptions(
@@ -2400,12 +2454,8 @@ private extension NodeAppModel {
         displayName: String?,
         includeApprovalScope: Bool
     ) -> GatewayConnectOptions {
-        var scopes = ["operator.read", "operator.write", "operator.talk.secrets"]
-        // Preserve reconnect compatibility for older paired operator tokens that were
-        // approved before iOS requested operator.approvals by default.
-        if includeApprovalScope {
-            scopes.append("operator.approvals")
-        }
+        _ = includeApprovalScope
+        let scopes = ["operator.read", "operator.write", "operator.talk.secrets", "operator.approvals"]
         return GatewayConnectOptions(
             role: "operator",
             scopes: scopes,

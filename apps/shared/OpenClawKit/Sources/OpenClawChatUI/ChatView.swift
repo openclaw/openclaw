@@ -10,7 +10,7 @@ public struct OpenClawChatView: View {
         case onboarding
     }
 
-    @State private var viewModel: OpenClawChatViewModel
+    private let viewModel: OpenClawChatViewModel
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
@@ -45,6 +45,10 @@ public struct OpenClawChatView: View {
         #endif
     }
 
+    private enum Limits {
+        static let maxVisibleMessages = 50
+    }
+
     public init(
         viewModel: OpenClawChatViewModel,
         showsSessionSwitcher: Bool = false,
@@ -53,7 +57,7 @@ public struct OpenClawChatView: View {
         userAccent: Color? = nil,
         showsAssistantTrace: Bool = false)
     {
-        self._viewModel = State(initialValue: viewModel)
+        self.viewModel = viewModel
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
         self.markdownVariant = markdownVariant
@@ -194,7 +198,10 @@ public struct OpenClawChatView: View {
                 style: self.style,
                 markdownVariant: self.markdownVariant,
                 userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace)
+                showsAssistantTrace: self.showsAssistantTrace,
+                requestToolResultDetail: { toolCallId in
+                    await self.viewModel.requestToolResultDetail(toolCallId: toolCallId)
+                })
                 .frame(
                     maxWidth: .infinity,
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
@@ -234,7 +241,11 @@ public struct OpenClawChatView: View {
         } else {
             base = self.viewModel.messages
         }
-        return self.mergeToolResults(in: base).filter(self.shouldDisplayMessage(_:))
+        let filtered = base.filter(self.shouldDisplayMessage(_:))
+        if filtered.count <= Limits.maxVisibleMessages {
+            return filtered
+        }
+        return Array(filtered.suffix(Limits.maxVisibleMessages))
     }
 
     @ViewBuilder
@@ -406,6 +417,13 @@ public struct OpenClawChatView: View {
         if self.hasInlineAttachments(in: message) {
             return true
         }
+        let inlineToolResults = self.inlineToolResults(in: message)
+        if !inlineToolResults.isEmpty {
+            return true
+        }
+        if self.isToolResultMessage(message) {
+            return true
+        }
 
         let primaryText = self.primaryText(in: message)
         if !primaryText.isEmpty {
@@ -421,11 +439,7 @@ public struct OpenClawChatView: View {
             return false
         }
 
-        if self.isToolResultMessage(message) {
-            return !primaryText.isEmpty
-        }
-
-        return !self.toolCalls(in: message).isEmpty || !self.inlineToolResults(in: message).isEmpty
+        return false
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {

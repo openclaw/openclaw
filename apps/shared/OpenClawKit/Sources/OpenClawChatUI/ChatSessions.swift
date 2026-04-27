@@ -6,12 +6,14 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let modelID: String
     public let name: String
     public let provider: String
+    public let alias: String?
     public let contextWindow: Int?
 
-    public init(modelID: String, name: String, provider: String, contextWindow: Int?) {
+    public init(modelID: String, name: String, provider: String, alias: String? = nil, contextWindow: Int?) {
         self.modelID = modelID
         self.name = name
         self.provider = provider
+        self.alias = alias
         self.contextWindow = contextWindow
     }
 
@@ -33,11 +35,13 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
 
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let model: String?
+    public let modelProvider: String?
     public let contextTokens: Int?
     public let mainSessionKey: String?
 
-    public init(model: String?, contextTokens: Int?, mainSessionKey: String? = nil) {
+    public init(model: String?, modelProvider: String? = nil, contextTokens: Int?, mainSessionKey: String? = nil) {
         self.model = model
+        self.modelProvider = modelProvider
         self.contextTokens = contextTokens
         self.mainSessionKey = mainSessionKey
     }

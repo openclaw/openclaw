@@ -125,6 +125,9 @@ struct RootCanvas: View {
                     sessionKey: self.appModel.chatSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
+                    .environment(self.appModel)
+                    .environment(self.appModel.voiceWake)
+                    .environment(self.gatewayController)
             case .quickSetup:
                 GatewayQuickSetupSheet()
                     .environment(self.appModel)

@@ -37,6 +37,7 @@ struct ChatSheet: View {
                     }
                 }
         }
+        .execApprovalPromptDialog()
     }
 
     private var chatTitle: String {
