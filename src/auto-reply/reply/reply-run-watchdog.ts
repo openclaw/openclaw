@@ -123,9 +123,10 @@ export function createReplyRunProgressWatchdog(
       noticeCount += 1;
     } catch (error) {
       params.onError?.(error);
-      // Do not spin on failing transports; retry on the normal repeat cadence.
+      // Do not spin on failing transports. Keep the first-notice cadence until
+      // a notice is actually delivered so custom first/repeat intervals do not
+      // drift after transport failures.
       lastVisibleActivityAt = now();
-      noticeCount += 1;
     } finally {
       sending = false;
       schedule();

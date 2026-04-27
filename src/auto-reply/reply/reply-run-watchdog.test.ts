@@ -88,4 +88,41 @@ describe("reply run progress watchdog", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps first-notice cadence until a notice is delivered", async () => {
+    vi.useFakeTimers();
+    try {
+      const notices: string[] = [];
+      const errors: unknown[] = [];
+      let attempts = 0;
+      createReplyRunProgressWatchdog({
+        enabled: true,
+        firstNoticeMs: 1_000,
+        repeatNoticeMs: 5_000,
+        getPhase: () => "running",
+        sendNotice: (notice) => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error("transport unavailable");
+          }
+          notices.push(buildReplyRunProgressNoticeText(notice));
+        },
+        onError: (error) => errors.push(error),
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toBe(1);
+      expect(errors).toHaveLength(1);
+      expect(notices).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(attempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(2);
+      expect(notices).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

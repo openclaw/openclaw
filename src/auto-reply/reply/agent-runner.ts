@@ -22,6 +22,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getLogger } from "../../logging.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -1113,6 +1114,18 @@ export async function runReplyAgent(params: {
       });
       await opts?.onBlockReply?.(payload);
     },
+    onError: (error) => {
+      getLogger().warn(
+        {
+          error,
+          replyRunKey: replyOperation.key,
+          sessionKey: replySessionKey,
+          sessionId: followupRun.run.sessionId,
+          phase: replyOperation.phase,
+        },
+        "reply run progress notice delivery failed",
+      );
+    },
   });
 
   let runFollowupTurn = queuedRunFollowupTurn;
@@ -1287,6 +1300,17 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    const buildEmptyFinalPayload = () =>
+      buildEmptyFinalReplyPayload({
+        isHeartbeat,
+        silentExpected: followupRun.run.silentExpected,
+        hasVisibleBlockReply:
+          (directlySentBlockKeys?.size ?? 0) > 0 || blockReplyPipeline?.didStream() === true,
+        hasMessagingToolSend:
+          (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+          (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+          (runResult.messagingToolSentTargets?.length ?? 0) > 0,
+      });
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -1381,20 +1405,7 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      return finalizeWithFollowup(
-        buildEmptyFinalReplyPayload({
-          isHeartbeat,
-          silentExpected: followupRun.run.silentExpected,
-          hasVisibleBlockReply:
-            (directlySentBlockKeys?.size ?? 0) > 0 || blockReplyPipeline?.didStream() === true,
-          hasMessagingToolSend:
-            (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
-            (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
-            (runResult.messagingToolSentTargets?.length ?? 0) > 0,
-        }),
-        queueKey,
-        runFollowupTurn,
-      );
+      return finalizeWithFollowup(buildEmptyFinalPayload(), queueKey, runFollowupTurn);
     }
 
     const payloadResult = await buildReplyPayloads({
@@ -1787,7 +1798,11 @@ export async function runReplyAgent(params: {
     }
 
     return finalizeWithFollowup(
-      finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+      finalPayloads.length === 0
+        ? buildEmptyFinalPayload()
+        : finalPayloads.length === 1
+          ? finalPayloads[0]
+          : finalPayloads,
       queueKey,
       runFollowupTurn,
     );
