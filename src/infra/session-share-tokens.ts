@@ -44,7 +44,7 @@ function loadFromDisk(): void {
         continue;
       }
       try {
-        const entry = JSON.parse(trimmed) as unknown;
+        const entry: unknown = JSON.parse(trimmed);
         if (!isValidTokenEntry(entry)) {
           continue;
         }
