@@ -107,6 +107,9 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.resumeSessionId?.description).toContain(
       'ignored for runtime="subagent"',
     );
+    expect(schema.properties?.resumeSessionId?.description).toContain(
+      "backend/harness policy owns authorization",
+    );
     expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
     expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');
   });
@@ -559,6 +562,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-3b", {
       task: "analyze file",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
       streamTo: "parent",
     });
 
@@ -573,6 +577,9 @@ describe("sessions_spawn tool", () => {
         task: "analyze file",
       }),
       expect.any(Object),
+    );
+    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "resumeSessionId",
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
   });
