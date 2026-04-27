@@ -1,10 +1,9 @@
 import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
 import {
   enqueueSystemEventMock,

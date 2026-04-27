@@ -34,9 +34,9 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/auto-reply/dispatch.js")>(
-    "../../../../src/auto-reply/dispatch.js",
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
   );
   return {
     ...actual,

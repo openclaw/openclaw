@@ -7,8 +7,11 @@ export type {
 } from "../infra/diagnostic-events.js";
 export {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {

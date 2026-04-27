@@ -1425,7 +1425,7 @@ describe("handleFeishuMessage command authorization", () => {
     const cfg: ClawdbotConfig = {
       channels: {
         feishu: {
-          // groupPolicy intentionally omitted -> schema default is "allowlist"
+          groupPolicy: "allowlist",
           // groupAllowFrom intentionally omitted -> empty []
           groups: {
             "oc-explicit-group": {
@@ -1454,6 +1454,72 @@ describe("handleFeishuMessage command authorization", () => {
     // Group must be admitted: the inbound finalize/dispatch path runs.
     expect(mockFinalizeInboundContext).toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).toHaveBeenCalled();
+  });
+
+  it("does not let explicit group config override disabled group policy", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "disabled",
+          groups: {
+            "oc-disabled-policy-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-disabled-policy-group",
+        chat_id: "oc-disabled-policy-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not treat wildcard group defaults as allowlist admission", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-wildcard-group-default",
+        chat_id: "oc-wildcard-only",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   it("drops message when groupConfig.enabled is false", async () => {

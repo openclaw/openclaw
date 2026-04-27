@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
-} from "../../../src/plugin-sdk/facade-runtime.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
 
 beforeEach(() => {

@@ -20,7 +20,12 @@ export type MatrixQaScenarioId =
   | "matrix-subagent-thread-spawn"
   | "matrix-top-level-reply-shape"
   | "matrix-room-thread-reply-override"
+  | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
+  | "matrix-room-tool-progress-preview"
+  | "matrix-room-tool-progress-preview-opt-out"
+  | "matrix-room-tool-progress-error"
+  | "matrix-room-tool-progress-mention-safety"
   | "matrix-room-block-streaming"
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
@@ -318,11 +323,60 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     },
   },
   {
+    id: "matrix-room-partial-streaming-preview",
+    timeoutMs: 45_000,
+    title: "Matrix partial streaming emits text previews before finalizing",
+    configOverrides: {
+      streaming: "partial",
+    },
+  },
+  {
     id: "matrix-room-quiet-streaming-preview",
     timeoutMs: 45_000,
     title: "Matrix quiet streaming emits notice previews before finalizing",
     configOverrides: {
       streaming: "quiet",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-preview",
+    timeoutMs: 60_000,
+    title: "Matrix streaming folds tool progress into the preview message",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-preview-opt-out",
+    timeoutMs: 60_000,
+    title: "Matrix streaming can opt out of preview tool progress",
+    configOverrides: {
+      streaming: {
+        mode: "quiet",
+        preview: {
+          toolProgress: false,
+        },
+      },
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-error",
+    timeoutMs: 60_000,
+    title: "Matrix streaming finalizes previews after tool errors",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-mention-safety",
+    timeoutMs: 60_000,
+    title: "Matrix streaming keeps tool-progress mentions inert",
+    configOverrides: {
+      streaming: "partial",
+      toolProfile: "coding",
     },
   },
   {

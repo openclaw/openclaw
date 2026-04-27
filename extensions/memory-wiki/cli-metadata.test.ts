@@ -3,16 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => {
-    throw new Error("loadConfig should not be called during CLI metadata registration");
-  }),
   registerWikiCli: vi.fn(),
   resolveMemoryWikiConfig: vi.fn(),
-}));
-
-vi.mock("../../src/config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock("./src/cli.js", () => ({
@@ -66,7 +58,6 @@ describe("memory-wiki cli metadata entry", () => {
       logger: api.logger,
     });
 
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.resolveMemoryWikiConfig).toHaveBeenCalledWith(
       appConfig.plugins.entries["memory-wiki"].config,
     );

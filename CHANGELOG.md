@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Matrix/streaming: stream tool-progress updates into live Matrix preview edits by default when preview streaming is active, with `streaming.preview.toolProgress: false` to keep answer previews while hiding interim tool lines. Thanks @gumadeiras.
 - Plugins/models: wire manifest `modelCatalog.aliases` and `modelCatalog.suppressions` into model-catalog planning and built-in model suppression, with OpenAI stale Spark suppression now declared in the plugin manifest before runtime fallback. Thanks @shakkernerd.
 - Channels/Yuanbao: register the Tencent Yuanbao external channel plugin (`openclaw-plugin-yuanbao`) in the official channel catalog, contract suites, and community plugin docs, with a new `docs/channels/yuanbao.md` quick-start guide for WebSocket bot DMs and group chats. (#72756) Thanks @loongfay.
 - Channels/QQBot: add full group chat support (history tracking, @-mention gating, activation modes, per-group config, FIFO message queue with deliver debounce), C2C `stream_messages` streaming with a `StreamingController` lifecycle manager, unified `sendMedia` with chunked upload for large files, and refactor the engine into pipeline stages, focused outbound submodules, builtin slash-command modules, and explicit DI ports via `createEngineAdapters()`. (#70624) Thanks @cxyhhhhh.
@@ -15,11 +16,22 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/commands: make generated `/dock-*` commands switch the active session reply route through `session.identityLinks` instead of falling through to normal chat. Fixes #69206; carries forward #73033. Thanks @clawbones and @michaelatamuk.
+- Providers/Cloudflare AI Gateway: strip assistant prefill turns from Anthropic Messages payloads when thinking is enabled, so Claude requests through Cloudflare AI Gateway no longer fail Anthropic conversation-ending validation. Fixes #72905; carries forward #73005. Thanks @AaronFaby and @sahilsatralkar.
+- Gateway/startup: keep primary-model startup prewarm on scoped metadata preparation, let native approval bootstraps retry outside channel startup, and skip the global hook runner when no `gateway_start` hook is registered, so clean post-ready sidecar work stays off the critical path. Refs #72846. Thanks @RayWoo, @livekm0309, and @mrz1836.
+- Gateway/supervisor: exit cleanly when a supervised restart finds an existing healthy gateway and bound retries when the existing gateway stays unhealthy, so stale lock contention cannot loop indefinitely. Refs #72846. Thanks @azgardtek.
+- Gateway/startup: scope primary-model provider discovery during channel prewarm to the configured provider owner and add split startup trace timings, so boot avoids staging unrelated bundled provider dependencies while setup discovery remains broad. Fixes #73002. Thanks @Schnup03.
+- Channels/Microsoft Teams: unwrap staged CommonJS JWT runtime dependencies before Bot Connector token validation so inbound Teams messages no longer 401 after the bundled runtime-deps move. Fixes #73026. Thanks @kbrown10000.
 - Channels/sessions: prevent guarded inbound session recording from creating route-only phantom sessions while still allowing last-route updates for sessions that already exist. Carries forward #73009. Thanks @jzakirov.
+- Cron: accept `delivery.threadId` in Gateway cron add/update schemas so scheduled announce delivery can target Telegram forum topics and other threaded channel destinations through the documented delivery path. Fixes #73017. Thanks @coachsootz.
 - Plugins/runtime deps: stage bundled plugin dependencies imported by mirrored root dist chunks, so packaged memory and status commands do not miss `chokidar` or similar root-chunk dependencies after update. Fixes #72882 and #72970; carries forward #72992. Thanks @shrimpy8, @colin-chang, and @Schnup03.
+- Agents/runtime context: deliver hidden runtime context through prompt-local system context while keeping the transcript-only custom entry out of provider user turns, and strip stale copied runtime-context prefaces from user-facing replies. Fixes #72386; carries forward #72969. Thanks @jhsmith409.
 - Channels/Telegram: skip the optional webhook-info API call during polling-mode status checks and startup bot-label probes so long-polling setups avoid an unnecessary Telegram round trip. Carries forward #72990. Thanks @danielgruneberg.
 - CLI/message: resolve targeted `openclaw message` channels to their owning plugin before loading the registry, and fall back to configured channel plugins when the channel must be inferred, so scripted sends avoid full bundled plugin registry scans without assuming channel ids match plugin ids. Fixes #73006. Thanks @jasonftl.
+- Plugins/startup: parse strict JSON plugin manifests with native JSON first and keep JSON5 as the compatibility fallback, reducing manifest registry CPU during Gateway boot and CLI startup. Fixes #73011. Thanks @jasonftl.
 - CLI/models: keep route-first `models status --json` stdout reserved for the JSON payload by routing auth-profile and startup diagnostics to stderr. Fixes #72962. Thanks @vishutdhar.
+- Gateway/runtime: keep dirty-tree status calls from rebuilding live `dist`, clear stale task and restart state across in-process restarts, retry transient Discord lazy imports, and let channel startup continue after slow model warmup so browser, Discord, and voice-call sidecars come online. Thanks @vincentkoc.
+- Security/CodeQL: replace file SecretRef id gateway schema regex validation with segment-aligned predicates and set empty permissions on release summary/backfill jobs so the narrowed CodeQL profile stays clean. Thanks @vincentkoc.
 - Sessions: ignore future-dated session activity timestamps during reset freshness checks and cap future `updatedAt` values at the merge boundary so clock-skewed messages cannot keep stale sessions alive forever. Fixes #72989. Thanks @martingarramon.
 - Sessions: apply search, activity filters, and limits before gateway row enrichment so bounded session lists avoid scanning discarded transcripts. Carries forward #72978. Thanks @yeager.
 - Sessions: remove trajectory runtime and pointer sidecars when session maintenance prunes, caps, or disk-evicts their owning session, while preserving sidecars still referenced by live rows. Fixes #73000. Thanks @jared-rebel.
@@ -31,7 +43,7 @@ Docs: https://docs.openclaw.ai
 - Memory-core/dreaming: give narrative generation a 60-second timeout so slower local or remote models can finish instead of timing out at 15 seconds. Fixes #72837. (#72852) Thanks @RayWoo.
 - Plugins/hooks: inject each plugin's resolved config into internal hook event context without mutating the shared event object. (#72888) Thanks @jalapeno777.
 - Agents/ACP: pass the resolved ACP agent directory into media understanding so per-agent media caches and config are used for ACP-dispatched image turns. (#72832) Thanks @luyao618.
-- Gateway/Bonjour: truncate mDNS service names and host labels to the 63-byte DNS label limit without splitting multibyte characters. (#72809) Thanks @luyao618.
+- Gateway/Bonjour: truncate mDNS service names and host labels to the 63-byte DNS label limit at valid UTF-8 boundaries. (#72809) Thanks @luyao618.
 - Feishu: treat groups explicitly configured under channels.feishu.groups as admitted even when groupAllowFrom is empty, so per-group mention overrides work with the default allowlist policy. Fixes #67687. (#72789) Thanks @MoerAI.
 - Gateway/startup: keep hot Gateway boot paths on leaf config imports and add max-RSS reporting to the gateway startup bench so low-memory startup regressions are visible before release. Thanks @vincentkoc.
 - WebChat: read `chat.history` from active transcript branches, drop stale streamed assistant tails once final history catches up, and coalesce duplicate in-flight Control UI submits, so rewritten prompts, completed replies, and rapid send events no longer render or process twice. Fixes #72975, #72963, and #72974. Thanks @dmagdici, @lhtpluto, and @Benjamin5281999.
@@ -56,9 +68,14 @@ Docs: https://docs.openclaw.ai
 - WebChat/Control UI: support non-video file attachments in chat uploads while preserving the existing image attachment path and MIME-sniff fallback for generic image uploads. (#70947) Thanks @IAMSamuelRodda.
 - Skills/memory: restore Chokidar v5 hot reloads by watching concrete skill and memory roots with filters, including SKILL.md removals and deleted skill folders without broad workspace recursion. Fixes #27404, #33585, and #41606. Thanks @shelvenzhou, @08820048, and @rocke2020.
 - Gateway/chat: keep duplicate attachment-backed `chat.send` retries with the same idempotency key on the documented in-flight path so aborts still target the real active run. Fixes #70139. Thanks @Feelw00.
+- Gateway/chat: preserve repeated boundary characters while merging assistant chat stream deltas, including repeated digits, CJK characters, and markdown/table tokens. Fixes #63769; carries forward #63994 and #65457. Thanks @yon950905 and @mohuaxiao.
 - Plugins: share package entrypoint resolution between install and discovery, reject mismatched `runtimeExtensions`, and cache bundled runtime-dependency manifest reads during scans. Thanks @vincentkoc.
 - WhatsApp/Web: keep quiet but healthy linked-device sessions connected by basing the watchdog on WhatsApp Web transport activity, while retaining a longer app-silence cap so frame activity cannot mask a stuck session forever. Fixes #70678; carries forward the focused #71466 approach and keeps #63939 as related configurable-timeout follow-up. Thanks @vincentkoc and @oromeis.
 - Discord/gateway: count failed health-monitor restart attempts toward cooldown and hourly caps, and evict stale account lifecycle state during channel reloads so repeated Discord gateway recovery cannot loop on old status. Fixes #38596. (#40413) Thanks @jellyAI-dev and @vashquez.
+
+### Fixes
+
+- TTS/BlueBubbles: pre-transcode synthesized MP3 audio to opus-in-CAF (mono, 24 kHz — validated against macOS 15.x Messages.app's native voice-memo CAF descriptor) on macOS hosts before handing the file to BlueBubbles, so iMessage renders the result as a native voice-memo bubble with proper duration and waveform UI instead of a plain file attachment. Adds an opt-in `tts.voice.preferAudioFileFormat` channel capability and a magic-byte sniff for the CAF container so the host-local-media validator (which uses `file-type` and didn't recognize CAF natively) can verify the pre-transcoded buffer. Channels that don't opt in are unaffected. (#72586) Fixes #72506. Thanks @omarshahine.
 
 ## 2026.4.26
 
