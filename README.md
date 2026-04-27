@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Add session cost to /status output
+- **Reward:** $22
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
