@@ -612,28 +612,14 @@ enum ExecApprovalsSocketPathGuard {
 
     static func hardenParentDirectory(for socketPath: String) throws {
         let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
-        let parentPath = parentURL.path
-        let hardenedParentURL: URL
+        let hardenedParentURL = try self.trustedParentDirectoryURL(for: parentURL)
 
-        switch try self.pathKind(at: parentPath) {
-        case .missing:
-            hardenedParentURL = parentURL
-        case .directory:
-            hardenedParentURL = parentURL
-        case .symlink:
-            hardenedParentURL = try self.trustedParentSymlinkTarget(for: parentURL)
-        case let kind:
-            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
-        }
-
-        if hardenedParentURL.path == parentPath {
-            do {
-                try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
-            } catch {
-                throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
-                    path: parentPath,
-                    message: error.localizedDescription)
-            }
+        do {
+            try FileManager().createDirectory(at: hardenedParentURL, withIntermediateDirectories: true)
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                path: hardenedParentURL.path,
+                message: error.localizedDescription)
         }
 
         do {
@@ -645,6 +631,34 @@ enum ExecApprovalsSocketPathGuard {
                 path: hardenedParentURL.path,
                 message: error.localizedDescription)
         }
+    }
+
+    private static func trustedParentDirectoryURL(for parentURL: URL) throws -> URL {
+        let standardizedURL = parentURL.standardizedFileURL
+        let components = standardizedURL.pathComponents
+        guard !components.isEmpty else {
+            return standardizedURL
+        }
+
+        var rawURL = URL(fileURLWithPath: components[0], isDirectory: true)
+        var hardenedURL = rawURL
+
+        for component in components.dropFirst() {
+            rawURL.appendPathComponent(component, isDirectory: true)
+            let nextHardenedURL = hardenedURL.appendingPathComponent(component, isDirectory: true)
+            switch try self.pathKind(at: rawURL.path) {
+            case .missing, .directory:
+                hardenedURL = nextHardenedURL
+            case .symlink:
+                hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
+            case let kind:
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: rawURL.path,
+                    kind: kind)
+            }
+        }
+
+        return hardenedURL
     }
 
     private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {
