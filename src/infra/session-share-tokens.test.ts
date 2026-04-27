@@ -138,7 +138,7 @@ describe("session-share-tokens", () => {
       expect(fs.existsSync(filePath)).toBe(true);
       const content = fs.readFileSync(filePath, "utf8");
       expect(content.trim()).not.toBe("");
-      const parsed = JSON.parse(content.trim().split("\n")[0]!);
+      const parsed = JSON.parse(content.trim().split("\n")[0] ?? "");
       expect(parsed.sessionKey).toBe("s");
     });
   });
