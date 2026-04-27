@@ -210,7 +210,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+  if (hasSilentAssistantReply(params.attempt)) {
     return null;
   }
 
@@ -249,6 +249,48 @@ function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean
   return (
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
+  );
+}
+
+function extractAssistantText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const record = message as { role?: unknown; content?: unknown };
+  if (record.role !== "assistant") {
+    return "";
+  }
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (!Array.isArray(record.content)) {
+    return "";
+  }
+  return record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const contentBlock = block as { type?: unknown; text?: unknown };
+      return contentBlock.type === "text" && typeof contentBlock.text === "string"
+        ? contentBlock.text
+        : "";
+    })
+    .filter((text) => text.trim().length > 0)
+    .join("\n");
+}
+
+function hasSilentAssistantMessage(message: unknown): boolean {
+  const text = extractAssistantText(message).trim();
+  return text.length > 0 && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+}
+
+function hasSilentAssistantReply(
+  attempt: Pick<IncompleteTurnAttempt, "assistantTexts" | "currentAttemptAssistant">,
+): boolean {
+  return (
+    hasOnlySilentAssistantReply(attempt.assistantTexts) ||
+    hasSilentAssistantMessage(attempt.currentAttemptAssistant)
   );
 }
 
@@ -306,7 +348,10 @@ function isEmptyResponseAssistantTurn(params: {
   if (params.payloadCount !== 0) {
     return false;
   }
-  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+  if (
+    params.attempt.assistantTexts.join("\n\n").trim().length > 0 ||
+    hasSilentAssistantReply(params.attempt)
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;

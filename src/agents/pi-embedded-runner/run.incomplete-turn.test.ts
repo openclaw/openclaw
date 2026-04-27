@@ -803,6 +803,103 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("treats raw final NO_REPLY as deliberate silence when streamed assistant text is absent", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", ok: true }],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [
+            {
+              type: "thinking",
+              thinking: "I should stay silent after the requested write.",
+              thinkingSignature: JSON.stringify({ id: "rs_raw_no_reply", type: "reasoning" }),
+            },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("does not retry empty-response recovery for raw final NO_REPLY", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      executionContract: "strict-agentic",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "  NO_REPLY  " }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not let stale prior NO_REPLY hide a current empty response", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      executionContract: "strict-agentic",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        currentAttemptAssistant: undefined,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("surfaces incomplete-turn warning after side effects when only stale prior NO_REPLY exists", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        currentAttemptAssistant: undefined,
+        toolMetas: [{ toolName: "write", ok: true }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("verify before retrying");
+  });
+
   it("suppresses the incomplete-turn warning after committed messaging text delivery", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,
