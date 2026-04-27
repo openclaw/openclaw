@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { globSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
@@ -57,9 +58,60 @@ export function copyStaticExtensionAssets(params = {}) {
   }
 }
 
+function extractNamedRuntimeExports(sourceText) {
+  const names = new Set();
+  const exportBlockRe = /export\s*\{([^}]+)\}/g;
+  for (const match of sourceText.matchAll(exportBlockRe)) {
+    const block = match[1] ?? "";
+    for (const part of block.split(",")) {
+      const trimmed = part.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const aliased = trimmed.match(
+        /^(?:type\s+)?(?<local>[A-Za-z_$][\w$]*)(?:\s+as\s+(?<exported>[A-Za-z_$][\w$]*))?$/u,
+      );
+      const exported = aliased?.groups?.exported ?? aliased?.groups?.local;
+      if (exported) {
+        names.add(exported);
+      }
+    }
+  }
+  return [...names];
+}
+
+function resolveSourceDrivenRuntimeAliasTarget(params) {
+  const { srcFilePath, distFileNames, distDir, fsImpl } = params;
+  const aliasFileName = path.basename(srcFilePath).replace(/\.ts$/u, ".js");
+  const stemWithoutRuntime = aliasFileName.replace(/\.runtime\.js$/u, "");
+  const candidates = distFileNames.filter((name) =>
+    new RegExp(
+      `^${stemWithoutRuntime.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[A-Za-z0-9_-]+\\.js$`,
+      "u",
+    ).test(name),
+  );
+  if (candidates.length === 0) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  const sourceText = fsImpl.readFileSync(srcFilePath, "utf8");
+  const exportNames = extractNamedRuntimeExports(sourceText);
+  if (exportNames.length === 0) {
+    return null;
+  }
+  const matches = candidates.filter((name) => {
+    const text = fsImpl.readFileSync(path.join(distDir, name), "utf8");
+    return exportNames.every((exportName) => text.includes(exportName));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
+  const srcDir = path.join(rootDir, "src");
   const fsImpl = params.fs ?? fs;
   let entries = [];
   try {
@@ -67,6 +119,8 @@ export function writeStableRootRuntimeAliases(params = {}) {
   } catch {
     return;
   }
+
+  const distFileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 
   for (const entry of entries) {
     if (!entry.isFile()) {
@@ -78,6 +132,24 @@ export function writeStableRootRuntimeAliases(params = {}) {
     }
     const aliasPath = path.join(distDir, `${match.groups.base}.js`);
     writeTextFileIfChanged(aliasPath, `export * from "./${entry.name}";\n`);
+  }
+
+  for (const srcFilePath of globSync(path.join(srcDir, "**", "*.runtime.ts"))) {
+    const aliasFileName = path.basename(srcFilePath).replace(/\.ts$/u, ".js");
+    const aliasPath = path.join(distDir, aliasFileName);
+    if (fsImpl.existsSync(aliasPath)) {
+      continue;
+    }
+    const target = resolveSourceDrivenRuntimeAliasTarget({
+      srcFilePath,
+      distFileNames,
+      distDir,
+      fsImpl,
+    });
+    if (!target) {
+      continue;
+    }
+    writeTextFileIfChanged(aliasPath, `export * from "./${target}";\n`);
   }
 }
 
