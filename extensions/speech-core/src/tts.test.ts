@@ -890,10 +890,13 @@ describe("speech-core native voice-note routing", () => {
         },
       },
     };
-    const payload = setReplyPayloadMetadata({ text: "[warmly] long expressive reply" }, {
-      ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
-      ttsPlainText: "plain fallback text",
-    } satisfies ReplyPayload);
+    const payload = setReplyPayloadMetadata(
+      { text: "[warmly] long expressive reply" } satisfies ReplyPayload,
+      {
+        ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
+        ttsPlainText: "plain fallback text",
+      },
+    );
 
     let mediaDir: string | undefined;
     try {
@@ -947,10 +950,13 @@ describe("speech-core native voice-note routing", () => {
         },
       },
     };
-    const payload = setReplyPayloadMetadata({ text: "[warmly] long expressive reply" }, {
-      ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
-      ttsPlainText: "plain fallback text",
-    } satisfies ReplyPayload);
+    const payload = setReplyPayloadMetadata(
+      { text: "[warmly] long expressive reply" } satisfies ReplyPayload,
+      {
+        ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
+        ttsPlainText: "plain fallback text",
+      },
+    );
 
     let mediaDir: string | undefined;
     try {
