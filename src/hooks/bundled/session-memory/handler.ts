@@ -668,6 +668,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // file is too large to snapshot, we fall back to unlink-on-retraction
     // — a small loss-of-restore semantic vs. a real DoS, the right trade
     // (gpt-5.5 deep-review P1-1 + P2-2 on PR #38162).
+    //
+    // Non-ENOENT errors are FATAL (Codex P2 on PR #38162, previously
+    // deferred): if we can't determine whether a file exists or read
+    // its content (EACCES, EROFS, EIO, EPERM, etc.), proceeding with the
+    // inline write risks a later blockSessionSave=true unlinking a file
+    // we couldn't snapshot. Fail closed instead — abort the handler so
+    // the unreadable file stays intact and the operator sees the real
+    // problem in the log.
     let preExistingContent: string | null = null;
     try {
       const preStat = await fs.lstat(writtenFilePath);
@@ -676,7 +684,24 @@ const saveSessionToMemory: HookHandler = async (event) => {
         !preStat.isSymbolicLink() &&
         preStat.size <= MAX_PRE_EXISTING_SNAPSHOT_BYTES
       ) {
-        preExistingContent = await fs.readFile(writtenFilePath, "utf-8");
+        try {
+          preExistingContent = await fs.readFile(writtenFilePath, "utf-8");
+        } catch (readErr) {
+          const code = (readErr as NodeJS.ErrnoException | undefined)?.code;
+          // ENOENT after lstat succeeded means the file was deleted between
+          // the two syscalls (race window). Treat as no prior content.
+          if (code !== "ENOENT") {
+            log.warn(
+              "Pre-existing snapshot read failed with non-ENOENT error — aborting handler to keep retraction non-destructive",
+              {
+                code,
+                path: sanitizePathForLog(writtenFilePath),
+                redirected: isRedirected,
+              },
+            );
+            return;
+          }
+        }
       } else if (preStat.isFile() && preStat.size > MAX_PRE_EXISTING_SNAPSHOT_BYTES) {
         log.debug("Pre-existing file too large to snapshot for retraction; will unlink instead", {
           size: preStat.size,
@@ -689,8 +714,24 @@ const saveSessionToMemory: HookHandler = async (event) => {
           { path: sanitizePathForLog(writtenFilePath) },
         );
       }
-    } catch {
-      // File doesn't exist yet — no prior content to preserve.
+    } catch (lstatErr) {
+      const code = (lstatErr as NodeJS.ErrnoException | undefined)?.code;
+      // ENOENT is the normal "no prior file" signal — proceed with a fresh
+      // write and a null snapshot. Anything else (EACCES on the parent
+      // directory, EROFS, EPERM, EIO, etc.) means we can't safely reason
+      // about retraction and must fail closed.
+      if (code !== "ENOENT") {
+        log.warn(
+          "Pre-existing snapshot lstat failed with non-ENOENT error — aborting handler to keep retraction non-destructive",
+          {
+            code,
+            path: sanitizePathForLog(writtenFilePath),
+            redirected: isRedirected,
+          },
+        );
+        return;
+      }
+      // ENOENT — no prior content to preserve, continue normally.
     }
 
     // Write inline (fail-safe: if postHookActions never drains, the file

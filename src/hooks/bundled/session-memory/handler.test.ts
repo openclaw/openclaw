@@ -1176,6 +1176,63 @@ describe("session-memory hook", () => {
     expect(body).toContain("tail-marker");
   }, 30_000);
 
+  it("aborts the handler when pre-existing snapshot read fails with a non-ENOENT error (Codex P2)", async () => {
+    // The pre-write snapshot used to swallow every fs.readFile error, so an
+    // existing target that was writable but not readable (EACCES, EROFS,
+    // EIO, EPERM …) would be treated as if it never existed. A later
+    // blockSessionSave=true rollback would then take the
+    // preExistingContent === null branch and unlink the file, permanently
+    // destroying prior content. This regression test simulates that race
+    // by stubbing fs.lstat to throw EACCES and verifies the handler aborts
+    // BEFORE writing anything.
+    const tempDir = await createCaseWorkspace("redirect-snapshot-eacces");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "don't lose me" }]),
+    });
+    const quarantine = path.join(tempDir, "quarantine");
+    await fs.mkdir(quarantine, { recursive: true });
+    const redirectFile = path.join(quarantine, "redirected.md");
+    await fs.writeFile(redirectFile, "sensitive-prior-content");
+
+    // Stub fs.lstat to throw EACCES specifically for the redirect target.
+    // All other lstat calls (e.g. workspace canonicalization) must still
+    // work, so we delegate to the real implementation for non-matching paths.
+    const realLstat = fs.lstat;
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation((async (p: string) => {
+      if (p === redirectFile) {
+        const e = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        e.code = "EACCES";
+        throw e;
+      }
+      return realLstat(p);
+    }) as typeof fs.lstat);
+
+    try {
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+        previousSessionEntry: { sessionId: "s1", sessionFile },
+      });
+      event.context.sessionSaveRedirectPath = redirectFile;
+      await handler(event);
+      await drainPostHookActions(event);
+    } finally {
+      lstatSpy.mockRestore();
+    }
+
+    // The handler must have aborted: the pre-existing file is intact
+    // with its original content, no inline write happened, and the
+    // default memory directory has nothing in it either.
+    const surviving = await fs.readFile(redirectFile, "utf-8");
+    expect(surviving).toBe("sensitive-prior-content");
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
   it("sessionSaveContent + sessionSaveRedirectPath writes custom content to redirect path", async () => {
     const tempDir = await createCaseWorkspace("custom-content-redirect");
     const quarantine = path.join(tempDir, "quarantine");
