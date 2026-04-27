@@ -163,9 +163,8 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       expect.objectContaining({
         requesterOrigin: {
           channel: "matrix",
-          accountId: "bot-alpha",
+          accountId: "bot-beta",
           to: `room:${boundRoom}`,
-          threadId: "$thread-root",
         },
         expectsCompletionMessage: false,
         spawnMode: "session",
