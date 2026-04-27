@@ -306,7 +306,25 @@ export async function resolveSubagentCompletionOrigin(params: {
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
-  const route = createBoundDeliveryRouter().resolveDestination({
+  const router = createBoundDeliveryRouter();
+  const childRoute = router.resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.childSessionKey,
+    requester: requesterConversation,
+    failClosed: true,
+  });
+  if (childRoute.mode === "bound" && childRoute.binding) {
+    return mergeDeliveryContext(
+      resolveBoundConversationOrigin({
+        bindingConversation: childRoute.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
+      requesterOrigin,
+    );
+  }
+
+  const route = router.resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.requesterSessionKey,
     requester: requesterConversation,
