@@ -113,6 +113,22 @@ export function mergeDeliveryContext(
     normalizedPrimary?.channel &&
     normalizedFallback?.channel &&
     normalizedPrimary.channel !== normalizedFallback.channel;
+  // A threadId only makes sense inside the conversation it was created in.
+  // Two same-channel shapes leak it across conversations:
+  //   * targetsDiffer — both sides have a `to` but they don't match, so
+  //     fallback's threadId belongs to a different conversation.
+  //   * fallbackThreadIdOrphaned — fallback has a threadId but no `to`, so
+  //     it can't be attributed to any conversation; folding it into a primary
+  //     with its own `to` would route the result into an unrelated thread.
+  const targetsDiffer =
+    !channelsConflict &&
+    normalizedPrimary?.to &&
+    normalizedFallback?.to &&
+    normalizedPrimary.to !== normalizedFallback.to;
+  const fallbackThreadIdOrphaned =
+    Boolean(normalizedPrimary?.to) &&
+    !normalizedFallback?.to &&
+    normalizedFallback?.threadId != null;
   return normalizeDeliveryContext({
     channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
     // Keep route fields paired to their channel; avoid crossing fields between
@@ -123,9 +139,10 @@ export function mergeDeliveryContext(
     accountId: channelsConflict
       ? normalizedPrimary?.accountId
       : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
-    threadId: channelsConflict
-      ? normalizedPrimary?.threadId
-      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
+    threadId:
+      channelsConflict || targetsDiffer || fallbackThreadIdOrphaned
+        ? normalizedPrimary?.threadId
+        : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });
 }
 
