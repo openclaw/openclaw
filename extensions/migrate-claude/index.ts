@@ -1,11 +1,11 @@
-import type { OpenClawPlugin } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildClaudeMigrationProvider } from "./provider.js";
 
-const plugin: OpenClawPlugin = {
+export default definePluginEntry({
   id: "migrate-claude",
+  name: "Claude Migration",
+  description: "Imports Claude state into OpenClaw.",
   register(api) {
     api.registerMigrationProvider(buildClaudeMigrationProvider({ runtime: api.runtime }));
   },
-};
-
-export default plugin;
+});

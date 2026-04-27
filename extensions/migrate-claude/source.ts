@@ -13,6 +13,7 @@ export type ClaudeSource = {
   confidence: "low" | "medium" | "high";
   homeDir?: string;
   projectDir?: string;
+  homeProjectsDir?: string;
   userSettingsPath?: string;
   userLocalSettingsPath?: string;
   userClaudeJsonPath?: string;
@@ -74,6 +75,7 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
   const userClaudeJsonPath = path.join(os.homedir(), ".claude.json");
   const userMemoryPath = path.join(homeDir, "CLAUDE.md");
   const desktopConfigPath = defaultDesktopConfig();
+  const homeProjectsDir = path.join(homeDir, "projects");
 
   for (const dir of HOME_ARCHIVE_DIRS) {
     await addArchivePath(archivePaths, `archive:home:${dir}`, path.join(homeDir, dir), dir);
@@ -84,6 +86,7 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
     confidence: "low",
     archivePaths,
     ...((await isDirectory(homeDir)) ? { homeDir } : {}),
+    ...((await isDirectory(homeProjectsDir)) ? { homeProjectsDir } : {}),
     ...(projectDir ? { projectDir } : {}),
     ...((await exists(userSettingsPath)) ? { userSettingsPath } : {}),
     ...((await exists(userLocalSettingsPath)) ? { userLocalSettingsPath } : {}),
@@ -157,7 +160,7 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
     source.projectAgentsDir ||
     source.projectRulesDir ||
     source.projectLocalMemoryPath ||
-    source.archivePaths.length > 0,
+    source.homeProjectsDir,
   );
   source.confidence = high ? "high" : medium ? "medium" : "low";
   return source;
