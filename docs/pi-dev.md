@@ -43,6 +43,8 @@ This covers the main Pi unit suites:
 - `src/agents/pi-tool-definition-adapter.test.ts`
 - `src/agents/pi-hooks/*.test.ts`
 
+The tool-adapter interoperability contract lives in `src/agents/pi-tool-definition-adapter.conformance.test.ts` and is covered by the existing `src/agents/pi-tool-definition-adapter*.test.ts` glob.
+
 ## Manual Testing
 
 Recommended flow:
