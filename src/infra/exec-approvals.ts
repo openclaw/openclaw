@@ -322,6 +322,8 @@ function assertSafeExecApprovalsDirectoryPath(targetPath: string): void {
 }
 
 function resolveTrustedOpenClawSymlink(linkPath: string): string {
+  const targetPath = resolveOpenClawSymlinkDestinationPath(linkPath);
+  assertNoAdditionalOpenClawSymlinkTargetHops(targetPath, linkPath);
   const realPath = fs.realpathSync(linkPath);
   const targetStat = fs.statSync(realPath);
   if (!targetStat.isDirectory()) {
@@ -348,6 +350,27 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
     assertStableResolvedOpenClawSymlinkTarget(realPath, linkPath, currentUid);
   }
   return realPath;
+}
+
+function resolveOpenClawSymlinkDestinationPath(linkPath: string): string {
+  const destination = fs.readlinkSync(linkPath);
+  return path.resolve(path.dirname(linkPath), destination);
+}
+
+function assertNoAdditionalOpenClawSymlinkTargetHops(targetPath: string, linkPath: string): void {
+  const root = path.parse(targetPath).root;
+  let current = root;
+  const relative = path.relative(root, targetPath);
+  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to use exec approvals .openclaw symlink target that resolves through another symlink: ${current} (${linkPath})`,
+      );
+    }
+  }
 }
 
 function assertStableResolvedOpenClawSymlinkTarget(

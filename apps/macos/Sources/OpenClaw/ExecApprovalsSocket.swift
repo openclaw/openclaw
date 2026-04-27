@@ -671,6 +671,10 @@ enum ExecApprovalsSocketPathGuard {
                 path: parentPath,
                 message: "target is group/other-writable")
         }
+        let destinationPath = try self.symlinkDestinationPath(for: parentURL)
+        try self.validateNoAdditionalSymlinkTargetHops(
+            in: destinationPath,
+            reportedPath: parentPath)
         let targetURL = parentURL.resolvingSymlinksInPath()
         switch try self.pathKind(at: targetURL.path) {
         case .directory:
@@ -682,6 +686,51 @@ enum ExecApprovalsSocketPathGuard {
         }
         try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
         return targetURL
+    }
+
+    private static func symlinkDestinationPath(for parentURL: URL) throws -> String {
+        let parentPath = parentURL.path
+        do {
+            let destination = try FileManager().destinationOfSymbolicLink(atPath: parentPath)
+            if destination.hasPrefix("/") {
+                return URL(fileURLWithPath: destination).standardizedFileURL.path
+            }
+            return parentURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(destination)
+                .standardizedFileURL
+                .path
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "readlink failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func validateNoAdditionalSymlinkTargetHops(
+        in targetPath: String,
+        reportedPath: String
+    ) throws {
+        var ancestors: [String] = []
+        var current = URL(fileURLWithPath: targetPath).standardizedFileURL
+
+        while true {
+            ancestors.append(current.path)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        for path in ancestors.reversed() {
+            let kind = try self.pathKind(at: path)
+            if kind == .symlink {
+                throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                    path: reportedPath,
+                    message: "target resolves through another symlink at \(path)")
+            }
+        }
     }
 
     private static func validateResolvedAncestorChain(for targetURL: URL, reportedPath: String)

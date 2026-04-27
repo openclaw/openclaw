@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 function createHomeDir(): string {
-  const dir = makeTempDir();
+  const dir = fs.realpathSync(makeTempDir());
   tempDirs.push(dir);
   process.env.OPENCLAW_HOME = dir;
   return dir;
@@ -200,7 +200,7 @@ describe("exec approvals store helpers", () => {
   });
 
   it("accepts a symlinked OPENCLAW_HOME as the trusted approvals root", () => {
-    const realHome = makeTempDir();
+    const realHome = fs.realpathSync(makeTempDir());
     const linkedHome = `${realHome}-link`;
     tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome, "dir");
@@ -214,7 +214,7 @@ describe("exec approvals store helpers", () => {
   });
 
   it("accepts a trusted first-level .openclaw symlink", () => {
-    const realHome = makeTempDir();
+    const realHome = fs.realpathSync(makeTempDir());
     const linkedHome = `${realHome}-link`;
     const linkedStateTarget = path.join(realHome, "state-target");
     tempDirs.push(realHome, linkedHome);
@@ -266,6 +266,25 @@ describe("exec approvals store helpers", () => {
       expectUnsafeApprovalsReadFailsClosed(
         /group\/other-writable exec approvals \.openclaw symlink ancestor/,
       );
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink target that resolves through another symlink",
+    () => {
+      const dir = createHomeDir();
+      const linkedStateTarget = path.join(dir, "state-target");
+      const intermediateLink = path.join(dir, "current-state");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, intermediateLink, "dir");
+      fs.symlinkSync(intermediateLink, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/resolves through another symlink/);
+      expectUnsafeApprovalsReadFailsClosed(/resolves through another symlink/);
       expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
     },
   );
