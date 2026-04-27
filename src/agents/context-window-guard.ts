@@ -174,7 +174,11 @@ export function evaluateContextWindowGuard(params: {
     1,
     Math.floor(params.warnBelowTokens ?? resolvedThresholds.warnBelowTokens),
   );
-  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? resolvedThresholds.hardMinTokens));
+  const defaultHardMin = Math.min(
+    resolvedThresholds.hardMinTokens,
+    Math.max(tokens, CONTEXT_WINDOW_HARD_MIN_TOKENS),
+  );
+  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? defaultHardMin));
   return {
     ...params.info,
     tokens,

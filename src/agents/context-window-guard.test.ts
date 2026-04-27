@@ -267,6 +267,16 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("does not let inflated reference metadata hard-block a valid effective cap", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 20_000, referenceTokens: 1_000_000_000, source: "agentContextTokens" },
+    });
+    expect(guard.hardMinTokens).toBe(20_000);
+    expect(guard.warnBelowTokens).toBe(200_000_000);
+    expect(guard.shouldWarn).toBe(true);
+    expect(guard.shouldBlock).toBe(false);
+  });
+
   it("adds a local-model hint to warning messages for localhost endpoints", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 6_000, source: "model" },
