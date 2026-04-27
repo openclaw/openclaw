@@ -152,3 +152,18 @@ export const ExecApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ExecApprovalAuditLogParamsSchema = Type.Object(
+  {
+    since: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    agentId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export type ExecApprovalAuditLogParams = {
+  since?: number;
+  limit?: number;
+  agentId?: string;
+};

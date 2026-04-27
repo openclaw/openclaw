@@ -151,6 +151,8 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type ExecApprovalAuditLogParams,
+  ExecApprovalAuditLogParamsSchema,
   type PluginApprovalRequestParams,
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
@@ -553,6 +555,9 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
+export const validateExecApprovalAuditLogParams = ajv.compile<ExecApprovalAuditLogParams>(
+  ExecApprovalAuditLogParamsSchema,
+);
 export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalRequestParams>(
   PluginApprovalRequestParamsSchema,
 );
@@ -749,6 +754,7 @@ export {
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  ExecApprovalAuditLogParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
@@ -885,6 +891,7 @@ export type {
   ExecApprovalGetParams,
   ExecApprovalRequestParams,
   ExecApprovalResolveParams,
+  ExecApprovalAuditLogParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,

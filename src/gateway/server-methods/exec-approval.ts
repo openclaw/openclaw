@@ -1,3 +1,4 @@
+import { appendApprovalAuditEntry, readApprovalAuditLog } from "../../infra/exec-approval-audit.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
@@ -22,6 +23,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateExecApprovalAuditLogParams,
   validateExecApprovalGetParams,
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
@@ -47,9 +49,15 @@ type ExecApprovalIosPushDelivery = {
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
 
+type AppendAuditEntry = typeof appendApprovalAuditEntry;
+
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
-  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    iosPushDelivery?: ExecApprovalIosPushDelivery;
+    appendAuditEntry?: AppendAuditEntry;
+  },
 ): GatewayRequestHandlers {
   return {
     "exec.approval.get": async ({ params, respond }) => {
@@ -378,15 +386,62 @@ export function createExecApprovalHandlers(
           }) satisfies ExecApprovalResolved,
         forwardResolved: (resolvedEvent) => opts?.forwarder?.handleResolved(resolvedEvent),
         forwardResolvedErrorLabel: "exec approvals: forward resolve failed",
-        extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved
-          ? [
-              {
-                run: (resolvedEvent) => opts.iosPushDelivery!.handleResolved!(resolvedEvent),
-                errorLabel: "exec approvals: iOS push resolve failed",
-              },
-            ]
-          : undefined,
+        extraResolvedHandlers: [
+          ...(opts?.iosPushDelivery?.handleResolved
+            ? [
+                {
+                  run: (resolvedEvent: ExecApprovalResolved) =>
+                    opts.iosPushDelivery!.handleResolved!(resolvedEvent),
+                  errorLabel: "exec approvals: iOS push resolve failed",
+                },
+              ]
+            : []),
+          {
+            run: (resolvedEvent: ExecApprovalResolved) => {
+              const auditDecision: "approved" | "denied" =
+                resolvedEvent.decision === "deny" ? "denied" : "approved";
+              const doAppend = opts?.appendAuditEntry ?? appendApprovalAuditEntry;
+              doAppend({
+                ts: resolvedEvent.ts,
+                approvalId: resolvedEvent.id,
+                command: resolvedEvent.request?.command ?? "",
+                decision: auditDecision,
+                resolvedBy: {
+                  deviceId: client?.connect?.device?.id ?? null,
+                  clientId: client?.connect?.client?.id ?? null,
+                  connId: client?.connId ?? null,
+                },
+                agentId: resolvedEvent.request?.agentId ?? null,
+                sessionKey: resolvedEvent.request?.sessionKey ?? null,
+                args: resolvedEvent.request?.commandArgv,
+              });
+            },
+            errorLabel: "exec approvals: audit log write failed",
+          },
+        ],
       });
+    },
+    "exec.approval.auditLog": async ({ params, respond }) => {
+      if (!validateExecApprovalAuditLogParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid exec.approval.auditLog params: ${formatValidationErrors(
+              validateExecApprovalAuditLogParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const p = params as { since?: number; limit?: number; agentId?: string };
+      const entries = readApprovalAuditLog({
+        since: p.since,
+        limit: p.limit,
+        agentId: p.agentId,
+      });
+      respond(true, { entries }, undefined);
     },
   };
 }
