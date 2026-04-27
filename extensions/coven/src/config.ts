@@ -14,6 +14,7 @@ export type CovenPluginConfig = {
 export type ResolvedCovenPluginConfig = {
   covenHome: string;
   socketPath: string;
+  workspaceDir: string;
   fallbackBackend: string;
   pollIntervalMs: number;
   harnesses: Record<string, string>;
@@ -41,16 +42,47 @@ function normalizeBackendId(value: string | undefined): string {
   return normalized || DEFAULT_FALLBACK_BACKEND;
 }
 
-function resolveCovenHome(raw: string | undefined): string {
+function expandTilde(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/")) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function resolveConfiguredPath(raw: string, baseDir: string): string {
+  const expanded = expandTilde(raw);
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(baseDir, expanded);
+}
+
+function pathIsInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveCovenHome(raw: string | undefined, baseDir: string): string {
   const fromConfig = raw?.trim();
   if (fromConfig) {
-    return path.resolve(fromConfig);
+    return resolveConfiguredPath(fromConfig, baseDir);
   }
   const fromEnv = process.env.COVEN_HOME?.trim();
   if (fromEnv) {
-    return path.resolve(fromEnv);
+    return resolveConfiguredPath(fromEnv, baseDir);
   }
   return path.join(os.homedir(), ".coven");
+}
+
+function resolveSocketPath(covenHome: string, raw: string | undefined, baseDir: string): string {
+  const socketPath = raw?.trim()
+    ? resolveConfiguredPath(raw, baseDir)
+    : path.join(covenHome, "coven.sock");
+  if (!pathIsInside(covenHome, socketPath)) {
+    throw new Error("Coven socketPath must stay inside covenHome");
+  }
+  return socketPath;
 }
 
 function normalizeHarnesses(value: Record<string, string> | undefined): Record<string, string> {
@@ -72,12 +104,19 @@ export function resolveCovenPluginConfig(params: {
     throw new Error(parsed.error.issues[0]?.message ?? "invalid Coven plugin config");
   }
   const config = parsed.data as CovenPluginConfig;
-  const covenHome = resolveCovenHome(config.covenHome);
+  const workspaceDir = path.resolve(params.workspaceDir ?? process.cwd());
+  const covenHome = resolveCovenHome(config.covenHome, workspaceDir);
   return {
     covenHome,
-    socketPath: path.resolve(config.socketPath?.trim() || path.join(covenHome, "coven.sock")),
+    socketPath: resolveSocketPath(covenHome, config.socketPath, workspaceDir),
+    workspaceDir,
     fallbackBackend: normalizeBackendId(config.fallbackBackend),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     harnesses: normalizeHarnesses(config.harnesses),
   };
 }
+
+export const __testing = {
+  expandTilde,
+  resolveConfiguredPath,
+};

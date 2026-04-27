@@ -13,7 +13,7 @@
       },
       "socketPath": {
         "type": "string",
-        "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock."
+        "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock and must stay inside covenHome."
       },
       "fallbackBackend": {
         "type": "string",
