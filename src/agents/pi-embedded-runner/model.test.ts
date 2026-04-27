@@ -443,6 +443,77 @@ describe("resolveModel", () => {
     );
   });
 
+  it("uses provider-level context defaults over discovered metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        contextTokens: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            contextTokens: 8_000,
+            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(8_192);
+    expect((result.model as { contextTokens?: number } | undefined)?.contextTokens).toBe(8_000);
+    expect(result.model?.maxTokens).toBe(8_192);
+  });
+
+  it("keeps per-model context values above provider-level defaults", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "qwen3.5:9b",
+                contextWindow: 16_384,
+                maxTokens: 12_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(16_384);
+    expect(result.model?.maxTokens).toBe(12_000);
+  });
+
   it("applies agent default model params without explicit provider config", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "ollama",

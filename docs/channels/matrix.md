@@ -853,7 +853,7 @@ Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`)
 - `historyLimit`: number of recent room messages included as `InboundHistory` when a room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; effective default `0` (disabled).
 - `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing.
 
-### Reactions
+### Reaction settings
 
 - `ackReaction`: ack reaction override for this channel/account.
 - `ackReactionScope`: scope override (`"group-mentions"` default, `"group-all"`, `"direct"`, `"all"`, `"none"`, `"off"`).
@@ -871,7 +871,7 @@ Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`)
   - `groups.<room>.skills`: per-room skill filter.
   - `groups.<room>.systemPrompt`: per-room system prompt snippet.
 
-### Exec approvals
+### Exec approval settings
 
 - `execApprovals.enabled`: deliver exec approvals through Matrix-native prompts.
 - `execApprovals.approvers`: Matrix user IDs allowed to approve. Falls back to `dm.allowFrom`.

@@ -80,7 +80,7 @@ Node pairing is a trust and identity flow plus token issuance. It does **not** p
 
 - Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
 - Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
-</Warning>
+  </Warning>
 
 ## Node command gating (2026.3.31+)
 

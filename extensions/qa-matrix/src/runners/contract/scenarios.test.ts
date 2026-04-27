@@ -319,6 +319,7 @@ describe("matrix live qa scenarios", () => {
     expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
       180_000,
     );
+    expect(scenarios.get("matrix-room-block-streaming")?.timeoutMs).toBeGreaterThanOrEqual(75_000);
     expect(scenarios.get("matrix-e2ee-restart-resume")?.timeoutMs).toBeGreaterThanOrEqual(150_000);
     expect(scenarios.get("matrix-e2ee-artifact-redaction")?.timeoutMs).toBeGreaterThanOrEqual(
       150_000,

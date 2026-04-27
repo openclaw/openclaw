@@ -39,7 +39,8 @@ describe("package acceptance workflow", () => {
 
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
-    expect(workflow).toContain("install-e2e npm-onboard-channel-agent doctor-switch");
+    expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
+    expect(workflow).toContain("bundled-channel-deps-compat");
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -59,14 +60,32 @@ describe("package artifact reuse", () => {
     const action = readFileSync(DOCKER_E2E_PLAN_ACTION, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
-    expect(workflow).toContain("Download provided OpenClaw Docker E2E package");
+    expect(workflow).toContain("package_artifact_run_id:");
+    expect(workflow).toContain("docker_e2e_bare_image:");
+    expect(workflow).toContain("docker_e2e_functional_image:");
+    expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
+    expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
     expect(workflow).toContain("inputs.package_artifact_name != ''");
-    expect(workflow).toContain('image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"');
+    expect(workflow).toContain(
+      'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
+    );
+    expect(workflow).toContain(
+      'functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"',
+    );
     expect(workflow).toContain(
       "package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}",
     );
     expect(action).toContain("package-artifact-name:");
     expect(action).toContain("name: ${{ inputs.package-artifact-name }}");
+  });
+
+  it("uses Blacksmith Docker build caching for prepared E2E images", () => {
+    const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
+    expect(workflow).toContain("uses: useblacksmith/build-push-action@");
+    expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
+    expect(workflow).not.toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {
@@ -89,6 +108,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("package_ref: ${{ needs.resolve_target.outputs.ref }}");
     expect(workflow).toContain("suite_profile: package");
     expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
+    expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
     expect(workflow).toContain(
       "OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
     );

@@ -149,13 +149,21 @@ Use one run per line:
 ```text
 full-release-validation openclaw/openclaw <run-id> blocking
 package-acceptance openclaw/openclaw <run-id> blocking
-private-cross-os openclaw/releases-private <run-id> advisory
+release-checks openclaw/openclaw <run-id> blocking
 ```
 
 Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
 short release-manager notes there. Do not store raw logs, provider
 prompts/responses, channel transcripts, signing material, or secret-bearing
 config in git; raw logs stay in Actions artifacts.
+
+When `Full Release Validation` completes and
+`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
+requests the private `OpenClaw Release Evidence From Full Validation` workflow.
+That private workflow reads the parent full-validation run, extracts the child
+CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
+PR automatically. If the token is absent or the run predates this wiring, trigger
+that private workflow manually with the full-validation run id.
 
 ### Release Checks
 
@@ -187,10 +195,10 @@ default is the fast release path. Use explicit profiles:
   window when paired with fast or sharded gates
 
 `QA-Lab - All Lanes` uses explicit fast Matrix on scheduled runs; manual
-dispatch keeps `matrix_profile=all` as the default and can shard full Matrix
-with `matrix_profile=all` and `matrix_shards=true`. `OpenClaw Release Checks`
-uses explicit fast Matrix; run the sharded all-lanes workflow when release
-investigation needs full Matrix media/E2EE inventory.
+dispatch keeps `matrix_profile=all` as the default and always shards that full
+Matrix selection. `OpenClaw Release Checks` uses explicit fast Matrix; run the
+all-lanes workflow when release investigation needs full Matrix media/E2EE
+inventory.
 
 ### Reusable Live/E2E Checks
 
@@ -262,16 +270,22 @@ Multiple lanes are allowed:
 docker_lanes: install-e2e bundled-channel-update-acpx
 ```
 
-That skips the three chunk matrix and runs one targeted Docker job against the
-prepared GHCR images and a fresh OpenClaw npm tarball for the selected ref.
-Reruns usually need that new tarball because the fix being tested changed the
-package contents even if the SHA-tagged GHCR Docker image can be reused.
+That skips the release chunk matrix and runs one targeted Docker job against the
+prepared GHCR images and the selected package artifact. Rerun commands
+generated inside GitHub artifacts include `package_artifact_run_id`,
+`package_artifact_name`, `docker_e2e_bare_image`, and
+`docker_e2e_functional_image` when available, so failed lanes can reuse the
+exact tarball and prepared images from the failed run. When the fix changes
+package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
 image. Release-path normal mode remains max three Docker chunk jobs:
 
 - `core`
 - `package-update`
 - `plugins-integrations`
+
+OpenWebUI is folded into `plugins-integrations` for full release-path coverage
+and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
 
 ## Package Acceptance
 
@@ -332,7 +346,7 @@ Profiles:
   package/update coverage.
 - `product`: package profile plus broader product surfaces: MCP channels,
   cron/subagent cleanup, OpenAI web search, and OpenWebUI.
-- `full`: Docker release-path chunks with OpenWebUI.
+- `full`: split Docker release-path chunks with OpenWebUI.
 - `custom`: exact `docker_lanes` list for a focused rerun.
 
 Candidate sources:
