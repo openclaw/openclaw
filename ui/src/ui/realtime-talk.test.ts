@@ -83,6 +83,43 @@ describe("RealtimeTalkSession", () => {
     expect(onStatus).toHaveBeenCalledWith("connecting");
   });
 
+  it("keeps Google Live WebSocket sessions off the WebRTC fallback when transport is omitted", async () => {
+    const request = vi.fn(async () => ({
+      provider: "google",
+      protocol: "google-live-bidi",
+      clientSecret: "auth_tokens/session",
+      websocketUrl: "wss://example.test/live",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 16000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    }));
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+
+    expect(googleCtor).toHaveBeenCalledTimes(1);
+    expect(googleStart).toHaveBeenCalledTimes(1);
+    expect(webRtcCtor).not.toHaveBeenCalled();
+  });
+
+  it("does not treat ambiguous Google sessions as browser WebRTC sessions", async () => {
+    const request = vi.fn(async () => ({
+      provider: "google",
+      clientSecret: "secret",
+    }));
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toThrow(
+      'Realtime voice provider "google" does not support browser WebRTC sessions',
+    );
+
+    expect(webRtcCtor).not.toHaveBeenCalled();
+    expect(googleCtor).not.toHaveBeenCalled();
+  });
+
   it("starts the Gateway relay transport for backend-only realtime providers", async () => {
     const request = vi.fn(async () => ({
       provider: "example",

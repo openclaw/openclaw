@@ -19,7 +19,7 @@ function createTransport(
   session: RealtimeTalkSessionResult,
   ctx: RealtimeTalkTransportContext,
 ): RealtimeTalkTransport {
-  const transport = session.transport ?? "webrtc-sdp";
+  const transport = resolveTransport(session);
   if (transport === "webrtc-sdp") {
     return new WebRtcSdpRealtimeTalkTransport(session as RealtimeTalkWebRtcSdpSessionResult, ctx);
   }
@@ -40,6 +40,26 @@ function createTransport(
   }
   const unknownTransport = (session as { transport?: string }).transport ?? "unknown";
   throw new Error(`Unsupported realtime Talk transport: ${unknownTransport}`);
+}
+
+function resolveTransport(session: RealtimeTalkSessionResult): string {
+  if (session.transport) {
+    return session.transport;
+  }
+  const raw = session as {
+    provider?: string;
+    protocol?: string;
+    websocketUrl?: string;
+  };
+  if (raw.protocol === "google-live-bidi" || raw.websocketUrl) {
+    return "json-pcm-websocket";
+  }
+  if (raw.provider?.trim().toLowerCase() === "google") {
+    throw new Error(
+      'Realtime voice provider "google" does not support browser WebRTC sessions; restart the gateway so Google Live returns a browser WebSocket session.',
+    );
+  }
+  return "webrtc-sdp";
 }
 
 export class RealtimeTalkSession {

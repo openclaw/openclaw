@@ -13,7 +13,10 @@ import {
 } from "../../realtime-voice/agent-consult-tool.js";
 import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
-import type { RealtimeVoiceProviderConfig } from "../../realtime-voice/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceProviderConfig,
+} from "../../realtime-voice/provider-types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -224,6 +227,12 @@ function withRealtimeBrowserOverrides(
     overrides.voice = voice;
   }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
+}
+
+function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
+  const provider = normalizeLowercaseStringOrEmpty(session.provider);
+  const transport = (session as { transport?: string }).transport ?? "webrtc-sdp";
+  return provider === "google" && transport === "webrtc-sdp";
 }
 
 function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
@@ -459,8 +468,10 @@ export const talkHandlers: GatewayRequestHandlers = {
           model: normalizeOptionalString(typedParams.model),
           voice: normalizeOptionalString(typedParams.voice),
         });
-        respond(true, session, undefined);
-        return;
+        if (!isUnsupportedBrowserWebRtcSession(session)) {
+          respond(true, session, undefined);
+          return;
+        }
       }
 
       const connId = client?.connId;
